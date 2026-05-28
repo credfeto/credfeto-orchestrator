@@ -2,15 +2,14 @@
 
 # Orchestrator oneshot script.
 # Fetches the top-priority open work item for credfeto/credfeto-orchestrator from the
-# priorities API and drives a Claude Code session to work on it.  Persists the Claude
-# session ID so subsequent runs resume where they left off.
+# priorities API and drives a Claude Code session to work on it.  Persists one Claude
+# session ID per Issue/PR so subsequent runs resume the correct session.
 
 OWNER="credfeto"
 REPO="credfeto-orchestrator"
 REPO_FULL="${OWNER}/${REPO}"
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
-SESSION_DIR="${HOME}/.orchestrator/${OWNER}"
-SESSION_FILE="${SESSION_DIR}/${REPO}.env"
+SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
 REPO_DIR=$(cd "$(dirname "$0")" && pwd)
 
 die() {
@@ -41,6 +40,12 @@ check_required_tools() {
     done
 }
 
+# Returns the path to the session file for a given item type and ID.
+session_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.env' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
 # Outputs the top-priority item JSON for this repo; caller announces progress.
 fetch_top_priority() {
     local priorities_json top_item
@@ -58,14 +63,35 @@ fetch_top_priority() {
     printf '%s' "${top_item}"
 }
 
+# Sets SESSION_ID for the given item.  For a PullRequest with no session file, falls back
+# to the session of a linked closing issue so work already done on the issue is continued.
 load_session() {
-    SESSION_ID=""
-    STORED_ITEM_ID=""
-    STORED_ITEM_TYPE=""
+    local item_type="$1" item_id="$2"
+    local session_file linked_issue_id linked_session_file
 
-    if [ -f "${SESSION_FILE}" ]; then
+    SESSION_ID=""
+
+    session_file=$(session_file_path "${item_type}" "${item_id}")
+    if [ -f "${session_file}" ]; then
         # shellcheck source=/dev/null
-        . "${SESSION_FILE}"
+        . "${session_file}"
+        return
+    fi
+
+    if [ "${item_type}" = "PullRequest" ]; then
+        linked_issue_id=$(gh pr view "${item_id}" \
+            --repo "${REPO_FULL}" \
+            --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null)
+
+        if [ -n "${linked_issue_id}" ]; then
+            linked_session_file=$(session_file_path "Issue" "${linked_issue_id}")
+            if [ -f "${linked_session_file}" ]; then
+                info "No session for PR #${item_id} — inheriting session from linked issue #${linked_issue_id}"
+                # shellcheck source=/dev/null
+                . "${linked_session_file}"
+            fi
+        fi
     fi
 }
 
@@ -116,13 +142,14 @@ invoke_claude() {
 }
 
 save_session() {
-    local new_session_id="$1" item_id="$2" item_type="$3"
+    local item_type="$1" item_id="$2" new_session_id="$3"
+    local session_file
 
-    mkdir -p "${SESSION_DIR}" || die "Failed to create session directory: ${SESSION_DIR}"
-    printf 'SESSION_ID="%s"\nSTORED_ITEM_ID="%s"\nSTORED_ITEM_TYPE="%s"\n' \
-        "${new_session_id}" "${item_id}" "${item_type}" \
-        > "${SESSION_FILE}" \
-        || die "Failed to write session file: ${SESSION_FILE}"
+    session_file=$(session_file_path "${item_type}" "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf 'SESSION_ID="%s"\n' "${new_session_id}" \
+        > "${session_file}" \
+        || die "Failed to write session file: ${session_file}"
 }
 
 main() {
@@ -154,13 +181,12 @@ main() {
         fi
     fi
 
-    load_session
+    load_session "${item_type}" "${item_id}"
 
-    if [ "${STORED_ITEM_ID}" != "${item_id}" ] || [ "${STORED_ITEM_TYPE}" != "${item_type}" ]; then
-        info "New work item — starting fresh session"
-        SESSION_ID=""
-    else
+    if [ -n "${SESSION_ID}" ]; then
         info "Resuming existing session for ${item_type} #${item_id}"
+    else
+        info "No existing session — starting fresh for ${item_type} #${item_id}"
     fi
 
     if [ "${item_type}" = "Issue" ]; then
@@ -172,7 +198,7 @@ main() {
     new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
         || die "Failed to invoke Claude"
 
-    save_session "${new_session_id}" "${item_id}" "${item_type}"
+    save_session "${item_type}" "${item_id}" "${new_session_id}"
     success "Session ${new_session_id} saved for ${item_type} #${item_id}"
 }
 
