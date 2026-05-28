@@ -15,7 +15,3 @@ This is an index of local instructions that apply to just this project.
 ## Instruction Files
 
 <!-- Locally Maintained -->
-
-| File | Covers |
-| --- | --- |
-| [workflow.instructions.md](workflow.instructions.md) | Blocking items when asking questions; replying to comments |

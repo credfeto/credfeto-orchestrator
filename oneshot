@@ -95,42 +95,50 @@ load_session() {
 
 build_issue_prompt() {
     local item_id="$1"
-    printf 'You are the Orchestrator agent. Work on issue #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository for all rules and procedures.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_DIR}"
+    printf 'You are the Orchestrator agent. Work on issue #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository for all rules and procedures. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". When you need to ask a question and must wait for an answer, add the Blocked label to the issue first: gh issue edit %s --repo %s --add-label Blocked.' \
+        "${item_id}" "${REPO_FULL}" "${REPO_DIR}" "${item_id}" "${REPO_FULL}"
 }
 
 build_pr_prompt() {
     local item_id="$1"
-    printf 'You are the Orchestrator agent. Work on pull request #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository. Check the PR comments, any code reviews, and CI workflow runs for the branch, then proceed to address all outstanding work.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_DIR}"
+    printf 'You are the Orchestrator agent. Work on pull request #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository. Check the PR comments, any code reviews, and CI workflow runs for the branch, then proceed to address all outstanding work. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". When you need to ask a question and must wait for an answer, add the Blocked label to the PR first: gh pr edit %s --repo %s --add-label Blocked.' \
+        "${item_id}" "${REPO_FULL}" "${REPO_DIR}" "${item_id}" "${REPO_FULL}"
 }
 
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
+# Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2"
-    local claude_output new_session_id
+    local tmpfile new_session_id
+
+    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
-        claude_output=$(printf '%s' "${prompt}" | claude \
+        printf '%s' "${prompt}" | claude \
             --resume "${resume_session_id}" \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
-            --add-dir "${REPO_DIR}") \
-            || die "Claude invocation failed"
+            --add-dir "${REPO_DIR}" > "${tmpfile}" \
+            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     else
         info "Starting new Claude session..." >&2
-        claude_output=$(printf '%s' "${prompt}" | claude \
+        printf '%s' "${prompt}" | claude \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
-            --add-dir "${REPO_DIR}") \
-            || die "Claude invocation failed"
+            --add-dir "${REPO_DIR}" > "${tmpfile}" \
+            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     fi
 
-    new_session_id=$(printf '%s' "${claude_output}" | jq -r '.session_id // empty') \
-        || die "Failed to parse session_id from Claude output"
+    # Show Claude's text response so the caller can review what was done
+    jq -r '.result // ""' "${tmpfile}" >&2
+
+    new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
+        || { rm -f "${tmpfile}"; die "Failed to parse session_id from Claude output"; }
+
+    rm -f "${tmpfile}"
 
     [ -n "${new_session_id}" ] || die "No session_id returned by Claude"
 
