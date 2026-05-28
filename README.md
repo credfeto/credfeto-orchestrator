@@ -35,6 +35,14 @@ inherits the session from any linked closing issue.
 
 View [changelog](CHANGELOG.md)
 
+## Documentation
+
+Additional documentation is in the [docs/](docs/) folder.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for reporting security issues.
+
 ## Contributors
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
