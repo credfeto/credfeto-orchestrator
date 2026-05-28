@@ -11,12 +11,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 ### Fixed
-- Corrected broken cross-reference in github-workflows.instructions.md — anchor #visual-indicators updated to #output-helpers to match actual section name in shell-scripts.instructions.md
-- shell.firewall.examples.md open_port_for_private_networks no longer calls firewall-cmd --reload internally; added explicit caller-reload rule to shell.firewall.instructions.md
+- oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 ### Changed
-- die() must output to stderr so error messages are not swallowed by stdout pipelines
-- SDK - Updated DotNet SDK to 10.0.300
+- oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
+- oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
+- oneshot session prompts now instruct Claude to reply to every actioned comment and add the Blocked label before asking questions
+- oneshot issue prompt now instructs Claude to create a branch, add a placeholder CHANGELOG entry, push upstream, and open a draft PR when starting work on an issue
 ### Deprecated
 ### Removed
 ### Deployment Changes
