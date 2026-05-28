@@ -181,6 +181,7 @@ main() {
     if [ "${item_type}" = "Issue" ]; then
         linked_pr=$(printf '%s' "${top_item}" | jq -r '(.linkedPrNumbers // []) | first // empty')
         if [ -n "${linked_pr}" ]; then
+            [[ "${linked_pr}" =~ ^[0-9]+$ ]] || die "Non-numeric linked PR number from priorities API: ${linked_pr}"
             info "Issue #${item_id} has linked PR #${linked_pr} — switching to PR workflow"
             item_id="${linked_pr}"
             item_type="PullRequest"
