@@ -6,9 +6,10 @@ Orchestrator tooling for driving Claude Code agents to work on GitHub issues and
 
 The `oneshot` script fetches the top-priority open work item for `credfeto/credfeto-orchestrator`
 from the [priorities API](https://git-workflow.markridgwell.com/priorities) and invokes a
-Claude Code session to work on it.  Session state is persisted in
-`$HOME/.orchestrator/credfeto/credfeto-orchestrator.env` so that subsequent runs resume the
-same Claude session.
+Claude Code session to work on it.  One session file is stored per issue or pull request at
+`$HOME/.orchestrator/credfeto/credfeto-orchestrator/<ItemType>_<id>.env` so that subsequent
+runs resume the correct Claude session.  When a PR has no session of its own the script
+inherits the session from any linked closing issue.
 
 ### Usage
 
