@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 ### Fixed
+- oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 ### Deprecated

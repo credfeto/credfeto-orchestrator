@@ -112,22 +112,20 @@ invoke_claude() {
 
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
-        claude_output=$(claude \
+        claude_output=$(printf '%s' "${prompt}" | claude \
             --resume "${resume_session_id}" \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
-            --add-dir "${REPO_DIR}" \
-            "${prompt}") \
+            --add-dir "${REPO_DIR}") \
             || die "Claude invocation failed"
     else
         info "Starting new Claude session..." >&2
-        claude_output=$(claude \
+        claude_output=$(printf '%s' "${prompt}" | claude \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
-            --add-dir "${REPO_DIR}" \
-            "${prompt}") \
+            --add-dir "${REPO_DIR}") \
             || die "Claude invocation failed"
     fi
 
@@ -204,6 +202,8 @@ main() {
     else
         prompt=$(build_pr_prompt "${item_id}")
     fi
+
+    [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id}"
 
     new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
         || die "Failed to invoke Claude"
