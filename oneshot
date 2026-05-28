@@ -1,0 +1,166 @@
+#!/bin/bash
+
+# Orchestrator oneshot script.
+# Fetches the top-priority open work item for credfeto/credfeto-orchestrator from the
+# priorities API and drives a Claude Code session to work on it.  Persists the Claude
+# session ID so subsequent runs resume where they left off.
+
+OWNER="credfeto"
+REPO="credfeto-orchestrator"
+REPO_FULL="${OWNER}/${REPO}"
+PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
+SESSION_DIR="${HOME}/.orchestrator/${OWNER}"
+SESSION_FILE="${SESSION_DIR}/${REPO}.env"
+REPO_DIR=$(cd "$(dirname "$0")" && pwd)
+
+die() {
+    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+success() {
+    printf '\n\033[32m✓\033[0m %s\n' "$*"
+}
+
+info() {
+    printf '\n\033[32m→\033[0m %s\n' "$*"
+}
+
+# Returns true (0) when running inside a Claude Code Bash-tool session.
+# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
+# that value is inherited by subprocesses (e.g. git hooks).
+# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+check_required_tools() {
+    local tool
+    for tool in curl jq claude gh; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+fetch_top_priority() {
+    local priorities_json top_item
+
+    info "Fetching priorities from ${PRIORITIES_URL}..."
+    priorities_json=$(curl --silent --fail "${PRIORITIES_URL}") \
+        || die "Failed to fetch priorities from ${PRIORITIES_URL}"
+
+    top_item=$(printf '%s' "${priorities_json}" | jq -c --arg repo "${REPO_FULL}" '
+        .priorities
+            | map(select(.repository == $repo and .status == "Open" and .isOnHold == false))
+            | sort_by(.priority)
+            | first
+    ') || die "Failed to parse priorities JSON"
+
+    printf '%s' "${top_item}"
+}
+
+load_session() {
+    SESSION_ID=""
+    STORED_ITEM_ID=""
+    STORED_ITEM_TYPE=""
+
+    if [ -f "${SESSION_FILE}" ]; then
+        # shellcheck source=/dev/null
+        . "${SESSION_FILE}"
+    fi
+}
+
+build_issue_prompt() {
+    local item_id="$1"
+    printf 'You are the Orchestrator agent. Work on issue #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository for all rules and procedures.' \
+        "${item_id}" "${REPO_FULL}" "${REPO_DIR}"
+}
+
+build_pr_prompt() {
+    local item_id="$1"
+    printf 'You are the Orchestrator agent. Work on pull request #%s in %s. The repository is checked out at %s. Follow the .ai-instructions at the root of the repository. Check the PR comments, any code reviews, and CI workflow runs for the branch, then proceed to address all outstanding work.' \
+        "${item_id}" "${REPO_FULL}" "${REPO_DIR}"
+}
+
+invoke_claude() {
+    local prompt="$1" resume_session_id="$2"
+    local claude_output new_session_id
+
+    if [ -n "${resume_session_id}" ]; then
+        info "Resuming Claude session ${resume_session_id}..."
+        claude_output=$(claude \
+            --resume "${resume_session_id}" \
+            --print \
+            --output-format json \
+            --dangerously-skip-permissions \
+            --add-dir "${REPO_DIR}" \
+            "${prompt}") \
+            || die "Claude invocation failed"
+    else
+        info "Starting new Claude session..."
+        claude_output=$(claude \
+            --print \
+            --output-format json \
+            --dangerously-skip-permissions \
+            --add-dir "${REPO_DIR}" \
+            "${prompt}") \
+            || die "Claude invocation failed"
+    fi
+
+    new_session_id=$(printf '%s' "${claude_output}" | jq -r '.session_id // empty') \
+        || die "Failed to parse session_id from Claude output"
+
+    [ -n "${new_session_id}" ] || die "No session_id returned by Claude"
+
+    printf '%s' "${new_session_id}"
+}
+
+save_session() {
+    local new_session_id="$1" item_id="$2" item_type="$3"
+
+    mkdir -p "${SESSION_DIR}" || die "Failed to create session directory: ${SESSION_DIR}"
+    printf 'SESSION_ID="%s"\nSTORED_ITEM_ID="%s"\nSTORED_ITEM_TYPE="%s"\n' \
+        "${new_session_id}" "${item_id}" "${item_type}" \
+        > "${SESSION_FILE}" \
+        || die "Failed to write session file: ${SESSION_FILE}"
+}
+
+main() {
+    check_required_tools
+
+    local top_item item_id item_type item_priority prompt new_session_id
+
+    top_item=$(fetch_top_priority)
+
+    if [ -z "${top_item}" ] || [ "${top_item}" = "null" ]; then
+        success "No open work items for ${REPO_FULL}"
+        exit 0
+    fi
+
+    item_id=$(printf '%s' "${top_item}" | jq -r '.id')
+    item_type=$(printf '%s' "${top_item}" | jq -r '.itemType')
+    item_priority=$(printf '%s' "${top_item}" | jq -r '.priority')
+
+    info "Top priority item: ${item_type} #${item_id} (priority level ${item_priority})"
+
+    load_session
+
+    if [ "${STORED_ITEM_ID}" != "${item_id}" ] || [ "${STORED_ITEM_TYPE}" != "${item_type}" ]; then
+        info "New work item — starting fresh session"
+        SESSION_ID=""
+    else
+        info "Resuming existing session for ${item_type} #${item_id}"
+    fi
+
+    if [ "${item_type}" = "Issue" ]; then
+        prompt=$(build_issue_prompt "${item_id}")
+    else
+        prompt=$(build_pr_prompt "${item_id}")
+    fi
+
+    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}")
+
+    save_session "${new_session_id}" "${item_id}" "${item_type}"
+    success "Session ${new_session_id} saved for ${item_type} #${item_id}"
+}
+
+main
