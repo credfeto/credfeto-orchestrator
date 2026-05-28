@@ -73,8 +73,7 @@ load_session() {
 
     session_file=$(session_file_path "${item_type}" "${item_id}")
     if [ -f "${session_file}" ]; then
-        # shellcheck source=/dev/null
-        . "${session_file}"
+        SESSION_ID=$(cat "${session_file}")
         return
     fi
 
@@ -88,8 +87,7 @@ load_session() {
             linked_session_file=$(session_file_path "Issue" "${linked_issue_id}")
             if [ -f "${linked_session_file}" ]; then
                 info "No session for PR #${item_id} — inheriting session from linked issue #${linked_issue_id}"
-                # shellcheck source=/dev/null
-                . "${linked_session_file}"
+                SESSION_ID=$(cat "${linked_session_file}")
             fi
         fi
     fi
@@ -138,6 +136,11 @@ invoke_claude() {
 
     [ -n "${new_session_id}" ] || die "No session_id returned by Claude"
 
+    # Reject anything that is not a plain UUID to prevent injecting shell statements
+    # into the session file that is read on the next run.
+    [[ "${new_session_id}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] \
+        || die "Unexpected session_id format returned by Claude: ${new_session_id}"
+
     printf '%s' "${new_session_id}"
 }
 
@@ -147,7 +150,7 @@ save_session() {
 
     session_file=$(session_file_path "${item_type}" "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf 'SESSION_ID="%s"\n' "${new_session_id}" \
+    printf '%s\n' "${new_session_id}" \
         > "${session_file}" \
         || die "Failed to write session file: ${session_file}"
 }
