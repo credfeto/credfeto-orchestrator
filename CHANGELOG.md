@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
 - oneshot session prompts now instruct Claude to reply to every actioned comment and add the Blocked label before asking questions
+- oneshot issue prompt now instructs Claude to create a branch, add a placeholder CHANGELOG entry, push upstream, and open a draft PR when starting work on an issue
 ### Deprecated
 ### Removed
 ### Deployment Changes
