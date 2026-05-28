@@ -169,6 +169,12 @@ main() {
     item_type=$(printf '%s' "${top_item}" | jq -r '.itemType')
     item_priority=$(printf '%s' "${top_item}" | jq -r '.priority')
 
+    [[ "${item_id}" =~ ^[0-9]+$ ]] || die "Non-numeric id from priorities API: ${item_id}"
+    case "${item_type}" in
+        Issue|PullRequest) ;;
+        *) die "Unexpected itemType from priorities API: ${item_type}" ;;
+    esac
+
     info "Top priority item: ${item_type} #${item_id} (priority level ${item_priority})"
 
     # When an issue already has a linked pull request, work on the PR directly.
