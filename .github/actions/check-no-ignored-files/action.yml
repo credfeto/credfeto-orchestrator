@@ -1,0 +1,42 @@
+--- # Fail if any tracked files are matched by gitignore rules
+name: "Check No Ignored Files"
+description: "Fails if tracked files are matched by ignore rules"
+
+runs:
+  using: composite
+  steps:
+    - name: "Check for ignored files"
+      uses: actions/github-script@v9.0.0
+      with:
+        script: |
+          const { execSync } = require('node:child_process');
+          const path = require('node:path');
+
+          const excludedFiles = ['server.pfx', '.gitignore'];
+          const isPreCommitRepo = context.repo.repo.endsWith('global-pre-commit');
+
+          if (isPreCommitRepo) {
+            excludedFiles.push('.pre-commit-config.yaml');
+          }
+
+          const isExcludedFile = (file) => excludedFiles.includes(path.basename(file));
+
+          // git ls-files -i correctly honours negation patterns in nested .gitignore files,
+          // unlike `git check-ignore --no-index` which ignores them.
+          const ignoredFiles = execSync('git ls-files --cached -i --exclude-standard', { encoding: 'utf8' })
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .filter((file) => !isExcludedFile(file));
+
+          if (ignoredFiles.length === 0) {
+            core.info('No ignored files');
+            return;
+          }
+
+          ignoredFiles.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }) || a.localeCompare(b));
+
+          for (const file of ignoredFiles) {
+            core.error(`Ignored file found: ${file}`, { file });
+          }
+
+          core.setFailed(`Found ignored files (${ignoredFiles.length}).`);

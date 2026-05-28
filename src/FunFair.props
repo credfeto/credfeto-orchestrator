@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Project>
+    <!-- Common company metadata -->
+    <PropertyGroup>
+        <Authors>FunFair</Authors>
+        <Company>FunFair</Company>
+        <Copyright>FunFair</Copyright>
+        <Product>FunFair</Product>
+    </PropertyGroup>
+
+    <!-- Release notes; if any - injected in at build time -->
+    <PropertyGroup>
+        <PackageReleaseNotes>$(ReleaseNotes)</PackageReleaseNotes>
+    </PropertyGroup>
+
+    <!-- Repository type -->
+    <PropertyGroup>
+        <RepositoryType>git</RepositoryType>
+        <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
+    </PropertyGroup>
+
+    <!-- Only add these properties in if the project is publishable or packable.
+         TODO: Find a better piece of metadata that gets defined _only_ during publish or pack
+    -->
+    <PropertyGroup>
+        <FFPacking>False</FFPacking>
+        <FFPacking Condition="$(IsPackable) == 'true' OR $(IsPublishable) == 'true'">True</FFPacking>
+    </PropertyGroup>
+
+    <!-- Package Icon -->
+    <PropertyGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)packageicon.png')">
+        <PackageIcon>packageicon.png</PackageIcon>
+        <PackageIconUrl>https://avatars.githubusercontent.com/u/29401895</PackageIconUrl>
+    </PropertyGroup>
+    <ItemGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)packageicon.png')">
+        <None Include="$(MSBuildThisFileDirectory)packageicon.png" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+    <!-- License -->
+    <PropertyGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)..\LICENSE')">
+        <PackageLicense>LICENSE</PackageLicense>
+        <PackageLicenseUrl>$(RepositoryUrl)/blob/master/LICENSE.md</PackageLicenseUrl>
+    </PropertyGroup>
+    <ItemGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)..\LICENSE')">
+        <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+    <!-- Readme -->
+    <PropertyGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)..\README.md')">
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+    </PropertyGroup>
+    <ItemGroup Condition="$(FFPacking) == 'True' AND Exists('$(MSBuildThisFileDirectory)..\README.md')">
+        <None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+    <!-- Disable Nuget errors on publishing -->
+    <PropertyGroup Condition="$(FFPublishing) == 'True'">
+        <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+    </PropertyGroup>
+
+    <!-- Enable SBOM generation in production builds -->
+    <PropertyGroup Condition="$(FFPacking) == 'True' AND $(IsProduction) == 'True'">
+        <EnableSbom>true</EnableSbom>
+    </PropertyGroup>
+
+    <!-- Sarif -->
+    <PropertyGroup Condition="$(EnableSarif)=='True' And !$(MSBuildProjectName.EndsWith('.Tests'))">
+        <ErrorLog>$(MSBuildThisFileDirectory)\..\results\$(MSBuildProjectName).sarif,version=2.1</ErrorLog>
+        <ReportAnalyzer>true</ReportAnalyzer>
+    </PropertyGroup>
+
+<!--     <ItemGroup> -->
+<!--       <GlobalAnalyzerConfigFiles Include="$(MSBuildThisFileDirectory)..\.globalconfig" /> -->
+<!--     </ItemGroup> -->
+</Project>
