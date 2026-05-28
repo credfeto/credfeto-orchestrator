@@ -41,10 +41,10 @@ check_required_tools() {
     done
 }
 
+# Outputs the top-priority item JSON for this repo; caller announces progress.
 fetch_top_priority() {
     local priorities_json top_item
 
-    info "Fetching priorities from ${PRIORITIES_URL}..."
     priorities_json=$(curl --silent --fail "${PRIORITIES_URL}") \
         || die "Failed to fetch priorities from ${PRIORITIES_URL}"
 
@@ -81,12 +81,13 @@ build_pr_prompt() {
         "${item_id}" "${REPO_FULL}" "${REPO_DIR}"
 }
 
+# Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2"
     local claude_output new_session_id
 
     if [ -n "${resume_session_id}" ]; then
-        info "Resuming Claude session ${resume_session_id}..."
+        info "Resuming Claude session ${resume_session_id}..." >&2
         claude_output=$(claude \
             --resume "${resume_session_id}" \
             --print \
@@ -96,7 +97,7 @@ invoke_claude() {
             "${prompt}") \
             || die "Claude invocation failed"
     else
-        info "Starting new Claude session..."
+        info "Starting new Claude session..." >&2
         claude_output=$(claude \
             --print \
             --output-format json \
@@ -127,8 +128,9 @@ save_session() {
 main() {
     check_required_tools
 
-    local top_item item_id item_type item_priority prompt new_session_id
+    local top_item item_id item_type item_priority linked_pr prompt new_session_id
 
+    info "Fetching priorities from ${PRIORITIES_URL}..."
     top_item=$(fetch_top_priority)
 
     if [ -z "${top_item}" ] || [ "${top_item}" = "null" ]; then
@@ -141,6 +143,16 @@ main() {
     item_priority=$(printf '%s' "${top_item}" | jq -r '.priority')
 
     info "Top priority item: ${item_type} #${item_id} (priority level ${item_priority})"
+
+    # When an issue already has a linked pull request, work on the PR directly.
+    if [ "${item_type}" = "Issue" ]; then
+        linked_pr=$(printf '%s' "${top_item}" | jq -r '(.linkedPrNumbers // []) | first // empty')
+        if [ -n "${linked_pr}" ]; then
+            info "Issue #${item_id} has linked PR #${linked_pr} — switching to PR workflow"
+            item_id="${linked_pr}"
+            item_type="PullRequest"
+        fi
+    fi
 
     load_session
 
@@ -157,7 +169,8 @@ main() {
         prompt=$(build_pr_prompt "${item_id}")
     fi
 
-    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}")
+    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
+        || die "Failed to invoke Claude"
 
     save_session "${new_session_id}" "${item_id}" "${item_type}"
     success "Session ${new_session_id} saved for ${item_type} #${item_id}"
