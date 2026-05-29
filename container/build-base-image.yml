@@ -1,3 +1,4 @@
+---
 name: Build base image
 
 # Build and push the heavy half of the agent container image — apt, bun,
@@ -128,5 +129,7 @@ jobs:
             echo "credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
             echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
             echo ""
-            echo "Hosts pull this image via the hourly \`nanoclaw-base-refresh.timer\` (\`scripts/refresh-base-image.sh\`); when the digest changes, the customisation layer is rebuilt and running agent containers are recycled."
+            echo "Hosts pull this image via the hourly \`nanoclaw-base-refresh.timer\`" \
+              "(\`scripts/refresh-base-image.sh\`); when the digest changes," \
+              "the customisation layer is rebuilt and running agent containers are recycled."
           } >> "$GITHUB_STEP_SUMMARY"
