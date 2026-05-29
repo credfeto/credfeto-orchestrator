@@ -33,6 +33,9 @@ is_ai_agent && die "Continuous loop must not be run inside a Claude Code session
 iteration=0
 while true; do
     iteration=$((iteration + 1))
+    info "Iteration ${iteration} — updating scripts..."
+    git -C "${SCRIPT_DIR}" switch main
+    git -C "${SCRIPT_DIR}" pull
     info "Iteration ${iteration} — running oneshot..."
     "${SCRIPT_DIR}/oneshot"
     success "Iteration ${iteration} complete — sleeping ${SLEEP_SECONDS}s"
