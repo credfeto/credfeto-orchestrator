@@ -7,6 +7,10 @@ setup() {
     source_oneshot
 }
 
+teardown() {
+    cleanup_repo_fixtures
+}
+
 # --- prompt building -------------------------------------------------------
 
 @test "build_issue_prompt includes issue number, repo, work dir and key instructions" {
@@ -310,4 +314,57 @@ setup() {
     local model=""
     [ -n "${model}" ] && model_flags=( --model "${model}" )
     [ "${#model_flags[@]}" -eq 0 ]
+}
+
+# Integration tests: verify invoke_claude actually passes --model to the claude subprocess.
+# The claude stub writes its received arguments to CLAUDE_ARGS_LOG (an exported env var
+# so the subprocess can resolve the path at runtime) and emits a minimal JSON session response.
+
+_make_invoke_claude_stub() {
+    # Creates a claude stub in a repo-tree directory (not /tmp, which is noexec).
+    # The stub appends all received arguments to CLAUDE_ARGS_LOG (env var, set by caller)
+    # and emits a minimal JSON session response on stdout.
+    make_repo_fixture_dir
+    cat > "${REPO_FIXTURE_DIR}/claude" <<'CLAUDE_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "${CLAUDE_ARGS_LOG}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":""}\n'
+CLAUDE_STUB
+    chmod +x "${REPO_FIXTURE_DIR}/claude"
+}
+
+@test "invoke_claude passes --model flag to claude subprocess when model is non-empty" {
+    # shellcheck disable=SC2030
+    export CLAUDE_ARGS_LOG="${TEST_TMP}/claude_args"
+    _make_invoke_claude_stub
+    # shellcheck disable=SC2030
+    local orig_path="${PATH}"
+    # shellcheck disable=SC2030
+    PATH="${REPO_FIXTURE_DIR}:${PATH}"
+    run invoke_claude "test prompt" "" "sonnet"
+    # shellcheck disable=SC2031
+    PATH="${orig_path}"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2031
+    [ -f "${CLAUDE_ARGS_LOG}" ]
+    grep -q -- '--model' "${CLAUDE_ARGS_LOG}"
+    grep -q 'sonnet' "${CLAUDE_ARGS_LOG}"
+}
+
+@test "invoke_claude omits --model flag when model argument is empty" {
+    # shellcheck disable=SC2031
+    export CLAUDE_ARGS_LOG="${TEST_TMP}/claude_args"
+    _make_invoke_claude_stub
+    # shellcheck disable=SC2031
+    local orig_path="${PATH}"
+    # shellcheck disable=SC2031
+    PATH="${REPO_FIXTURE_DIR}:${PATH}"
+    run invoke_claude "test prompt" "" ""
+    # shellcheck disable=SC2031
+    PATH="${orig_path}"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2031
+    [ -f "${CLAUDE_ARGS_LOG}" ]
+    run grep -q -- '--model' "${CLAUDE_ARGS_LOG}"
+    [ "${status}" -ne 0 ]
 }
