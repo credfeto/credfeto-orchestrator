@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Non-agentic PR status check to avoid burning tokens on up-to-date PRs
 - Non-agentic issue status check to skip unchanged issues without burning tokens
 - Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
+- Bats-based test suite for the oneshot and loop shell scripts
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub

@@ -230,6 +230,12 @@ check_item_open() {
     return 1
 }
 
+# Returns 0 if the value is a plain UUID (the format Claude returns for a session id).
+# Rejecting anything else prevents injecting shell statements into the session file.
+is_valid_session_id() {
+    [[ "$1" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
+}
+
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
@@ -276,7 +282,7 @@ invoke_claude() {
 
     # Reject anything that is not a plain UUID to prevent injecting shell statements
     # into the session file that is read on the next run.
-    [[ "${new_session_id}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] \
+    is_valid_session_id "${new_session_id}" \
         || die "Unexpected session_id format returned by Claude: ${new_session_id}"
 
     printf '%s' "${new_session_id}"
@@ -575,4 +581,6 @@ main() {
     fi
 }
 
-main
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

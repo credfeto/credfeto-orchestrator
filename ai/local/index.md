@@ -15,3 +15,5 @@ This is an index of local instructions that apply to just this project.
 ## Instruction Files
 
 <!-- Locally Maintained -->
+
+* [Shell Testing](shell-testing.instructions.md) — bats-core test framework, the source-guard convention, test isolation, and external-command mocking for the `oneshot` and `loop` scripts. Load when working on those scripts or `test/*.bats`.
