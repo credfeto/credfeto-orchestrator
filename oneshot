@@ -284,18 +284,26 @@ fetch_pr_json() {
 # Outputs the hash on stdout; returns non-zero if jq fails.
 fingerprint_pr_json() {
     local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -r '
+    local canonical
+
+    canonical=$(printf '%s' "${pr_json}" | jq -r '
         .title,
         (.body // ""),
         (.isDraft | tostring),
-        ([.labels[].name] | sort | .[]),
+        ([((.labels // [])[] | .name)] | sort | .[]),
         .headRefOid,
-        (.comments | length | tostring),
-        (.comments | sort_by(.updatedAt) | last | .updatedAt // "none"),
-        (.reviews | last | .state // "none"),
-        (.reviews | last | .submittedAt // .updatedAt // "none"),
-        ([.statusCheckRollup[] | .conclusion + ":" + .name] | sort | join(","))
-    ' | sha256sum | awk '{ print $1 }'
+        ((.comments // []) | length | tostring),
+        (((.comments // []) | sort_by(.updatedAt) | last | .updatedAt) // "none"),
+        (((.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
+        (((.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
+        ([((.statusCheckRollup // [])[]
+            | (.name // "unknown") as $n
+            | (.conclusion // .status // "none") as $c
+            | "\($c):\($n)"
+        )] | sort | join(","))
+    ') || return 1
+
+    printf '%s' "${canonical}" | sha256sum | awk '{ print $1 }'
 }
 
 # Computes a deterministic hash of the PR's current state using a single gh pr view call.
