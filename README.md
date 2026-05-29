@@ -41,7 +41,7 @@ To charge Claude usage to a specific owner's Anthropic account, create a key fil
 ~/.orchestrator/<owner>/api-key
 ```
 
-The file must contain only the raw API key (no newlines, no surrounding whitespace).
+The file should contain the raw API key; any surrounding whitespace is stripped automatically.
 The key is scoped to the `claude` invocation and is never written to log output.
 
 **File permissions — set `600` to prevent other users from reading the key:**

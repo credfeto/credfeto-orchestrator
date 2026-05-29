@@ -43,22 +43,46 @@ is_ai_agent() {
 # Key files must be readable only by the owner (chmod 600).
 load_api_key_for_owner() {
     local owner="$1"
-    local xdg_key_file legacy_key_file
+    local xdg_key_file legacy_key_file perms
+
+    case "${owner}" in
+        *[!a-zA-Z0-9_-]*) return ;;
+    esac
 
     xdg_key_file="${HOME}/.config/orchestrator/api-keys/${owner}"
     legacy_key_file="${HOME}/.orchestrator/${owner}/api-key"
 
     if [ -f "${xdg_key_file}" ]; then
-        tr -d '[:space:]' < "${xdg_key_file}"
-        return
+        perms=$(stat -c '%a' "${xdg_key_file}" 2>/dev/null)
+        case "${perms}" in
+            600|400) ;;
+            *) info "Warning: key file ${xdg_key_file} has permissions ${perms} — expected 600; skipping" >&2
+               ;;
+        esac
+        case "${perms}" in
+            600|400)
+                tr -d '[:space:]' < "${xdg_key_file}"
+                return
+                ;;
+        esac
     fi
 
     if [ -f "${legacy_key_file}" ]; then
-        tr -d '[:space:]' < "${legacy_key_file}"
-        return
+        perms=$(stat -c '%a' "${legacy_key_file}" 2>/dev/null)
+        case "${perms}" in
+            600|400) ;;
+            *) info "Warning: key file ${legacy_key_file} has permissions ${perms} — expected 600; skipping" >&2
+               ;;
+        esac
+        case "${perms}" in
+            600|400)
+                tr -d '[:space:]' < "${legacy_key_file}"
+                return
+                ;;
+        esac
     fi
 
-    printf ''
+    return
 }
 
 ensure_rules_current() {
@@ -203,42 +227,26 @@ invoke_claude() {
     # The key is never logged — use [REDACTED] in any diagnostic messages that reference it.
     owner_api_key=$(load_api_key_for_owner "${OWNER}")
 
+    local -a claude_env_prefix=()
+    [ -n "${owner_api_key}" ] && claude_env_prefix=( env "ANTHROPIC_API_KEY=${owner_api_key}" )
+
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
-        if [ -n "${owner_api_key}" ]; then
-            printf '%s' "${prompt}" | env ANTHROPIC_API_KEY="${owner_api_key}" claude \
-                --resume "${resume_session_id}" \
-                --print \
-                --output-format json \
-                --dangerously-skip-permissions \
-                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
-        else
-            printf '%s' "${prompt}" | claude \
-                --resume "${resume_session_id}" \
-                --print \
-                --output-format json \
-                --dangerously-skip-permissions \
-                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
-        fi
+        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+            --resume "${resume_session_id}" \
+            --print \
+            --output-format json \
+            --dangerously-skip-permissions \
+            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     else
         info "Starting new Claude session..." >&2
-        if [ -n "${owner_api_key}" ]; then
-            printf '%s' "${prompt}" | env ANTHROPIC_API_KEY="${owner_api_key}" claude \
-                --print \
-                --output-format json \
-                --dangerously-skip-permissions \
-                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
-        else
-            printf '%s' "${prompt}" | claude \
-                --print \
-                --output-format json \
-                --dangerously-skip-permissions \
-                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
-        fi
+        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+            --print \
+            --output-format json \
+            --dangerously-skip-permissions \
+            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     fi
 
     # Show Claude's text response so the caller can review what was done
