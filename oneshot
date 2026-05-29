@@ -265,6 +265,77 @@ save_session() {
         || die "Failed to write session file: ${session_file}"
 }
 
+# Returns the path to the fingerprint file for a given PR ID.
+pr_fingerprint_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.fingerprint' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Fetches the PR state JSON used for fingerprinting; returns 1 on gh failure.
+fetch_pr_json() {
+    local item_id="$1"
+    gh pr view "${item_id}" \
+        --repo "${REPO_FULL}" \
+        --json title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup \
+        2>/dev/null || return 1
+}
+
+# Computes a deterministic fingerprint from pre-fetched PR state JSON.
+# Outputs the hash on stdout; returns non-zero if jq fails.
+fingerprint_pr_json() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -r '
+        .title,
+        (.body // ""),
+        (.isDraft | tostring),
+        ([.labels[].name] | sort | .[]),
+        .headRefOid,
+        (.comments | length | tostring),
+        (.comments | sort_by(.updatedAt) | last | .updatedAt // "none"),
+        (.reviews | last | .state // "none"),
+        (.reviews | last | .submittedAt // .updatedAt // "none"),
+        ([.statusCheckRollup[] | .conclusion + ":" + .name] | sort | join(","))
+    ' | sha256sum | awk '{ print $1 }'
+}
+
+# Computes a deterministic hash of the PR's current state using a single gh pr view call.
+# Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
+compute_pr_fingerprint() {
+    local item_id="$1"
+    local pr_json
+    pr_json=$(fetch_pr_json "${item_id}") || return 1
+    fingerprint_pr_json "${pr_json}"
+}
+
+# Writes the fingerprint to the fingerprint file for a given PR ID.
+save_pr_fingerprint() {
+    local item_id="$1" fingerprint="$2"
+    local fingerprint_file
+
+    fingerprint_file=$(pr_fingerprint_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${fingerprint}" \
+        > "${fingerprint_file}" \
+        || die "Failed to write fingerprint file: ${fingerprint_file}"
+}
+
+# Reads and outputs the saved fingerprint for a given PR ID, or empty string if none exists.
+load_pr_fingerprint() {
+    local item_id="$1"
+    local fingerprint_file
+
+    fingerprint_file=$(pr_fingerprint_file_path "${item_id}")
+    if [ -f "${fingerprint_file}" ]; then
+        cat "${fingerprint_file}"
+    fi
+}
+
+# Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
+pr_json_has_blocked_label() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+}
+
 main() {
     check_required_tools
 
@@ -313,6 +384,26 @@ main() {
         *) die "Failed to determine GitHub state of ${item_type} #${item_id} — aborting to avoid skipping valid work" ;;
     esac
 
+    if [ "${item_type}" = "PullRequest" ]; then
+        local pr_json current_fingerprint saved_fingerprint
+        pr_json=$(fetch_pr_json "${item_id}") \
+            || die "Failed to fetch state for PR #${item_id} from GitHub"
+
+        if pr_json_has_blocked_label "${pr_json}"; then
+            info "PR #${item_id} has the 'blocked' label — skipping"
+            exit 0
+        fi
+
+        current_fingerprint=$(fingerprint_pr_json "${pr_json}") \
+            || die "Failed to compute fingerprint for PR #${item_id}"
+        saved_fingerprint=$(load_pr_fingerprint "${item_id}")
+
+        if [ -n "${saved_fingerprint}" ] && [ "${current_fingerprint}" = "${saved_fingerprint}" ]; then
+            info "PR #${item_id} state unchanged since last run — skipping"
+            exit 0
+        fi
+    fi
+
     load_session "${item_type}" "${item_id}"
 
     if [ -n "${SESSION_ID}" ]; then
@@ -334,6 +425,13 @@ main() {
 
     save_session "${item_type}" "${item_id}" "${new_session_id}"
     success "Session ${new_session_id} saved for ${item_type} #${item_id}"
+
+    if [ "${item_type}" = "PullRequest" ]; then
+        local current_fingerprint
+        current_fingerprint=$(compute_pr_fingerprint "${item_id}") \
+            || die "Failed to compute fingerprint for PR #${item_id}"
+        save_pr_fingerprint "${item_id}" "${current_fingerprint}"
+    fi
 }
 
 main
