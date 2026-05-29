@@ -11,6 +11,8 @@ REPO_FULL="${OWNER}/${REPO}"
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
 REPO_DIR=$(cd "$(dirname "$0")" && pwd)
+WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
+RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -31,6 +33,33 @@ info() {
 # Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
 is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
+}
+
+ensure_rules_current() {
+    if [ -d "${RULES_DIR}/.git" ]; then
+        info "Updating rules (cs-template) at ${RULES_DIR}..."
+        git -C "${RULES_DIR}" pull --ff-only || die "Failed to update cs-template at ${RULES_DIR}"
+    else
+        info "Cloning rules (cs-template) to ${RULES_DIR}..."
+        mkdir -p "$(dirname "${RULES_DIR}")" || die "Failed to create parent directory for ${RULES_DIR}"
+        git clone git@github.com:credfeto/cs-template.git "${RULES_DIR}" || die "Failed to clone cs-template to ${RULES_DIR}"
+    fi
+}
+
+ensure_repo_current() {
+    info "Fetching latest changes for ${REPO_FULL}..."
+    git -C "${REPO_DIR}" fetch origin || die "Failed to fetch from origin for ${REPO_FULL}"
+
+    local current_branch
+    current_branch=$(git -C "${REPO_DIR}" branch --show-current)
+    if [ "${current_branch}" = "main" ]; then
+        if git -C "${REPO_DIR}" diff --quiet && git -C "${REPO_DIR}" diff --cached --quiet; then
+            info "Rebasing main with origin/main..."
+            git -C "${REPO_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
+        else
+            info "Working tree has uncommitted changes — skipping rebase of main"
+        fi
+    fi
 }
 
 check_required_tools() {
@@ -188,6 +217,9 @@ save_session() {
 
 main() {
     check_required_tools
+
+    ensure_rules_current
+    ensure_repo_current
 
     local top_item item_id item_type item_priority linked_pr prompt new_session_id
 
