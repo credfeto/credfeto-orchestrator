@@ -24,47 +24,41 @@ inherits the session from any linked closing issue.
 - `claude` (Claude Code CLI)
 - `gh` (GitHub CLI, authenticated)
 
-### Per-owner API key
+### Per-owner OAuth token
 
-By default the script uses whatever `ANTHROPIC_API_KEY` is already set in the environment.
-To charge Claude usage to a specific owner's Anthropic account, create a key file for that owner.
+By default the script uses whatever `CLAUDE_CODE_OAUTH_TOKEN` is already set in the environment.
+To charge Claude usage to a specific owner's Anthropic account, create a token file for that owner.
 
 **Preferred location (XDG):**
 
 ```text
-$XDG_CONFIG_HOME/orchestrator/api-keys/<owner>
+$XDG_CONFIG_HOME/orchestrator/tokens/<owner>
 ```
 
-(defaults to `~/.config/orchestrator/api-keys/<owner>` when `$XDG_CONFIG_HOME` is not set)
+(defaults to `~/.config/orchestrator/tokens/<owner>` when `$XDG_CONFIG_HOME` is not set)
 
-**Legacy fallback location:**
+The file should contain the raw OAuth token; any surrounding whitespace is stripped automatically.
+The token is scoped to the `claude` invocation via `env CLAUDE_CODE_OAUTH_TOKEN=...` and is never written to log output.
 
-```text
-~/.orchestrator/<owner>/api-key
-```
-
-The file should contain the raw API key; any surrounding whitespace is stripped automatically.
-The key is scoped to the `claude` invocation and is never written to log output.
-
-**File permissions — set `600` to prevent other users from reading the key:**
+**File permissions — set `600` to prevent other users from reading the token:**
 
 ```sh
-chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/<owner>"
+chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens/<owner>"
 ```
 
-Example — storing a key for the `credfeto` owner:
+Example — storing a token for the `credfeto` owner:
 
 ```sh
-mkdir -p "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys"
-printf '%s' 'sk-ant-...' > "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/credfeto"
-chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/credfeto"
+mkdir -p "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens"
+printf '%s' '<oauth-token>' > "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens/credfeto"
+chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens/credfeto"
 ```
 
-If neither key file exists, the script falls back to `ANTHROPIC_API_KEY` from the environment,
+If no token file exists, the script falls back to `CLAUDE_CODE_OAUTH_TOKEN` from the environment,
 preserving the existing behaviour for installations that do not require per-owner billing.
 
 > **Note:** The current script is configured for the `credfeto` owner. As the orchestrator is
-> extended to cover additional repos, set `OWNER` accordingly and create a key file for each owner.
+> extended to cover additional repos, set `OWNER` accordingly and create a token file for each owner.
 
 ## Build Status
 
