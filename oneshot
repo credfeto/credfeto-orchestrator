@@ -107,9 +107,22 @@ ensure_repo_current() {
 
 check_required_tools() {
     local tool
-    for tool in curl jq claude gh git sha256sum awk grep; do
+    for tool in curl jq claude gh git awk grep; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
+
+    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+        die "Required tool not found: sha256sum or shasum"
+    fi
+}
+
+# Reads stdin and writes a SHA-256 digest to stdout.
+hash_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{ print $1 }'
+    else
+        shasum -a 256 | awk '{ print $1 }'
+    fi
 }
 
 # Returns the path to the session file for a given item type and ID.
@@ -303,7 +316,7 @@ fingerprint_pr_json() {
         )] | sort | join(","))
     ') || return 1
 
-    printf '%s' "${canonical}" | sha256sum | awk '{ print $1 }'
+    printf '%s' "${canonical}" | hash_sha256
 }
 
 # Computes a deterministic hash of the PR's current state using a single gh pr view call.
@@ -355,8 +368,7 @@ fetch_issue_json() {
     local item_id="$1"
     gh issue view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json title,body,state,labels,comments,assignees,milestone \
-        2>/dev/null || return 1
+        --json title,body,state,labels,comments,assignees,milestone || return 1
 }
 
 # Computes a deterministic fingerprint from pre-fetched Issue state JSON.
@@ -367,13 +379,12 @@ fingerprint_issue_json() {
         .title,
         (.body // ""),
         .state,
-        ([.labels[].name] | sort | .[]),
-        (.comments | length | tostring),
-        (.comments | sort_by(.updatedAt) | last | .updatedAt // "none"),
-        ([.comments[] | .body] | join("\n")),
-        ([.assignees[].login] | sort | join(",")),
+        ([((.labels // [])[] | .name)] | sort | .[]),
+        ((.comments // []) | length | tostring),
+        ([((.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv)] | sort | join("\n")),
+        ([((.assignees // [])[] | .login)] | sort | join(",")),
         (.milestone.title // "none")
-    ' | sha256sum | awk '{ print $1 }'
+    ' | hash_sha256
 }
 
 # Computes a deterministic hash of the Issue's current state using a single gh issue view call.
@@ -412,7 +423,6 @@ load_issue_fingerprint() {
 issue_json_has_blocked_label() {
     local issue_json="$1"
     printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
-}
 }
 
 main() {
