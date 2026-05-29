@@ -26,7 +26,7 @@ inherits the session from any linked closing issue.
 
 ### Per-owner OAuth token
 
-By default the script uses whatever `CLAUDE_CODE_OAUTH_TOKEN` is already set in the environment.
+By default, the script uses whatever `CLAUDE_CODE_OAUTH_TOKEN` is already set in the environment.
 To charge Claude usage to a specific owner's Anthropic account, create a token file for that owner.
 
 **Preferred location (XDG):**
