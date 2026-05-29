@@ -38,6 +38,7 @@ is_ai_agent() {
 ensure_rules_current() {
     if [ -d "${RULES_DIR}/.git" ]; then
         info "Updating rules (cs-template) at ${RULES_DIR}..."
+        git -C "${RULES_DIR}" checkout main || die "Failed to switch cs-template to main at ${RULES_DIR}"
         git -C "${RULES_DIR}" pull --ff-only || die "Failed to update cs-template at ${RULES_DIR}"
     else
         info "Cloning rules (cs-template) to ${RULES_DIR}..."
