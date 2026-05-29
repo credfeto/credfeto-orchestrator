@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
+- loop script: continuous wrapper that runs oneshot every 5 minutes
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 ### Changed

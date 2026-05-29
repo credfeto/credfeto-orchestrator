@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Continuous loop wrapper: runs ./oneshot then waits 300 seconds, indefinitely.
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+SLEEP_SECONDS=300
+
+die() {
+    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+success() {
+    printf '\n\033[32m✓\033[0m %s\n' "$*"
+}
+
+info() {
+    printf '\n\033[32m→\033[0m %s\n' "$*"
+}
+
+# Returns true (0) when running inside a Claude Code Bash-tool session.
+# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
+# that value is inherited by subprocesses (e.g. git hooks).
+# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+[ -x "${SCRIPT_DIR}/oneshot" ] || die "oneshot script not found or not executable at ${SCRIPT_DIR}/oneshot"
+
+is_ai_agent && die "Continuous loop must not be run inside a Claude Code session"
+
+iteration=0
+while true; do
+    iteration=$((iteration + 1))
+    info "Iteration ${iteration} — running oneshot..."
+    "${SCRIPT_DIR}/oneshot"
+    success "Iteration ${iteration} complete — sleeping ${SLEEP_SECONDS}s"
+    sleep "${SLEEP_SECONDS}"
+done
