@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+# Shared helpers for the bats suites covering the oneshot and loop scripts.
+#
+# These helpers keep every test isolated and offline:
+#   * a per-test temporary directory is created under BATS_TEST_TMPDIR
+#   * HOME / XDG_CONFIG_HOME / XDG_PROJECTS_DIR / SESSION_BASE_DIR are redirected there
+#   * external commands are replaced with deterministic PATH stubs
+# Nothing here touches the real filesystem outside TEST_TMP or makes network calls.
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Tracks repo-tree fixture directories so teardown can remove them.
+REPO_FIXTURE_DIRS=()
+
+# Creates an isolated environment and exports the variables the scripts read.
+# Call this from setup() before sourcing a script under test.
+setup_isolated_env() {
+    TEST_TMP="$(mktemp -d "${BATS_TEST_TMPDIR}/oneshot.XXXXXX")"
+    export TEST_TMP
+
+    export HOME="${TEST_TMP}/home"
+    export XDG_CONFIG_HOME="${TEST_TMP}/config"
+    export XDG_PROJECTS_DIR="${TEST_TMP}/projects"
+    export SESSION_BASE_DIR="${TEST_TMP}/sessions"
+
+    STUB_BIN="${TEST_TMP}/bin"
+    export STUB_BIN
+    mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${SESSION_BASE_DIR}" "${STUB_BIN}"
+
+    # Put the stub directory first so any stubs we create take precedence.
+    export PATH="${STUB_BIN}:${PATH}"
+}
+
+# Sources the oneshot script so its functions are defined without running main.
+# Re-asserts SESSION_BASE_DIR afterwards because oneshot derives it from HOME at source time.
+source_oneshot() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/oneshot"
+    SESSION_BASE_DIR="${TEST_TMP}/sessions"
+}
+
+# Sources the loop script so its functions are defined without running main.
+source_loop() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/loop"
+}
+
+# Creates a unique fixture directory inside the repository tree and assigns its path
+# to the variable named REPO_FIXTURE_DIR. The loop script checks `[ -x oneshot ]`;
+# some sandboxes do not honour the execute bit for files created under the system temp
+# directory, so loop subprocess fixtures must live inside the repo tree. The directory
+# is registered for teardown removal. It assigns rather than prints so the registration
+# is not lost to a command-substitution subshell.
+make_repo_fixture_dir() {
+    REPO_FIXTURE_DIR="$(mktemp -d "${REPO_ROOT}/test/.fixture.XXXXXX")"
+    REPO_FIXTURE_DIRS+=("${REPO_FIXTURE_DIR}")
+}
+
+# Removes any repo-tree fixture directories created during the test.
+cleanup_repo_fixtures() {
+    local dir
+    for dir in "${REPO_FIXTURE_DIRS[@]}"; do
+        [ -n "${dir}" ] && rm -rf "${dir}"
+    done
+    REPO_FIXTURE_DIRS=()
+}
+
+# Writes an executable PATH stub named "$1" whose body is the remaining arguments,
+# in the per-test stub directory that is first on PATH. Use this for commands invoked
+# as subprocesses. For commands that the test must inspect or vary per call — or that
+# the host environment resolves regardless of PATH — override the matching shell
+# function directly in the test instead.
+# Example: make_stub gh 'echo "{}"'
+make_stub() {
+    local name="$1"
+    shift
+    local script="${STUB_BIN}/${name}"
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '%s\n' "$*"
+    } > "${script}"
+    chmod +x "${script}"
+}

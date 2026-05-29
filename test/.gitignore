@@ -1,0 +1,4 @@
+# Ephemeral fixture directories created under the repo tree by test_helper.bash
+# (used where the sandbox does not honour the execute bit under the system temp dir).
+# These are removed by test teardown; ignore them so a crashed run cannot leak them into a commit.
+.fixture.*/
