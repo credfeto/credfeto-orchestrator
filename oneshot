@@ -72,6 +72,49 @@ load_token_for_owner() {
     [ -n "${token}" ] && printf '%s' "${token}"
 }
 
+# Returns the Claude model alias for the given numeric priority, or empty string for Claude's default.
+# Lookup order:
+#   1. ${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/model-priority — priority-to-model map.
+#      Format: lines of "<max_priority_inclusive> <model>" (blank lines and # comments ignored).
+#      Lines are evaluated in file order; the first line where priority <= max_priority wins.
+#   2. ${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/model — a single model name for all priorities.
+#   3. Empty string — caller passes no --model flag and Claude uses its default model.
+# Model names must contain only alphanumeric characters, hyphens, and dots.
+load_model_for_priority() {
+    local priority="$1"
+    local map_file model_file max_pri model_name line
+
+    case "${priority}" in
+        *[!0-9]*) return ;;
+    esac
+
+    map_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/model-priority"
+    model_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/model"
+
+    if [ -f "${map_file}" ]; then
+        while IFS= read -r line || [ -n "${line}" ]; do
+            case "${line}" in '#'*|'') continue ;; esac
+            max_pri=$(printf '%s' "${line}" | awk '{print $1}')
+            model_name=$(printf '%s' "${line}" | awk '{print $2}')
+            case "${max_pri}" in *[!0-9]*) continue ;; esac
+            case "${model_name}" in *[!a-zA-Z0-9._-]*) continue ;; esac
+            [ -z "${max_pri}" ] || [ -z "${model_name}" ] && continue
+            if [ "${priority}" -le "${max_pri}" ]; then
+                printf '%s' "${model_name}"
+                return
+            fi
+        done < "${map_file}"
+    fi
+
+    if [ -f "${model_file}" ]; then
+        model_name=$(tr -d '[:space:]' < "${model_file}")
+        case "${model_name}" in
+            *[!a-zA-Z0-9._-]*) return ;;
+        esac
+        [ -n "${model_name}" ] && printf '%s' "${model_name}"
+    fi
+}
+
 ensure_rules_current() {
     if [ -d "${RULES_DIR}/.git" ]; then
         info "Updating rules (cs-template) at ${RULES_DIR}..."
@@ -239,7 +282,7 @@ is_valid_session_id() {
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
-    local prompt="$1" resume_session_id="$2"
+    local prompt="$1" resume_session_id="$2" model="$3"
     local tmpfile new_session_id owner_token
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
@@ -251,6 +294,9 @@ invoke_claude() {
     local -a claude_env_prefix=()
     [ -n "${owner_token}" ] && claude_env_prefix=( env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
 
+    local -a model_flags=()
+    [ -n "${model}" ] && model_flags=( --model "${model}" )
+
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
@@ -258,6 +304,7 @@ invoke_claude() {
             --print \
             --output-format json \
             --dangerously-skip-permissions \
+            "${model_flags[@]}" \
             --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
             || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     else
@@ -266,6 +313,7 @@ invoke_claude() {
             --print \
             --output-format json \
             --dangerously-skip-permissions \
+            "${model_flags[@]}" \
             --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
             || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
     fi
@@ -452,7 +500,7 @@ main() {
     ensure_rules_current
     ensure_repo_current
 
-    local top_item item_id item_type item_priority linked_pr prompt new_session_id
+    local top_item item_id item_type item_priority linked_pr prompt new_session_id selected_model
 
     info "Fetching priorities from ${PRIORITIES_URL}..."
     top_item=$(fetch_top_priority)
@@ -562,7 +610,13 @@ main() {
 
     [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id}"
 
-    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
+    local selected_model
+    selected_model=$(load_model_for_priority "${item_priority}")
+    if [ -n "${selected_model}" ]; then
+        info "Using model '${selected_model}' for priority ${item_priority}"
+    fi
+
+    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${selected_model}") \
         || die "Failed to invoke Claude"
 
     save_session "${item_type}" "${item_id}" "${new_session_id}"

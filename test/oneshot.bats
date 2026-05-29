@@ -212,3 +212,102 @@ setup() {
     run issue_json_has_blocked_label '{"labels":[{"name":"wontfix"}]}'
     [ "${status}" -ne 0 ]
 }
+
+# --- model selection -------------------------------------------------------
+
+@test "load_model_for_priority returns empty when no config files exist" {
+    run load_model_for_priority 3
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "load_model_for_priority returns model from model file when no priority map" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'sonnet\n' > "${XDG_CONFIG_HOME}/orchestrator/model"
+    run load_model_for_priority 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "sonnet" ]
+}
+
+@test "load_model_for_priority strips whitespace from model file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '  opus  \n' > "${XDG_CONFIG_HOME}/orchestrator/model"
+    run load_model_for_priority 1
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "opus" ]
+}
+
+@test "load_model_for_priority returns model from priority map for matching priority" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '2 opus\n5 sonnet\n' > "${XDG_CONFIG_HOME}/orchestrator/model-priority"
+    run load_model_for_priority 1
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "opus" ]
+}
+
+@test "load_model_for_priority uses first matching entry in priority map" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '2 opus\n5 sonnet\n' > "${XDG_CONFIG_HOME}/orchestrator/model-priority"
+    run load_model_for_priority 4
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "sonnet" ]
+}
+
+@test "load_model_for_priority falls back to model file when priority map has no match" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '2 opus\n' > "${XDG_CONFIG_HOME}/orchestrator/model-priority"
+    printf 'haiku\n' > "${XDG_CONFIG_HOME}/orchestrator/model"
+    run load_model_for_priority 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "haiku" ]
+}
+
+@test "load_model_for_priority ignores comment lines and empty lines in priority map" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '# this is a comment\n\n3 sonnet\n' > "${XDG_CONFIG_HOME}/orchestrator/model-priority"
+    run load_model_for_priority 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "sonnet" ]
+}
+
+@test "load_model_for_priority returns empty for non-numeric priority" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'opus\n' > "${XDG_CONFIG_HOME}/orchestrator/model"
+    run load_model_for_priority "high"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "load_model_for_priority rejects model names with unsafe characters in model file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'opus; rm -rf /\n' > "${XDG_CONFIG_HOME}/orchestrator/model"
+    run load_model_for_priority 1
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "load_model_for_priority skips entries with unsafe model names in priority map" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf '2 opus;evil\n5 sonnet\n' > "${XDG_CONFIG_HOME}/orchestrator/model-priority"
+    run load_model_for_priority 1
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "sonnet" ]
+}
+
+# --- invoke_claude model flag ----------------------------------------------
+
+@test "model_flags contains --model and value when model is non-empty" {
+    local -a model_flags=()
+    local model="sonnet"
+    [ -n "${model}" ] && model_flags=( --model "${model}" )
+    [ "${#model_flags[@]}" -eq 2 ]
+    [ "${model_flags[0]}" = "--model" ]
+    [ "${model_flags[1]}" = "sonnet" ]
+}
+
+@test "model_flags is empty when model is empty" {
+    local -a model_flags=()
+    local model=""
+    [ -n "${model}" ] && model_flags=( --model "${model}" )
+    [ "${#model_flags[@]}" -eq 0 ]
+}
