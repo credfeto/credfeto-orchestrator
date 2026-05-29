@@ -10,26 +10,55 @@ setup() {
 # --- prompt building -------------------------------------------------------
 
 @test "build_issue_prompt includes issue number, repo, work dir and key instructions" {
-    run build_issue_prompt 42
+    run build_issue_prompt 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"issue #42"* ]]
     [[ "${output}" == *"${REPO_FULL}"* ]]
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
-    # Blocked-label instruction.
     [[ "${output}" == *"--add-label Blocked"* ]]
     [[ "${output}" == *"gh issue edit 42 --repo ${REPO_FULL} --add-label Blocked"* ]]
-    # .ai-instructions ordering: repo work dir is tried before the rules dir.
-    [[ "${output}" == *"if ${REPO_WORK_DIR}/.ai-instructions exists use it; otherwise if ${RULES_DIR}/.ai-instructions exists use it"* ]]
+    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
 @test "build_pr_prompt includes PR number, repo, work dir and Blocked instruction" {
-    run build_pr_prompt 7
+    run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"pull request #7"* ]]
     [[ "${output}" == *"${REPO_FULL}"* ]]
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
     [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
-    [[ "${output}" == *"if ${REPO_WORK_DIR}/.ai-instructions exists use it; otherwise if ${RULES_DIR}/.ai-instructions exists use it"* ]]
+    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
+}
+
+@test "find_ai_instructions returns repo work dir path when .ai-instructions exists there" {
+    mkdir -p "${REPO_WORK_DIR}"
+    printf 'instructions\n' > "${REPO_WORK_DIR}/.ai-instructions"
+    run find_ai_instructions
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${REPO_WORK_DIR}/.ai-instructions" ]
+}
+
+@test "find_ai_instructions falls back to rules dir when repo work dir has no .ai-instructions" {
+    mkdir -p "${RULES_DIR}"
+    printf 'instructions\n' > "${RULES_DIR}/.ai-instructions"
+    run find_ai_instructions
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${RULES_DIR}/.ai-instructions" ]
+}
+
+@test "find_ai_instructions prefers repo work dir over rules dir when both exist" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    printf 'repo\n' > "${REPO_WORK_DIR}/.ai-instructions"
+    printf 'rules\n' > "${RULES_DIR}/.ai-instructions"
+    run find_ai_instructions
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${REPO_WORK_DIR}/.ai-instructions" ]
+}
+
+@test "find_ai_instructions dies when neither path has .ai-instructions" {
+    run find_ai_instructions
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *".ai-instructions"* ]]
 }
 
 # --- input validation / security ------------------------------------------
