@@ -14,6 +14,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 - loop script: continuous wrapper that runs oneshot every 5 minutes
 - oneshot now clones both cs-template rules and the target repo into $XDG_PROJECTS_DIR (or $HOME/work) before each Claude session, keeping both up-to-date
+- Support for specifying a Claude OAuth token per repo owner so work can be billed to the appropriate account
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
