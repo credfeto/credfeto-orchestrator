@@ -17,6 +17,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Support for specifying a Claude OAuth token per repo owner so work can be billed to the appropriate account
 - Non-agentic PR status check to avoid burning tokens on up-to-date PRs
 - Non-agentic issue status check to skip unchanged issues without burning tokens
+- Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub

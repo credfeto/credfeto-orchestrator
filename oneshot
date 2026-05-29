@@ -190,6 +190,21 @@ build_pr_prompt() {
         "${item_id}" "${REPO_FULL}" "${REPO_WORK_DIR}" "${REPO_WORK_DIR}" "${RULES_DIR}" "${item_id}" "${REPO_FULL}"
 }
 
+# Queries GitHub for an open PR whose closing issues include the given issue ID.
+# Outputs the PR number on stdout, or empty string if none found.
+# Returns 1 if the gh call fails (caller should treat as "no linked PR found").
+find_linked_pr_on_github() {
+    local issue_id="$1"
+    local pr_list
+    pr_list=$(gh pr list \
+        --repo "${REPO_FULL}" \
+        --state open \
+        --json number,closingIssuesReferences \
+        2>/dev/null) || return 1
+    printf '%s' "${pr_list}" | jq -r --argjson issue "${issue_id}" \
+        '[.[] | select(.closingIssuesReferences[]?.number == $issue)] | first | .number // empty'
+}
+
 # Checks whether the given item is still open on GitHub.
 # Return codes: 0 = open; 1 = closed or merged; 2 = gh call failed (state unknown).
 # The priorities API may be stale — always verify against the live GitHub state.
@@ -454,10 +469,16 @@ main() {
     info "Top priority item: ${item_type} #${item_id} (priority level ${item_priority})"
 
     # When an issue already has a linked pull request, work on the PR directly.
+    # First check the priorities API (cheap), then fall back to a live GitHub query.
     if [ "${item_type}" = "Issue" ]; then
         linked_pr=$(printf '%s' "${top_item}" | jq -r '(.linkedPrNumbers // []) | first // empty')
+        if [ -z "${linked_pr}" ]; then
+            info "No linked PR in priorities API for Issue #${item_id} — querying GitHub directly..."
+            linked_pr=$(find_linked_pr_on_github "${item_id}") \
+                || info "GitHub PR lookup failed for Issue #${item_id} — proceeding as issue"
+        fi
         if [ -n "${linked_pr}" ]; then
-            [[ "${linked_pr}" =~ ^[0-9]+$ ]] || die "Non-numeric linked PR number from priorities API: ${linked_pr}"
+            [[ "${linked_pr}" =~ ^[0-9]+$ ]] || die "Non-numeric linked PR number: ${linked_pr}"
             info "Issue #${item_id} has linked PR #${linked_pr} — switching to PR workflow"
             item_id="${linked_pr}"
             item_type="PullRequest"
