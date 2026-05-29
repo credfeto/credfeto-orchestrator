@@ -1,0 +1,55 @@
+#!/bin/bash
+# Build the NanoClaw agent BASE image locally.
+#
+# Normally this is built and pushed by the GitHub Action at
+# .github/workflows/build-base-image.yml — local builds are only needed when:
+#   - iterating on container/base.Dockerfile before opening a PR
+#   - enabling INSTALL_CJK_FONTS without waiting for CI
+#   - the registry is unreachable
+#
+# Tags the local build as `nanoclaw-base:local-dev`. Use it with
+# `NANOCLAW_BASE_REPO=nanoclaw-base NANOCLAW_BASE_TAG=local-dev ./container/build.sh`.
+#
+# Env / .env knobs (passed through as docker build-args):
+#   INSTALL_CJK_FONTS   true  — add ~200MB of Chinese/Japanese/Korean fonts
+#   CONTAINER_RUNTIME   docker | podman | etc. (default: docker)
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
+TAG="${1:-local-dev}"
+IMAGE="nanoclaw-base:${TAG}"
+
+# Caller's env takes precedence; fall back to .env.
+if [ -z "${INSTALL_CJK_FONTS:-}" ] && [ -f "../.env" ]; then
+    INSTALL_CJK_FONTS="$(grep '^INSTALL_CJK_FONTS=' ../.env | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')"
+fi
+
+BUILD_ARGS=()
+if [ "${INSTALL_CJK_FONTS:-false}" = "true" ]; then
+    echo "CJK fonts: enabled (adds ~200MB)"
+    BUILD_ARGS+=(--build-arg INSTALL_CJK_FONTS=true)
+fi
+
+# Daily cache-bust so `dotnet tool install -g`, the /opt/pre-commit clone, and
+# the composite-action-lint Go build refresh to upstream's latest even when
+# earlier Docker layers are cached.
+BUILD_ARGS+=(--build-arg "DOTNET_TOOLS_CACHE_BUST=$(date +%Y-%m-%d)")
+BUILD_ARGS+=(--build-arg "CREDFETO_PRECOMMIT_CACHE_BUST=$(date +%Y-%m-%d)")
+BUILD_ARGS+=(--build-arg "COMPOSITE_ACTION_LINT_CACHE_BUST=$(date +%Y-%m-%d)")
+
+echo "Building NanoClaw agent BASE image..."
+echo "Image: ${IMAGE}"
+echo "(this is the heavy ~20-minute build — for routine iteration use ./container/build.sh)"
+echo ""
+
+${CONTAINER_RUNTIME} build "${BUILD_ARGS[@]}" -f base.Dockerfile -t "${IMAGE}" .
+
+echo ""
+echo "Base build complete: ${IMAGE}"
+echo ""
+echo "To use this base for the customisation build:"
+echo "  NANOCLAW_BASE_REPO=nanoclaw-base NANOCLAW_BASE_TAG=${TAG} ./container/build.sh"

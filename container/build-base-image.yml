@@ -1,0 +1,132 @@
+name: Build base image
+
+# Build and push the heavy half of the agent container image — apt, bun,
+# dotnet, pnpm globals, every static binary, sanity check. Local
+# customisation rebuilds (`./container/build.sh`) pull this base from
+# the registry rather than rebuilding everything every time, which is the
+# whole point of the split.
+#
+# Tags pushed:
+#   :YYYY-MM-DD   immutable date pin (set NANOCLAW_BASE_TAG to use it)
+#   :latest       what local builds resolve by default
+#
+# Pushes to GitHub Container Registry (ghcr.io). Auth via the
+# workflow's built-in GITHUB_TOKEN — no secrets to manage. The image
+# is public so hosts pull anonymously over HTTPS, no login required.
+#
+# History: previous incarnations of this workflow tried pushing to a
+# self-hosted registry over a Tailscale tunnel. That hit a wall on
+# symmetric NAT (no direct path → DERP relay → ~3 Mbps → 70min push
+# for a 1.7GB image). ghcr.io sidesteps the entire mess: GitHub →
+# GitHub backbone, no NAT, no relay, no router config needed. Local
+# hosts read from ghcr.io directly.
+
+on:
+  schedule:
+    # Hourly — credfeto-global-pre-commit can move multiple times a day, and
+    # the host-side refresher (systemd/nanoclaw-base-refresh.timer) only picks
+    # up new credfeto config when a fresh base image lands in the registry.
+    # CREDFETO_PRECOMMIT_CACHE_BUST is the upstream HEAD SHA, so unchanged
+    # hours hit cache fully — only the docker pull / layer-validation /
+    # tag-push noop runs (~30-60s of runner time per hour).
+    - cron: '0 * * * *'
+  push:
+    branches: [main]
+    paths:
+      # Anything that changes the base output → rebuild + repush.
+      - 'container/base.Dockerfile'
+      - 'container/system-gitconfig'
+      - 'container/agent-runner/package.json'
+      - 'container/agent-runner/bun.lock'
+      - '.github/workflows/build-base-image.yml'
+  workflow_dispatch:
+    inputs:
+      install_cjk_fonts:
+        description: 'Add CJK fonts (~200MB)'
+        type: boolean
+        default: false
+
+concurrency:
+  # One build at a time per ref — a push that lands while the cron job is
+  # running cancels the cron one (the push is fresher anyway).
+  group: build-base-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/nanoclaw-base
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve cache-bust values
+        # date    — used for DOTNET_TOOLS_CACHE_BUST (daily refresh of pinned
+        #           tools is fine — they don't move within a day) and for the
+        #           dated registry tag.
+        # credfeto_sha — upstream HEAD of credfeto-global-pre-commit. Used as
+        #           CREDFETO_PRECOMMIT_CACHE_BUST so the credfeto clone layer
+        #           hits cache when upstream is unchanged. The hourly cron
+        #           depends on this — without it, hourly runs would either all
+        #           be cache-misses (if cache-bust was per-hour) or all
+        #           cache-hits (if per-day), neither of which gives "rebuild
+        #           when upstream actually changes."
+        id: cb
+        run: |
+          {
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "credfeto_sha=$(git ls-remote https://github.com/credfeto/credfeto-global-pre-commit.git HEAD | cut -f1)"
+            echo "cal_sha=$(git ls-remote https://github.com/bettermarks/composite-action-lint.git HEAD | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: container
+          file: container/base.Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            INSTALL_CJK_FONTS=${{ github.event.inputs.install_cjk_fonts || 'false' }}
+            DOTNET_TOOLS_CACHE_BUST=${{ steps.cb.outputs.date }}
+            CREDFETO_PRECOMMIT_CACHE_BUST=${{ steps.cb.outputs.credfeto_sha }}
+            COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
+          # Cache via GitHub Actions cache. Survives across runs without
+          # needing to push a separate cache image. mode=max stores
+          # intermediate layers too, not just the final-image chain.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarise
+        run: |
+          {
+            echo "## Base image pushed"
+            echo ""
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}"
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+            echo ""
+            echo "credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
+            echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
+            echo ""
+            echo "Hosts pull this image via the hourly \`nanoclaw-base-refresh.timer\` (\`scripts/refresh-base-image.sh\`); when the digest changes, the customisation layer is rebuilt and running agent containers are recycled."
+          } >> "$GITHUB_STEP_SUMMARY"
