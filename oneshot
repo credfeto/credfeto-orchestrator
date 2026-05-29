@@ -105,6 +105,31 @@ build_pr_prompt() {
         "${item_id}" "${REPO_FULL}" "${REPO_DIR}" "${item_id}" "${REPO_FULL}"
 }
 
+# Checks whether the given item is still open on GitHub.
+# Return codes: 0 = open; 1 = closed or merged; 2 = gh call failed (state unknown).
+# The priorities API may be stale — always verify against the live GitHub state.
+check_item_open() {
+    local item_type="$1" item_id="$2"
+    local state
+
+    if [ "${item_type}" = "Issue" ]; then
+        state=$(gh issue view "${item_id}" \
+            --repo "${REPO_FULL}" \
+            --json state \
+            --jq '.state' 2>/dev/null) || return 2
+    else
+        state=$(gh pr view "${item_id}" \
+            --repo "${REPO_FULL}" \
+            --json state \
+            --jq '.state' 2>/dev/null) || return 2
+    fi
+
+    if [ "${state}" = "OPEN" ]; then
+        return 0
+    fi
+    return 1
+}
+
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
@@ -196,6 +221,15 @@ main() {
             item_type="PullRequest"
         fi
     fi
+
+    info "Verifying ${item_type} #${item_id} is still open on GitHub..."
+    check_item_open "${item_type}" "${item_id}"
+    case $? in
+        0) ;;
+        1) success "${item_type} #${item_id} is no longer open on GitHub — skipping"
+           exit 0 ;;
+        *) die "Failed to determine GitHub state of ${item_type} #${item_id} — aborting to avoid skipping valid work" ;;
+    esac
 
     load_session "${item_type}" "${item_id}"
 
