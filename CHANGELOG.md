@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 - loop script: continuous wrapper that runs oneshot every 5 minutes
+- Always clone repos to XDG_PROJECTS_DIR (or $HOME/work if not defined) and keep both cs-template and target repo up-to-date before starting work
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
