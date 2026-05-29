@@ -178,16 +178,50 @@ load_session() {
     fi
 }
 
+find_ai_instructions() {
+    if [ -f "${REPO_WORK_DIR}/.ai-instructions" ]; then
+        printf '%s/.ai-instructions' "${REPO_WORK_DIR}"
+    elif [ -f "${RULES_DIR}/.ai-instructions" ]; then
+        printf '%s/.ai-instructions' "${RULES_DIR}"
+    else
+        die "No .ai-instructions found at ${REPO_WORK_DIR}/.ai-instructions or ${RULES_DIR}/.ai-instructions"
+    fi
+}
+
 build_issue_prompt() {
-    local item_id="$1"
-    printf 'You are the Orchestrator agent. Work on issue #%s in %s. The repository is checked out at %s. Load AI instructions in this order: if %s/.ai-instructions exists use it; otherwise if %s/.ai-instructions exists use it; if neither exists stop immediately and do not proceed without instructions. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". When you need to ask a question and must wait for an answer, add the Blocked label to the issue first: gh issue edit %s --repo %s --add-label Blocked. When ready to start work on the issue, create a new branch for it, commit a placeholder CHANGELOG.md entry to the branch, push the branch upstream, and create a draft pull request that links issue #%s.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_WORK_DIR}" "${REPO_WORK_DIR}" "${RULES_DIR}" "${item_id}" "${REPO_FULL}" "${item_id}"
+    local item_id="$1" ai_instructions="$2"
+    cat <<EOF
+You are the Orchestrator agent.
+
+Read AI instructions from ${ai_instructions}.
+
+Work on issue #${item_id} in ${REPO_FULL}.
+The repository is checked out at ${REPO_WORK_DIR}.
+
+Steps:
+1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+3. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+4. When ready to start work: create a new branch, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
+EOF
 }
 
 build_pr_prompt() {
-    local item_id="$1"
-    printf 'You are the Orchestrator agent. Work on pull request #%s in %s. The repository is checked out at %s. Load AI instructions in this order: if %s/.ai-instructions exists use it; otherwise if %s/.ai-instructions exists use it; if neither exists stop immediately and do not proceed without instructions. Check the PR comments, any code reviews, and CI workflow runs for the branch, then proceed to address all outstanding work. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". When you need to ask a question and must wait for an answer, add the Blocked label to the PR first: gh pr edit %s --repo %s --add-label Blocked.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_WORK_DIR}" "${REPO_WORK_DIR}" "${RULES_DIR}" "${item_id}" "${REPO_FULL}"
+    local item_id="$1" ai_instructions="$2"
+    cat <<EOF
+You are the Orchestrator agent.
+
+Read AI instructions from ${ai_instructions}.
+
+Work on pull request #${item_id} in ${REPO_FULL}.
+The repository is checked out at ${REPO_WORK_DIR}.
+
+Steps:
+1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+4. Proceed to address all outstanding work
+EOF
 }
 
 # Queries GitHub for an open PR whose closing issues include the given issue ID.
@@ -554,10 +588,13 @@ main() {
         info "No existing session — starting fresh for ${item_type} #${item_id}"
     fi
 
+    local ai_instructions
+    ai_instructions=$(find_ai_instructions) || exit 1
+
     if [ "${item_type}" = "Issue" ]; then
-        prompt=$(build_issue_prompt "${item_id}")
+        prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
     else
-        prompt=$(build_pr_prompt "${item_id}")
+        prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}")
     fi
 
     [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id}"

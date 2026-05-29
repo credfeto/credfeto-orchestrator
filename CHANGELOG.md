@@ -29,6 +29,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot session prompts now instruct Claude to reply to every actioned comment and add the Blocked label before asking questions
 - oneshot issue prompt now instructs Claude to create a branch, add a placeholder CHANGELOG entry, push upstream, and open a draft PR when starting work on an issue
 - Claude sessions now run against the XDG-based repo clone; prompts specify .ai-instructions loading order (repo then rules fallback, error if neither found)
+- oneshot prompt builders rewritten as heredocs with direct variable expansion; instructions are read first, followed by numbered task steps, making both source and rendered prompts easier to review
+- oneshot now resolves the .ai-instructions path before building prompts via find_ai_instructions(), dying immediately if neither repo nor rules dir contains the file
 ### Deprecated
 ### Removed
 ### Deployment Changes
