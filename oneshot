@@ -190,14 +190,38 @@ find_ai_instructions() {
 
 build_issue_prompt() {
     local item_id="$1" ai_instructions="$2"
-    printf 'You are the Orchestrator agent. Work on issue #%s in %s. The repository is checked out at %s. First, assign yourself to the issue: gh issue edit %s --repo %s --add-assignee @me. Read AI instructions from %s. BEFORE writing any code: read the issue and all comments; if the issue contains questions that need answers or if you have questions, you MUST ask them first. Mark the issue as blocked and wait for answers: gh issue edit %s --repo %s --add-label Blocked. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". When ready to start work, create a new branch, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #%s.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_WORK_DIR}" "${item_id}" "${REPO_FULL}" "${ai_instructions}" "${item_id}" "${REPO_FULL}" "${item_id}"
+    cat <<EOF
+You are the Orchestrator agent.
+
+Read AI instructions from ${ai_instructions}.
+
+Work on issue #${item_id} in ${REPO_FULL}.
+The repository is checked out at ${REPO_WORK_DIR}.
+
+Steps:
+1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+3. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+4. When ready to start work: create a new branch, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
+EOF
 }
 
 build_pr_prompt() {
     local item_id="$1" ai_instructions="$2"
-    printf 'You are the Orchestrator agent. Work on pull request #%s in %s. The repository is checked out at %s. First, assign yourself to the PR: gh pr edit %s --repo %s --add-assignee @me. Read AI instructions from %s. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers or if you have questions, ask them first and mark the PR as blocked: gh pr edit %s --repo %s --add-label Blocked. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". Then proceed to address all outstanding work.' \
-        "${item_id}" "${REPO_FULL}" "${REPO_WORK_DIR}" "${item_id}" "${REPO_FULL}" "${ai_instructions}" "${item_id}" "${REPO_FULL}"
+    cat <<EOF
+You are the Orchestrator agent.
+
+Read AI instructions from ${ai_instructions}.
+
+Work on pull request #${item_id} in ${REPO_FULL}.
+The repository is checked out at ${REPO_WORK_DIR}.
+
+Steps:
+1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+4. Proceed to address all outstanding work
+EOF
 }
 
 # Queries GitHub for an open PR whose closing issues include the given issue ID.
