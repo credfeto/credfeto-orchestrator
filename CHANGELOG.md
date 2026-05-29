@@ -19,7 +19,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Non-agentic issue status check to skip unchanged issues without burning tokens
 - Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
 - Bats-based test suite for the oneshot and loop shell scripts
-- Support for configuring the Claude model via config, with dynamic model selection based on issue priority
+- Support for configuring the Claude model via `model` and `model-priority` config files, enabling dynamic model selection (haiku/sonnet/opus) per issue priority
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
