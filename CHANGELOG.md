@@ -19,7 +19,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Non-agentic issue status check to skip unchanged issues without burning tokens
 - Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
 - Bats-based test suite for the oneshot and loop shell scripts
-- Add systemd-timer install script that runs as the current user without requiring an active login session
+- Add install-timer script to install a system-level systemd service and timer that runs the orchestrator every 5 minutes as the invoking user, self-updates via git pull before each run, and persists across reboots without requiring an active login session
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
