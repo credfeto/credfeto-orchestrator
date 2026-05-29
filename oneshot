@@ -35,6 +35,32 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
+# Outputs the Anthropic API key for the given owner, or empty string if not configured.
+# Lookup order:
+#   1. ~/.config/orchestrator/api-keys/<owner>  (preferred XDG location)
+#   2. ~/.orchestrator/<owner>/api-key           (legacy location)
+#   3. Empty string — caller falls back to ANTHROPIC_API_KEY from the environment.
+# Key files must be readable only by the owner (chmod 600).
+load_api_key_for_owner() {
+    local owner="$1"
+    local xdg_key_file legacy_key_file
+
+    xdg_key_file="${HOME}/.config/orchestrator/api-keys/${owner}"
+    legacy_key_file="${HOME}/.orchestrator/${owner}/api-key"
+
+    if [ -f "${xdg_key_file}" ]; then
+        tr -d '[:space:]' < "${xdg_key_file}"
+        return
+    fi
+
+    if [ -f "${legacy_key_file}" ]; then
+        tr -d '[:space:]' < "${legacy_key_file}"
+        return
+    fi
+
+    printf ''
+}
+
 ensure_rules_current() {
     if [ -d "${RULES_DIR}/.git" ]; then
         info "Updating rules (cs-template) at ${RULES_DIR}..."
@@ -169,27 +195,50 @@ check_item_open() {
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2"
-    local tmpfile new_session_id
+    local tmpfile new_session_id owner_api_key
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
+    # Load the per-owner API key (if configured) and scope it to this invocation only.
+    # The key is never logged — use [REDACTED] in any diagnostic messages that reference it.
+    owner_api_key=$(load_api_key_for_owner "${OWNER}")
+
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
-        printf '%s' "${prompt}" | claude \
-            --resume "${resume_session_id}" \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        if [ -n "${owner_api_key}" ]; then
+            printf '%s' "${prompt}" | env ANTHROPIC_API_KEY="${owner_api_key}" claude \
+                --resume "${resume_session_id}" \
+                --print \
+                --output-format json \
+                --dangerously-skip-permissions \
+                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        else
+            printf '%s' "${prompt}" | claude \
+                --resume "${resume_session_id}" \
+                --print \
+                --output-format json \
+                --dangerously-skip-permissions \
+                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        fi
     else
         info "Starting new Claude session..." >&2
-        printf '%s' "${prompt}" | claude \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        if [ -n "${owner_api_key}" ]; then
+            printf '%s' "${prompt}" | env ANTHROPIC_API_KEY="${owner_api_key}" claude \
+                --print \
+                --output-format json \
+                --dangerously-skip-permissions \
+                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        else
+            printf '%s' "${prompt}" | claude \
+                --print \
+                --output-format json \
+                --dangerously-skip-permissions \
+                --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+                || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        fi
     fi
 
     # Show Claude's text response so the caller can review what was done

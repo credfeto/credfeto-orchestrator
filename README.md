@@ -24,6 +24,43 @@ inherits the session from any linked closing issue.
 - `claude` (Claude Code CLI)
 - `gh` (GitHub CLI, authenticated)
 
+### Per-owner API key
+
+By default the script uses whatever `ANTHROPIC_API_KEY` is already set in the environment.
+To charge Claude usage to a specific owner's Anthropic account, create a key file for that owner.
+
+**Preferred location (XDG):**
+
+```text
+~/.config/orchestrator/api-keys/<owner>
+```
+
+**Legacy fallback location:**
+
+```text
+~/.orchestrator/<owner>/api-key
+```
+
+The file must contain only the raw API key (no newlines, no surrounding whitespace).
+The key is scoped to the `claude` invocation and is never written to log output.
+
+**File permissions — set `600` to prevent other users from reading the key:**
+
+```sh
+chmod 600 ~/.config/orchestrator/api-keys/<owner>
+```
+
+Example — storing a key for the `credfeto` owner:
+
+```sh
+mkdir -p ~/.config/orchestrator/api-keys
+printf '%s' 'sk-ant-...' > ~/.config/orchestrator/api-keys/credfeto
+chmod 600 ~/.config/orchestrator/api-keys/credfeto
+```
+
+If neither key file exists, the script falls back to `ANTHROPIC_API_KEY` from the environment,
+preserving the existing behaviour for installations that do not require per-owner billing.
+
 ## Build Status
 
 | Branch  | Status                                                                                                                                                                                                                                          |
