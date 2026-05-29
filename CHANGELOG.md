@@ -13,6 +13,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 - loop script: continuous wrapper that runs oneshot every 5 minutes
+- oneshot now clones both cs-template rules and the target repo into $XDG_PROJECTS_DIR (or $HOME/work) before each Claude session, keeping both up-to-date
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
@@ -21,6 +22,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
 - oneshot session prompts now instruct Claude to reply to every actioned comment and add the Blocked label before asking questions
 - oneshot issue prompt now instructs Claude to create a branch, add a placeholder CHANGELOG entry, push upstream, and open a draft PR when starting work on an issue
+- Claude sessions now run against the XDG-based repo clone; prompts specify .ai-instructions loading order (repo then rules fallback, error if neither found)
 ### Deprecated
 ### Removed
 ### Deployment Changes
