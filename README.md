@@ -32,8 +32,10 @@ To charge Claude usage to a specific owner's Anthropic account, create a key fil
 **Preferred location (XDG):**
 
 ```text
-~/.config/orchestrator/api-keys/<owner>
+$XDG_CONFIG_HOME/orchestrator/api-keys/<owner>
 ```
+
+(defaults to `~/.config/orchestrator/api-keys/<owner>` when `$XDG_CONFIG_HOME` is not set)
 
 **Legacy fallback location:**
 
@@ -47,19 +49,22 @@ The key is scoped to the `claude` invocation and is never written to log output.
 **File permissions — set `600` to prevent other users from reading the key:**
 
 ```sh
-chmod 600 ~/.config/orchestrator/api-keys/<owner>
+chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/<owner>"
 ```
 
 Example — storing a key for the `credfeto` owner:
 
 ```sh
-mkdir -p ~/.config/orchestrator/api-keys
-printf '%s' 'sk-ant-...' > ~/.config/orchestrator/api-keys/credfeto
-chmod 600 ~/.config/orchestrator/api-keys/credfeto
+mkdir -p "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys"
+printf '%s' 'sk-ant-...' > "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/credfeto"
+chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/credfeto"
 ```
 
 If neither key file exists, the script falls back to `ANTHROPIC_API_KEY` from the environment,
 preserving the existing behaviour for installations that do not require per-owner billing.
+
+> **Note:** The current script is configured for the `credfeto` owner. As the orchestrator is
+> extended to cover additional repos, set `OWNER` accordingly and create a key file for each owner.
 
 ## Build Status
 

@@ -27,6 +27,10 @@ info() {
     printf '\n\033[32m→\033[0m %s\n' "$*"
 }
 
+warn() {
+    printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+}
+
 # Returns true (0) when running inside a Claude Code Bash-tool session.
 # Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
 # that value is inherited by subprocesses (e.g. git hooks).
@@ -35,54 +39,41 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
+# Checks that key_file exists, has safe permissions, and outputs its contents (whitespace stripped).
+# Outputs nothing and returns silently if the file is absent or has unsafe permissions.
+read_key_if_safe() {
+    local key_file="$1"
+    local perms
+    [ -f "${key_file}" ] || return
+    perms=$(stat -c '%a' "${key_file}" 2>/dev/null || stat -f '%Lp' "${key_file}" 2>/dev/null)
+    case "${perms}" in
+        600|400) ;;
+        *) warn "Key file ${key_file} has permissions ${perms} — expected 600; skipping"
+           return
+           ;;
+    esac
+    tr -d '[:space:]' < "${key_file}"
+}
+
 # Outputs the Anthropic API key for the given owner, or empty string if not configured.
 # Lookup order:
-#   1. ~/.config/orchestrator/api-keys/<owner>  (preferred XDG location)
-#   2. ~/.orchestrator/<owner>/api-key           (legacy location)
+#   1. $XDG_CONFIG_HOME/orchestrator/api-keys/<owner>  (preferred XDG location, defaults to ~/.config)
+#   2. ~/.orchestrator/<owner>/api-key                  (legacy location)
 #   3. Empty string — caller falls back to ANTHROPIC_API_KEY from the environment.
 # Key files must be readable only by the owner (chmod 600).
 load_api_key_for_owner() {
     local owner="$1"
-    local xdg_key_file legacy_key_file perms
+    local key
 
     case "${owner}" in
         *[!a-zA-Z0-9_-]*) return ;;
     esac
 
-    xdg_key_file="${HOME}/.config/orchestrator/api-keys/${owner}"
-    legacy_key_file="${HOME}/.orchestrator/${owner}/api-key"
+    key=$(read_key_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/api-keys/${owner}")
+    [ -n "${key}" ] && { printf '%s' "${key}"; return; }
 
-    if [ -f "${xdg_key_file}" ]; then
-        perms=$(stat -c '%a' "${xdg_key_file}" 2>/dev/null)
-        case "${perms}" in
-            600|400) ;;
-            *) info "Warning: key file ${xdg_key_file} has permissions ${perms} — expected 600; skipping" >&2
-               ;;
-        esac
-        case "${perms}" in
-            600|400)
-                tr -d '[:space:]' < "${xdg_key_file}"
-                return
-                ;;
-        esac
-    fi
-
-    if [ -f "${legacy_key_file}" ]; then
-        perms=$(stat -c '%a' "${legacy_key_file}" 2>/dev/null)
-        case "${perms}" in
-            600|400) ;;
-            *) info "Warning: key file ${legacy_key_file} has permissions ${perms} — expected 600; skipping" >&2
-               ;;
-        esac
-        case "${perms}" in
-            600|400)
-                tr -d '[:space:]' < "${legacy_key_file}"
-                return
-                ;;
-        esac
-    fi
-
-    return
+    key=$(read_key_if_safe "${HOME}/.orchestrator/${owner}/api-key")
+    [ -n "${key}" ] && printf '%s' "${key}"
 }
 
 ensure_rules_current() {
