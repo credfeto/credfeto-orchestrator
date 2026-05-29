@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# Installs a systemd system-level service and timer that runs the orchestrator
+# every 5 minutes as the current user, even when the user is not logged in.
+
+die() {
+    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+success() {
+    printf '\n\033[32m✓\033[0m %s\n' "$*"
+}
+
+info() {
+    printf '\n\033[32m→\033[0m %s\n' "$*"
+}
+
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+case "${REPO_DIR}" in
+    *$'\n'*) die "install-timer: REPO_DIR contains a newline; aborting." ;;
+esac
+
+CURRENT_USER=$(id -un)
+case "${CURRENT_USER}" in
+    *$'\n'*) die "install-timer: CURRENT_USER contains a newline; aborting." ;;
+esac
+[[ "${CURRENT_USER}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "install-timer: CURRENT_USER contains invalid characters; aborting."
+SERVICE_NAME="credfeto-orchestrator-${CURRENT_USER}"
+[[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "install-timer: SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
+UNIT_DIR="/etc/systemd/system"
+
+check_required_tools() {
+    local tool
+    for tool in id sudo systemctl git; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+# Writes content to dest via sudo tee.
+write_unit_file() {
+    local dest="$1"
+    local content="$2"
+    printf '%s\n' "${content}" | sudo tee "${dest}" > /dev/null || die "Failed to write ${dest}"
+}
+
+create_service_unit() {
+    local dest="${UNIT_DIR}/${SERVICE_NAME}.service"
+    local content
+    content="[Unit]
+Description=Credfeto Orchestrator for ${CURRENT_USER}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${CURRENT_USER}
+WorkingDirectory=${REPO_DIR}
+ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" pull --ff-only
+ExecStart=${REPO_DIR}/oneshot"
+    write_unit_file "${dest}" "${content}"
+}
+
+create_timer_unit() {
+    local dest="${UNIT_DIR}/${SERVICE_NAME}.timer"
+    local content
+    content="[Unit]
+Description=Credfeto Orchestrator Timer for ${CURRENT_USER}
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=${SERVICE_NAME}.service
+
+[Install]
+WantedBy=timers.target"
+    write_unit_file "${dest}" "${content}"
+}
+
+main() {
+    is_ai_agent && die "install-timer must not be run inside a Claude Code session"
+
+    check_required_tools
+
+    info "Installing Credfeto Orchestrator systemd timer for user ${CURRENT_USER}..."
+    info "Repository: ${REPO_DIR}"
+
+    create_service_unit
+    info "Service unit written to ${UNIT_DIR}/${SERVICE_NAME}.service"
+
+    create_timer_unit
+    info "Timer unit written to ${UNIT_DIR}/${SERVICE_NAME}.timer"
+
+    info "Reloading systemd daemon..."
+    sudo systemctl daemon-reload || die "Failed to reload systemd daemon"
+
+    info "Enabling ${SERVICE_NAME}.timer..."
+    sudo systemctl enable "${SERVICE_NAME}.timer" || die "Failed to enable ${SERVICE_NAME}.timer"
+
+    info "Starting ${SERVICE_NAME}.timer..."
+    sudo systemctl start "${SERVICE_NAME}.timer" || die "Failed to start ${SERVICE_NAME}.timer"
+
+    success "Credfeto Orchestrator timer installed and started for user ${CURRENT_USER}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
