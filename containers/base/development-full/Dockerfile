@@ -94,7 +94,7 @@ RUN su developer -c '\
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 RUN git clone --depth 1 https://github.com/codewithmukesh/dotnet-claude-kit.git /opt/dotnet-claude-kit \
-    && chown -R developer:developer /opt/dotnet-claude-kit
+    && chown -R root:root /opt/dotnet-claude-kit
 
 # ---- wshobson/agents marketplace — sparse-checkout three plugins -------------
 # The full repo is ~78 plugins; we only want javascript-typescript, python-
@@ -107,18 +107,18 @@ RUN git clone --depth 1 --filter=blob:none --sparse \
         plugins/javascript-typescript \
         plugins/python-development \
         plugins/shell-scripting \
-    && chown -R developer:developer /opt/wshobson-agents
+    && chown -R root:root /opt/wshobson-agents
 
 # ---- akin-ozer/cc-devops-skills (GitHub Actions et al) ----------------------
 # hadolint ignore=DL3059
 RUN git clone --depth 1 https://github.com/akin-ozer/cc-devops-skills.git /opt/cc-devops-skills \
-    && chown -R developer:developer /opt/cc-devops-skills
+    && chown -R root:root /opt/cc-devops-skills
 
 # ---- s2005/markdown-linter-fixer-skill (pinned) -----------------------------
 # hadolint ignore=DL3059
 RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
         https://github.com/s2005/markdown-linter-fixer-skill.git /opt/markdown-linter-fixer \
-    && chown -R developer:developer /opt/markdown-linter-fixer
+    && chown -R root:root /opt/markdown-linter-fixer
 
 # ---- /opt/pre-commit (global pre-commit config) ------------------------------
 # Cloned read-only into the image. After cloning, the .git directory is

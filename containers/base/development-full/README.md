@@ -89,10 +89,10 @@ The `developer` user is inherited from upstream images in the `development-tools
 | `/opt/git-global-hooks/` | root:root | 0755 | Global hooks shim directory; executable, not writable |
 | `/opt/git-global-hooks/pre-commit` | root:root | 0755 | Shim that delegates to `/opt/pre-commit/src/hooks/pre-commit` |
 | `/etc/gitconfig` | root:root | 0444 | System-wide git configuration; immutable at runtime |
-| `/opt/dotnet-claude-kit/` | developer:developer | (default) | Claude Code plugin repo; writable by developer |
-| `/opt/wshobson-agents/` | developer:developer | (default) | Sparse-checked-out agent plugin repo; writable by developer |
-| `/opt/cc-devops-skills/` | developer:developer | (default) | DevOps skills repo; writable by developer |
-| `/opt/markdown-linter-fixer/` | developer:developer | (default) | Markdown linter skill repo; writable by developer |
+| `/opt/dotnet-claude-kit/` | root:root | 0755 | Claude Code .NET plugin side; agent can read/execute but not modify |
+| `/opt/wshobson-agents/` | root:root | 0755 | Sparse-checkout of javascript-typescript, python-development, shell-scripting plugins; agent can read/execute but not modify |
+| `/opt/cc-devops-skills/` | root:root | 0755 | GitHub Actions devops skills plugin; agent can read/execute but not modify |
+| `/opt/markdown-linter-fixer/` | root:root | 0755 | Markdown linter/fixer skill (pinned to `MARKDOWN_LINTER_FIXER_REF`); agent can read/execute but not modify |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 
 ---
