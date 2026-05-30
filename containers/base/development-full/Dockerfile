@@ -175,7 +175,7 @@ RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
     for cmd in git gh dotnet python3 gpg curl sqlite3 \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
-               trufflehog hadolint dotenv-linter pwsh \
+               trufflehog hadolint dotenv-linter sqlcmd composite-action-lint pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
                xmllint; do \
