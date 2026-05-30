@@ -128,7 +128,8 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
 # Owned by root so the unprivileged `developer` user can read + execute but
 # cannot modify anything in here.
 # hadolint ignore=DL3059
-RUN git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
+RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
+    git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
     && test -f /opt/pre-commit/src/.pre-commit-config.yaml \
     && HEAD_SHA="$(git -C /opt/pre-commit rev-parse HEAD)" \
     && rm -rf /opt/pre-commit/.git \
@@ -156,7 +157,7 @@ RUN mkdir -p /opt/git-global-hooks \
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
 # `developer` user the agent runs as has no way to modify it.
 # Build context must be repo root so this COPY path resolves correctly.
-COPY container/system-gitconfig /etc/gitconfig
+COPY system-gitconfig /etc/gitconfig
 RUN chown root:root /etc/gitconfig \
     && chmod 0444 /etc/gitconfig \
     && git config --file /etc/gitconfig --list >/dev/null
