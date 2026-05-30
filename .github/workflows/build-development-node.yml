@@ -18,7 +18,7 @@ on:
     # hours hit the GHA cache fully (only a layer-validation / tag-push noop).
     - cron: "0 * * * *"
   push:
-    branches: [main]
+    branches: ["main"]
     paths:
       - "containers/base/development-node/Dockerfile"
       - ".github/workflows/build-development-node.yml"
@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
       contents: read
@@ -75,7 +75,7 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
+          cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 
       - name: "Summarise"
