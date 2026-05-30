@@ -43,9 +43,12 @@ same pattern: factor work into functions and gate execution behind this guard.
 The scripts call external commands (`curl`, `gh`, `claude`, `git`, `sleep`, and the hashing
 tools). Replace these with deterministic, offline stubs using one of two techniques:
 
-- **PATH stub directory** — create an executable script in a temporary `bin` directory and
-  prepend it to `PATH`. Use this for commands invoked as subprocesses (`gh`, `git`, `claude`,
-  `curl`, `sleep`) and for the tool-presence checks in `check_required_tools`.
+- **PATH stub directory** — use `make_stub <name> <body>` from `test_helper.bash`. The stub
+  bin directory (`STUB_BIN`) is created inside the repo tree (`test/.stub.XXXXXX`), not under
+  the system temp directory, because `/tmp` is mounted `noexec` in sandboxed environments and
+  files there cannot be executed as subprocesses. Use this technique for commands invoked as
+  subprocesses (`gh`, `git`, `claude`, `curl`, `sleep`). Tests that call `make_stub` must have
+  a `teardown()` hook that calls `cleanup_stubs` to remove the stub directory.
 - **Function override** — after sourcing the script, redefine a shell function with the same
   name to control its behaviour directly. Use this when you need to inspect arguments or vary
   the response per call.

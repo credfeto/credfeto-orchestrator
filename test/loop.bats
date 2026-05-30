@@ -7,6 +7,7 @@ setup() {
 }
 
 teardown() {
+    cleanup_stubs
     cleanup_repo_fixtures
 }
 

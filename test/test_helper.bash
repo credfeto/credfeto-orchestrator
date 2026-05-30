@@ -13,6 +13,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Tracks repo-tree fixture directories so teardown can remove them.
 REPO_FIXTURE_DIRS=()
 
+# Tracks stub-bin directories created in the repo tree so teardown can remove them.
+STUB_BIN_DIRS=()
+
 # Creates an isolated environment and exports the variables the scripts read.
 # Call this from setup() before sourcing a script under test.
 setup_isolated_env() {
@@ -24,9 +27,12 @@ setup_isolated_env() {
     export XDG_PROJECTS_DIR="${TEST_TMP}/projects"
     export SESSION_BASE_DIR="${TEST_TMP}/sessions"
 
-    STUB_BIN="${TEST_TMP}/bin"
+    # Stub bin must live inside the repo tree so that stub scripts are executable;
+    # the system temp directory (/tmp) may be mounted noexec in sandboxed environments.
+    STUB_BIN="$(mktemp -d "${REPO_ROOT}/test/.stub.XXXXXX")"
     export STUB_BIN
-    mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${SESSION_BASE_DIR}" "${STUB_BIN}"
+    STUB_BIN_DIRS+=("${STUB_BIN}")
+    mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${SESSION_BASE_DIR}"
 
     # Put the stub directory first so any stubs we create take precedence.
     export PATH="${STUB_BIN}:${PATH}"
@@ -70,6 +76,15 @@ cleanup_repo_fixtures() {
         [ -n "${dir}" ] && rm -rf "${dir}"
     done
     REPO_FIXTURE_DIRS=()
+}
+
+# Removes stub-bin directories created in the repo tree during the test.
+cleanup_stubs() {
+    local dir
+    for dir in "${STUB_BIN_DIRS[@]}"; do
+        [ -n "${dir}" ] && rm -rf "${dir}"
+    done
+    STUB_BIN_DIRS=()
 }
 
 # Writes an executable PATH stub named "$1" whose body is the remaining arguments,
