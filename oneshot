@@ -200,8 +200,8 @@ The repository is checked out at ${REPO_WORK_DIR}.
 
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-3. Reply to every issue comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first in comments on the issue. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+3. Reply to every issue comment that prompted an action with "<one sentence description>"
 4. When ready to start work: create a new branch, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
 EOF
 }
@@ -218,7 +218,7 @@ The repository is checked out at ${REPO_WORK_DIR}.
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 4. Proceed to address all outstanding work
 EOF
