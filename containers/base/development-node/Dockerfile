@@ -60,7 +60,7 @@ RUN set -e; \
     echo "== stage 1 + stage 2 binary presence + version probe =="; \
     for cmd in git gpg curl dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog \
-               composite-action-lint python3 ansible-lint flake8 pylint \
+               python3 ansible-lint flake8 pylint \
                yamllint pre-commit xmllint; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
@@ -69,6 +69,13 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== composite-action-lint check (uses -h not --version) =="; \
+    if ! command -v composite-action-lint >/dev/null 2>&1; then \
+        echo "FATAL sanity: required binary 'composite-action-lint' is missing" >&2; exit 1; \
+    fi; \
+    composite-action-lint -h >/dev/null 2>&1 \
+        || composite-action-lint --help >/dev/null 2>&1 \
+        || { echo "FATAL sanity: composite-action-lint is not functional" >&2; exit 1; }; \
     echo "== stage 2 binary version probe =="; \
     node --version; \
     bun --version; \
