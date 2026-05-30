@@ -70,6 +70,11 @@ RUN set -e; \
     if ! ssh -V >/dev/null 2>&1; then \
         echo "FATAL sanity: ssh -V did not exit 0" >&2; exit 1; \
     fi; \
+    echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
+    rm -rf /tmp/sanity-clone-python; \
+    GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 \
+        https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone-python; \
+    rm -rf /tmp/sanity-clone-python; \
     echo "== stage 2 tools (presence / non-standard version flags) =="; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1; \
     if ! command -v block-no-verify >/dev/null 2>&1; then \

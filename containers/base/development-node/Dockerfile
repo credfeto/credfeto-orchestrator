@@ -55,6 +55,7 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm install -g "block-no-verify@${BLOCK_NO_VERIFY_VERSION}"
 
 # ---- Build-time sanity check ------------------------------------------------
+# hadolint ignore=DL3001
 RUN set -e; \
     echo "== stage 1 + stage 2 binary presence + version probe =="; \
     for cmd in git gpg curl dotnet shellcheck shfmt bats sqlite3 gh \
@@ -79,4 +80,13 @@ RUN set -e; \
     if ! command -v block-no-verify >/dev/null 2>&1; then \
         echo "FATAL sanity: block-no-verify is not on PATH" >&2; exit 1; \
     fi; \
+    echo "== ssh version check (uses -V not --version) =="; \
+    if ! ssh -V >/dev/null 2>&1; then \
+        echo "FATAL sanity: ssh -V did not exit 0" >&2; exit 1; \
+    fi; \
+    echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
+    rm -rf /tmp/sanity-clone-node; \
+    GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 \
+        https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone-node; \
+    rm -rf /tmp/sanity-clone-node; \
     echo "== all build-time checks passed =="
