@@ -28,7 +28,8 @@ ARG COMPOSITE_ACTION_LINT_UPSTREAM
 ARG COMPOSITE_ACTION_LINT_REF
 ARG COMPOSITE_ACTION_LINT_CACHE_BUST
 WORKDIR /src
-RUN git clone --depth 1 --branch "$COMPOSITE_ACTION_LINT_REF" \
+RUN : "${COMPOSITE_ACTION_LINT_CACHE_BUST}"; \
+    git clone --depth 1 --branch "$COMPOSITE_ACTION_LINT_REF" \
         "$COMPOSITE_ACTION_LINT_UPSTREAM" . \
     && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
         -o /out/composite-action-lint ./cmd/composite-action-lint \
@@ -87,9 +88,6 @@ RUN useradd -m -s /bin/bash developer
 #   shfmt      — shell formatter
 #   libicu76   — ICU Unicode library (required by .NET)
 #   libxml2-utils — provides xmllint (used by the credfeto pre-commit chain)
-#   fonts-liberation — metrically identical to Arial/Times/Courier; provides
-#                      fontconfig aliases that headless Chrome, wkhtmltopdf,
-#                      and weasyprint resolve automatically
 #   ttf-mscorefonts-installer — real MS fonts needed by tools (e.g.
 #                      SixLabors.Fonts) that match by internal family-name
 #                      records rather than fontconfig aliases
@@ -119,7 +117,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ansible-lint \
         flake8 \
         fontconfig \
-        fonts-liberation \
         ttf-mscorefonts-installer \
         libxml2-utils \
         pre-commit \
@@ -256,6 +253,18 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
 
 ENV DOTNET_ROOT=/usr/share/dotnet
 ENV PATH="${PATH}:/home/developer/.dotnet/tools"
+
+# Disable .NET telemetry, multi-level lookup (ensures only /usr/share/dotnet is
+# searched), suppress logo output, and tune JIT for better CI throughput.
+ENV DOTNET_MULTILEVEL_LOOKUP="false"
+ENV DOTNET_NOLOGO="true"
+ENV DOTNET_PRINT_TELEMETRY_MESSAGE="false"
+ENV DOTNET_JitCollect64BitCounts="1"
+ENV DOTNET_ReadyToRun="0"
+ENV DOTNET_TC_QuickJitForLoops="1"
+ENV DOTNET_TC_CallCountingDelayMs="0"
+ENV DOTNET_TieredPGO="1"
+ENV MSBUILDTERMINALLOGGER="auto"
 
 # Login-shell PATH augmentation. The ENV PATH above propagates to processes
 # spawned by the container entrypoint, but anything that runs through
