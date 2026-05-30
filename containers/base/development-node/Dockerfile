@@ -12,6 +12,10 @@ ARG STYLELINT_CONFIG_STANDARD_VERSION=latest
 ARG ESLINT_VERSION=latest
 ARG BLOCK_NO_VERIFY_VERSION=1.1.5
 
+# Use bash with pipefail for all subsequent RUN instructions so that pipes
+# fail the step on any non-zero exit in the pipeline, not just the last command.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ---- npm registry (private mirror) ------------------------------------------
 # Routes both build-time and runtime npm installs through the local cache
 # mirror at npm.markridgwell.com. /etc/npmrc is root:root mode 0444 so
@@ -21,9 +25,6 @@ RUN echo "registry=https://npm.markridgwell.com/" > /etc/npmrc \
     && chown root:root /etc/npmrc \
     && chmod 0444 /etc/npmrc
 ENV NPM_CONFIG_REGISTRY=https://npm.markridgwell.com/
-
-# Enable pipefail so any pipe error is caught.
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ---- Node.js v24.x via NodeSource -------------------------------------------
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
@@ -55,10 +56,16 @@ RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
 
 # ---- Build-time sanity check ------------------------------------------------
 RUN set -e; \
-    echo "== stage 1 binary presence check =="; \
-    for cmd in git gh dotnet curl; do \
+    echo "== stage 1 + stage 2 binary presence + version probe =="; \
+    for cmd in git gpg curl dotnet shellcheck shfmt bats sqlite3 gh \
+               hadolint dotenv-linter sqlcmd actionlint trufflehog \
+               composite-action-lint python3 ansible-lint flake8 pylint \
+               yamllint pre-commit xmllint; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
-            echo "FATAL sanity: required stage-1 binary '$cmd' is missing" >&2; exit 1; \
+            echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
+        fi; \
+        if ! "$cmd" --version >/dev/null 2>&1; then \
+            echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
     echo "== stage 2 binary version probe =="; \
