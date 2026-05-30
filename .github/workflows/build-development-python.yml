@@ -33,15 +33,15 @@ env:
   IMAGE_NAME: "${{ github.repository_owner }}/development-python"
 
 permissions:
-  contents: read
+  contents: "read"
 
 jobs:
   build:
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
-      contents: read
-      packages: write
+      contents: "read"
+      packages: "write"
     steps:
       - name: "Checkout source"
         uses: actions/checkout@v6.0.2
@@ -59,8 +59,8 @@ jobs:
         uses: docker/setup-buildx-action@v4.1.0
 
       - name: "Resolve cache-bust values"
-        id: cb
-        shell: bash
+        id: "cb"
+        shell: "bash"
         run: |
           {
             echo "date=$(date -u +%%Y-%%m-%%d)"
@@ -79,7 +79,7 @@ jobs:
           cache-to: "type=gha,mode=max"
 
       - name: "Summarise"
-        shell: bash
+        shell: "bash"
         run: |
           {
             echo "## development-python image pushed"
