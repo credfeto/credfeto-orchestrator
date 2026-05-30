@@ -6,7 +6,6 @@ name: "Build development-full base image"
 # development-python.
 #
 # Tags pushed:
-#   :YYYY-MM-DD   immutable date pin
 #   :latest       what consumers resolve by default
 #
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
@@ -59,6 +58,8 @@ jobs:
         with:
           fetch-depth: 1
 
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
       - name: "Log in to GHCR"
         uses: docker/login-action@v4.2.0
         with:
@@ -85,9 +86,7 @@ jobs:
           file: "containers/base/development-full/Dockerfile"
           pull: true
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             DOTNET_TOOLS_CACHE_BUST=${{ steps.cb.outputs.date }}
             CREDFETO_PRECOMMIT_CACHE_BUST=${{ steps.cb.outputs.credfeto_sha }}
@@ -101,7 +100,6 @@ jobs:
             echo "## development-full image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}"
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
             echo ""

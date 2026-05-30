@@ -6,7 +6,6 @@ name: "Build development-tools base image"
 # trufflehog, composite-action-lint), and the .NET SDK.
 #
 # Tags pushed:
-#   :YYYY-MM-DD   immutable date pin
 #   :latest       what consumers resolve by default
 #
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
@@ -49,6 +48,8 @@ jobs:
         with:
           fetch-depth: 1
 
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
       - name: "Log in to GHCR"
         uses: docker/login-action@v4.2.0
         with:
@@ -64,7 +65,6 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "date=$(date -u +%%Y-%%m-%%d)"
             echo "cal_sha=$(git ls-remote https://github.com/bettermarks/composite-action-lint.git HEAD | cut -f1)"
           } >> "$GITHUB_OUTPUT"
 
@@ -74,9 +74,7 @@ jobs:
           context: "containers/base/development-tools"
           file: "containers/base/development-tools/Dockerfile"
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
           cache-from: "type=gha"
@@ -89,7 +87,6 @@ jobs:
             echo "## development-tools image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}"
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
             echo ""

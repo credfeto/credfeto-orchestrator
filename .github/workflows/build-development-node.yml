@@ -6,7 +6,6 @@ name: "Build development-node base image"
 # stylelint, eslint, block-no-verify).
 #
 # Tags pushed:
-#   :YYYY-MM-DD   immutable date pin
 #   :latest       what consumers resolve by default
 #
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
@@ -56,6 +55,8 @@ jobs:
         with:
           fetch-depth: 1
 
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
       - name: "Log in to GHCR"
         uses: docker/login-action@v4.2.0
         with:
@@ -66,14 +67,6 @@ jobs:
       - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v4.1.0
 
-      - name: "Resolve cache-bust values"
-        id: "cb"
-        shell: "bash"
-        run: |
-          {
-            echo "date=$(date -u +%%Y-%%m-%%d)"
-          } >> "$GITHUB_OUTPUT"
-
       - name: "Build and push"
         uses: docker/build-push-action@v7.2.0
         with:
@@ -81,9 +74,7 @@ jobs:
           file: "containers/base/development-node/Dockerfile"
           push: true
           pull: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 
@@ -94,7 +85,6 @@ jobs:
             echo "## development-node image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}"
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
