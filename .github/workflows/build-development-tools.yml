@@ -19,7 +19,7 @@ on:
     # hours hit cache fully (only a layer-validation / tag-push noop runs).
     - cron: "0 * * * *"
   push:
-    branches: [main]
+    branches: ["main"]
     paths:
       - "containers/base/development-tools/Dockerfile"
       - ".github/workflows/build-development-tools.yml"
@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
       contents: read
@@ -79,7 +79,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
-          cache-from: type=gha
+          cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 
       - name: "Summarise"
