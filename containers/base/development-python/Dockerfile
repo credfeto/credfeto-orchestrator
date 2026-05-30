@@ -51,14 +51,30 @@ RUN pip3 install --break-system-packages --no-cache-dir --ignore-installed \
 # don't support --version (just --help). Probe them by presence only using
 # `command -v` — the credfeto pre-commit config exercises each one at runtime
 # as a `language: system` entry.
+# hadolint ignore=DL3001
 RUN set -e; \
-    echo "== stage 1 + stage 2 binary presence check =="; \
-    for cmd in git gh dotnet curl node bun claude \
-               markdownlint-cli2 markdownlint stylelint eslint block-no-verify; do \
+    echo "== stage 1 + stage 2 + stage 3 binary presence + version probe =="; \
+    for cmd in git gpg curl dotnet shellcheck shfmt bats sqlite3 gh \
+               hadolint dotenv-linter sqlcmd actionlint trufflehog \
+               composite-action-lint python3 ansible-lint flake8 pylint \
+               yamllint pre-commit xmllint \
+               node bun markdownlint-cli2 markdownlint stylelint eslint; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
-            echo "FATAL sanity: required stage-1/2 binary '$cmd' is missing" >&2; exit 1; \
+            echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
+        fi; \
+        if ! "$cmd" --version >/dev/null 2>&1; then \
+            echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== ssh version check (uses -V not --version) =="; \
+    if ! ssh -V >/dev/null 2>&1; then \
+        echo "FATAL sanity: ssh -V did not exit 0" >&2; exit 1; \
+    fi; \
+    echo "== stage 2 tools (presence / non-standard version flags) =="; \
+    claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1; \
+    if ! command -v block-no-verify >/dev/null 2>&1; then \
+        echo "FATAL sanity: block-no-verify is not on PATH" >&2; exit 1; \
+    fi; \
     echo "== stage 3 Python tool version probe =="; \
     uv --version; \
     ruff --version; \
