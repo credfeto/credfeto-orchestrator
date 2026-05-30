@@ -176,7 +176,7 @@ RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
     for cmd in git gh dotnet python3 gpg curl sqlite3 \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
-               trufflehog hadolint dotenv-linter sqlcmd composite-action-lint pwsh \
+               trufflehog hadolint dotenv-linter sqlcmd pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \
                markdownlint stylelint eslint \
                xmllint; do \
@@ -187,6 +187,13 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== composite-action-lint check (uses -h not --version) =="; \
+    if ! command -v composite-action-lint >/dev/null 2>&1; then \
+        echo "FATAL sanity: required binary 'composite-action-lint' is missing" >&2; exit 1; \
+    fi; \
+    composite-action-lint -h >/dev/null 2>&1 \
+        || composite-action-lint --help >/dev/null 2>&1 \
+        || { echo "FATAL sanity: composite-action-lint is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
     for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell credfeto.dotnet.repo.formatter dotnet-script; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
