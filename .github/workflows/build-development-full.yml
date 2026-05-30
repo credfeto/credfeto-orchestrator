@@ -1,0 +1,102 @@
+---
+name: "Build development-full base image"
+
+# Build and push the development-full base image — .NET SDK, global .NET tools,
+# skill repos, and the credfeto global pre-commit hook chain layered on top of
+# development-python.
+#
+# Tags pushed:
+#   :YYYY-MM-DD   immutable date pin
+#   :latest       what consumers resolve by default
+#
+# Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
+# built-in GITHUB_TOKEN — no extra secrets to manage.
+#
+# Build context is repo root (.) because the Dockerfile COPYs
+# container/system-gitconfig from the repo root.
+
+on:
+  schedule:
+    # Hourly — keeps .NET tool versions up to date and picks up new commits
+    # from credfeto-global-pre-commit; unchanged hours hit the GHA cache
+    # fully (only a layer-validation / tag-push noop runs).
+    - cron: "0 * * * *"
+  push:
+    branches: [main]
+    paths:
+      - "containers/base/development-full/Dockerfile"
+      - ".github/workflows/build-development-full.yml"
+      - "container/system-gitconfig"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "build-development-full-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: "ghcr.io"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-full"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 1
+
+      - name: "Log in to GHCR"
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: "Resolve cache-bust values"
+        id: cb
+        shell: bash
+        run: |
+          {
+            echo "date=$(date -u +%%Y-%%m-%%d)"
+            echo "credfeto_sha=$(git ls-remote https://github.com/credfeto/credfeto-global-pre-commit.git HEAD | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Build and push"
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: "."
+          file: "containers/base/development-full/Dockerfile"
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            DOTNET_TOOLS_CACHE_BUST=${{ steps.cb.outputs.date }}
+            CREDFETO_PRECOMMIT_CACHE_BUST=${{ steps.cb.outputs.credfeto_sha }}
+          cache-from: type=gha
+          cache-to: "type=gha,mode=max"
+
+      - name: "Summarise"
+        shell: bash
+        run: |
+          {
+            echo "## development-full image pushed"
+            echo ""
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}"
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+            echo ""
+            echo "credfeto/credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
