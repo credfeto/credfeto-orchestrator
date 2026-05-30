@@ -1,0 +1,89 @@
+---
+name: "Build development-python base image"
+
+# Build and push the development-python base image — Python pip toolchain
+# (uv, ruff, sqlfluff, cfn-lint, pre-commit-hooks) layered on top of
+# development-node.
+#
+# Tags pushed:
+#   :latest       what consumers resolve by default
+#
+# Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
+# built-in GITHUB_TOKEN — no extra secrets to manage.
+
+on:
+  schedule:
+    # Hourly — keeps pip package versions up to date; unchanged hours hit
+    # the GHA cache fully (only a layer-validation / tag-push noop runs).
+    - cron: "30 * * * *"
+  workflow_run:
+    workflows: ["Build development-node base image"]
+    types:
+      - completed
+    branches:
+      - "main"
+  push:
+    branches: ["main"]
+    paths:
+      - "containers/base/development-python/**"
+      - ".github/workflows/build-development-python.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "build-development-python-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: "ghcr.io"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-python"
+
+permissions:
+  contents: "read"
+
+jobs:
+  build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 60
+    permissions:
+      contents: "read"
+      packages: "write"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 1
+
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
+      - name: "Log in to GHCR"
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: "Build and push"
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: "containers/base/development-python"
+          file: "containers/base/development-python/Dockerfile"
+          pull: true
+          push: true
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          cache-from: "type=gha"
+          cache-to: "type=gha,mode=max"
+
+      - name: "Summarise"
+        shell: "bash"
+        run: |
+          {
+            echo "## development-python image pushed"
+            echo ""
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
