@@ -50,7 +50,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG HADOLINT_VERSION=v2.14.0
 ARG DOTENV_LINTER_VERSION=v4.0.0
 ARG SQLCMD_VERSION=v1.10.0
+# actionlint: the download-actionlint.bash script resolves "latest" to the
+# current release natively. Override via --build-arg ACTIONLINT_VERSION=vX.Y.Z
+# to pin a specific release for reproducible builds.
 ARG ACTIONLINT_VERSION=latest
+# trufflehog: the upstream install.sh selects the current release when no
+# version is given (empty ARG). Override via --build-arg TRUFFLEHOG_VERSION=vX.Y.Z.
+ARG TRUFFLEHOG_VERSION
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
@@ -208,7 +214,7 @@ RUN curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/d
 # No Debian package available; upstream's install.sh handles arch detection
 # and pulls a static binary from the GitHub release.
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-        | sh -s -- -b /usr/local/bin \
+        | sh -s -- -b /usr/local/bin ${TRUFFLEHOG_VERSION:+"$TRUFFLEHOG_VERSION"} \
     && trufflehog --version
 
 # ---- composite-action-lint --------------------------------------------------
