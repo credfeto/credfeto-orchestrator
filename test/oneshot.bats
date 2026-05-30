@@ -7,6 +7,10 @@ setup() {
     source_oneshot
 }
 
+teardown() {
+    cleanup_stubs
+}
+
 # --- prompt building -------------------------------------------------------
 
 @test "build_issue_prompt includes issue number, repo, work dir and key instructions" {
