@@ -20,6 +20,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Active GitHub query for linked PRs when the priorities API has none, ensuring a recently-created PR is detected and worked on rather than the issue
 - Bats-based test suite for the oneshot and loop shell scripts
 - Add install-timer script to install a system-level systemd service and timer that runs the orchestrator every 5 minutes as the invoking user, self-updates via git pull before each run, and persists across reboots without requiring an active login session
+- Layered development base Docker images (development-tools, development-node, development-python, development-full) with per-stage self-checks for modular, independently-rebuildable agent container layers
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
