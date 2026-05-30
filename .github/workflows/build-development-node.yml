@@ -14,13 +14,20 @@ name: "Build development-node base image"
 
 on:
   schedule:
-    # Hourly — keeps node/bun/npm-package versions up to date; unchanged
-    # hours hit the GHA cache fully (only a layer-validation / tag-push noop).
-    - cron: "0 * * * *"
+    # Hourly at :15 (staggered after development-tools at :00) — keeps
+    # node/bun/npm-package versions up to date; unchanged hours hit the GHA
+    # cache fully (only a layer-validation / tag-push noop).
+    - cron: "15 * * * *"
+  workflow_run:
+    workflows: ["Build development-tools base image"]
+    types:
+      - completed
+    branches:
+      - "main"
   push:
     branches: ["main"]
     paths:
-      - "containers/base/development-node/Dockerfile"
+      - "containers/base/development-node/**"
       - ".github/workflows/build-development-node.yml"
   workflow_dispatch: {}
 
@@ -37,6 +44,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
@@ -72,6 +80,7 @@ jobs:
           context: "containers/base/development-node"
           file: "containers/base/development-node/Dockerfile"
           push: true
+          pull: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

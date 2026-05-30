@@ -12,21 +12,26 @@ name: "Build development-full base image"
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
 # built-in GITHUB_TOKEN — no extra secrets to manage.
 #
-# Build context is repo root (.) because the Dockerfile COPYs
-# container/system-gitconfig from the repo root.
+# Build context is containers/base/development-full because system-gitconfig
+# now lives inside that folder alongside the Dockerfile.
 
 on:
   schedule:
     # Hourly — keeps .NET tool versions up to date and picks up new commits
     # from credfeto-global-pre-commit; unchanged hours hit the GHA cache
     # fully (only a layer-validation / tag-push noop runs).
-    - cron: "0 * * * *"
+    - cron: "45 * * * *"
+  workflow_run:
+    workflows: ["Build development-python base image"]
+    types:
+      - completed
+    branches:
+      - "main"
   push:
     branches: ["main"]
     paths:
-      - "containers/base/development-full/Dockerfile"
+      - "containers/base/development-full/**"
       - ".github/workflows/build-development-full.yml"
-      - "container/system-gitconfig"
   workflow_dispatch: {}
 
 concurrency:
@@ -42,6 +47,7 @@ permissions:
 
 jobs:
   build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: "ubuntu-latest"
     timeout-minutes: 90
     permissions:
@@ -75,8 +81,9 @@ jobs:
       - name: "Build and push"
         uses: docker/build-push-action@v7.2.0
         with:
-          context: "."
+          context: "containers/base/development-full"
           file: "containers/base/development-full/Dockerfile"
+          pull: true
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.date }}

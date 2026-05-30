@@ -21,7 +21,7 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "containers/base/development-tools/Dockerfile"
+      - "containers/base/development-tools/**"
       - ".github/workflows/build-development-tools.yml"
   workflow_dispatch: {}
 
