@@ -72,7 +72,7 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "claude_version=$(curl -sf https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r .version)"
+            echo "claude_version=$(npm view @anthropic-ai/claude-code version)"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Build and push"
