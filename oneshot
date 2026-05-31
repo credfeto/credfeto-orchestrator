@@ -69,7 +69,9 @@ load_token_for_owner() {
     esac
 
     token=$(read_token_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens/${owner}")
-    [ -n "${token}" ] && printf '%s' "${token}"
+    if [ -n "${token}" ]; then
+        printf '%s' "${token}"
+    fi
 }
 
 ensure_rules_current() {
@@ -291,6 +293,7 @@ invoke_claude() {
         info "Resuming Claude session ${resume_session_id}..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
             --resume "${resume_session_id}" \
+            --model opusplan \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
@@ -299,6 +302,7 @@ invoke_claude() {
     else
         info "Starting new Claude session..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+            --model opusplan \
             --print \
             --output-format json \
             --dangerously-skip-permissions \
