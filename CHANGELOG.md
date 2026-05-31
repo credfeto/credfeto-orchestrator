@@ -37,6 +37,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot now resolves the .ai-instructions path before building prompts via find_ai_instructions(), dying immediately if neither repo nor rules dir contains the file
 - Claude sessions now use --model opusplan, giving smarter model selection: Opus for plan-mode reasoning, Sonnet for execution
 - oneshot now iterates through all priorities entries across all repos, working on the first actionable item rather than being restricted to a single hardcoded repository
+- oneshot now respects the one-PR-per-repo constraint correctly: skip_repos is only marked busy after a PR is confirmed open and non-blocked, and the is_skipped flag is explicitly reset between loop iterations
 ### Deprecated
 ### Removed
 ### Deployment Changes
