@@ -5,6 +5,11 @@ FROM ghcr.io/credfeto/development-tools:latest
 # ---- Build-time arguments ----------------------------------------------------
 ARG BUN_VERSION=1.3.13
 ARG CLAUDE_CODE_VERSION=latest
+# CLAUDE_CODE_CACHE_BUST: resolved by the workflow to the current published npm
+# version of @anthropic-ai/claude-code. Embedding it here busts the GHA layer
+# cache whenever a new version is released — without it, the static "latest"
+# string never changes and Docker re-uses the stale cached npm install layer.
+ARG CLAUDE_CODE_CACHE_BUST
 ARG MARKDOWNLINT_CLI2_VERSION=latest
 ARG MARKDOWNLINT_CLI_VERSION=latest
 ARG STYLELINT_VERSION=latest
@@ -45,7 +50,11 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 #   the agent reaches for when a project doesn't ship its own.
 # block-no-verify: security guard that blocks `git --no-verify` and
 #   core.hooksPath overrides.
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+# The no-op `: "${CLAUDE_CODE_CACHE_BUST}"` embeds the resolved version in the
+# layer cache key so the entire npm install block is re-run when claude-code
+# (the most frequently updated package in this list) publishes a new release.
+RUN : "${CLAUDE_CODE_CACHE_BUST}"; \
+    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
     && npm install -g \
         "markdownlint-cli@${MARKDOWNLINT_CLI_VERSION}" \
