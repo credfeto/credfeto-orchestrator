@@ -489,9 +489,17 @@ main() {
 
     local -a skip_repos=()
     local item_index=0
+    # Declare all loop-body variables here so they are function-scoped.
+    # 'local' inside a while loop is a no-op after the first iteration in bash,
+    # so initialising them here (and resetting where needed at the top of each
+    # iteration) avoids stale-value bugs.
+    local item item_repo item_id item_type item_priority
+    local skip_repo is_skipped
+    local open_pr pr_json pr_state pr_fp saved_fp
+    local issue_json issue_state issue_fp
+    local ai_instructions prompt new_session_id post_fp
 
     while [ "${item_index}" -lt "${item_count}" ]; do
-        local item item_repo item_id item_type item_priority
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
         item_index=$((item_index + 1))
 
@@ -508,7 +516,8 @@ main() {
         esac
 
         # Skip repos that already have an active (non-blocked) PR.
-        local skip_repo is_skipped=false
+        # Explicit reset — the 'local' initialiser above only fires once.
+        is_skipped=false
         for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
             if [ "${skip_repo}" = "${item_repo}" ]; then
                 is_skipped=true
@@ -527,7 +536,6 @@ main() {
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
-            local open_pr
             open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}") \
                 || die "Failed to query open PRs for ${item_repo}"
 
@@ -535,22 +543,23 @@ main() {
                 [[ "${open_pr}" =~ ^[0-9]+$ ]] \
                     || die "Non-numeric open PR number from GitHub: ${open_pr}"
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
-                skip_repos+=("${item_repo}")
 
-                local pr_json pr_state pr_fp saved_fp
                 pr_json=$(fetch_pr_json "${open_pr}") \
                     || die "Failed to fetch state for PR #${open_pr} in ${item_repo}"
 
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
                 if [ "${pr_state}" != "OPEN" ]; then
-                    info "PR #${open_pr} in ${item_repo} is no longer open — skipping repo"
+                    info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
                     continue
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}"; then
-                    info "PR #${open_pr} in ${item_repo} is blocked — skipping repo"
+                    info "PR #${open_pr} in ${item_repo} is blocked — skipping"
                     continue
                 fi
+
+                # PR is confirmed open and non-blocked — mark repo as having active work.
+                skip_repos+=("${item_repo}")
 
                 pr_fp=$(fingerprint_pr_json "${pr_json}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
@@ -567,7 +576,6 @@ main() {
 
             else
                 # No active PR — check the issue itself.
-                local issue_json issue_state issue_fp saved_fp
                 issue_json=$(fetch_issue_json "${item_id}") \
                     || die "Failed to fetch state for Issue #${item_id} in ${item_repo}"
 
@@ -595,7 +603,6 @@ main() {
 
         else
             # PullRequest appearing directly in the priorities list.
-            local pr_json pr_state pr_fp saved_fp
             pr_json=$(fetch_pr_json "${item_id}") \
                 || die "Failed to fetch state for PR #${item_id} in ${item_repo}"
 
@@ -630,7 +637,6 @@ main() {
         ensure_rules_current
         ensure_repo_current
 
-        local ai_instructions
         if ! ai_instructions=$(find_ai_instructions); then
             warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
             if [ "${item_type}" = "Issue" ]; then
@@ -648,7 +654,6 @@ main() {
             info "No existing session — starting fresh for ${item_type} #${item_id} in ${item_repo}"
         fi
 
-        local prompt
         if [ "${item_type}" = "Issue" ]; then
             prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
         else
@@ -657,7 +662,6 @@ main() {
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        local new_session_id
         new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
             || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
@@ -665,12 +669,10 @@ main() {
         success "Session ${new_session_id} saved for ${item_type} #${item_id} in ${item_repo}"
 
         if [ "${item_type}" = "PullRequest" ]; then
-            local post_fp
             post_fp=$(compute_pr_fingerprint "${item_id}") \
                 || die "Failed to compute post-run fingerprint for PR #${item_id} in ${item_repo}"
             save_pr_fingerprint "${item_id}" "${post_fp}"
         elif [ "${item_type}" = "Issue" ]; then
-            local post_fp
             post_fp=$(compute_issue_fingerprint "${item_id}") \
                 || die "Failed to compute post-run fingerprint for Issue #${item_id} in ${item_repo}"
             save_issue_fingerprint "${item_id}" "${post_fp}"

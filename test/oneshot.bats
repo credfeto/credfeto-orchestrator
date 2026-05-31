@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
 
 load test_helper
 
@@ -383,4 +384,131 @@ teardown() {
     run find_ai_instructions
     [ "${status}" -ne 0 ]
     [[ "${output}" == *".ai-instructions"* ]]
+}
+
+# --- main() skip_repos integration tests -------------------------------------
+# These tests exercise the multi-repo iteration logic in main() by overriding
+# all external-call functions.  No PATH stubs are used — all overrides are
+# function-level so no teardown stub cleanup is required beyond the common hook.
+
+# Common overrides shared across main() integration tests.
+# Call this inside each test after sourcing (i.e. after setup has run) to
+# replace every function that performs real I/O.
+setup_main_mocks() {
+    check_required_tools()      { return 0; }
+    set_repo_context()          { return 0; }
+    ensure_rules_current()      { return 0; }
+    ensure_repo_current()       { return 0; }
+    find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
+    load_session()              { SESSION_ID=""; }
+    build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
+    build_pr_prompt()           { printf 'mock-pr-prompt\n'; }
+    invoke_claude()             { printf '12345678-1234-1234-1234-123456789abc\n'; }
+    save_session()              { return 0; }
+    compute_pr_fingerprint()    { printf 'new-fp\n'; }
+    compute_issue_fingerprint() { printf 'new-fp\n'; }
+    save_pr_fingerprint()       { return 0; }
+    save_issue_fingerprint()    { return 0; }
+}
+
+@test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
+    # Item 1 (repoA Issue): repo has an unchanged non-blocked PR → skip_repos += repoA, continue
+    # Item 2 (repoB Issue): different repo, must NOT be skipped due to stale is_skipped=true;
+    #                        issue is blocked → skipped with "blocked" message, not "active work"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"orgA/repoA","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"orgB/repoB","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() {
+        case "$1" in orgA/repoA) printf '99\n' ;; *) printf '' ;; esac
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'same-fp\n'; }
+    load_pr_fingerprint()       { printf 'same-fp\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in orgA/repoA unchanged — skipping repo"* ]]
+    # repoB issue must be evaluated (not skip_repos-skipped) and hit the "blocked" path
+    [[ "${output}" == *"Issue #20 in orgB/repoB is blocked — skipping"* ]]
+    # Must NOT see the "repo already has active work" message for repoB
+    [[ "${output}" != *"Skipping Issue #20 in orgB/repoB — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main skips same-repo issue when repo has a non-blocked unchanged PR in priorities" {
+    # Item 1 (PR #5, org/repo): open, non-blocked, unchanged → skip_repos += org/repo, continue
+    # Item 2 (Issue #10, org/repo): same repo → skipped with "repo already has active work"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main does not add repo to skip_repos for a blocked PR in priorities so same-repo issue is still evaluated" {
+    # Item 1 (PR #5, org/repo): blocked → skipped, NOT added to skip_repos
+    # Item 2 (Issue #10, org/repo): must be evaluated; here it is also blocked → no work
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    # Issue #10 must be evaluated (not falsely skipped due to skip_repos from the blocked PR)
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main does not add repo to skip_repos when switched-to PR is no longer open" {
+    # Item 1 (Issue #10, org/repo): finds PR #99 via list (open at list time), but fetch
+    #   returns MERGED — race condition.  Repo must NOT be added to skip_repos.
+    # Item 2 (Issue #20, org/repo): same repo must still be evaluated; second call to
+    #   find_open_nonblocked_pr_for_repo returns empty (PR gone); issue is blocked → no work.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    # The function is called via $(...) substitution (subshell), so incrementing a variable
+    # inside the function would not persist.  Use a temp file as a persistent call counter.
+    local _pr_call_file="${TEST_TMP}/_pr_call"
+    printf '0' > "${_pr_call_file}"
+    find_open_nonblocked_pr_for_repo() {
+        local _count
+        _count=$(cat "${_pr_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_call_file}"
+        [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
+    }
+    fetch_pr_json()    { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is no longer open — skipping"* ]]
+    # Issue #20 must be evaluated (repo NOT in skip_repos)
+    [[ "${output}" == *"Issue #20 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
 }
