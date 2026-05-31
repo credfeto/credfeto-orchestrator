@@ -412,30 +412,33 @@ setup_main_mocks() {
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
-    # Item 1 (repoA Issue): repo has an unchanged non-blocked PR → skip_repos += repoA, continue
-    # Item 2 (repoB Issue): different repo, must NOT be skipped due to stale is_skipped=true;
-    #                        issue is blocked → skipped with "blocked" message, not "active work"
+    # Three-item scenario that exercises the is_skipped reset:
+    # Item 1 (PR #5, org/repo): non-blocked, unchanged → skip_repos += org/repo (is_skipped stays false)
+    # Item 2 (Issue #10, org/repo): for-loop matches skip_repos → is_skipped=true → "active work" skip
+    # Item 3 (Issue #20, other/repo): is_skipped must be reset to false; without the reset it stays
+    #   true from iteration 2 and incorrectly skips this different-repo item.
     setup_main_mocks
     fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"orgA/repoA","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"orgB/repoB","priority":2,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() {
-        case "$1" in orgA/repoA) printf '99\n' ;; *) printf '' ;; esac
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"other/repo","priority":3,"status":"Open","isOnHold":false}]'
     }
     fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     pr_json_has_blocked_label() { return 1; }
-    fingerprint_pr_json()       { printf 'same-fp\n'; }
-    load_pr_fingerprint()       { printf 'same-fp\n'; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 0; }
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #99 in orgA/repoA unchanged — skipping repo"* ]]
-    # repoB issue must be evaluated (not skip_repos-skipped) and hit the "blocked" path
-    [[ "${output}" == *"Issue #20 in orgB/repoB is blocked — skipping"* ]]
-    # Must NOT see the "repo already has active work" message for repoB
-    [[ "${output}" != *"Skipping Issue #20 in orgB/repoB — repo already has active work"* ]]
+    # Item 1: PR unchanged → skip_repos += org/repo
+    [[ "${output}" == *"PR #5 in org/repo unchanged"* ]]
+    # Item 2: Issue #10 correctly skipped via skip_repos (is_skipped=true at end of this iteration)
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    # Item 3: Issue #20 must be evaluated (is_skipped reset to false) and hit the "blocked" path
+    [[ "${output}" == *"Issue #20 in other/repo is blocked — skipping"* ]]
+    # Must NOT see "repo already has active work" for other/repo (that would be the stale-is_skipped bug)
+    [[ "${output}" != *"Skipping Issue #20 in other/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
 }
 
@@ -548,4 +551,20 @@ setup_main_mocks() {
     [ "${status}" -eq 0 ]
     # Valid repo name accepted — issue processed (then skipped as blocked)
     [[ "${output}" == *"Issue #1 in org/my-repo is blocked"* ]]
+}
+
+@test "main accepts a repo name starting with underscore from priorities API" {
+    # GitHub allows repo names like _git_ignore_patterns — must not die with "Malformed"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"isaacs/_git_ignore_patterns","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Malformed repository from priorities API"* ]]
+    [[ "${output}" == *"Issue #1 in isaacs/_git_ignore_patterns is blocked"* ]]
 }

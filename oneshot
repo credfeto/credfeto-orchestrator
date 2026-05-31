@@ -514,7 +514,7 @@ main() {
             Issue|PullRequest) ;;
             *) die "Unexpected itemType from priorities API: ${item_type}" ;;
         esac
-        [[ "${item_repo}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] \
+        [[ "${item_repo}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]] \
             || die "Malformed repository from priorities API: ${item_repo}"
 
         # Skip repos that already have an active (non-blocked) PR.
@@ -556,7 +556,7 @@ main() {
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}"; then
-                    info "PR #${open_pr} in ${item_repo} is blocked — skipping"
+                    info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
                     continue
                 fi
 
