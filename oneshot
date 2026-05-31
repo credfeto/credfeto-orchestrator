@@ -1,18 +1,12 @@
 #!/bin/bash
 
 # Orchestrator oneshot script.
-# Fetches the top-priority open work item for credfeto/credfeto-orchestrator from the
-# priorities API and drives a Claude Code session to work on it.  Persists one Claude
+# Fetches all open work items from the priorities API and drives a Claude Code session
+# to work on the first actionable item across any repository.  Persists one Claude
 # session ID per Issue/PR so subsequent runs resume the correct session.
 
-OWNER="credfeto"
-REPO="credfeto-orchestrator"
-REPO_FULL="${OWNER}/${REPO}"
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
-SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
-RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
-REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -74,6 +68,18 @@ load_token_for_owner() {
     fi
 }
 
+# Sets the per-repo globals used by all sub-functions.
+# Call once for each repository before invoking any function that reads these globals.
+set_repo_context() {
+    local repo_full="$1"
+    OWNER="${repo_full%%/*}"
+    REPO="${repo_full##*/}"
+    REPO_FULL="${repo_full}"
+    RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
+    REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
+    SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
+}
+
 ensure_rules_current() {
     if [ -d "${RULES_DIR}/.git" ]; then
         info "Updating rules (cs-template) at ${RULES_DIR}..."
@@ -133,21 +139,38 @@ session_file_path() {
     printf '%s/%s_%s.env' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
 }
 
-# Outputs the top-priority item JSON for this repo; caller announces progress.
-fetch_top_priority() {
-    local priorities_json top_item
+# Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
+fetch_all_priorities() {
+    local priorities_json
 
     priorities_json=$(curl --silent --fail "${PRIORITIES_URL}") \
         || die "Failed to fetch priorities from ${PRIORITIES_URL}"
 
-    top_item=$(printf '%s' "${priorities_json}" | jq -c --arg repo "${REPO_FULL}" '
+    printf '%s' "${priorities_json}" | jq -c '[
         .priorities
-            | map(select(.repository == $repo and .status == "Open" and .isOnHold == false))
+            | map(select(.status == "Open" and .isOnHold == false))
             | sort_by(.priority)
-            | first
-    ') || die "Failed to parse priorities JSON"
+            | .[]
+    ]' || die "Failed to parse priorities JSON"
+}
 
-    printf '%s' "${top_item}"
+# Queries GitHub for the first open, non-blocked PR authored by @me in the given repo.
+# Outputs the PR number on stdout, or empty string if none found.
+# Returns 1 if the gh call fails (caller should treat as an error).
+find_open_nonblocked_pr_for_repo() {
+    local repo_full="$1"
+    local pr_list
+    pr_list=$(gh pr list \
+        --repo "${repo_full}" \
+        --state open \
+        --author "@me" \
+        --json number,labels \
+        2>/dev/null) || return 1
+    printf '%s' "${pr_list}" | jq -r '
+        [.[] | select(
+            ([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null
+        )] | first | .number // empty
+    '
 }
 
 # Sets SESSION_ID for the given item.  For a PullRequest with no session file, falls back
@@ -180,13 +203,16 @@ load_session() {
     fi
 }
 
+# Outputs the path to the .ai-instructions file for the current repo context.
+# Returns 1 (with a warning) if neither the repo work dir nor the rules dir has the file.
 find_ai_instructions() {
     if [ -f "${REPO_WORK_DIR}/.ai-instructions" ]; then
         printf '%s/.ai-instructions' "${REPO_WORK_DIR}"
     elif [ -f "${RULES_DIR}/.ai-instructions" ]; then
         printf '%s/.ai-instructions' "${RULES_DIR}"
     else
-        die "No .ai-instructions found at ${REPO_WORK_DIR}/.ai-instructions or ${RULES_DIR}/.ai-instructions"
+        warn "No .ai-instructions found at ${REPO_WORK_DIR}/.ai-instructions or ${RULES_DIR}/.ai-instructions"
+        return 1
     fi
 }
 
@@ -226,46 +252,6 @@ Steps:
 4. Proceed to address all outstanding work
 5. All interaction with humans including status report must be made as a comment to the pull request.
 EOF
-}
-
-# Queries GitHub for an open PR whose closing issues include the given issue ID.
-# Outputs the PR number on stdout, or empty string if none found.
-# Returns 1 if the gh call fails (caller should treat as "no linked PR found").
-find_linked_pr_on_github() {
-    local issue_id="$1"
-    local pr_list
-    pr_list=$(gh pr list \
-        --repo "${REPO_FULL}" \
-        --state open \
-        --json number,closingIssuesReferences \
-        2>/dev/null) || return 1
-    printf '%s' "${pr_list}" | jq -r --argjson issue "${issue_id}" \
-        '[.[] | select(.closingIssuesReferences[]?.number == $issue)] | first | .number // empty'
-}
-
-# Checks whether the given item is still open on GitHub.
-# Return codes: 0 = open; 1 = closed or merged; 2 = gh call failed (state unknown).
-# The priorities API may be stale — always verify against the live GitHub state.
-check_item_open() {
-    local item_type="$1" item_id="$2"
-    local state
-
-    if [ "${item_type}" = "Issue" ]; then
-        state=$(gh issue view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json state \
-            --jq '.state' 2>/dev/null) || return 2
-    else
-        state=$(gh pr view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json state \
-            --jq '.state' 2>/dev/null) || return 2
-    fi
-
-    if [ "${state}" = "OPEN" ]; then
-        return 0
-    fi
-    return 1
 }
 
 # Returns 0 if the value is a plain UUID (the format Claude returns for a session id).
@@ -350,7 +336,7 @@ fetch_pr_json() {
     local item_id="$1"
     gh pr view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup \
+        --json state,title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup \
         2>/dev/null || return 1
 }
 
@@ -489,139 +475,211 @@ issue_json_has_blocked_label() {
 main() {
     check_required_tools
 
-    ensure_rules_current
-    ensure_repo_current
-
-    local top_item item_id item_type item_priority linked_pr prompt new_session_id
-
+    local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."
-    top_item=$(fetch_top_priority)
+    items_json=$(fetch_all_priorities)
 
-    if [ -z "${top_item}" ] || [ "${top_item}" = "null" ]; then
-        success "No open work items for ${REPO_FULL}"
+    item_count=$(printf '%s' "${items_json}" | jq 'length')
+    if [ "${item_count}" -eq 0 ]; then
+        success "No open work items found in priorities"
         exit 0
     fi
 
-    item_id=$(printf '%s' "${top_item}" | jq -r '.id')
-    item_type=$(printf '%s' "${top_item}" | jq -r '.itemType')
-    item_priority=$(printf '%s' "${top_item}" | jq -r '.priority')
+    info "Found ${item_count} open work item(s) — scanning for actionable work..."
 
-    [[ "${item_id}" =~ ^[0-9]+$ ]] || die "Non-numeric id from priorities API: ${item_id}"
-    case "${item_type}" in
-        Issue|PullRequest) ;;
-        *) die "Unexpected itemType from priorities API: ${item_type}" ;;
-    esac
+    local -a skip_repos=()
+    local item_index=0
 
-    info "Top priority item: ${item_type} #${item_id} (priority level ${item_priority})"
+    while [ "${item_index}" -lt "${item_count}" ]; do
+        local item item_repo item_id item_type item_priority
+        item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
+        item_index=$((item_index + 1))
 
-    # When an issue already has a linked pull request, work on the PR directly.
-    # First check the priorities API (cheap), then fall back to a live GitHub query.
-    if [ "${item_type}" = "Issue" ]; then
-        linked_pr=$(printf '%s' "${top_item}" | jq -r '(.linkedPrNumbers // []) | first // empty')
-        if [ -z "${linked_pr}" ]; then
-            info "No linked PR in priorities API for Issue #${item_id} — querying GitHub directly..."
-            linked_pr=$(find_linked_pr_on_github "${item_id}") \
-                || info "GitHub PR lookup failed for Issue #${item_id} — proceeding as issue"
-        fi
-        if [ -n "${linked_pr}" ]; then
-            [[ "${linked_pr}" =~ ^[0-9]+$ ]] || die "Non-numeric linked PR number: ${linked_pr}"
-            info "Issue #${item_id} has linked PR #${linked_pr} — switching to PR workflow"
-            item_id="${linked_pr}"
-            item_type="PullRequest"
-        fi
-    fi
+        item_repo=$(printf '%s' "${item}" | jq -r '.repository')
+        item_id=$(printf '%s' "${item}" | jq -r '.id')
+        item_type=$(printf '%s' "${item}" | jq -r '.itemType')
+        item_priority=$(printf '%s' "${item}" | jq -r '.priority')
 
-    if [ "${item_type}" = "Issue" ]; then
-        local issue_json issue_state current_fingerprint saved_fingerprint
-        issue_json=$(fetch_issue_json "${item_id}") \
-            || die "Failed to fetch state for Issue #${item_id} from GitHub"
-
-        issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
-        if [ "${issue_state}" != "OPEN" ]; then
-            success "Issue #${item_id} is no longer open on GitHub — skipping"
-            exit 0
-        fi
-
-        if issue_json_has_blocked_label "${issue_json}"; then
-            info "Issue #${item_id} has the 'blocked' label — skipping"
-            exit 0
-        fi
-
-        current_fingerprint=$(fingerprint_issue_json "${issue_json}") \
-            || die "Failed to compute fingerprint for Issue #${item_id}"
-        saved_fingerprint=$(load_issue_fingerprint "${item_id}")
-
-        if [ -n "${saved_fingerprint}" ] && [ "${current_fingerprint}" = "${saved_fingerprint}" ]; then
-            info "Issue #${item_id} state unchanged since last run — skipping"
-            exit 0
-        fi
-    else
-        info "Verifying ${item_type} #${item_id} is still open on GitHub..."
-        check_item_open "${item_type}" "${item_id}"
-        case $? in
-            0) ;;
-            1) success "${item_type} #${item_id} is no longer open on GitHub — skipping"
-               exit 0 ;;
-            *) die "Failed to determine GitHub state of ${item_type} #${item_id} — aborting to avoid skipping valid work" ;;
+        [[ "${item_id}" =~ ^[0-9]+$ ]] \
+            || die "Non-numeric id from priorities API: ${item_id}"
+        case "${item_type}" in
+            Issue|PullRequest) ;;
+            *) die "Unexpected itemType from priorities API: ${item_type}" ;;
         esac
-    fi
 
-    if [ "${item_type}" = "PullRequest" ]; then
-        local pr_json current_fingerprint saved_fingerprint
-        pr_json=$(fetch_pr_json "${item_id}") \
-            || die "Failed to fetch state for PR #${item_id} from GitHub"
-
-        if pr_json_has_blocked_label "${pr_json}"; then
-            info "PR #${item_id} has the 'blocked' label — skipping"
-            exit 0
+        # Skip repos that already have an active (non-blocked) PR.
+        local skip_repo is_skipped=false
+        for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
+            if [ "${skip_repo}" = "${item_repo}" ]; then
+                is_skipped=true
+                break
+            fi
+        done
+        if [ "${is_skipped}" = true ]; then
+            info "Skipping ${item_type} #${item_id} in ${item_repo} — repo already has active work"
+            continue
         fi
 
-        current_fingerprint=$(fingerprint_pr_json "${pr_json}") \
-            || die "Failed to compute fingerprint for PR #${item_id}"
-        saved_fingerprint=$(load_pr_fingerprint "${item_id}")
+        info "Checking ${item_type} #${item_id} in ${item_repo} (priority ${item_priority})..."
 
-        if [ -n "${saved_fingerprint}" ] && [ "${current_fingerprint}" = "${saved_fingerprint}" ]; then
-            info "PR #${item_id} state unchanged since last run — skipping"
-            exit 0
+        # Configure per-repo globals for all sub-functions.
+        set_repo_context "${item_repo}"
+
+        if [ "${item_type}" = "Issue" ]; then
+            # Lazy check: does this repo already have an open non-blocked PR that we authored?
+            local open_pr
+            open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}") \
+                || die "Failed to query open PRs for ${item_repo}"
+
+            if [ -n "${open_pr}" ]; then
+                [[ "${open_pr}" =~ ^[0-9]+$ ]] \
+                    || die "Non-numeric open PR number from GitHub: ${open_pr}"
+                info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
+                skip_repos+=("${item_repo}")
+
+                local pr_json pr_state pr_fp saved_fp
+                pr_json=$(fetch_pr_json "${open_pr}") \
+                    || die "Failed to fetch state for PR #${open_pr} in ${item_repo}"
+
+                pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
+                if [ "${pr_state}" != "OPEN" ]; then
+                    info "PR #${open_pr} in ${item_repo} is no longer open — skipping repo"
+                    continue
+                fi
+
+                if pr_json_has_blocked_label "${pr_json}"; then
+                    info "PR #${open_pr} in ${item_repo} is blocked — skipping repo"
+                    continue
+                fi
+
+                pr_fp=$(fingerprint_pr_json "${pr_json}") \
+                    || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
+                saved_fp=$(load_pr_fingerprint "${open_pr}")
+
+                if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                    info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                    continue
+                fi
+
+                # PR has changed — work on it.
+                item_id="${open_pr}"
+                item_type="PullRequest"
+
+            else
+                # No active PR — check the issue itself.
+                local issue_json issue_state issue_fp saved_fp
+                issue_json=$(fetch_issue_json "${item_id}") \
+                    || die "Failed to fetch state for Issue #${item_id} in ${item_repo}"
+
+                issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
+                if [ "${issue_state}" != "OPEN" ]; then
+                    info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
+                    continue
+                fi
+
+                if issue_json_has_blocked_label "${issue_json}"; then
+                    info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    continue
+                fi
+
+                issue_fp=$(fingerprint_issue_json "${issue_json}") \
+                    || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
+                saved_fp=$(load_issue_fingerprint "${item_id}")
+
+                if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
+                    info "Issue #${item_id} in ${item_repo} unchanged — skipping"
+                    continue
+                fi
+                # Fall through to work block (item_type remains "Issue").
+            fi
+
+        else
+            # PullRequest appearing directly in the priorities list.
+            local pr_json pr_state pr_fp saved_fp
+            pr_json=$(fetch_pr_json "${item_id}") \
+                || die "Failed to fetch state for PR #${item_id} in ${item_repo}"
+
+            pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
+            if [ "${pr_state}" != "OPEN" ]; then
+                info "PR #${item_id} in ${item_repo} is no longer open — skipping"
+                continue
+            fi
+
+            if pr_json_has_blocked_label "${pr_json}"; then
+                info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
+                continue
+            fi
+
+            # Non-blocked, open PR = active work for this repo.
+            skip_repos+=("${item_repo}")
+
+            pr_fp=$(fingerprint_pr_json "${pr_json}") \
+                || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
+            saved_fp=$(load_pr_fingerprint "${item_id}")
+
+            if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                continue
+            fi
+            # Fall through to work block (item_type remains "PullRequest").
         fi
-    fi
 
-    load_session "${item_type}" "${item_id}"
+        # ---- Work block: item_type and item_id are resolved ----
+        info "Found actionable ${item_type} #${item_id} in ${item_repo} — preparing..."
 
-    if [ -n "${SESSION_ID}" ]; then
-        info "Resuming existing session for ${item_type} #${item_id}"
-    else
-        info "No existing session — starting fresh for ${item_type} #${item_id}"
-    fi
+        ensure_rules_current
+        ensure_repo_current
 
-    local ai_instructions
-    ai_instructions=$(find_ai_instructions) || exit 1
+        local ai_instructions
+        if ! ai_instructions=$(find_ai_instructions); then
+            warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
+            if [ "${item_type}" = "Issue" ]; then
+                gh issue edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+            else
+                gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+            fi
+            continue
+        fi
 
-    if [ "${item_type}" = "Issue" ]; then
-        prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
-    else
-        prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}")
-    fi
+        load_session "${item_type}" "${item_id}"
+        if [ -n "${SESSION_ID}" ]; then
+            info "Resuming existing session for ${item_type} #${item_id} in ${item_repo}"
+        else
+            info "No existing session — starting fresh for ${item_type} #${item_id} in ${item_repo}"
+        fi
 
-    [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id}"
+        local prompt
+        if [ "${item_type}" = "Issue" ]; then
+            prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
+        else
+            prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}")
+        fi
 
-    new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
-        || die "Failed to invoke Claude"
+        [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-    save_session "${item_type}" "${item_id}" "${new_session_id}"
-    success "Session ${new_session_id} saved for ${item_type} #${item_id}"
+        local new_session_id
+        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
+            || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
-    if [ "${item_type}" = "PullRequest" ]; then
-        local current_fingerprint
-        current_fingerprint=$(compute_pr_fingerprint "${item_id}") \
-            || die "Failed to compute fingerprint for PR #${item_id}"
-        save_pr_fingerprint "${item_id}" "${current_fingerprint}"
-    elif [ "${item_type}" = "Issue" ]; then
-        local post_run_fingerprint
-        post_run_fingerprint=$(compute_issue_fingerprint "${item_id}") \
-            || die "Failed to compute fingerprint for Issue #${item_id}"
-        save_issue_fingerprint "${item_id}" "${post_run_fingerprint}"
-    fi
+        save_session "${item_type}" "${item_id}" "${new_session_id}"
+        success "Session ${new_session_id} saved for ${item_type} #${item_id} in ${item_repo}"
+
+        if [ "${item_type}" = "PullRequest" ]; then
+            local post_fp
+            post_fp=$(compute_pr_fingerprint "${item_id}") \
+                || die "Failed to compute post-run fingerprint for PR #${item_id} in ${item_repo}"
+            save_pr_fingerprint "${item_id}" "${post_fp}"
+        elif [ "${item_type}" = "Issue" ]; then
+            local post_fp
+            post_fp=$(compute_issue_fingerprint "${item_id}") \
+                || die "Failed to compute post-run fingerprint for Issue #${item_id} in ${item_repo}"
+            save_issue_fingerprint "${item_id}" "${post_fp}"
+        fi
+
+        exit 0
+    done
+
+    success "No actionable work items found across all priorities"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

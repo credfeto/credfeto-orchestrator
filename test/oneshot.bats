@@ -269,3 +269,118 @@ teardown() {
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
+
+# --- set_repo_context ---------------------------------------------------------
+
+@test "set_repo_context sets OWNER REPO REPO_FULL RULES_DIR REPO_WORK_DIR SESSION_BASE_DIR" {
+    set_repo_context "myorg/myrepo"
+    [ "${OWNER}"    = "myorg" ]
+    [ "${REPO}"     = "myrepo" ]
+    [ "${REPO_FULL}" = "myorg/myrepo" ]
+    [ "${RULES_DIR}"     = "${WORK}/myorg/myrepo/rules" ]
+    [ "${REPO_WORK_DIR}" = "${WORK}/myorg/myrepo/repo" ]
+    [ "${SESSION_BASE_DIR}" = "${HOME}/.orchestrator/myorg/myrepo" ]
+}
+
+@test "set_repo_context is idempotent when called twice with the same repo" {
+    set_repo_context "orgA/repoA"
+    set_repo_context "orgA/repoA"
+    [ "${REPO_FULL}" = "orgA/repoA" ]
+    [ "${OWNER}" = "orgA" ]
+}
+
+@test "set_repo_context correctly switches context between two different repos" {
+    set_repo_context "orgA/repoA"
+    [ "${REPO_FULL}" = "orgA/repoA" ]
+    [ "${OWNER}" = "orgA" ]
+
+    set_repo_context "orgB/repoB"
+    [ "${REPO_FULL}" = "orgB/repoB" ]
+    [ "${OWNER}" = "orgB" ]
+    [ "${REPO_WORK_DIR}" = "${WORK}/orgB/repoB/repo" ]
+}
+
+# --- fetch_all_priorities -----------------------------------------------------
+
+@test "fetch_all_priorities returns all open non-on-hold items sorted by priority" {
+    make_stub curl 'printf '"'"'{"priorities":[
+        {"id":3,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":3},
+        {"id":1,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":1},
+        {"id":2,"itemType":"PullRequest","repository":"org/repo","status":"Open","isOnHold":false,"priority":2},
+        {"id":4,"itemType":"Issue","repository":"org/repo","status":"Closed","isOnHold":false,"priority":4},
+        {"id":5,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":true,"priority":0}
+    ]}\n'"'"
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    # Only the 3 open non-on-hold items appear, in priority order
+    local ids
+    ids=$(printf '%s' "${output}" | jq -r '.[].id')
+    [ "${ids}" = "$(printf '1\n2\n3')" ]
+}
+
+@test "fetch_all_priorities returns empty array when no open items exist" {
+    make_stub curl 'printf '"'"'{"priorities":[]}\n'"'"
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+}
+
+@test "fetch_all_priorities includes items from multiple repositories" {
+    make_stub curl 'printf '"'"'{"priorities":[
+        {"id":10,"itemType":"Issue","repository":"org/repoA","status":"Open","isOnHold":false,"priority":1},
+        {"id":20,"itemType":"Issue","repository":"org/repoB","status":"Open","isOnHold":false,"priority":2}
+    ]}\n'"'"
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    local repos
+    repos=$(printf '%s' "${output}" | jq -r '.[].repository')
+    [[ "${repos}" == *"org/repoA"* ]]
+    [[ "${repos}" == *"org/repoB"* ]]
+}
+
+# --- find_open_nonblocked_pr_for_repo -----------------------------------------
+
+@test "find_open_nonblocked_pr_for_repo returns first non-blocked PR number" {
+    make_stub gh 'printf '"'"'[{"number":42,"labels":[]},{"number":99,"labels":[{"name":"enhancement"}]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo skips PRs with the Blocked label" {
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"Blocked"}]},{"number":8,"labels":[]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "8" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns empty when all PRs are blocked" {
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"blocked"}]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns empty when no PRs exist" {
+    make_stub gh 'printf '"'"'[]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns 1 when gh fails" {
+    make_stub gh 'exit 1'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
+# --- find_ai_instructions (updated behaviour) ---------------------------------
+
+@test "find_ai_instructions returns non-zero (not die) when neither path has .ai-instructions" {
+    # Function should return 1 and emit a warning, not call die/exit.
+    run find_ai_instructions
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *".ai-instructions"* ]]
+}
