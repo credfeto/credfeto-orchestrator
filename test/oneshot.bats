@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
 
 load test_helper
 
@@ -268,4 +269,302 @@ teardown() {
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
+}
+
+# --- set_repo_context ---------------------------------------------------------
+
+@test "set_repo_context sets OWNER REPO REPO_FULL RULES_DIR REPO_WORK_DIR SESSION_BASE_DIR" {
+    set_repo_context "myorg/myrepo"
+    [ "${OWNER}"    = "myorg" ]
+    [ "${REPO}"     = "myrepo" ]
+    [ "${REPO_FULL}" = "myorg/myrepo" ]
+    [ "${RULES_DIR}"     = "${WORK}/myorg/myrepo/rules" ]
+    [ "${REPO_WORK_DIR}" = "${WORK}/myorg/myrepo/repo" ]
+    [ "${SESSION_BASE_DIR}" = "${HOME}/.orchestrator/myorg/myrepo" ]
+}
+
+@test "set_repo_context is idempotent when called twice with the same repo" {
+    set_repo_context "orgA/repoA"
+    set_repo_context "orgA/repoA"
+    [ "${REPO_FULL}" = "orgA/repoA" ]
+    [ "${OWNER}" = "orgA" ]
+}
+
+@test "set_repo_context correctly switches context between two different repos" {
+    set_repo_context "orgA/repoA"
+    [ "${REPO_FULL}" = "orgA/repoA" ]
+    [ "${OWNER}" = "orgA" ]
+
+    set_repo_context "orgB/repoB"
+    [ "${REPO_FULL}" = "orgB/repoB" ]
+    [ "${OWNER}" = "orgB" ]
+    [ "${REPO_WORK_DIR}" = "${WORK}/orgB/repoB/repo" ]
+}
+
+# --- fetch_all_priorities -----------------------------------------------------
+
+@test "fetch_all_priorities returns all open non-on-hold items sorted by priority" {
+    make_stub curl 'printf '"'"'{"priorities":[
+        {"id":3,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":3},
+        {"id":1,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":1},
+        {"id":2,"itemType":"PullRequest","repository":"org/repo","status":"Open","isOnHold":false,"priority":2},
+        {"id":4,"itemType":"Issue","repository":"org/repo","status":"Closed","isOnHold":false,"priority":4},
+        {"id":5,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":true,"priority":0}
+    ]}\n'"'"
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    # Only the 3 open non-on-hold items appear, in priority order
+    local ids
+    ids=$(printf '%s' "${output}" | jq -r '.[].id')
+    [ "${ids}" = "$(printf '1\n2\n3')" ]
+}
+
+@test "fetch_all_priorities returns empty array when no open items exist" {
+    make_stub curl 'printf '"'"'{"priorities":[]}\n'"'"
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+}
+
+@test "fetch_all_priorities includes items from multiple repositories" {
+    make_stub curl 'printf '"'"'{"priorities":[
+        {"id":10,"itemType":"Issue","repository":"org/repoA","status":"Open","isOnHold":false,"priority":1},
+        {"id":20,"itemType":"Issue","repository":"org/repoB","status":"Open","isOnHold":false,"priority":2}
+    ]}\n'"'"
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    local repos
+    repos=$(printf '%s' "${output}" | jq -r '.[].repository')
+    [[ "${repos}" == *"org/repoA"* ]]
+    [[ "${repos}" == *"org/repoB"* ]]
+}
+
+# --- find_open_nonblocked_pr_for_repo -----------------------------------------
+
+@test "find_open_nonblocked_pr_for_repo returns first non-blocked PR number" {
+    make_stub gh 'printf '"'"'[{"number":42,"labels":[]},{"number":99,"labels":[{"name":"enhancement"}]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo skips PRs with the Blocked label" {
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"Blocked"}]},{"number":8,"labels":[]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "8" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns empty when all PRs are blocked" {
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"blocked"}]}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns empty when no PRs exist" {
+    make_stub gh 'printf '"'"'[]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns 1 when gh fails" {
+    make_stub gh 'exit 1'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
+# --- find_ai_instructions (updated behaviour) ---------------------------------
+
+@test "find_ai_instructions returns non-zero (not die) when neither path has .ai-instructions" {
+    # Function should return 1 and emit a warning, not call die/exit.
+    run find_ai_instructions
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *".ai-instructions"* ]]
+}
+
+# --- main() skip_repos integration tests -------------------------------------
+# These tests exercise the multi-repo iteration logic in main() by overriding
+# all external-call functions.  No PATH stubs are used — all overrides are
+# function-level so no teardown stub cleanup is required beyond the common hook.
+
+# Common overrides shared across main() integration tests.
+# Call this inside each test after sourcing (i.e. after setup has run) to
+# replace every function that performs real I/O.
+setup_main_mocks() {
+    check_required_tools()      { return 0; }
+    set_repo_context()          { return 0; }
+    ensure_rules_current()      { return 0; }
+    ensure_repo_current()       { return 0; }
+    find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
+    load_session()              { SESSION_ID=""; }
+    build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
+    build_pr_prompt()           { printf 'mock-pr-prompt\n'; }
+    invoke_claude()             { printf '12345678-1234-1234-1234-123456789abc\n'; }
+    save_session()              { return 0; }
+    compute_pr_fingerprint()    { printf 'new-fp\n'; }
+    compute_issue_fingerprint() { printf 'new-fp\n'; }
+    save_pr_fingerprint()       { return 0; }
+    save_issue_fingerprint()    { return 0; }
+}
+
+@test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
+    # Three-item scenario that exercises the is_skipped reset:
+    # Item 1 (PR #5, org/repo): non-blocked, unchanged → skip_repos += org/repo (is_skipped stays false)
+    # Item 2 (Issue #10, org/repo): for-loop matches skip_repos → is_skipped=true → "active work" skip
+    # Item 3 (Issue #20, other/repo): is_skipped must be reset to false; without the reset it stays
+    #   true from iteration 2 and incorrectly skips this different-repo item.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"other/repo","priority":3,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Item 1: PR unchanged → skip_repos += org/repo
+    [[ "${output}" == *"PR #5 in org/repo unchanged"* ]]
+    # Item 2: Issue #10 correctly skipped via skip_repos (is_skipped=true at end of this iteration)
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    # Item 3: Issue #20 must be evaluated (is_skipped reset to false) and hit the "blocked" path
+    [[ "${output}" == *"Issue #20 in other/repo is blocked — skipping"* ]]
+    # Must NOT see "repo already has active work" for other/repo (that would be the stale-is_skipped bug)
+    [[ "${output}" != *"Skipping Issue #20 in other/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main skips same-repo issue when repo has a non-blocked unchanged PR in priorities" {
+    # Item 1 (PR #5, org/repo): open, non-blocked, unchanged → skip_repos += org/repo, continue
+    # Item 2 (Issue #10, org/repo): same repo → skipped with "repo already has active work"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main does not add repo to skip_repos for a blocked PR in priorities so same-repo issue is still evaluated" {
+    # Item 1 (PR #5, org/repo): blocked → skipped, NOT added to skip_repos
+    # Item 2 (Issue #10, org/repo): must be evaluated; here it is also blocked → no work
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    # Issue #10 must be evaluated (not falsely skipped due to skip_repos from the blocked PR)
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main does not add repo to skip_repos when switched-to PR is no longer open" {
+    # Item 1 (Issue #10, org/repo): finds PR #99 via list (open at list time), but fetch
+    #   returns MERGED — race condition.  Repo must NOT be added to skip_repos.
+    # Item 2 (Issue #20, org/repo): same repo must still be evaluated; second call to
+    #   find_open_nonblocked_pr_for_repo returns empty (PR gone); issue is blocked → no work.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    # The function is called via $(...) substitution (subshell), so incrementing a variable
+    # inside the function would not persist.  Use a temp file as a persistent call counter.
+    local _pr_call_file="${TEST_TMP}/_pr_call"
+    printf '0' > "${_pr_call_file}"
+    find_open_nonblocked_pr_for_repo() {
+        local _count
+        _count=$(cat "${_pr_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_call_file}"
+        [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
+    }
+    fetch_pr_json()    { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is no longer open — skipping"* ]]
+    # Issue #20 must be evaluated (repo NOT in skip_repos)
+    [[ "${output}" == *"Issue #20 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+# --- repository name validation -----------------------------------------------
+
+@test "main dies on malformed repository name from priorities API (path traversal)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"../evil/path","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Malformed repository from priorities API"* ]]
+}
+
+@test "main dies on repository name with no slash from priorities API" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"noslash","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Malformed repository from priorities API"* ]]
+}
+
+@test "main accepts a well-formed owner/repo name from priorities API" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/my-repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Valid repo name accepted — issue processed (then skipped as blocked)
+    [[ "${output}" == *"Issue #1 in org/my-repo is blocked"* ]]
+}
+
+@test "main accepts a repo name starting with underscore from priorities API" {
+    # GitHub allows repo names like _git_ignore_patterns — must not die with "Malformed"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"isaacs/_git_ignore_patterns","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Malformed repository from priorities API"* ]]
+    [[ "${output}" == *"Issue #1 in isaacs/_git_ignore_patterns is blocked"* ]]
 }

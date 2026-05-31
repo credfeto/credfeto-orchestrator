@@ -39,10 +39,13 @@ setup_isolated_env() {
 }
 
 # Sources the oneshot script so its functions are defined without running main.
-# Re-asserts SESSION_BASE_DIR afterwards because oneshot derives it from HOME at source time.
+# Calls set_repo_context with the canonical test repo so tests that reference
+# REPO_FULL / REPO_WORK_DIR / RULES_DIR get consistent values, then overrides
+# SESSION_BASE_DIR to point into the isolated test directory.
 source_oneshot() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/oneshot"
+    set_repo_context "credfeto/credfeto-orchestrator"
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
 }
 
