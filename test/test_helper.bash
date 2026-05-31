@@ -103,3 +103,21 @@ make_stub() {
     } > "${script}"
     chmod +x "${script}"
 }
+
+# Writes an executable PATH stub named "$1" whose body consists of each subsequent
+# argument as a separate line. Use when the stub body requires multiple statements
+# that make_stub cannot express as a single joined string.
+# Example: make_stub_multiline claude 'line_one' 'line_two'
+make_stub_multiline() {
+    local name="$1"
+    shift
+    local script="${STUB_BIN}/${name}"
+    {
+        printf '#!/usr/bin/env bash\n'
+        local line
+        for line; do
+            printf '%s\n' "${line}"
+        done
+    } > "${script}"
+    chmod +x "${script}"
+}

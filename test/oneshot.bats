@@ -245,3 +245,27 @@ teardown() {
     run issue_json_has_blocked_label '{"labels":[{"name":"wontfix"}]}'
     [ "${status}" -ne 0 ]
 }
+
+# --- model selection -----------------------------------------------------------
+
+@test "invoke_claude passes --model opusplan to claude for a new session" {
+    local args_log="${TEST_TMP}/claude_args"
+    make_stub_multiline claude \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    grep -qx -- '--model' "${args_log}"
+    grep -qx 'opusplan' "${args_log}"
+}
+
+@test "invoke_claude passes --model opusplan to claude when resuming a session" {
+    local args_log="${TEST_TMP}/claude_args"
+    make_stub_multiline claude \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    grep -qx -- '--model' "${args_log}"
+    grep -qx 'opusplan' "${args_log}"
+}
