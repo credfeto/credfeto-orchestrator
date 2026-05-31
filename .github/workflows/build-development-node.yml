@@ -67,6 +67,14 @@ jobs:
       - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v4.1.0
 
+      - name: "Resolve cache-bust values"
+        id: "cb"
+        shell: "bash"
+        run: |
+          {
+            echo "claude_version=$(curl -sf https://registry.npmjs.org/@anthropic-ai/claude-code/latest | jq -r .version)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: "Build and push"
         uses: docker/build-push-action@v7.2.0
         with:
@@ -75,6 +83,8 @@ jobs:
           push: true
           pull: true
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          build-args: |
+            CLAUDE_CODE_CACHE_BUST=${{ steps.cb.outputs.claude_version }}
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 
