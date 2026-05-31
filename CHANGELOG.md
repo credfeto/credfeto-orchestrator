@@ -36,6 +36,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot prompt builders rewritten as heredocs with direct variable expansion; instructions are read first, followed by numbered task steps, making both source and rendered prompts easier to review
 - oneshot now resolves the .ai-instructions path before building prompts via find_ai_instructions(), dying immediately if neither repo nor rules dir contains the file
 - Claude sessions now use --model opusplan, giving smarter model selection: Opus for plan-mode reasoning, Sonnet for execution
+- oneshot now iterates through all priorities entries across all repos, working on the first actionable item rather than being restricted to a single hardcoded repository
 ### Deprecated
 ### Removed
 ### Deployment Changes
