@@ -516,6 +516,28 @@ setup_main_mocks() {
     [[ "${output}" == *"No actionable work items found"* ]]
 }
 
+@test "main skips same-repo issue when linked PR found via issue-to-PR pivot is unchanged" {
+    # Item 1 (Issue #10, org/repo): find_open_nonblocked_pr_for_repo returns PR #99.
+    #   PR is open, non-blocked, fingerprint matches saved → "unchanged — skipping repo".
+    #   org/repo is added to skip_repos.
+    # Item 2 (Issue #20, org/repo): same repo → "repo already has active work".
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo unchanged — skipping repo"* ]]
+    [[ "${output}" == *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
 # --- repository name validation -----------------------------------------------
 
 @test "main dies on malformed repository name from priorities API (path traversal)" {
