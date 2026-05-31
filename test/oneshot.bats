@@ -512,3 +512,40 @@ setup_main_mocks() {
     [[ "${output}" != *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
 }
+
+# --- repository name validation -----------------------------------------------
+
+@test "main dies on malformed repository name from priorities API (path traversal)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"../evil/path","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Malformed repository from priorities API"* ]]
+}
+
+@test "main dies on repository name with no slash from priorities API" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"noslash","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Malformed repository from priorities API"* ]]
+}
+
+@test "main accepts a well-formed owner/repo name from priorities API" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/my-repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Valid repo name accepted — issue processed (then skipped as blocked)
+    [[ "${output}" == *"Issue #1 in org/my-repo is blocked"* ]]
+}
