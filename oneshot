@@ -157,16 +157,26 @@ fetch_all_priorities() {
 # Queries GitHub for the first open, non-blocked PR authored by @me in the given repo.
 # Outputs the PR number on stdout, or empty string if none found.
 # Returns 1 if the gh call fails (caller should treat as an error).
-# Uses the search API instead of gh pr list because gh 2.93.0 broke --author @me
-# (exits 1 with "malformed version:" on stderr).
+# Avoids --author @me because gh 2.93.0 broke that flag (exits 1 with "malformed version:").
+# Instead, fetches all open PRs with their author field and filters client-side using _GH_ME.
+# _GH_ME is resolved lazily on the first call and cached for subsequent calls.
 find_open_nonblocked_pr_for_repo() {
     local repo_full="$1"
+
+    if [ -z "${_GH_ME}" ]; then
+        _GH_ME=$(gh api user --jq '.login' 2>/dev/null) \
+            || die "Failed to determine current GitHub user"
+    fi
+
     local pr_list
-    pr_list=$(gh api "search/issues?q=type:pr+state:open+author:@me+repo:${repo_full}" \
-        --jq '[.items[] | {number: .number, labels: [.labels[] | {name: .name}]}]' \
+    pr_list=$(gh pr list \
+        --repo "${repo_full}" \
+        --state open \
+        --json number,labels,author \
         2>/dev/null) || return 1
-    printf '%s' "${pr_list}" | jq -r '
+    printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" '
         [.[] | select(
+            .author.login == $me and
             ([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null
         )] | first | .number // empty
     '

@@ -344,34 +344,47 @@ teardown() {
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
 
 @test "find_open_nonblocked_pr_for_repo returns first non-blocked PR number" {
-    make_stub gh 'printf '"'"'[{"number":42,"labels":[]},{"number":99,"labels":[{"name":"enhancement"}]}]\n'"'"
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":99,"labels":[{"name":"enhancement"}],"author":{"login":"testuser"}}]\n'"'"
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
 @test "find_open_nonblocked_pr_for_repo skips PRs with the Blocked label" {
-    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"Blocked"}]},{"number":8,"labels":[]}]\n'"'"
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}},{"number":8,"labels":[],"author":{"login":"testuser"}}]\n'"'"
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ "${output}" = "8" ]
 }
 
 @test "find_open_nonblocked_pr_for_repo returns empty when all PRs are blocked" {
-    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"blocked"}]}]\n'"'"
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"blocked"}],"author":{"login":"testuser"}}]\n'"'"
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
 }
 
 @test "find_open_nonblocked_pr_for_repo returns empty when no PRs exist" {
+    _GH_ME="testuser"
     make_stub gh 'printf '"'"'[]\n'"'"
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
 }
 
+@test "find_open_nonblocked_pr_for_repo returns empty when all open PRs are by other authors" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'[{"number":7,"labels":[],"author":{"login":"dependabot"}},{"number":8,"labels":[],"author":{"login":"github-actions"}}]\n'"'"
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 @test "find_open_nonblocked_pr_for_repo returns 1 when gh fails" {
+    _GH_ME="testuser"
     make_stub gh 'exit 1'
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -ne 0 ]
