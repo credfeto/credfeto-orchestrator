@@ -410,6 +410,9 @@ setup_main_mocks() {
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
     tag_pr_closed_issue()       { return 0; }
+    load_discord_config()       { return 0; }
+    notify_discord_work_item()  { return 0; }
+    notify_discord_no_work()    { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -649,4 +652,183 @@ setup_main_mocks() {
     [[ "${output}" != *"Starting new Claude session"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
     [ ! -f "${_tag_log}" ] || [ ! -s "${_tag_log}" ]
+}
+
+# --- load_discord_config ------------------------------------------------------
+
+@test "load_discord_config sets DISCORD_WEBHOOK_URL from env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/webhook/123\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/123" ]
+}
+
+@test "load_discord_config strips double quotes from value" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK="https://discord.example.com/webhook/456"\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/456" ]
+}
+
+@test "load_discord_config strips single quotes from value" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf "DISCORD_WEBHOOK='https://discord.example.com/webhook/789'\n" \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/789" ]
+}
+
+@test "load_discord_config leaves DISCORD_WEBHOOK_URL empty when file is absent" {
+    DISCORD_WEBHOOK_URL="should-be-cleared"
+    load_discord_config
+    [ -z "${DISCORD_WEBHOOK_URL}" ]
+}
+
+@test "load_discord_config leaves DISCORD_WEBHOOK_URL empty when key is absent from file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'OTHER_KEY=some-value\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL="should-be-cleared"
+    load_discord_config
+    [ -z "${DISCORD_WEBHOOK_URL}" ]
+}
+
+@test "load_discord_config strips trailing CR from CRLF env files" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/hook\r\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/hook" ]
+}
+
+@test "load_discord_config does not strip unmatched leading quote" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK="https://discord.example.com/hook\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = '"https://discord.example.com/hook' ]
+}
+
+# --- notify_discord_work_item -------------------------------------------------
+
+@test "notify_discord_work_item warns and returns for unknown msg_type without calling curl" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "unknown_type" "Issue" "1" "Title"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+    [[ "${output}" == *"unknown notification type"* ]]
+}
+
+@test "notify_discord_work_item does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_work_item calls curl with embed payload for Issue start" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "Fix the bug" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "New" "${args_log}"
+}
+
+@test "notify_discord_work_item calls curl with embed payload for PullRequest resume" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "resume" "PullRequest" "7" "Update deps"
+    [ "${status}" -eq 0 ]
+    grep -q "https://github.com/org/repo/pull/7" "${args_log}"
+    grep -q "Resume" "${args_log}"
+    grep -q "Update deps" "${args_log}"
+}
+
+# --- notify_discord_no_work ---------------------------------------------------
+
+@test "notify_discord_no_work does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_no_work calls curl with content payload" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "No actionable work items found" "${args_log}"
+}
+
+# --- main() Discord notification integration ----------------------------------
+
+@test "main sends start notification when starting new work on an issue" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"Do the thing","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    load_session() { SESSION_ID=""; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_work_item() { printf 'type=%s item=%s id=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=start item=Issue id=10' "${_notif_log}"
+}
+
+@test "main sends resume notification when resuming existing work on an issue" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"Do the thing","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    load_session() { SESSION_ID="aaaabbbb-cccc-dddd-eeee-ffffffffffff"; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_work_item() { printf 'type=%s item=%s id=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=resume item=Issue id=10' "${_notif_log}"
+}
+
+@test "main sends no-work notification when no actionable items found" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_no_work() { printf 'no_work\n' >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'no_work' "${_notif_log}"
 }

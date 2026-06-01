@@ -472,6 +472,91 @@ issue_json_has_blocked_label() {
     printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
+# Reads DISCORD_WEBHOOK from ${XDG_CONFIG_HOME:-~/.config}/orchestrator/.env and sets
+# DISCORD_WEBHOOK_URL.  Silent when the file is absent or the key is missing.
+load_discord_config() {
+    DISCORD_WEBHOOK_URL=""
+    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+    [ -f "${env_file}" ] || return 0
+    local line val
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in
+            DISCORD_WEBHOOK=*)
+                val="${line#DISCORD_WEBHOOK=}"
+                val="${val%$'\r'}"
+                case "${val}" in
+                    '"'*'"') val="${val#?}"; val="${val%?}" ;;
+                    "'"*"'") val="${val#?}"; val="${val%?}" ;;
+                esac
+                DISCORD_WEBHOOK_URL="${val}"
+                break
+                ;;
+        esac
+    done < "${env_file}"
+}
+
+# Sends a Discord embed notification when starting or resuming work on an item.
+# Arguments: msg_type (start|resume), item_type, item_id, item_title
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_work_item() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4"
+    local url color status_label payload
+
+    case "${msg_type}" in
+        start|resume) ;;
+        *) warn "Discord: unknown notification type '${msg_type}'"; return 0 ;;
+    esac
+
+    case "${item_type}" in
+        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           url="https://github.com/${REPO_FULL}" ;;
+    esac
+
+    if [ "${msg_type}" = "start" ]; then
+        color=3066993    # green  (#2ECC71)
+        status_label="New"
+    else
+        color=15844367   # gold   (#F1C40F)
+        status_label="Resume"
+    fi
+
+    payload=$(jq --null-input \
+        --argjson color "${color}" \
+        --arg title "${item_title}" \
+        --arg url "${url}" \
+        --arg repo "${REPO_FULL}" \
+        --arg type "${item_type}" \
+        --arg status "${status_label}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Repository",value:$repo,inline:true},
+            {name:"Type",value:$type,inline:true},
+            {name:"Status",value:$status,inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build payload for ${item_type} #${item_id}"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord notification when no actionable work items are found.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_no_work() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local payload
+    payload=$(jq --null-input '{"content":"No actionable work items found."}') \
+        || { warn "Discord: failed to build no-work payload"; return 0; }
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being applied.
 tag_pr_closed_issue() {
@@ -486,6 +571,7 @@ tag_pr_closed_issue() {
 
 main() {
     check_required_tools
+    load_discord_config
 
     local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."
@@ -494,6 +580,7 @@ main() {
     item_count=$(printf '%s' "${items_json}" | jq 'length')
     if [ "${item_count}" -eq 0 ]; then
         success "No open work items found in priorities"
+        notify_discord_no_work
         exit 0
     fi
 
@@ -505,7 +592,7 @@ main() {
     # 'local' inside a while loop is a no-op after the first iteration in bash,
     # so initialising them here (and resetting where needed at the top of each
     # iteration) avoids stale-value bugs.
-    local item item_repo item_id item_type item_priority
+    local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped
     local open_pr pr_json pr_state pr_fp saved_fp
     local issue_json issue_state issue_fp
@@ -677,11 +764,19 @@ main() {
             continue
         fi
 
+        if [ "${item_type}" = "Issue" ]; then
+            item_title=$(printf '%s' "${issue_json}" | jq -r '.title // empty')
+        else
+            item_title=$(printf '%s' "${pr_json}" | jq -r '.title // empty')
+        fi
+
         load_session "${item_type}" "${item_id}"
         if [ -n "${SESSION_ID}" ]; then
             info "Resuming existing session for ${item_type} #${item_id} in ${item_repo}"
+            notify_discord_work_item "resume" "${item_type}" "${item_id}" "${item_title}"
         else
             info "No existing session — starting fresh for ${item_type} #${item_id} in ${item_repo}"
+            notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}"
         fi
 
         if [ "${item_type}" = "Issue" ]; then
@@ -711,6 +806,7 @@ main() {
         exit 0
     done
 
+    notify_discord_no_work
     success "No actionable work items found across all priorities"
 }
 
