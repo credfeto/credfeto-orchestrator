@@ -3,8 +3,7 @@
 Base image: `debian:trixie-slim`
 
 Built and pushed to `ghcr.io/<owner>/development-tools:latest` hourly by
-`.github/workflows/build-development-tools.yml`. Each run also pushes a
-date-stamped tag (`YYYY-MM-DD`) so builds remain reproducible.
+`.github/workflows/build-development-tools.yml`.
 
 This image packages the full CI/CD and linting toolchain used by the
 credfeto orchestrator. It intentionally contains no application source,

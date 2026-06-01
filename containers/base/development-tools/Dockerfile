@@ -9,7 +9,7 @@
 # the customisation layer that FROMs this image.
 #
 # Built and pushed hourly by .github/workflows/build-development-tools.yml as
-#   ghcr.io/<owner>/development-tools:YYYY-MM-DD + :latest
+#   ghcr.io/<owner>/development-tools:latest
 #
 # Multi-stage build: a throwaway Go stage compiles composite-action-lint (no
 # published release binaries) so the final image doesn't carry the ~500 MB Go
