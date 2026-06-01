@@ -157,14 +157,13 @@ fetch_all_priorities() {
 # Queries GitHub for the first open, non-blocked PR authored by @me in the given repo.
 # Outputs the PR number on stdout, or empty string if none found.
 # Returns 1 if the gh call fails (caller should treat as an error).
+# Uses the search API instead of gh pr list because gh 2.93.0 broke --author @me
+# (exits 1 with "malformed version:" on stderr).
 find_open_nonblocked_pr_for_repo() {
     local repo_full="$1"
     local pr_list
-    pr_list=$(gh pr list \
-        --repo "${repo_full}" \
-        --state open \
-        --author "@me" \
-        --json number,labels \
+    pr_list=$(gh api "search/issues?q=type:pr+state:open+author:@me+repo:${repo_full}" \
+        --jq '[.items[] | {number: .number, labels: [.labels[] | {name: .name}]}]' \
         2>/dev/null) || return 1
     printf '%s' "${pr_list}" | jq -r '
         [.[] | select(
