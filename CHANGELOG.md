@@ -29,6 +29,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - development-node Docker image: add CLAUDE_CODE_CACHE_BUST ARG so npm @latest installs are rebuilt when a new version is published
 - load_token_for_owner now exits 0 when no token is configured, preventing spurious failures under set -e callers
 - Avoid gh pr list --author flag broken in gh 2.93.0 by filtering open PRs by author client-side using gh api user
+- Include Draft PRs in priority scan — Draft status indicates work still needed
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
