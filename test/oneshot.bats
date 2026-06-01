@@ -303,7 +303,7 @@ teardown() {
 
 # --- fetch_all_priorities -----------------------------------------------------
 
-@test "fetch_all_priorities returns all open and draft non-on-hold items sorted by priority" {
+@test "fetch_all_priorities returns all open and draft non-on-hold items in API order" {
     make_stub curl 'printf '"'"'{"priorities":[
         {"id":3,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":3},
         {"id":1,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":1},
@@ -314,10 +314,10 @@ teardown() {
 
     run fetch_all_priorities
     [ "${status}" -eq 0 ]
-    # The 3 open/draft non-on-hold items appear in priority order; Closed and on-hold are excluded
+    # The 3 open/draft non-on-hold items appear in API order; Closed and on-hold are excluded
     local ids
     ids=$(printf '%s' "${output}" | jq -r '.[].id')
-    [ "${ids}" = "$(printf '1\n2\n3')" ]
+    [ "${ids}" = "$(printf '3\n1\n2')" ]
 }
 
 @test "fetch_all_priorities includes Draft items" {
