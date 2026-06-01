@@ -28,6 +28,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - bats test stubs now created in repo tree so they are executable in sandboxes where /tmp is mounted noexec, fixing load_session PR fallback test failures
 - development-node Docker image: add CLAUDE_CODE_CACHE_BUST ARG so npm @latest installs are rebuilt when a new version is published
 - load_token_for_owner now exits 0 when no token is configured, preventing spurious failures under set -e callers
+- Use GitHub search API instead of gh pr list --author to work around breakage in gh 2.93.0
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
