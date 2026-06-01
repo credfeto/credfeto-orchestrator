@@ -148,7 +148,7 @@ fetch_all_priorities() {
 
     printf '%s' "${priorities_json}" | jq -c '[
         .priorities
-            | map(select(.status == "Open" and .isOnHold == false))
+            | map(select((.status == "Open" or .status == "Draft") and .isOnHold == false))
             | sort_by(.priority)
             | .[]
     ]' || die "Failed to parse priorities JSON"
