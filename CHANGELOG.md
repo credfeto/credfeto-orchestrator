@@ -21,6 +21,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Bats-based test suite for the oneshot and loop shell scripts
 - Add install-timer script to install a system-level systemd service and timer that runs the orchestrator every 5 minutes as the invoking user, self-updates via git pull before each run, and persists across reboots without requiring an active login session
 - Layered development base Docker images (development-tools, development-node, development-python, development-full) with per-stage self-checks for modular, independently-rebuildable agent container layers
+- Discord webhook notifications on work start, resume, and no-work — configurable via DISCORD_WEBHOOK in ~/.config/orchestrator/.env
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
