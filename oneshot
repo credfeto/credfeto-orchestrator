@@ -472,6 +472,18 @@ issue_json_has_blocked_label() {
     printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
+# Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
+# Labels are added individually so a missing label does not prevent the others from being applied.
+tag_pr_closed_issue() {
+    local pr_number="$1" issue_id="$2"
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null || true
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null || true
+    gh pr comment "${pr_number}" --repo "${REPO_FULL}" \
+        --body "Issue #${issue_id} was found closed while this PR is still open. Automated work has been paused pending manual investigation." \
+        2>/dev/null || true
+}
+
 main() {
     check_required_tools
 
@@ -544,6 +556,22 @@ main() {
             if [ -n "${open_pr}" ]; then
                 [[ "${open_pr}" =~ ^[0-9]+$ ]] \
                     || die "Non-numeric open PR number from GitHub: ${open_pr}"
+
+                # Before pivoting to the PR workflow, verify the issue is still open and
+                # unblocked — a PR can outlive its issue if the issue was closed as not planned.
+                issue_json=$(fetch_issue_json "${item_id}") \
+                    || die "Failed to fetch state for Issue #${item_id} in ${item_repo}"
+                issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
+                if [ "${issue_state}" != "OPEN" ]; then
+                    info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
+                    tag_pr_closed_issue "${open_pr}" "${item_id}"
+                    continue
+                fi
+                if issue_json_has_blocked_label "${issue_json}"; then
+                    info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    continue
+                fi
+
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
                 pr_json=$(fetch_pr_json "${open_pr}") \

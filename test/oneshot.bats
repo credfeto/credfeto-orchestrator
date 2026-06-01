@@ -409,6 +409,7 @@ setup_main_mocks() {
     compute_issue_fingerprint() { printf 'new-fp\n'; }
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
+    tag_pr_closed_issue()       { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -484,8 +485,9 @@ setup_main_mocks() {
 }
 
 @test "main does not add repo to skip_repos when switched-to PR is no longer open" {
-    # Item 1 (Issue #10, org/repo): finds PR #99 via list (open at list time), but fetch
-    #   returns MERGED — race condition.  Repo must NOT be added to skip_repos.
+    # Item 1 (Issue #10, org/repo): issue is open+unblocked, finds PR #99 via list (open at
+    #   list time), but fetch returns MERGED — race condition.  Repo must NOT be added to
+    #   skip_repos.
     # Item 2 (Issue #20, org/repo): same repo must still be evaluated; second call to
     #   find_open_nonblocked_pr_for_repo returns empty (PR gone); issue is blocked → no work.
     setup_main_mocks
@@ -503,9 +505,22 @@ setup_main_mocks() {
         printf '%d' "${_count}" > "${_pr_call_file}"
         [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
     }
-    fetch_pr_json()    { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 0; }
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    # Issue #10 (first call, pivot path): open, not blocked — allows the PR-state check to fire.
+    # Issue #20 (second call, no-PR path): open, blocked.
+    local _issue_call_file="${TEST_TMP}/_issue_call"
+    printf '0' > "${_issue_call_file}"
+    fetch_issue_json() {
+        local _count
+        _count=$(cat "${_issue_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_issue_call_file}"
+        if [ "${_count}" -eq 1 ]; then
+            printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+        else
+            printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'
+        fi
+    }
 
     run main
     [ "${status}" -eq 0 ]
@@ -518,14 +533,15 @@ setup_main_mocks() {
 
 @test "main skips same-repo issue when linked PR found via issue-to-PR pivot is unchanged" {
     # Item 1 (Issue #10, org/repo): find_open_nonblocked_pr_for_repo returns PR #99.
-    #   PR is open, non-blocked, fingerprint matches saved → "unchanged — skipping repo".
-    #   org/repo is added to skip_repos.
+    #   Issue is open and unblocked; PR is open, non-blocked, fingerprint matches saved
+    #   → "unchanged — skipping repo".  org/repo is added to skip_repos.
     # Item 2 (Issue #20, org/repo): same repo → "repo already has active work".
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
@@ -589,4 +605,48 @@ setup_main_mocks() {
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Malformed repository from priorities API"* ]]
     [[ "${output}" == *"Issue #1 in isaacs/_git_ignore_patterns is blocked"* ]]
+}
+
+# --- issue-to-PR pivot: issue state/blocked checks ----------------------------
+
+@test "main tags PR for investigation and skips when linked issue is no longer open" {
+    # Issue #10 has a linked open PR #99, but the issue itself is CLOSED.
+    # Expect: tag_pr_closed_issue called, no Claude invocation, repo not in skip_repos.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _tag_log="${TEST_TMP}/tag_log"
+    tag_pr_closed_issue() { printf 'pr=%s issue=%s\n' "$1" "$2" >> "${_tag_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is no longer open"* ]]
+    [[ "${output}" == *"PR #99"* ]]
+    [[ "${output}" != *"Starting new Claude session"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+    grep -q 'pr=99 issue=10' "${_tag_log}"
+}
+
+@test "main skips issue-to-PR pivot without tagging PR when issue is blocked" {
+    # Issue #10 has a linked open PR #99, but the issue is blocked.
+    # Expect: blocked skip message, no tagging, no Claude invocation.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _tag_log="${TEST_TMP}/tag_log"
+    tag_pr_closed_issue() { printf 'pr=%s issue=%s\n' "$1" "$2" >> "${_tag_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"switching to PR workflow"* ]]
+    [[ "${output}" != *"Starting new Claude session"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+    [ ! -f "${_tag_log}" ] || [ ! -s "${_tag_log}" ]
 }
