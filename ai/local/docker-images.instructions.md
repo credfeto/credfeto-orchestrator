@@ -17,7 +17,7 @@ debian:trixie-slim
                     └── development-full  (.NET global tools, pre-commit, skill repos)
 ```
 
-Each image is built and pushed to `ghcr.io/<owner>/<image>:YYYY-MM-DD` and `:latest`.
+Each image is built and pushed to `ghcr.io/<owner>/<image>:latest`.
 
 ## Lock-Down Requirements (MANDATORY)
 

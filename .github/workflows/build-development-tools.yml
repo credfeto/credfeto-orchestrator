@@ -5,10 +5,6 @@ name: "Build development-tools base image"
 # static binary linters (hadolint, dotenv-linter, sqlcmd, actionlint,
 # trufflehog, composite-action-lint), and the .NET SDK.
 #
-# Tags pushed:
-#   :YYYY-MM-DD   date-stamped for reproducible builds
-#   :latest       what consumers resolve by default
-#
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
 # built-in GITHUB_TOKEN — no extra secrets to manage.
 
@@ -67,7 +63,6 @@ jobs:
         run: |
           {
             echo "cal_sha=$(git ls-remote https://github.com/bettermarks/composite-action-lint.git HEAD | cut -f1)"
-            echo "today=$(date -u '+%Y-%m-%d')"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Build and push"
@@ -76,9 +71,7 @@ jobs:
           context: "containers/base/development-tools"
           file: "containers/base/development-tools/Dockerfile"
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.today }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
           cache-from: "type=gha"
@@ -91,7 +84,6 @@ jobs:
             echo "## development-tools image pushed"
             echo ""
             echo '```'
-            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.cb.outputs.today }}"
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
             echo ""
