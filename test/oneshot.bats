@@ -697,7 +697,36 @@ setup_main_mocks() {
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
+@test "load_discord_config strips trailing CR from CRLF env files" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/hook\r\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/hook" ]
+}
+
+@test "load_discord_config does not strip unmatched leading quote" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK="https://discord.example.com/hook\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = '"https://discord.example.com/hook' ]
+}
+
 # --- notify_discord_work_item -------------------------------------------------
+
+@test "notify_discord_work_item warns and returns for unknown msg_type without calling curl" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "unknown_type" "Issue" "1" "Title"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+    [[ "${output}" == *"unknown notification type"* ]]
+}
 
 @test "notify_discord_work_item does not call curl when DISCORD_WEBHOOK_URL is empty" {
     DISCORD_WEBHOOK_URL=""

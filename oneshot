@@ -483,9 +483,10 @@ load_discord_config() {
         case "${line}" in
             DISCORD_WEBHOOK=*)
                 val="${line#DISCORD_WEBHOOK=}"
+                val="${val%$'\r'}"
                 case "${val}" in
-                    '"'*) val="${val#?}"; val="${val%?}" ;;
-                    "'"*) val="${val#?}"; val="${val%?}" ;;
+                    '"'*'"') val="${val#?}"; val="${val%?}" ;;
+                    "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
                 DISCORD_WEBHOOK_URL="${val}"
                 break
@@ -501,6 +502,11 @@ notify_discord_work_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local msg_type="$1" item_type="$2" item_id="$3" item_title="$4"
     local url color status_label payload
+
+    case "${msg_type}" in
+        start|resume) ;;
+        *) warn "Discord: unknown notification type '${msg_type}'"; return 0 ;;
+    esac
 
     case "${item_type}" in
         Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
