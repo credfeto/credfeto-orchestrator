@@ -5,6 +5,9 @@ name: "Build development-tools base image"
 # static binary linters (hadolint, dotenv-linter, sqlcmd, actionlint,
 # trufflehog, composite-action-lint), and the .NET SDK.
 #
+# Tags pushed:
+#   :latest       what consumers resolve by default
+#
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
 # built-in GITHUB_TOKEN — no extra secrets to manage.
 
