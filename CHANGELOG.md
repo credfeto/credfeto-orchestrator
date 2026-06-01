@@ -38,6 +38,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Claude sessions now use --model opusplan, giving smarter model selection: Opus for plan-mode reasoning, Sonnet for execution
 - oneshot now iterates through all priorities entries across all repos, working on the first actionable item rather than being restricted to a single hardcoded repository
 - oneshot now respects the one-PR-per-repo constraint correctly: skip_repos is only marked busy after a PR is confirmed open and non-blocked, and the is_skipped flag is explicitly reset between loop iterations
+- docker-images.instructions.md updated to specify :latest only for container image tags; development-tools README and Dockerfile updated accordingly
 ### Deprecated
 ### Removed
 ### Deployment Changes
