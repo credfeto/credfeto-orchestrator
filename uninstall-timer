@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Uninstalls the systemd service and timer installed by install-timer.
+
+die() {
+    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+success() {
+    printf '\n\033[32m✓\033[0m %s\n' "$*"
+}
+
+info() {
+    printf '\n\033[32m→\033[0m %s\n' "$*"
+}
+
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+CURRENT_USER=$(id -un)
+case "${CURRENT_USER}" in
+    *$'\n'*) die "uninstall-timer: CURRENT_USER contains a newline; aborting." ;;
+esac
+[[ "${CURRENT_USER}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "uninstall-timer: CURRENT_USER contains invalid characters; aborting."
+SERVICE_NAME="credfeto-orchestrator-${CURRENT_USER}"
+[[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "uninstall-timer: SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
+UNIT_DIR="/etc/systemd/system"
+
+check_required_tools() {
+    local tool
+    for tool in id sudo systemctl; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+main() {
+    is_ai_agent && die "uninstall-timer must not be run inside a Claude Code session"
+
+    check_required_tools
+
+    info "Uninstalling Credfeto Orchestrator systemd timer for user ${CURRENT_USER}..."
+
+    info "Stopping ${SERVICE_NAME}.timer..."
+    sudo systemctl stop "${SERVICE_NAME}.timer" 2>/dev/null || true
+
+    info "Disabling ${SERVICE_NAME}.timer..."
+    sudo systemctl disable "${SERVICE_NAME}.timer" 2>/dev/null || true
+
+    info "Removing unit files..."
+    sudo rm -f "${UNIT_DIR}/${SERVICE_NAME}.service" "${UNIT_DIR}/${SERVICE_NAME}.timer" \
+        || die "Failed to remove unit files"
+
+    info "Reloading systemd daemon..."
+    sudo systemctl daemon-reload || die "Failed to reload systemd daemon"
+
+    success "Credfeto Orchestrator timer uninstalled for user ${CURRENT_USER}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

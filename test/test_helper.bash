@@ -61,6 +61,12 @@ source_install_timer() {
     source "${REPO_ROOT}/install-timer"
 }
 
+# Sources the uninstall-timer script so its functions are defined without running main.
+source_uninstall_timer() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/uninstall-timer"
+}
+
 # Creates a unique fixture directory inside the repository tree and assigns its path
 # to the variable named REPO_FIXTURE_DIR. The loop script checks `[ -x oneshot ]`;
 # some sandboxes do not honour the execute bit for files created under the system temp
