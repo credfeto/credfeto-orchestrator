@@ -80,7 +80,7 @@ setup() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
-    grep -qE "ExecStart=.*/oneshot" "${svc}"
+    grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
     [ -f "${tmr}" ]
     grep -q "OnUnitActiveSec=5min" "${tmr}"
@@ -90,4 +90,41 @@ setup() {
     grep -q "systemctl daemon-reload" "${TEST_TMP}/sudo.log"
     grep -q "systemctl enable credfeto-orchestrator-testuser.timer" "${TEST_TMP}/sudo.log"
     grep -q "systemctl start credfeto-orchestrator-testuser.timer" "${TEST_TMP}/sudo.log"
+}
+
+@test "install-timer --owner creates owner-scoped unit files with --owner in ExecStart" {
+    run main --owner myorg
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
+    local tmr="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.timer"
+
+    [ -f "${svc}" ]
+    grep -q "User=testuser" "${svc}"
+    grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
+
+    [ -f "${tmr}" ]
+    grep -q "Unit=credfeto-orchestrator-testuser-myorg.service" "${tmr}"
+
+    [ -f "${TEST_TMP}/sudo.log" ]
+    grep -q "systemctl enable credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+    grep -q "systemctl start credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+}
+
+@test "install-timer --owner with no value dies" {
+    run main --owner
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"--owner requires a value"* ]]
+}
+
+@test "install-timer with an unknown argument dies" {
+    run main --unknown-flag
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown argument"* ]]
+}
+
+@test "install-timer --owner with invalid characters dies" {
+    run main --owner "evil;cmd"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"invalid characters"* ]]
 }

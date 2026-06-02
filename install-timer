@@ -50,7 +50,10 @@ write_unit_file() {
 }
 
 create_service_unit() {
+    local owner_filter="${1:-}"
     local dest="${UNIT_DIR}/${SERVICE_NAME}.service"
+    local exec_start="${REPO_DIR}/oneshot"
+    [ -n "${owner_filter}" ] && exec_start="${exec_start} --owner ${owner_filter}"
     local content
     content="[Unit]
 Description=Credfeto Orchestrator for ${CURRENT_USER}
@@ -62,7 +65,7 @@ Type=oneshot
 User=${CURRENT_USER}
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" pull --ff-only
-ExecStart=${REPO_DIR}/oneshot"
+ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
 }
 
@@ -83,14 +86,38 @@ WantedBy=timers.target"
 }
 
 main() {
+    local owner_filter=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --owner)
+                shift
+                [ -n "${1:-}" ] || die "--owner requires a value"
+                [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] \
+                    || die "--owner value contains invalid characters: $1"
+                owner_filter="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
     is_ai_agent && die "install-timer must not be run inside a Claude Code session"
 
     check_required_tools
 
+    if [ -n "${owner_filter}" ]; then
+        SERVICE_NAME="${SERVICE_NAME}-${owner_filter}"
+        [[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] \
+            || die "install-timer: resulting SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
+    fi
+
     info "Installing Credfeto Orchestrator systemd timer for user ${CURRENT_USER}..."
     info "Repository: ${REPO_DIR}"
 
-    create_service_unit
+    create_service_unit "${owner_filter}"
     info "Service unit written to ${UNIT_DIR}/${SERVICE_NAME}.service"
 
     create_timer_unit
