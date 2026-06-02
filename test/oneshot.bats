@@ -35,6 +35,39 @@ teardown() {
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
+@test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
+    run build_pr_prompt 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"BEHIND"* ]]
+    [[ "${output}" == *"feat/my-branch"* ]]
+    [[ "${output}" == *"force-with-lease"* ]]
+    [[ "${output}" == *"rebase"* ]]
+}
+
+@test "build_pr_prompt with CLEAN merge state does not include rebase notice" {
+    run build_pr_prompt 7 "/resolved/.ai-instructions" "CLEAN" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"force-with-lease"* ]]
+    [[ "${output}" != *"BEHIND"* ]]
+}
+
+@test "main passes BEHIND merge state and branch name to build_pr_prompt" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()           { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json()     { printf 'fp-new\n'; }
+    load_pr_fingerprint()     { printf 'fp-old\n'; }
+    local _prompt_log="${TEST_TMP}/prompt_log"
+    build_pr_prompt() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${_prompt_log}"; printf 'mock-pr-prompt\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'merge_state=BEHIND' "${_prompt_log}"
+    grep -q 'branch=feat/test' "${_prompt_log}"
+}
+
 @test "find_ai_instructions returns repo work dir path when .ai-instructions exists there" {
     mkdir -p "${REPO_WORK_DIR}"
     printf 'instructions\n' > "${REPO_WORK_DIR}/.ai-instructions"
