@@ -64,6 +64,36 @@ setup() {
     grep -q "systemctl daemon-reload" "${TEST_TMP}/sudo.log"
 }
 
+@test "uninstall-timer --owner uses owner-scoped service name for all systemctl and rm calls" {
+    run main --owner myorg
+    [ "${status}" -eq 0 ]
+
+    [ -f "${TEST_TMP}/sudo.log" ]
+    grep -q "systemctl stop credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+    grep -q "systemctl disable credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+    grep -q "rm -f.*credfeto-orchestrator-testuser-myorg.service" "${TEST_TMP}/sudo.log"
+    grep -q "rm -f.*credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+    grep -q "systemctl daemon-reload" "${TEST_TMP}/sudo.log"
+}
+
+@test "uninstall-timer --owner with no value dies" {
+    run main --owner
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"--owner requires a value"* ]]
+}
+
+@test "uninstall-timer with an unknown argument dies" {
+    run main --unknown-flag
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown argument"* ]]
+}
+
+@test "uninstall-timer --owner with invalid characters dies" {
+    run main --owner "evil;cmd"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"invalid characters"* ]]
+}
+
 @test "uninstall-timer issues stop and disable before removing unit files" {
     run main
     [ "${status}" -eq 0 ]

@@ -36,9 +36,33 @@ check_required_tools() {
 }
 
 main() {
+    local owner_filter=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --owner)
+                shift
+                [ -n "${1:-}" ] || die "--owner requires a value"
+                [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] \
+                    || die "--owner value contains invalid characters: $1"
+                owner_filter="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
     is_ai_agent && die "uninstall-timer must not be run inside a Claude Code session"
 
     check_required_tools
+
+    if [ -n "${owner_filter}" ]; then
+        SERVICE_NAME="${SERVICE_NAME}-${owner_filter}"
+        [[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] \
+            || die "uninstall-timer: resulting SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
+    fi
 
     info "Uninstalling Credfeto Orchestrator systemd timer for user ${CURRENT_USER}..."
 
