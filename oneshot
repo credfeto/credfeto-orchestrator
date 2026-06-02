@@ -594,12 +594,36 @@ tag_pr_closed_issue() {
 }
 
 main() {
+    local owner_filter=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --owner)
+                shift
+                [ -n "${1:-}" ] || die "--owner requires a value"
+                [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] \
+                    || die "--owner value contains invalid characters: $1"
+                owner_filter="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
     check_required_tools
     load_discord_config
 
     local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."
     items_json=$(fetch_all_priorities)
+
+    if [ -n "${owner_filter}" ]; then
+        items_json=$(printf '%s' "${items_json}" | jq -c --arg owner "${owner_filter}" \
+            '[.[] | select(.repository | startswith($owner + "/"))]') \
+            || die "Failed to filter priorities by owner"
+    fi
 
     item_count=$(printf '%s' "${items_json}" | jq 'length')
     if [ "${item_count}" -eq 0 ]; then
