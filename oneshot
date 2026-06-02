@@ -243,7 +243,16 @@ EOF
 }
 
 build_pr_prompt() {
-    local item_id="$1" ai_instructions="$2"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}"
+    local rebase_notice=""
+    if [ "${merge_state}" = "BEHIND" ]; then
+        rebase_notice="
+IMPORTANT — mergeStateStatus=BEHIND: The branch is behind origin/main and must be rebased before
+any other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${REPO_WORK_DIR},
+fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
+other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
+"
+    fi
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -251,7 +260,7 @@ Read AI instructions from ${ai_instructions}.
 
 Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${REPO_WORK_DIR}.
-
+${rebase_notice}
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
@@ -343,7 +352,7 @@ fetch_pr_json() {
     local item_id="$1"
     gh pr view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json state,title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus \
+        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus \
         2>/dev/null || return 1
 }
 
@@ -609,7 +618,7 @@ main() {
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped
-    local open_pr pr_json pr_state pr_fp saved_fp
+    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp
     local ai_instructions prompt new_session_id post_fp
 
@@ -807,7 +816,9 @@ main() {
         if [ "${item_type}" = "Issue" ]; then
             prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
         else
-            prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}")
+            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+            prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}" "${merge_state}" "${branch_name}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
