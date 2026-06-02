@@ -343,7 +343,7 @@ fetch_pr_json() {
     local item_id="$1"
     gh pr view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json state,title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup \
+        --json state,title,body,isDraft,labels,headRefOid,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus \
         2>/dev/null || return 1
 }
 
@@ -367,7 +367,9 @@ fingerprint_pr_json() {
             | (.name // "unknown") as $n
             | (.conclusion // .status // "none") as $c
             | "\($c):\($n)"
-        )] | sort | join(","))
+        )] | sort | join(",")),
+        (.mergeable // "UNKNOWN"),
+        (.mergeStateStatus // "UNKNOWN")
     ') || return 1
 
     printf '%s' "${canonical}" | hash_sha256
@@ -409,6 +411,12 @@ load_pr_fingerprint() {
 pr_json_has_blocked_label() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+}
+
+# Returns 0 (true) if the pre-fetched PR JSON indicates the PR has merge conflicts.
+pr_json_has_conflicts() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.mergeable == "CONFLICTING"' > /dev/null 2>&1
 }
 
 # Returns the path to the fingerprint file for a given Issue ID.
@@ -682,7 +690,12 @@ main() {
                     continue
                 fi
 
-                # PR is confirmed open and non-blocked — mark repo as having active work.
+                if pr_json_has_conflicts "${pr_json}"; then
+                    info "PR #${open_pr} in ${item_repo} has merge conflicts — skipping (not counting as active work)"
+                    continue
+                fi
+
+                # PR is confirmed open, non-blocked, and conflict-free — mark repo as having active work.
                 skip_repos+=("${item_repo}")
 
                 pr_fp=$(fingerprint_pr_json "${pr_json}") \
@@ -741,7 +754,12 @@ main() {
                 continue
             fi
 
-            # Non-blocked, open PR = active work for this repo.
+            if pr_json_has_conflicts "${pr_json}"; then
+                info "PR #${item_id} in ${item_repo} has merge conflicts — skipping (not counting as active work)"
+                continue
+            fi
+
+            # Non-blocked, conflict-free, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
 
             pr_fp=$(fingerprint_pr_json "${pr_json}") \
