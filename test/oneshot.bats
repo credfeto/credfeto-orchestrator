@@ -68,6 +68,59 @@ teardown() {
     grep -q 'branch=feat/test' "${_prompt_log}"
 }
 
+# --- --owner argument ---------------------------------------------------------
+
+@test "main --owner filters priorities to only items from that owner" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":2,"itemType":"Issue","repository":"other/repo2","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+
+    run main --owner org
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"org/repo"* ]]
+    [[ "${output}" != *"other/repo2"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main --owner with no value dies" {
+    setup_main_mocks
+    run main --owner
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"--owner requires a value"* ]]
+}
+
+@test "main with an unknown argument dies" {
+    setup_main_mocks
+    run main --unknown-flag
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown argument"* ]]
+}
+
+@test "main --owner with invalid characters dies" {
+    setup_main_mocks
+    run main --owner "evil;rm"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"invalid characters"* ]]
+}
+
+@test "main without --owner processes items from all owners" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":2,"itemType":"Issue","repository":"other/repo2","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"org/repo"* ]]
+    [[ "${output}" == *"other/repo2"* ]]
+    [[ "${output}" == *"No actionable work items found"* ]]
+}
+
 @test "find_ai_instructions returns repo work dir path when .ai-instructions exists there" {
     mkdir -p "${REPO_WORK_DIR}"
     printf 'instructions\n' > "${REPO_WORK_DIR}/.ai-instructions"
