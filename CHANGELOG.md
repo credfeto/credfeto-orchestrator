@@ -45,6 +45,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot now respects the one-PR-per-repo constraint correctly: skip_repos is only marked busy after a PR is confirmed open and non-blocked, and the is_skipped flag is explicitly reset between loop iterations
 - docker-images.instructions.md updated to specify :latest only for container image tags; development-tools README and Dockerfile updated accordingly
 - PR prompt now includes explicit gh pr ready command to mark PR as ready for review
+- Issue and PR prompts now include GitHub CLI markdown formatting guidance to prevent escaped newlines rendering as literal characters in comments
 ### Deprecated
 ### Removed
 ### Deployment Changes
