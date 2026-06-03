@@ -262,6 +262,17 @@ Read AI instructions from ${ai_instructions}.
 Work on issue #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${REPO_WORK_DIR}.
 
+IMPORTANT — GitHub CLI comment formatting: When posting comment bodies via the GitHub CLI
+(gh issue comment, gh pr comment, gh pr create, etc.), always pass the body using a HEREDOC
+so that real newline characters are embedded — never use escaped \n sequences, which GitHub
+renders as literal characters rather than line breaks:
+  gh issue comment ${item_id} --repo ${REPO_FULL} --body "\$(cat <<'COMMENT'
+Your comment text here.
+
+Second paragraph here.
+COMMENT
+)"
+
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first in comments on the issue. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
@@ -297,6 +308,17 @@ Read AI instructions from ${ai_instructions}.
 Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${REPO_WORK_DIR}.
 ${rebase_notice}
+IMPORTANT — GitHub CLI comment formatting: When posting comment bodies via the GitHub CLI
+(gh pr comment, gh pr create, gh pr edit, etc.), always pass the body using a HEREDOC
+so that real newline characters are embedded — never use escaped \n sequences, which GitHub
+renders as literal characters rather than line breaks:
+  gh pr comment ${item_id} --repo ${REPO_FULL} --body "\$(cat <<'COMMENT'
+Your comment text here.
+
+Second paragraph here.
+COMMENT
+)"
+
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
