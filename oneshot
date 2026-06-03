@@ -302,7 +302,8 @@ Steps:
 2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 4. Proceed to address all outstanding work
-5. All interaction with humans including status report must be made as a comment to the pull request.
+5. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
+6. All interaction with humans including status report must be made as a comment to the pull request.
 EOF
 }
 
