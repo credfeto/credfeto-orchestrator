@@ -611,6 +611,39 @@ notify_discord_no_work() {
         || warn "Discord webhook notification failed"
 }
 
+# Sends a Discord embed notification when an item is found to be blocked.
+# Arguments: item_type (Issue|PullRequest), item_id
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_blocked_item() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="$1" item_id="$2"
+    local url payload
+
+    case "${item_type}" in
+        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           url="https://github.com/${REPO_FULL}" ;;
+    esac
+
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Blocked: ${item_type} #${item_id}" \
+        --arg url "${url}" \
+        --arg repo "${REPO_FULL}" \
+        --arg type "${item_type}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Repository",value:$repo,inline:true},
+            {name:"Type",value:$type,inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build blocked payload for ${item_type} #${item_id}"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being applied.
 tag_pr_closed_issue() {
@@ -734,6 +767,7 @@ main() {
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    notify_discord_blocked_item "Issue" "${item_id}"
                     continue
                 fi
 
@@ -750,6 +784,7 @@ main() {
 
                 if pr_json_has_blocked_label "${pr_json}"; then
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
+                    notify_discord_blocked_item "PullRequest" "${open_pr}"
                     continue
                 fi
 
@@ -782,6 +817,7 @@ main() {
 
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    notify_discord_blocked_item "Issue" "${item_id}"
                     continue
                 fi
 
@@ -809,6 +845,7 @@ main() {
 
             if pr_json_has_blocked_label "${pr_json}"; then
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
+                notify_discord_blocked_item "PullRequest" "${item_id}"
                 continue
             fi
 
