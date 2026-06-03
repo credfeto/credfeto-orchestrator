@@ -33,6 +33,7 @@ teardown() {
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
     [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
+    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
 }
 
 @test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
