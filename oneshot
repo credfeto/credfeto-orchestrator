@@ -113,6 +113,35 @@ ensure_repo_current() {
     fi
 }
 
+# Attempts a non-agentic rebase of branch_name onto origin/main.
+# Returns 0 if the rebase succeeded and changes were force-pushed; 1 if any
+# conflict was encountered or if the push failed. Always leaves the working
+# tree on main.
+try_nonagentic_rebase() {
+    local branch_name="$1"
+
+    [ -n "${branch_name}" ] || return 1
+
+    if ! git -C "${REPO_WORK_DIR}" checkout "${branch_name}"; then
+        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
+        return 1
+    fi
+
+    if ! git -C "${REPO_WORK_DIR}" rebase origin/main; then
+        git -C "${REPO_WORK_DIR}" rebase --abort 2>/dev/null || true
+        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
+        return 1
+    fi
+
+    if ! git -C "${REPO_WORK_DIR}" push --force-with-lease; then
+        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
+        return 1
+    fi
+
+    git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
+    return 0
+}
+
 check_required_tools() {
     local tool
     for tool in curl jq claude gh git awk grep; do
@@ -249,6 +278,13 @@ build_pr_prompt() {
         rebase_notice="
 IMPORTANT — mergeStateStatus=BEHIND: The branch is behind origin/main and must be rebased before
 any other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${REPO_WORK_DIR},
+fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
+other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
+"
+    elif [ "${merge_state}" = "DIRTY" ]; then
+        rebase_notice="
+IMPORTANT — mergeStateStatus=DIRTY: The branch has merge conflicts and must be rebased before any
+other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${REPO_WORK_DIR},
 fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
 other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
 "
@@ -420,12 +456,6 @@ load_pr_fingerprint() {
 pr_json_has_blocked_label() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
-}
-
-# Returns 0 (true) if the pre-fetched PR JSON indicates the PR has merge conflicts.
-pr_json_has_conflicts() {
-    local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -e '.mergeable == "CONFLICTING"' > /dev/null 2>&1
 }
 
 # Returns the path to the fingerprint file for a given Issue ID.
@@ -723,12 +753,7 @@ main() {
                     continue
                 fi
 
-                if pr_json_has_conflicts "${pr_json}"; then
-                    info "PR #${open_pr} in ${item_repo} has merge conflicts — skipping (not counting as active work)"
-                    continue
-                fi
-
-                # PR is confirmed open, non-blocked, and conflict-free — mark repo as having active work.
+                # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
 
                 pr_fp=$(fingerprint_pr_json "${pr_json}") \
@@ -787,12 +812,7 @@ main() {
                 continue
             fi
 
-            if pr_json_has_conflicts "${pr_json}"; then
-                info "PR #${item_id} in ${item_repo} has merge conflicts — skipping (not counting as active work)"
-                continue
-            fi
-
-            # Non-blocked, conflict-free, open PR = active work for this repo.
+            # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
 
             pr_fp=$(fingerprint_pr_json "${pr_json}") \
@@ -811,6 +831,21 @@ main() {
 
         ensure_rules_current
         ensure_repo_current
+
+        if [ "${item_type}" = "PullRequest" ]; then
+            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+            if [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ]; then
+                if try_nonagentic_rebase "${branch_name}"; then
+                    info "PR #${item_id} in ${item_repo} rebased non-agentically — updating fingerprint"
+                    post_fp=$(compute_pr_fingerprint "${item_id}") \
+                        || die "Failed to compute post-rebase fingerprint for PR #${item_id} in ${item_repo}"
+                    save_pr_fingerprint "${item_id}" "${post_fp}"
+                    continue
+                fi
+                info "Non-agentic rebase of PR #${item_id} in ${item_repo} had conflicts — handing off to agent"
+            fi
+        fi
 
         if ! ai_instructions=$(find_ai_instructions); then
             warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
@@ -840,8 +875,6 @@ main() {
         if [ "${item_type}" = "Issue" ]; then
             prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
         else
-            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
-            branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
             prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}" "${merge_state}" "${branch_name}")
         fi
 

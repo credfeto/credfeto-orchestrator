@@ -51,6 +51,53 @@ teardown() {
     [[ "${output}" != *"BEHIND"* ]]
 }
 
+@test "build_pr_prompt with DIRTY merge state includes rebase notice with branch name and force-with-lease" {
+    run build_pr_prompt 7 "/resolved/.ai-instructions" "DIRTY" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"DIRTY"* ]]
+    [[ "${output}" == *"feat/my-branch"* ]]
+    [[ "${output}" == *"force-with-lease"* ]]
+    [[ "${output}" == *"rebase"* ]]
+}
+
+@test "main passes DIRTY merge state and branch name to build_pr_prompt" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()           { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}\n'; }
+    fingerprint_pr_json()     { printf 'fp-new\n'; }
+    load_pr_fingerprint()     { printf 'fp-old\n'; }
+    local _prompt_log="${TEST_TMP}/prompt_log"
+    build_pr_prompt() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${_prompt_log}"; printf 'mock-pr-prompt\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'merge_state=DIRTY' "${_prompt_log}"
+    grep -q 'branch=feat/test' "${_prompt_log}"
+}
+
+@test "main performs non-agentic rebase for BEHIND PR, saves fingerprint, and continues without invoking agent" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"other/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()        { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json()  { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { return 0; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    local _claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf 'called\n' >> "${_claude_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"rebased non-agentically"* ]]
+    [ ! -f "${_claude_log}" ]
+}
+
 @test "main passes BEHIND merge state and branch name to build_pr_prompt" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -511,6 +558,7 @@ setup_main_mocks() {
     set_repo_context()          { return 0; }
     ensure_rules_current()      { return 0; }
     ensure_repo_current()       { return 0; }
+    try_nonagentic_rebase()     { return 1; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
     load_session()              { SESSION_ID=""; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
