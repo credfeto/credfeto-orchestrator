@@ -60,6 +60,36 @@ preserving the existing behaviour for installations that do not require per-owne
 > **Note:** The current script is configured for the `credfeto` owner. As the orchestrator is
 > extended to cover additional repos, set `OWNER` accordingly and create a token file for each owner.
 
+### Discord webhook notifications (optional)
+
+The script can post notifications to a Discord channel via a webhook whenever:
+
+- An issue or PR is **picked up** (new session started or existing session resumed), with a link to the item.
+- An issue or PR is found to be **blocked** (has the `Blocked` label), with a link to the item.
+- **No actionable work items** are found after scanning all priorities.
+
+To enable, add a `DISCORD_WEBHOOK` entry to the config `.env` file:
+
+```dotenv
+DISCORD_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
+```
+
+**Config file location:**
+
+```text
+$XDG_CONFIG_HOME/orchestrator/.env
+```
+
+(defaults to `~/.config/orchestrator/.env` when `$XDG_CONFIG_HOME` is not set)
+
+**File permissions — set `600` to prevent other users from reading the webhook URL:**
+
+```sh
+chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+```
+
+If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications are silently skipped.
+
 ## Build Status
 
 | Branch  | Status                                                                                                                                                                                                                                          |

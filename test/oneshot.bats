@@ -570,9 +570,10 @@ setup_main_mocks() {
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
     tag_pr_closed_issue()       { return 0; }
-    load_discord_config()       { return 0; }
-    notify_discord_work_item()  { return 0; }
-    notify_discord_no_work()    { return 0; }
+    load_discord_config()           { return 0; }
+    notify_discord_work_item()      { return 0; }
+    notify_discord_no_work()        { return 0; }
+    notify_discord_blocked_item()   { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -991,4 +992,106 @@ setup_main_mocks() {
     run main
     [ "${status}" -eq 0 ]
     grep -q 'no_work' "${_notif_log}"
+}
+
+# --- notify_discord_blocked_item -----------------------------------------------
+
+@test "notify_discord_blocked_item does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_blocked_item calls curl with embed payload for a blocked Issue" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "Blocked" "${args_log}"
+}
+
+@test "notify_discord_blocked_item calls curl with embed payload for a blocked PullRequest" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_item "PullRequest" "7"
+    [ "${status}" -eq 0 ]
+    grep -q "https://github.com/org/repo/pull/7" "${args_log}"
+    grep -q "Blocked" "${args_log}"
+}
+
+# --- main() blocked Discord notification integration --------------------------
+
+@test "main sends blocked notification when a PR in priorities is blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s\n' "$1" "$2" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=PullRequest id=5' "${_notif_log}"
+}
+
+@test "main sends blocked notification when a direct Issue is blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s\n' "$1" "$2" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=Issue id=10' "${_notif_log}"
+}
+
+@test "main sends blocked notification for Issue when the Issue has a linked PR that is blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s\n' "$1" "$2" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=PullRequest id=99' "${_notif_log}"
+}
+
+@test "main sends blocked notification for Issue with linked PR when the Issue itself is blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s\n' "$1" "$2" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'type=Issue id=10' "${_notif_log}"
 }
