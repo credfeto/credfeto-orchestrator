@@ -2,8 +2,9 @@
 name: "Build development-node base image"
 
 # Build and push the development-node base image — Node.js v24.x, Bun runtime,
-# and global npm CLIs (claude-code, markdownlint-cli2, markdownlint-cli,
+# and global npm CLIs (markdownlint-cli2, markdownlint-cli,
 # stylelint, eslint, block-no-verify).
+# Note: claude-code is installed via apt in the development-full stage.
 #
 # Tags pushed:
 #   :latest       what consumers resolve by default
@@ -67,14 +68,6 @@ jobs:
       - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v4.1.0
 
-      - name: "Resolve cache-bust values"
-        id: "cb"
-        shell: "bash"
-        run: |
-          {
-            echo "claude_version=$(npm view @anthropic-ai/claude-code version)"
-          } >> "$GITHUB_OUTPUT"
-
       - name: "Build and push"
         uses: docker/build-push-action@v7.2.0
         with:
@@ -83,8 +76,6 @@ jobs:
           push: true
           pull: true
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-          build-args: |
-            CLAUDE_CODE_CACHE_BUST=${{ steps.cb.outputs.claude_version }}
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 

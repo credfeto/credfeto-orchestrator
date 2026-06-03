@@ -4,12 +4,6 @@ FROM ghcr.io/credfeto/development-tools:latest
 
 # ---- Build-time arguments ----------------------------------------------------
 ARG BUN_VERSION=1.3.13
-ARG CLAUDE_CODE_VERSION=latest
-# CLAUDE_CODE_CACHE_BUST: resolved by the workflow to the current published npm
-# version of @anthropic-ai/claude-code. Embedding it here busts the GHA layer
-# cache whenever a new version is released — without it, the static "latest"
-# string never changes and Docker re-uses the stale cached npm install layer.
-ARG CLAUDE_CODE_CACHE_BUST
 ARG MARKDOWNLINT_CLI2_VERSION=latest
 ARG MARKDOWNLINT_CLI_VERSION=latest
 ARG STYLELINT_VERSION=latest
@@ -44,18 +38,14 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && rm -rf /root/.bun
 
 # ---- npm global installs (most stable first, most frequently bumped last) ----
-# claude-code: postinstall downloads the native binary — works fine with npm.
 # markdownlint-cli2: companion CLI for the markdown-linter-fixer-skill kit.
 # markdownlint-cli, stylelint + standard config, eslint: additional linters
 #   the agent reaches for when a project doesn't ship its own.
 # block-no-verify: security guard that blocks `git --no-verify` and
 #   core.hooksPath overrides.
-# The no-op `: "${CLAUDE_CODE_CACHE_BUST}"` embeds the resolved version in the
-# layer cache key so the entire npm install block is re-run when claude-code
-# (the most frequently updated package in this list) publishes a new release.
-RUN : "${CLAUDE_CODE_CACHE_BUST}"; \
-    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-    && npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
+# Note: claude-code is installed via apt in development-full — it changes more
+# frequently than Node/npm globals and benefits from a dedicated apt source.
+RUN npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
     && npm install -g \
         "markdownlint-cli@${MARKDOWNLINT_CLI_VERSION}" \
         "stylelint@${STYLELINT_VERSION}" \
@@ -88,7 +78,6 @@ RUN set -e; \
     echo "== stage 2 binary version probe =="; \
     node --version; \
     bun --version; \
-    claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1; \
     markdownlint-cli2 --version; \
     markdownlint --version; \
     stylelint --version; \
