@@ -25,6 +25,14 @@ teardown() {
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
+@test "build_issue_prompt includes GitHub CLI markdown formatting guidance" {
+    run build_issue_prompt 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"HEREDOC"* ]]
+    [[ "${output}" == *"never use escaped"* ]]
+    [[ "${output}" == *"literal characters"* ]]
+}
+
 @test "build_pr_prompt includes PR number, repo, work dir and Blocked instruction" {
     run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
@@ -34,6 +42,14 @@ teardown() {
     [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
     [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+}
+
+@test "build_pr_prompt includes GitHub CLI markdown formatting guidance" {
+    run build_pr_prompt 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"HEREDOC"* ]]
+    [[ "${output}" == *"never use escaped"* ]]
+    [[ "${output}" == *"literal characters"* ]]
 }
 
 @test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
