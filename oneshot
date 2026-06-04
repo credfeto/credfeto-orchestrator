@@ -319,9 +319,21 @@ Second paragraph here.
 COMMENT
 )"
 
+IMPORTANT — never wait or poll for CI. Check the current check state once with:
+  gh pr checks ${item_id} --repo ${REPO_FULL}
+Then act immediately based on the result:
+- All required checks passed → proceed with the steps below.
+- Any check is pending or in_progress → post a brief status comment on the PR and stop. Do NOT
+  loop, sleep, or use --watch. The orchestrator re-invokes this session automatically when the
+  PR state next changes (e.g. when checks complete or a review arrives).
+- Any check failed → investigate, fix the failure, push, post a status comment, and stop. Do
+  not wait for the new run to complete.
+- If CI is consistently failing and you cannot fix it: mark the PR blocked:
+  gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Check the PR comments, any code reviews, and CI workflow runs. If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+2. Check the PR comments, any code reviews, and CI status (see above). If the PR or comments contain questions that need answers, or if you have questions, ask them first in PR Comment replies and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 4. Proceed to address all outstanding work
 5. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
