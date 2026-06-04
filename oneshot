@@ -273,6 +273,10 @@ Second paragraph here.
 COMMENT
 )"
 
+IMPORTANT — Label management: When adding labels, always use --add-label, never --label (which
+replaces all existing labels). Never remove labels from issues or PRs — GitHub workflows add
+classification labels automatically and they must not be removed.
+
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first in comments on the issue. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
@@ -318,6 +322,10 @@ Your comment text here.
 Second paragraph here.
 COMMENT
 )"
+
+IMPORTANT — Label management: When adding labels, always use --add-label, never --label (which
+replaces all existing labels). Never remove labels from issues or PRs — GitHub workflows add
+classification labels automatically and they must not be removed.
 
 IMPORTANT — never wait or poll for CI. Check the current check state once with:
   gh pr checks ${item_id} --repo ${REPO_FULL}
