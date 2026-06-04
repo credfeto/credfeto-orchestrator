@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord webhook notification when an issue or PR is found to be blocked, including a direct link to the blocked item
 - GitHub Actions workflow to run bats shell test suite in CI on every push and pull request
 - Label management guidance added to both issue and PR prompts in oneshot — GitHub workflow classification labels are preserved when adding new labels
+- Docker container execution for oneshot: named orchestrator-<owner>, mounts repo rw, rules ro, ssh ro, gnupg rw, passes Claude and GitHub CLI tokens
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
