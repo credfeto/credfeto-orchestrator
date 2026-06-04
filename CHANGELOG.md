@@ -47,6 +47,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR prompt now includes explicit gh pr ready command to mark PR as ready for review
 - Issue and PR prompts now include GitHub CLI markdown formatting guidance to prevent escaped newlines rendering as literal characters in comments
 - docker: base images: switch claude code install from npm to apt
+- PR prompt now instructs Claude to check CI state once with gh pr checks and stop immediately if checks are pending, rather than polling in a loop — prevents sessions hanging indefinitely when Build: Pre-Release is absent from the most-recent workflow runs window
 ### Deprecated
 ### Removed
 ### Deployment Changes
