@@ -41,6 +41,20 @@ RUN mkdir -p /home/developer/.nuget/NuGet \
     && mkdir -p /home/developer/.nuget-cache \
     && chown -R developer:developer /home/developer/.nuget-cache
 
+# ---- Claude Code (apt install — keyring baked in development-tools) ----------
+# Installed here rather than in development-node because claude-code releases
+# more frequently than Node/npm globals. The keyring and apt sources list entry
+# were added in development-tools. DOTNET_TOOLS_CACHE_BUST (the daily date)
+# busts this layer daily, ensuring any new claude-code release is picked up
+# within 24 hours.
+# hadolint ignore=DL3027,DL3059
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    : "${DOTNET_TOOLS_CACHE_BUST}"; \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        claude-code \
+    && rm -rf /var/lib/apt/lists/*
+
 # ---- .NET global tools (cache-bust daily so latest versions pull in) ---------
 #
 # Each tool gets its own RUN so:
@@ -194,6 +208,12 @@ RUN set -e; \
     composite-action-lint -h >/dev/null 2>&1 \
         || composite-action-lint --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: composite-action-lint is not functional" >&2; exit 1; }; \
+    echo "== claude-code check (apt-installed in this stage) =="; \
+    if ! command -v claude >/dev/null 2>&1; then \
+        echo "FATAL sanity: required binary 'claude' is missing" >&2; exit 1; \
+    fi; \
+    claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
+        || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
     for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd tsqllint funfair.buildcheck funfair.buildversion cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell credfeto.dotnet.repo.formatter dotnet-script; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \

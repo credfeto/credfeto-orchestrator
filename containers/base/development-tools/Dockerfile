@@ -235,6 +235,17 @@ RUN printf 'HEAD=%s\nUPSTREAM=%s\n' \
         || composite-action-lint --help >/dev/null 2>&1 \
         || test -x /usr/local/bin/composite-action-lint
 
+# ---- Claude Code apt source (keyring only — package installed in development-full) ----
+# The keyring and sources list entry are added here (stable, rarely changes)
+# so they are baked into the earliest base image. The actual claude-code
+# package is installed in development-full where it can be refreshed
+# independently on each daily/hourly build.
+RUN install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+        -o /etc/apt/keyrings/claude-code.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
+        > /etc/apt/sources.list.d/claude-code.list
+
 # ---- .NET SDK (LTS + STS side-by-side) ---------------------------------------
 # Both channels installed because repos in this fork target multiple TFMs
 # (e.g. net9.0 + net10.0). Without the STS channel, builds against net9.0

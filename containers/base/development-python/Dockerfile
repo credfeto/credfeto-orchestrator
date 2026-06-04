@@ -83,7 +83,6 @@ RUN set -e; \
         https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone-python; \
     rm -rf /tmp/sanity-clone-python; \
     echo "== stage 2 tools (presence / non-standard version flags) =="; \
-    claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1; \
     if ! command -v block-no-verify >/dev/null 2>&1; then \
         echo "FATAL sanity: block-no-verify is not on PATH" >&2; exit 1; \
     fi; \
