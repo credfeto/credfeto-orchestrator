@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - notify_discord_no_work now accepts an optional owner argument; when --owner is set the Discord message is prefixed with [owner] to distinguish multiple orchestrator instances (fixes #90)
 - Non-agentic PR rebases now proceed even when the owner is rate-limited — only invoke_claude is blocked during the rate-limit window
 - development-agent Docker image based on development-full with package-management and privilege-escalation tools removed, and a build workflow that triggers every 30 minutes or when development-full is updated
+- Docker container execution for oneshot: named orchestrator-<owner>, mounts repo rw, rules ro, ssh ro, gnupg rw, passes Claude and GitHub CLI tokens
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
