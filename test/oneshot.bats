@@ -294,7 +294,14 @@ teardown() {
 }
 
 @test "check_required_tools succeeds when all tools are present" {
-    # All required tools are available in the environment.
+    make_stub curl 'exit 0'
+    make_stub jq 'exit 0'
+    make_stub claude 'exit 0'
+    make_stub gh 'exit 0'
+    make_stub git 'exit 0'
+    make_stub awk 'exit 0'
+    make_stub grep 'exit 0'
+    make_stub sha256sum 'exit 0'
     run check_required_tools
     [ "${status}" -eq 0 ]
 }
