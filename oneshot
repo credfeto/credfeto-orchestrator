@@ -7,6 +7,9 @@
 
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
+ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-full:latest}"
+CONTAINER_REPO_PATH="/workspace/repo"
+CONTAINER_RULES_PATH="/workspace/rules"
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -66,6 +69,45 @@ load_token_for_owner() {
     if [ -n "${token}" ]; then
         printf '%s' "${token}"
     fi
+}
+
+# Outputs the GitHub CLI token for the given owner, or empty string if not configured.
+# Token files live at $XDG_CONFIG_HOME/orchestrator/gh-tokens/<owner> (mode 600).
+load_gh_token_for_owner() {
+    local owner="$1"
+    local token
+
+    case "${owner}" in
+        *[!a-zA-Z0-9_-]*) return ;;
+    esac
+
+    token=$(read_token_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/gh-tokens/${owner}")
+    if [ -n "${token}" ]; then
+        printf '%s' "${token}"
+    fi
+}
+
+# Maps a host file path to its container-internal equivalent.
+# Paths under REPO_WORK_DIR map to CONTAINER_REPO_PATH; paths under RULES_DIR
+# map to CONTAINER_RULES_PATH.  Unrecognised paths are returned unchanged.
+host_to_container_path() {
+    local host_path="$1"
+    local rel
+    if [ -n "${REPO_WORK_DIR}" ]; then
+        rel="${host_path#"${REPO_WORK_DIR}"}"
+        if [ "${rel}" != "${host_path}" ]; then
+            printf '%s%s' "${CONTAINER_REPO_PATH}" "${rel}"
+            return
+        fi
+    fi
+    if [ -n "${RULES_DIR}" ]; then
+        rel="${host_path#"${RULES_DIR}"}"
+        if [ "${rel}" != "${host_path}" ]; then
+            printf '%s%s' "${CONTAINER_RULES_PATH}" "${rel}"
+            return
+        fi
+    fi
+    printf '%s' "${host_path}"
 }
 
 # Sets the per-repo globals used by all sub-functions.
@@ -144,7 +186,7 @@ try_nonagentic_rebase() {
 
 check_required_tools() {
     local tool
-    for tool in curl jq claude gh git awk grep; do
+    for tool in curl jq docker gh git awk grep; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 
@@ -253,14 +295,14 @@ find_ai_instructions() {
 }
 
 build_issue_prompt() {
-    local item_id="$1" ai_instructions="$2"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}"
     cat <<EOF
 You are the Orchestrator agent.
 
 Read AI instructions from ${ai_instructions}.
 
 Work on issue #${item_id} in ${REPO_FULL}.
-The repository is checked out at ${REPO_WORK_DIR}.
+The repository is checked out at ${repo_path}.
 
 IMPORTANT — GitHub CLI comment formatting: When posting comment bodies via the GitHub CLI
 (gh issue comment, gh pr comment, gh pr create, etc.), always pass the body using a HEREDOC
@@ -287,19 +329,19 @@ EOF
 }
 
 build_pr_prompt() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}"
     local rebase_notice=""
     if [ "${merge_state}" = "BEHIND" ]; then
         rebase_notice="
 IMPORTANT — mergeStateStatus=BEHIND: The branch is behind origin/main and must be rebased before
-any other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${REPO_WORK_DIR},
+any other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${repo_path},
 fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
 other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
 "
     elif [ "${merge_state}" = "DIRTY" ]; then
         rebase_notice="
 IMPORTANT — mergeStateStatus=DIRTY: The branch has merge conflicts and must be rebased before any
-other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${REPO_WORK_DIR},
+other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${repo_path},
 fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
 other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
 "
@@ -310,7 +352,7 @@ You are the Orchestrator agent.
 Read AI instructions from ${ai_instructions}.
 
 Work on pull request #${item_id} in ${REPO_FULL}.
-The repository is checked out at ${REPO_WORK_DIR}.
+The repository is checked out at ${repo_path}.
 ${rebase_notice}
 IMPORTANT — GitHub CLI comment formatting: When posting comment bodies via the GitHub CLI
 (gh pr comment, gh pr create, gh pr edit, etc.), always pass the body using a HEREDOC
@@ -357,39 +399,56 @@ is_valid_session_id() {
 
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
+# Runs claude inside a Docker container named orchestrator-<OWNER>.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2"
-    local tmpfile new_session_id owner_token
+    local tmpfile new_session_id owner_token gh_token container_name
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
-    # Load the per-owner OAuth token (if configured) and scope it to this invocation only.
-    # The token is never logged — use [REDACTED] in any diagnostic messages that reference it.
+    # Load per-owner tokens — never logged; use [REDACTED] in diagnostics.
     owner_token=$(load_token_for_owner "${OWNER}")
+    gh_token=$(load_gh_token_for_owner "${OWNER}")
+    container_name="orchestrator-${OWNER}"
 
-    local -a claude_env_prefix=()
-    [ -n "${owner_token}" ] && claude_env_prefix=( env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    # Remove any pre-existing container with the same name to avoid conflicts.
+    docker rm -f "${container_name}" 2>/dev/null || true
+
+    local -a docker_args=(
+        run
+        --name "${container_name}"
+        --rm
+        --interactive
+        --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
+        --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
+    )
+    [ -d "${HOME}/.ssh" ]       && docker_args+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    [ -d "${HOME}/.gnupg" ]     && docker_args+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
+    [ -f "${HOME}/.gitconfig" ] && docker_args+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
+    [ -d "${HOME}/.claude" ]    && docker_args+=( --volume "${HOME}/.claude:/home/developer/.claude:rw" )
+
+    [ -n "${owner_token}" ] && docker_args+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    [ -n "${gh_token}" ]    && docker_args+=( --env "GH_TOKEN=${gh_token}" )
+
+    local -a claude_args=(
+        claude
+        --model opusplan
+        --print
+        --output-format json
+        --dangerously-skip-permissions
+        --add-dir "${CONTAINER_REPO_PATH}"
+    )
+    [ -n "${resume_session_id}" ] && claude_args+=( --resume "${resume_session_id}" )
 
     if [ -n "${resume_session_id}" ]; then
-        info "Resuming Claude session ${resume_session_id}..." >&2
-        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-            --resume "${resume_session_id}" \
-            --model opusplan \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        info "Resuming Claude session ${resume_session_id} in container ${container_name}..." >&2
     else
-        info "Starting new Claude session..." >&2
-        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-            --model opusplan \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+        info "Starting new Claude session in container ${container_name}..." >&2
     fi
+
+    printf '%s' "${prompt}" | \
+        docker "${docker_args[@]}" "${ORCHESTRATOR_IMAGE}" "${claude_args[@]}" > "${tmpfile}" \
+        || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
 
     # Show Claude's text response so the caller can review what was done
     jq -r '.result // ""' "${tmpfile}" >&2
@@ -750,7 +809,7 @@ main() {
     local skip_repo is_skipped
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp
-    local ai_instructions prompt new_session_id post_fp
+    local ai_instructions container_ai_instructions prompt new_session_id post_fp
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -952,10 +1011,12 @@ main() {
             notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}"
         fi
 
+        container_ai_instructions=$(host_to_container_path "${ai_instructions}")
+
         if [ "${item_type}" = "Issue" ]; then
-            prompt=$(build_issue_prompt "${item_id}" "${ai_instructions}")
+            prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
         else
-            prompt=$(build_pr_prompt "${item_id}" "${ai_instructions}" "${merge_state}" "${branch_name}")
+            prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"

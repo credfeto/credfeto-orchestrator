@@ -95,6 +95,22 @@ teardown() {
     [[ "${output}" == *"rebase"* ]]
 }
 
+@test "build_issue_prompt uses provided repo_path instead of REPO_WORK_DIR" {
+    run build_issue_prompt 42 "/workspace/rules/.ai-instructions" "/workspace/repo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/workspace/repo"* ]]
+    [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
+}
+
+@test "build_pr_prompt uses provided repo_path in rebase notice" {
+    run build_pr_prompt 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/workspace/repo"* ]]
+    [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
+    [[ "${output}" == *"feat/my-branch"* ]]
+    [[ "${output}" == *"force-with-lease"* ]]
+}
+
 @test "main passes DIRTY merge state and branch name to build_pr_prompt" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -281,6 +297,65 @@ teardown() {
     [ -z "${output}" ]
 }
 
+@test "load_gh_token_for_owner rejects owners with invalid characters" {
+    local bad
+    # shellcheck disable=SC2016  # 'owner$x' is a deliberate literal — testing that a '$' in the owner is rejected
+    for bad in 'owner;rm' 'owner space' 'owner/slash' 'owner$x' 'owner.dot'; do
+        run load_gh_token_for_owner "${bad}"
+        [ "${status}" -eq 0 ]
+        [ -z "${output}" ]
+    done
+}
+
+@test "load_gh_token_for_owner reads a gh token for a valid owner with safe perms" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
+    printf 'gh-secret-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    run load_gh_token_for_owner credfeto
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "gh-secret-token" ]
+}
+
+@test "load_gh_token_for_owner returns empty when no gh token file exists" {
+    run load_gh_token_for_owner credfeto
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+# --- host_to_container_path ---------------------------------------------------
+
+@test "host_to_container_path maps REPO_WORK_DIR to CONTAINER_REPO_PATH" {
+    run host_to_container_path "${REPO_WORK_DIR}/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CONTAINER_REPO_PATH}/.ai-instructions" ]
+}
+
+@test "host_to_container_path maps REPO_WORK_DIR exactly to CONTAINER_REPO_PATH" {
+    run host_to_container_path "${REPO_WORK_DIR}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CONTAINER_REPO_PATH}" ]
+}
+
+@test "host_to_container_path maps RULES_DIR to CONTAINER_RULES_PATH" {
+    run host_to_container_path "${RULES_DIR}/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CONTAINER_RULES_PATH}/.ai-instructions" ]
+}
+
+@test "host_to_container_path returns path unchanged when not matching a known dir" {
+    run host_to_container_path "/some/other/path"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "/some/other/path" ]
+}
+
+@test "host_to_container_path prefers REPO_WORK_DIR over RULES_DIR when path starts with both" {
+    # Construct a path that starts with REPO_WORK_DIR (which is a prefix match test).
+    # Since REPO_WORK_DIR is checked first, it wins.
+    run host_to_container_path "${REPO_WORK_DIR}/subdir"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${CONTAINER_REPO_PATH}/subdir" ]
+}
+
 @test "session_id UUID validation accepts a well-formed UUID" {
     run is_valid_session_id "12345678-1234-1234-1234-123456789abc"
     [ "${status}" -eq 0 ]
@@ -301,20 +376,20 @@ teardown() {
     # Override the shell builtin used for presence checks so that a chosen tool
     # reports as absent, deterministically and without altering the real system.
     command() {
-        if [ "$1" = "-v" ] && [ "$2" = "claude" ]; then
+        if [ "$1" = "-v" ] && [ "$2" = "docker" ]; then
             return 1
         fi
         builtin command "$@"
     }
     run check_required_tools
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"Required tool not found: claude"* ]]
+    [[ "${output}" == *"Required tool not found: docker"* ]]
 }
 
 @test "check_required_tools succeeds when all tools are present" {
     make_stub curl 'exit 0'
     make_stub jq 'exit 0'
-    make_stub claude 'exit 0'
+    make_stub docker 'exit 0'
     make_stub gh 'exit 0'
     make_stub git 'exit 0'
     make_stub awk 'exit 0'
@@ -424,9 +499,10 @@ teardown() {
 
 # --- model selection -----------------------------------------------------------
 
-@test "invoke_claude passes --model opusplan to claude for a new session" {
-    local args_log="${TEST_TMP}/claude_args"
-    make_stub_multiline claude \
+@test "invoke_claude passes --model opusplan to docker claude command for a new session" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
 
@@ -435,15 +511,79 @@ teardown() {
     grep -qx 'opusplan' "${args_log}"
 }
 
-@test "invoke_claude passes --model opusplan to claude when resuming a session" {
-    local args_log="${TEST_TMP}/claude_args"
-    make_stub_multiline claude \
+@test "invoke_claude passes --model opusplan to docker claude command when resuming a session" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
 
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
+}
+
+@test "invoke_claude uses container name orchestrator-OWNER" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline docker \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    grep -qx 'orchestrator-credfeto' "${args_log}"
+}
+
+@test "invoke_claude mounts REPO_WORK_DIR read-write and RULES_DIR read-only" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline docker \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
+    grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
+}
+
+@test "invoke_claude passes CLAUDE_CODE_OAUTH_TOKEN env var when owner token is configured" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    make_stub_multiline docker \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
+}
+
+@test "invoke_claude passes GH_TOKEN env var when gh token is configured" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
+    printf 'my-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    make_stub_multiline docker \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    grep -qx 'GH_TOKEN=my-gh-token' "${args_log}"
+}
+
+@test "invoke_claude passes --resume flag when session id is provided" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline docker \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    grep -qx -- '--resume' "${args_log}"
+    grep -qx '12345678-1234-1234-1234-123456789abc' "${args_log}"
 }
 
 # --- set_repo_context ---------------------------------------------------------
@@ -602,6 +742,7 @@ setup_main_mocks() {
     ensure_repo_current()       { return 0; }
     try_nonagentic_rebase()     { return 1; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
+    host_to_container_path()    { printf '%s\n' "$1"; }
     load_session()              { SESSION_ID=""; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
     build_pr_prompt()           { printf 'mock-pr-prompt\n'; }
