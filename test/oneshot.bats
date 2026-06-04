@@ -33,6 +33,15 @@ teardown() {
     [[ "${output}" == *"literal characters"* ]]
 }
 
+@test "build_issue_prompt includes label management guidance" {
+    run build_issue_prompt 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"--add-label"* ]]
+    [[ "${output}" == *"never --label"* ]]
+    [[ "${output}" == *"Never remove labels"* ]]
+    [[ "${output}" == *"GitHub workflows"* ]]
+}
+
 @test "build_pr_prompt includes PR number, repo, work dir and Blocked instruction" {
     run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
@@ -50,6 +59,15 @@ teardown() {
     [[ "${output}" == *"HEREDOC"* ]]
     [[ "${output}" == *"never use escaped"* ]]
     [[ "${output}" == *"literal characters"* ]]
+}
+
+@test "build_pr_prompt includes label management guidance" {
+    run build_pr_prompt 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"--add-label"* ]]
+    [[ "${output}" == *"never --label"* ]]
+    [[ "${output}" == *"Never remove labels"* ]]
+    [[ "${output}" == *"GitHub workflows"* ]]
 }
 
 @test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
