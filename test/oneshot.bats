@@ -511,7 +511,7 @@ STUBEOF
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
-@test "invoke_claude does not send Discord notification when retrying after blocking_limit" {
+@test "invoke_claude sends Discord notification when retrying after blocking_limit" {
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
 #!/usr/bin/env bash
 for arg; do
@@ -526,7 +526,7 @@ STUBEOF
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
     invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
-    run ! grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
 @test "invoke_claude dies with Discord notification on blocking_limit for a new session" {

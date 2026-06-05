@@ -392,6 +392,8 @@ handle_claude_is_error() {
 
     if [ "${terminal_reason}" = "blocking_limit" ] && [ -n "${resume_session_id}" ]; then
         warn "Session ${resume_session_id} exceeded context limit — retrying as a new session" >&2
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Session context too long — restarting session for ${REPO_FULL}"
         rm -f "${tmpfile}"
         local new_tmpfile
         new_tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
