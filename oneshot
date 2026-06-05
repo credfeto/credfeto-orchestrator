@@ -367,10 +367,25 @@ invoke_claude() {
 
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
-        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-            --resume "${resume_session_id}" \
-            "${claude_base_args[@]}" > "${tmpfile}" \
-            || die_claude_failed "${tmpfile}"
+        if ! printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+                --resume "${resume_session_id}" \
+                "${claude_base_args[@]}" > "${tmpfile}"; then
+            # If Claude reports the session no longer exists, silently retry fresh.
+            if grep -q "No conversation found with session ID" "${tmpfile}" 2>/dev/null; then
+                warn "Session ${resume_session_id} no longer exists — retrying as a new session" >&2
+                notify_discord_claude_error "${item_type}" "${item_id}" \
+                    "Stored session expired — restarting session for ${REPO_FULL}"
+                rm -f "${tmpfile}"
+                tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
+                resume_session_id=""
+                info "Starting new Claude session (retry after invalid session)..." >&2
+                printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+                    "${claude_base_args[@]}" > "${tmpfile}" \
+                    || die_claude_failed "${tmpfile}"
+            else
+                die_claude_failed "${tmpfile}"
+            fi
+        fi
     else
         info "Starting new Claude session..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
