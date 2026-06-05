@@ -1192,7 +1192,7 @@ setup_main_mocks() {
     run notify_discord_no_work
     [ "${status}" -eq 0 ]
     # Should NOT have bracket-prefixed owner
-    grep -qv "\[.*\] No actionable" "${args_log}" || true
+    run ! grep -q "\[.*\] No actionable" "${args_log}"
     grep -q "No actionable work items found" "${args_log}"
 }
 
