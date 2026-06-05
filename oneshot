@@ -988,6 +988,7 @@ main() {
     if [ "${item_count}" -eq 0 ]; then
         success "No open work items found in priorities"
         notify_discord_no_work "${owner_filter}"
+        exit 0
     fi
 
     info "Found ${item_count} open work item(s) — scanning for actionable work..."
