@@ -171,6 +171,25 @@ teardown() {
     [[ "${output}" == *"invalid characters"* ]]
 }
 
+@test "main exits cleanly when another instance holds the lock" {
+    setup_main_mocks
+    # Hold the lock in a background process so main's flock --nonblock fails.
+    local lock_dir="${HOME}/.orchestrator/locks"
+    mkdir -p "${lock_dir}"
+    # Use a subshell holding fd 9 for the duration of the test.
+    exec 9>"${lock_dir}/_global.lock"
+    flock --exclusive 9
+    # Remove the flock stub so the real flock binary is used.
+    rm -f "${STUB_BIN}/flock"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already running"* ]]
+
+    # Release lock.
+    exec 9>&-
+}
+
 @test "main without --owner processes items from all owners" {
     setup_main_mocks
     fetch_all_priorities() {
