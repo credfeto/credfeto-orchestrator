@@ -25,6 +25,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord webhook notification when an issue or PR is found to be blocked, including a direct link to the blocked item
 - GitHub Actions workflow to run bats shell test suite in CI on every push and pull request
 - Label management guidance added to both issue and PR prompts in oneshot — GitHub workflow classification labels are preserved when adding new labels
+- Discord notification when Claude returns an application-level error (is_error: true), including the error message and a link to the affected issue or PR
+- Automatic session reset when a resumed Claude session exceeds the context limit (terminal_reason=blocking_limit) — retries as a new session, overwriting the stored session ID to break the stuck loop
+- Pre-send prompt length guard (MAX_PROMPT_CHARS=100000) that fails fast and notifies Discord before invoking Claude if the initial prompt is grossly oversized
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
