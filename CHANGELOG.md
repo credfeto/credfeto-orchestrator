@@ -48,6 +48,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Retry as a new session when Claude reports the stored session ID no longer exists ('No conversation found with session ID')
 - Stored session expired retry no longer sends a Discord notification — this is a recoverable transient state already logged to the console
 - Draft PRs no longer skipped when fingerprint is unchanged — a draft PR always has pending work
+- Use sudo docker for container invocations in invoke_claude
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
