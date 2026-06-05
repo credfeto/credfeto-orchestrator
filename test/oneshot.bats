@@ -1473,13 +1473,17 @@ STUBEOF
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "" "Issue" "42"
     [ "${status}" -ne 0 ]
-    # Rate-limit file must exist and contain a future timestamp.
+    # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
     [ -f "${rate_file}" ]
     local saved_unix
     saved_unix=$(cat "${rate_file}")
     [[ "${saved_unix}" =~ ^[0-9]+$ ]]
-    [ "${saved_unix}" -gt "$(date +%s)" ]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${saved_unix}" -gt "${now_unix}" ]
+    # Buffer must be at least RATE_LIMIT_RESUME_BUFFER_SECS (3600) seconds from now.
+    [ "${saved_unix}" -ge "$((now_unix + RATE_LIMIT_RESUME_BUFFER_SECS))" ]
 }
 
 # --- main() rate-limit integration --------------------------------------------
@@ -1487,7 +1491,7 @@ STUBEOF
 @test "main skips items for a rate-limited owner and continues to other owners" {
     setup_main_mocks
     # Let set_repo_context set OWNER so is_owner_rate_limited can check it.
-    set_repo_context() { OWNER="${1%%/*}"; }
+    set_repo_context() { OWNER="${1%%/*}"; REPO_FULL="$1"; REPO_WORK_DIR="/work/$1"; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":2,"itemType":"Issue","repository":"other/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
@@ -1496,12 +1500,15 @@ STUBEOF
         return 1
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 0; }
+    # Issues are open and non-blocked so they reach the rate-limit check (which now fires after prompt build).
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json() { printf 'fp-new\n'; }
+    load_issue_fingerprint()  { printf ''; }
 
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"rate-limited"* ]]
-    # org/repo skipped; other/repo must still be evaluated
-    [[ "${output}" == *"Issue #2 in other/repo is blocked"* ]]
+    # org/repo rate-limited before invoke_claude; other/repo must still be invoked
+    [[ "${output}" == *"Issue #2 in other/repo"* ]]
 }

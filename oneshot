@@ -15,6 +15,10 @@ WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 # initial prompt text itself.
 MAX_PROMPT_CHARS=100000
 
+# Extra buffer added to the token-reset time before resuming agentic work.
+# Avoids hitting the limit again immediately after it lifts.
+RATE_LIMIT_RESUME_BUFFER_SECS=3600
+
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
     exit 1
@@ -410,10 +414,14 @@ handle_claude_is_error() {
     fi
 
     if [ "${api_error_status}" = "429" ]; then
-        local reset_unix
+        local reset_unix resume_unix
         reset_unix=$(parse_reset_time "${result_text}")
-        [ -n "${reset_unix}" ] && save_rate_limit "${reset_unix}"
-        notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${reset_unix}"
+        resume_unix=""
+        if [ -n "${reset_unix}" ]; then
+            resume_unix=$((reset_unix + RATE_LIMIT_RESUME_BUFFER_SECS))
+            save_rate_limit "${resume_unix}"
+        fi
+        notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${resume_unix}"
         rm -f "${tmpfile}"
         die "Claude rate limited: ${result_text}"
     fi
@@ -1028,11 +1036,6 @@ main() {
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
 
-        if is_owner_rate_limited; then
-            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
-            continue
-        fi
-
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
             open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}") \
@@ -1203,6 +1206,11 @@ main() {
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
+
+        if is_owner_rate_limited; then
+            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
+            continue
+        fi
 
         new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}") \
             || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
