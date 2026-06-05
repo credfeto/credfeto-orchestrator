@@ -505,6 +505,7 @@ teardown() {
 @test "invoke_claude passes --model opusplan to docker claude command for a new session" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -517,6 +518,7 @@ teardown() {
 @test "invoke_claude passes --model opusplan to docker claude command when resuming a session" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -562,6 +564,7 @@ teardown() {
 
 @test "invoke_claude dies and sends Discord notification when Claude returns is_error true" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         '[ "$1" = "rm" ] && exit 0' \
         'printf '"'"'{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'"'"
@@ -578,6 +581,7 @@ teardown() {
 
 @test "invoke_claude retries as new session when Claude returns blocking_limit on a resumed session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
@@ -596,6 +600,7 @@ STUBEOF
 
 @test "invoke_claude sends Discord notification when retrying after blocking_limit" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
@@ -616,6 +621,7 @@ STUBEOF
 
 @test "invoke_claude dies with Discord notification on blocking_limit for a new session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         '[ "$1" = "rm" ] && exit 0' \
         'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
@@ -631,6 +637,7 @@ STUBEOF
 
 @test "invoke_claude dies if retry after blocking_limit also fails" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         '[ "$1" = "rm" ] && exit 0' \
         'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
@@ -643,6 +650,7 @@ STUBEOF
 
 @test "invoke_claude retries as new session when Claude reports session no longer exists" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
@@ -661,6 +669,7 @@ STUBEOF
 
 @test "invoke_claude does not send Discord notification when retrying after invalid session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
@@ -727,6 +736,7 @@ STUBEOF
 @test "invoke_claude uses container name orchestrator-OWNER" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -738,6 +748,7 @@ STUBEOF
 @test "invoke_claude mounts REPO_WORK_DIR read-write and RULES_DIR read-only" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -753,6 +764,7 @@ STUBEOF
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -767,6 +779,7 @@ STUBEOF
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
     printf 'my-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -778,6 +791,7 @@ STUBEOF
 @test "invoke_claude passes --resume flag when session id is provided" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -1756,6 +1770,7 @@ setup_main_mocks() {
 
 @test "invoke_claude saves rate-limit file and sends Discord notification on HTTP 429" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
@@ -1775,6 +1790,7 @@ STUBEOF
 
 @test "invoke_claude persists rate-limit file on HTTP 429 so subsequent runs skip the owner" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "rm" ] && exit 0
