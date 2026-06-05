@@ -30,6 +30,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pre-send prompt length guard (MAX_PROMPT_CHARS=100000) that fails fast and notifies Discord before invoking Claude if the initial prompt is grossly oversized
 - Discord notification and automatic rate-limit backoff when Claude returns HTTP 429, with non-agentic parsing of the reset time from the error message
 - Exclusive per-owner flock lock in oneshot to prevent concurrent invocations racing on the same git working directories when a Claude session outlasts the timer interval
+- Log current HEAD SHA on startup so the running version is visible in systemd journal output
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
