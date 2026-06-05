@@ -556,7 +556,7 @@ STUBEOF
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
 #!/usr/bin/env bash
 for arg; do
-    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n'; exit 1; }
+    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
@@ -572,7 +572,7 @@ STUBEOF
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
 #!/usr/bin/env bash
 for arg; do
-    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n'; exit 1; }
+    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
