@@ -29,6 +29,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Automatic session reset when a resumed Claude session exceeds the context limit (terminal_reason=blocking_limit) — retries as a new session, overwriting the stored session ID to break the stuck loop
 - Pre-send prompt length guard (MAX_PROMPT_CHARS=100000) that fails fast and notifies Discord before invoking Claude if the initial prompt is grossly oversized
 - Discord notification and automatic rate-limit backoff when Claude returns HTTP 429, with non-agentic parsing of the reset time from the error message
+- Exclusive per-owner flock lock in oneshot to prevent concurrent invocations racing on the same git working directories when a Claude session outlasts the timer interval
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
@@ -39,6 +40,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Include Draft PRs in priority scan — Draft status indicates work still needed
 - Preserve /priorities API order — remove sort_by(.priority) that was overriding the server-defined priority ordering
 - Log claude output before dying on failed invocation
+- Replaced 'git pull --ff-only' in systemd ExecStartPre with explicit 'git fetch origin' then 'git merge --ff-only origin/main' to avoid failure when pull.rebase=true is configured
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did

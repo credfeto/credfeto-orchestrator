@@ -171,6 +171,25 @@ teardown() {
     [[ "${output}" == *"invalid characters"* ]]
 }
 
+@test "main exits cleanly when another instance holds the lock" {
+    setup_main_mocks
+    # Hold the lock in a background process so main's flock --nonblock fails.
+    local lock_dir="${HOME}/.orchestrator/locks"
+    mkdir -p "${lock_dir}"
+    # Use a subshell holding fd 9 for the duration of the test.
+    exec 9>"${lock_dir}/_global.lock"
+    flock --exclusive 9
+    # Remove the flock stub so the real flock binary is used.
+    rm -f "${STUB_BIN}/flock"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already running"* ]]
+
+    # Release lock.
+    exec 9>&-
+}
+
 @test "main without --owner processes items from all owners" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -302,6 +321,7 @@ teardown() {
     make_stub git 'exit 0'
     make_stub awk 'exit 0'
     make_stub grep 'exit 0'
+    make_stub flock 'exit 0'
     make_stub sha256sum 'exit 0'
     run check_required_tools
     [ "${status}" -eq 0 ]
@@ -727,6 +747,7 @@ STUBEOF
 # Call this inside each test after sourcing (i.e. after setup has run) to
 # replace every function that performs real I/O.
 setup_main_mocks() {
+    make_stub flock 'exit 0'
     check_required_tools()      { return 0; }
     set_repo_context()          { return 0; }
     ensure_rules_current()      { return 0; }
