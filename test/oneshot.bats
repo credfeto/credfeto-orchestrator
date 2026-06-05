@@ -25,21 +25,12 @@ teardown() {
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
-@test "build_issue_prompt includes GitHub CLI markdown formatting guidance" {
+@test "build_issue_prompt references AI instructions for CLI and label rules" {
     run build_issue_prompt 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"HEREDOC"* ]]
-    [[ "${output}" == *"never use escaped"* ]]
-    [[ "${output}" == *"literal characters"* ]]
-}
-
-@test "build_issue_prompt includes label management guidance" {
-    run build_issue_prompt 42 "/resolved/.ai-instructions"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"--add-label"* ]]
-    [[ "${output}" == *"never --label"* ]]
-    [[ "${output}" == *"Never remove labels"* ]]
-    [[ "${output}" == *"GitHub workflows"* ]]
+    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
+    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
+    [[ "${output}" == *"label management"* ]]
 }
 
 @test "build_pr_prompt includes PR number, repo, work dir and Blocked instruction" {
@@ -53,21 +44,13 @@ teardown() {
     [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
 }
 
-@test "build_pr_prompt includes GitHub CLI markdown formatting guidance" {
+@test "build_pr_prompt references AI instructions for CLI, label, and CI rules" {
     run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"HEREDOC"* ]]
-    [[ "${output}" == *"never use escaped"* ]]
-    [[ "${output}" == *"literal characters"* ]]
-}
-
-@test "build_pr_prompt includes label management guidance" {
-    run build_pr_prompt 7 "/resolved/.ai-instructions"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"--add-label"* ]]
-    [[ "${output}" == *"never --label"* ]]
-    [[ "${output}" == *"Never remove labels"* ]]
-    [[ "${output}" == *"GitHub workflows"* ]]
+    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
+    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
+    [[ "${output}" == *"label management"* ]]
+    [[ "${output}" == *"CI checks"* ]]
 }
 
 @test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
