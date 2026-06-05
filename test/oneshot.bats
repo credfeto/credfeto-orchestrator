@@ -1473,13 +1473,17 @@ STUBEOF
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "" "Issue" "42"
     [ "${status}" -ne 0 ]
-    # Rate-limit file must exist and contain a future timestamp.
+    # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
     [ -f "${rate_file}" ]
     local saved_unix
     saved_unix=$(cat "${rate_file}")
     [[ "${saved_unix}" =~ ^[0-9]+$ ]]
-    [ "${saved_unix}" -gt "$(date +%s)" ]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${saved_unix}" -gt "${now_unix}" ]
+    # Buffer must be at least RATE_LIMIT_RESUME_BUFFER_SECS (3600) seconds from now.
+    [ "${saved_unix}" -ge "$((now_unix + RATE_LIMIT_RESUME_BUFFER_SECS))" ]
 }
 
 # --- main() rate-limit integration --------------------------------------------
