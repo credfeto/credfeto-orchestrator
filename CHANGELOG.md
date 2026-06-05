@@ -55,6 +55,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Issue and PR prompts now include GitHub CLI markdown formatting guidance to prevent escaped newlines rendering as literal characters in comments
 - docker: base images: switch claude code install from npm to apt
 - PR prompt now instructs Claude to check CI state once with gh pr checks and stop immediately if checks are pending, rather than polling in a loop — prevents sessions hanging indefinitely when Build: Pre-Release is absent from the most-recent workflow runs window
+- Moved GitHub CLI comment body, label management, and CI check-once rules to cs-template global instructions; prompts now reference AI instructions instead of repeating inline rule blocks
 ### Deprecated
 ### Removed
 ### Deployment Changes
