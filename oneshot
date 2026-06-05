@@ -324,23 +324,111 @@ is_valid_session_id() {
     [[ "$1" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
 }
 
-# Logs any partial output from a failed Claude invocation, cleans up the temp file, and dies.
-die_claude_failed() {
+# Runs a single claude invocation, writing JSON output to tmpfile.
+# On non-zero exit: prints any output then dies.
+run_claude_fresh() {
     local tmpfile="$1"
-    [ -s "${tmpfile}" ] && { info "Claude output before failure:" >&2; cat "${tmpfile}" >&2; }
+    shift
+    info "Starting new Claude session..." >&2
+    printf '%s' "${CLAUDE_PROMPT}" | "${CLAUDE_ENV_PREFIX[@]}" claude \
+        "${CLAUDE_BASE_ARGS[@]}" > "${tmpfile}" \
+        || die_claude_failed "${tmpfile}"
+}
+
+# Runs claude with --resume, capturing stderr separately to detect the
+# "No conversation found" message that Claude writes to stderr on exit 1.
+# On invalid-session error: notifies Discord, retries fresh, returns 0.
+# On other failure: dies.
+# Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
+CLAUDE_RESUMED_AS_FRESH=0
+run_claude_resumed() {
+    local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
+    local stderrfile
+    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
+
+    info "Resuming Claude session ${resume_id}..." >&2
+    if printf '%s' "${CLAUDE_PROMPT}" | "${CLAUDE_ENV_PREFIX[@]}" claude \
+            --resume "${resume_id}" \
+            "${CLAUDE_BASE_ARGS[@]}" > "${tmpfile}" 2>"${stderrfile}"; then
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}"
+        return 0
+    fi
+
+    # Non-zero exit — check stderr for the known invalid-session message.
+    if grep -q "No conversation found with session ID" "${stderrfile}" "${tmpfile}" 2>/dev/null; then
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}" "${tmpfile}"
+        warn "Session ${resume_id} no longer exists — retrying as a new session" >&2
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Stored session expired — restarting session for ${REPO_FULL}"
+        tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
+        run_claude_fresh "${tmpfile}"
+        CLAUDE_RESUMED_AS_FRESH=1
+        # Propagate the new tmpfile path back to the caller via stdout.
+        printf '%s' "${tmpfile}"
+        return 0
+    fi
+
+    cat "${stderrfile}" >&2
+    rm -f "${stderrfile}"
+    die_claude_failed "${tmpfile}"
+}
+
+# Handles is_error=true in the Claude JSON response.
+# On blocking_limit (resumed session): retries fresh, updates tmpfile path via stdout.
+# On 429: persists rate limit, notifies Discord, dies.
+# On anything else: notifies Discord, dies.
+handle_claude_is_error() {
+    local tmpfile="$1" resume_session_id="$2" item_type="$3" item_id="$4"
+    local terminal_reason api_error_status result_text
+
+    terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
+    api_error_status=$(jq -r '.api_error_status // ""' "${tmpfile}" 2>/dev/null || printf '')
+    result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
+    info "Claude error: ${result_text}" >&2
+
+    if [ "${terminal_reason}" = "blocking_limit" ] && [ -n "${resume_session_id}" ]; then
+        warn "Session ${resume_session_id} exceeded context limit — retrying as a new session" >&2
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Session context too long — restarting session for ${REPO_FULL}"
+        rm -f "${tmpfile}"
+        local new_tmpfile
+        new_tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
+        run_claude_fresh "${new_tmpfile}"
+        local retry_is_error
+        retry_is_error=$(jq -r '.is_error // false' "${new_tmpfile}" 2>/dev/null || printf 'false')
+        if [ "${retry_is_error}" = "true" ]; then
+            local retry_result
+            retry_result=$(jq -r '.result // "Unknown error"' "${new_tmpfile}" 2>/dev/null || printf 'Unknown error')
+            notify_discord_claude_error "${item_type}" "${item_id}" "${retry_result}"
+            rm -f "${new_tmpfile}"
+            die "Claude invocation failed after retry: ${retry_result}"
+        fi
+        printf '%s' "${new_tmpfile}"
+        return 0
+    fi
+
+    if [ "${api_error_status}" = "429" ]; then
+        local reset_unix
+        reset_unix=$(parse_reset_time "${result_text}")
+        [ -n "${reset_unix}" ] && save_rate_limit "${reset_unix}"
+        notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${reset_unix}"
+        rm -f "${tmpfile}"
+        die "Claude rate limited: ${result_text}"
+    fi
+
+    notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
     rm -f "${tmpfile}"
-    die "Claude invocation failed"
+    die "Claude invocation failed: ${result_text}"
 }
 
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}"
-    local tmpfile new_session_id owner_token is_error terminal_reason api_error_status result_text reset_unix
+    local tmpfile new_session_id owner_token
 
-    # Defensive pre-check: catch prompts that are grossly oversized before calling Claude.
-    # The common failure mode is session history overflow on resumed sessions
-    # (terminal_reason=blocking_limit), handled below by retrying without --resume.
     local prompt_len=${#prompt}
     if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
         notify_discord_claude_error "${item_type}" "${item_id}" \
@@ -348,16 +436,13 @@ invoke_claude() {
         die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"
     fi
 
-    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
-
-    # Load the per-owner OAuth token (if configured) and scope it to this invocation only.
-    # The token is never logged — use [REDACTED] in any diagnostic messages that reference it.
     owner_token=$(load_token_for_owner "${OWNER}")
 
-    local -a claude_env_prefix=()
-    [ -n "${owner_token}" ] && claude_env_prefix=( env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
-
-    local -a claude_base_args=(
+    # Export invocation-scoped globals so helper functions can read them.
+    CLAUDE_PROMPT="${prompt}"
+    CLAUDE_ENV_PREFIX=()
+    [ -n "${owner_token}" ] && CLAUDE_ENV_PREFIX=( env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    CLAUDE_BASE_ARGS=(
         --model opusplan
         --print
         --output-format json
@@ -365,92 +450,35 @@ invoke_claude() {
         --add-dir "${REPO_WORK_DIR}"
     )
 
+    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
+
     if [ -n "${resume_session_id}" ]; then
-        info "Resuming Claude session ${resume_session_id}..." >&2
-        if ! printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-                --resume "${resume_session_id}" \
-                "${claude_base_args[@]}" > "${tmpfile}"; then
-            # If Claude reports the session no longer exists, silently retry fresh.
-            if grep -q "No conversation found with session ID" "${tmpfile}" 2>/dev/null; then
-                warn "Session ${resume_session_id} no longer exists — retrying as a new session" >&2
-                notify_discord_claude_error "${item_type}" "${item_id}" \
-                    "Stored session expired — restarting session for ${REPO_FULL}"
-                rm -f "${tmpfile}"
-                tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-                resume_session_id=""
-                info "Starting new Claude session (retry after invalid session)..." >&2
-                printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-                    "${claude_base_args[@]}" > "${tmpfile}" \
-                    || die_claude_failed "${tmpfile}"
-            else
-                die_claude_failed "${tmpfile}"
-            fi
-        fi
+        CLAUDE_RESUMED_AS_FRESH=0
+        local new_tmpfile
+        new_tmpfile=$(run_claude_resumed "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}")
+        # run_claude_resumed returns a new path only when it restarted as a fresh session.
+        [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
+        [ "${CLAUDE_RESUMED_AS_FRESH}" = "1" ] && resume_session_id=""
     else
-        info "Starting new Claude session..." >&2
-        printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-            "${claude_base_args[@]}" > "${tmpfile}" \
-            || die_claude_failed "${tmpfile}"
+        run_claude_fresh "${tmpfile}"
     fi
 
-    # Detect application-level errors returned by Claude (exit 0 but is_error: true).
+    local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
-        terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
-        api_error_status=$(jq -r '.api_error_status // ""' "${tmpfile}" 2>/dev/null || printf '')
-        result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
-        info "Claude error: ${result_text}" >&2
-
-        # On blocking_limit with a resumed session: drop the stale context and retry fresh.
-        # The new session ID overwrites the persisted one on the next save_session call,
-        # breaking any stuck loop caused by an oversized resumed session.
-        if [ "${terminal_reason}" = "blocking_limit" ] && [ -n "${resume_session_id}" ]; then
-            warn "Session ${resume_session_id} exceeded context limit — retrying as a new session" >&2
-            notify_discord_claude_error "${item_type}" "${item_id}" \
-                "Session context too long — restarting session for ${REPO_FULL}"
-            rm -f "${tmpfile}"
-            tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-            info "Starting new Claude session (retry after blocking_limit)..." >&2
-            printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-                "${claude_base_args[@]}" > "${tmpfile}" \
-                || die_claude_failed "${tmpfile}"
-
-            is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
-            if [ "${is_error}" = "true" ]; then
-                result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
-                info "Claude error on retry: ${result_text}" >&2
-                notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
-                rm -f "${tmpfile}"
-                die "Claude invocation failed after retry: ${result_text}"
-            fi
-        elif [ "${api_error_status}" = "429" ]; then
-            # Rate limit: parse the reset time from the error message, persist it so
-            # subsequent runs skip this owner until the limit lifts, then notify and die.
-            local reset_unix
-            reset_unix=$(parse_reset_time "${result_text}")
-            [ -n "${reset_unix}" ] && save_rate_limit "${reset_unix}"
-            notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${reset_unix}"
-            rm -f "${tmpfile}"
-            die "Claude rate limited: ${result_text}"
-        else
-            notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
-            rm -f "${tmpfile}"
-            die "Claude invocation failed: ${result_text}"
-        fi
+        local new_tmpfile
+        new_tmpfile=$(handle_claude_is_error "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}")
+        # handle_claude_is_error returns a new path only on blocking_limit retry.
+        [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
     fi
 
-    # Show Claude's text response so the caller can review what was done
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
         || { rm -f "${tmpfile}"; die "Failed to parse session_id from Claude output"; }
-
     rm -f "${tmpfile}"
 
     [ -n "${new_session_id}" ] || die "No session_id returned by Claude"
-
-    # Reject anything that is not a plain UUID to prevent injecting shell statements
-    # into the session file that is read on the next run.
     is_valid_session_id "${new_session_id}" \
         || die "Unexpected session_id format returned by Claude: ${new_session_id}"
 
