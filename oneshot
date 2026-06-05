@@ -797,8 +797,14 @@ notify_discord_work_item() {
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 notify_discord_no_work() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local payload
-    payload=$(jq --null-input '{"content":"No actionable work items found."}') \
+    local owner="${1:-}"
+    local message payload
+    if [ -n "${owner}" ]; then
+        message="[${owner}] No actionable work items found."
+    else
+        message="No actionable work items found."
+    fi
+    payload=$(jq --null-input --arg msg "${message}" '{"content":$msg}') \
         || { warn "Discord: failed to build no-work payload"; return 0; }
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
@@ -981,8 +987,7 @@ main() {
     item_count=$(printf '%s' "${items_json}" | jq 'length')
     if [ "${item_count}" -eq 0 ]; then
         success "No open work items found in priorities"
-        notify_discord_no_work
-        exit 0
+        notify_discord_no_work "${owner_filter}"
     fi
 
     info "Found ${item_count} open work item(s) — scanning for actionable work..."
@@ -1231,7 +1236,7 @@ main() {
         exit 0
     done
 
-    notify_discord_no_work
+    notify_discord_no_work "${owner_filter}"
     success "No actionable work items found across all priorities"
 }
 

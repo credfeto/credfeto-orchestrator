@@ -31,6 +31,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord notification and automatic rate-limit backoff when Claude returns HTTP 429, with non-agentic parsing of the reset time from the error message
 - Exclusive per-owner flock lock in oneshot to prevent concurrent invocations racing on the same git working directories when a Claude session outlasts the timer interval
 - Log current HEAD SHA on startup so the running version is visible in systemd journal output
+- notify_discord_no_work now accepts an optional owner argument; when --owner is set the Discord message is prefixed with [owner] to distinguish multiple orchestrator instances (fixes #90)
+- Non-agentic PR rebases now proceed even when the owner is rate-limited — only invoke_claude is blocked during the rate-limit window
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
