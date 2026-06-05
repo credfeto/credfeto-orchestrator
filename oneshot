@@ -412,7 +412,7 @@ invoke_claude() {
     container_name="orchestrator-${OWNER}"
 
     # Remove any pre-existing container with the same name to avoid conflicts.
-    docker rm -f "${container_name}" 2>/dev/null || true
+    sudo docker rm -f "${container_name}" 2>/dev/null || true
 
     local -a docker_args=(
         run
@@ -446,8 +446,10 @@ invoke_claude() {
         info "Starting new Claude session in container ${container_name}..." >&2
     fi
 
+    # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
+    # shellcheck disable=SC2024
     printf '%s' "${prompt}" | \
-        docker "${docker_args[@]}" "${ORCHESTRATOR_IMAGE}" "${claude_args[@]}" > "${tmpfile}" \
+        sudo docker "${docker_args[@]}" "${ORCHESTRATOR_IMAGE}" "${claude_args[@]}" > "${tmpfile}" \
         || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
 
     # Show Claude's text response so the caller can review what was done

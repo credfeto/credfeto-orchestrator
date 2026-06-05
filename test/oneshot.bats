@@ -502,6 +502,7 @@ teardown() {
 @test "invoke_claude passes --model opusplan to docker claude command for a new session" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -514,6 +515,7 @@ teardown() {
 @test "invoke_claude passes --model opusplan to docker claude command when resuming a session" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -526,6 +528,7 @@ teardown() {
 @test "invoke_claude uses container name orchestrator-OWNER" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -537,6 +540,7 @@ teardown() {
 @test "invoke_claude mounts REPO_WORK_DIR read-write and RULES_DIR read-only" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -552,6 +556,7 @@ teardown() {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -566,6 +571,7 @@ teardown() {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
     printf 'my-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
@@ -577,6 +583,7 @@ teardown() {
 @test "invoke_claude passes --resume flag when session id is provided" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
     make_stub_multiline docker \
         "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
         'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
