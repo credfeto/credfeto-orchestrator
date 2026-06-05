@@ -64,7 +64,8 @@ Wants=network-online.target
 Type=oneshot
 User=${CURRENT_USER}
 WorkingDirectory=${REPO_DIR}
-ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" pull --ff-only
+ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
+ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
 }

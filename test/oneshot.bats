@@ -302,6 +302,7 @@ teardown() {
     make_stub git 'exit 0'
     make_stub awk 'exit 0'
     make_stub grep 'exit 0'
+    make_stub flock 'exit 0'
     make_stub sha256sum 'exit 0'
     run check_required_tools
     [ "${status}" -eq 0 ]
@@ -727,6 +728,7 @@ STUBEOF
 # Call this inside each test after sourcing (i.e. after setup has run) to
 # replace every function that performs real I/O.
 setup_main_mocks() {
+    make_stub flock 'exit 0'
     check_required_tools()      { return 0; }
     set_repo_context()          { return 0; }
     ensure_rules_current()      { return 0; }
