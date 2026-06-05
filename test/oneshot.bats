@@ -1535,7 +1535,7 @@ STUBEOF
         return 1
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    # Issues are open and non-blocked so they reach the rate-limit check (which now fires after prompt build).
+    # Issues are open and non-blocked so they reach the rate-limit check (which now fires after ensure_repo_current).
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json() { printf 'fp-new\n'; }
@@ -1544,6 +1544,6 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"rate-limited"* ]]
-    # org/repo rate-limited before invoke_claude; other/repo must still be invoked
+    # org/repo rate-limited before ensure_rules_current; other/repo must still be invoked
     [[ "${output}" == *"Issue #2 in other/repo"* ]]
 }

@@ -1162,7 +1162,6 @@ main() {
         # ---- Work block: item_type and item_id are resolved ----
         info "Found actionable ${item_type} #${item_id} in ${item_repo} — preparing..."
 
-        ensure_rules_current
         ensure_repo_current
 
         if [ "${item_type}" = "PullRequest" ]; then
@@ -1179,6 +1178,13 @@ main() {
                 info "Non-agentic rebase of PR #${item_id} in ${item_repo} had conflicts — handing off to agent"
             fi
         fi
+
+        if is_owner_rate_limited; then
+            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
+            continue
+        fi
+
+        ensure_rules_current
 
         if ! ai_instructions=$(find_ai_instructions); then
             warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
@@ -1212,11 +1218,6 @@ main() {
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
-
-        if is_owner_rate_limited; then
-            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
-            continue
-        fi
 
         new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}") \
             || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
