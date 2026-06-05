@@ -1176,6 +1176,26 @@ setup_main_mocks() {
     grep -q "No actionable work items found" "${args_log}"
 }
 
+@test "notify_discord_no_work prefixes message with owner when owner argument provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "credfeto"
+    [ "${status}" -eq 0 ]
+    grep -q "\[credfeto\] No actionable work items found" "${args_log}"
+}
+
+@test "notify_discord_no_work omits prefix when no owner argument provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work
+    [ "${status}" -eq 0 ]
+    # Should NOT have bracket-prefixed owner
+    grep -qv "\[.*\] No actionable" "${args_log}" || true
+    grep -q "No actionable work items found" "${args_log}"
+}
+
 # --- main() Discord notification integration ----------------------------------
 
 @test "main sends start notification when starting new work on an issue" {
@@ -1218,11 +1238,26 @@ setup_main_mocks() {
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
     local _notif_log="${TEST_TMP}/notif_log"
-    notify_discord_no_work() { printf 'no_work\n' >> "${_notif_log}"; }
+    notify_discord_no_work() { printf 'no_work owner=%s\n' "${1:-}" >> "${_notif_log}"; }
 
     run main
     [ "${status}" -eq 0 ]
     grep -q 'no_work' "${_notif_log}"
+}
+
+@test "main passes owner to no-work notification when --owner flag is set" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_no_work() { printf 'no_work owner=%s\n' "${1:-}" >> "${_notif_log}"; }
+
+    run main --owner org
+    [ "${status}" -eq 0 ]
+    grep -q 'no_work owner=org' "${_notif_log}"
 }
 
 # --- notify_discord_blocked_item -----------------------------------------------
