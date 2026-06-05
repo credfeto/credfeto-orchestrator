@@ -917,6 +917,10 @@ main() {
     check_required_tools
     load_discord_config
 
+    local head_sha
+    head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
+    info "oneshot version: ${head_sha}"
+
     # Acquire an exclusive per-owner lock so concurrent invocations (e.g. two
     # systemd timer firings) do not race on the same git working directories.
     local lock_dir="${HOME}/.orchestrator/locks"
