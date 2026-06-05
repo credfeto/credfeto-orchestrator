@@ -8,6 +8,13 @@
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 
+# Conservative pre-send guard against grossly oversized prompts.
+# The common failure mode is session history overflow in resumed sessions
+# (reported as terminal_reason=blocking_limit), which is handled separately in
+# invoke_claude by retrying without --resume.  This constant caps only the
+# initial prompt text itself.
+MAX_PROMPT_CHARS=100000
+
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
     exit 1
@@ -366,8 +373,18 @@ die_claude_failed() {
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
-    local prompt="$1" resume_session_id="$2"
-    local tmpfile new_session_id owner_token
+    local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}"
+    local tmpfile new_session_id owner_token is_error terminal_reason result_text
+
+    # Defensive pre-check: catch prompts that are grossly oversized before calling Claude.
+    # The common failure mode is session history overflow on resumed sessions
+    # (terminal_reason=blocking_limit), handled below by retrying without --resume.
+    local prompt_len=${#prompt}
+    if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Prompt is too long: ${prompt_len} characters (max ${MAX_PROMPT_CHARS})"
+        die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"
+    fi
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
@@ -378,25 +395,61 @@ invoke_claude() {
     local -a claude_env_prefix=()
     [ -n "${owner_token}" ] && claude_env_prefix=( env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
 
+    local -a claude_base_args=(
+        --model opusplan
+        --print
+        --output-format json
+        --dangerously-skip-permissions
+        --add-dir "${REPO_WORK_DIR}"
+    )
+
     if [ -n "${resume_session_id}" ]; then
         info "Resuming Claude session ${resume_session_id}..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
             --resume "${resume_session_id}" \
-            --model opusplan \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+            "${claude_base_args[@]}" > "${tmpfile}" \
             || die_claude_failed "${tmpfile}"
     else
         info "Starting new Claude session..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
-            --model opusplan \
-            --print \
-            --output-format json \
-            --dangerously-skip-permissions \
-            --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
+            "${claude_base_args[@]}" > "${tmpfile}" \
             || die_claude_failed "${tmpfile}"
+    fi
+
+    # Detect application-level errors returned by Claude (exit 0 but is_error: true).
+    is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
+    if [ "${is_error}" = "true" ]; then
+        terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
+        result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
+        info "Claude error: ${result_text}" >&2
+
+        # On blocking_limit with a resumed session: drop the stale context and retry fresh.
+        # The new session ID overwrites the persisted one on the next save_session call,
+        # breaking any stuck loop caused by an oversized resumed session.
+        if [ "${terminal_reason}" = "blocking_limit" ] && [ -n "${resume_session_id}" ]; then
+            warn "Session ${resume_session_id} exceeded context limit — retrying as a new session" >&2
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Session context too long — restarting session for ${REPO_FULL}"
+            rm -f "${tmpfile}"
+            tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
+            info "Starting new Claude session (retry after blocking_limit)..." >&2
+            printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
+                "${claude_base_args[@]}" > "${tmpfile}" \
+                || die_claude_failed "${tmpfile}"
+
+            is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
+            if [ "${is_error}" = "true" ]; then
+                result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
+                info "Claude error on retry: ${result_text}" >&2
+                notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
+                rm -f "${tmpfile}"
+                die "Claude invocation failed after retry: ${result_text}"
+            fi
+        else
+            notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
+            rm -f "${tmpfile}"
+            die "Claude invocation failed: ${result_text}"
+        fi
     fi
 
     # Show Claude's text response so the caller can review what was done
@@ -695,6 +748,40 @@ notify_discord_blocked_item() {
         || warn "Discord webhook notification failed"
 }
 
+# Sends a Discord embed notification when Claude returns an application-level error.
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty), error_message
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_claude_error() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" error_message="$3"
+    local url payload
+
+    case "${item_type}" in
+        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           url="https://github.com/${REPO_FULL}" ;;
+    esac
+
+    # Truncate to stay within Discord's 1024-character field limit.
+    local truncated_error="${error_message:0:900}"
+
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Claude Error: ${REPO_FULL}" \
+        --arg url "${url}" \
+        --arg error "${truncated_error}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Error",value:$error,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build claude error payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being applied.
 tag_pr_closed_issue() {
@@ -968,7 +1055,7 @@ main() {
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}") \
+        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}") \
             || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
         save_session "${item_type}" "${item_id}" "${new_session_id}"

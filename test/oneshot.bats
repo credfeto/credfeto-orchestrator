@@ -446,6 +446,154 @@ teardown() {
     grep -qx 'opusplan' "${args_log}"
 }
 
+# --- invoke_claude error handling ---------------------------------------------
+
+@test "invoke_claude fails fast before calling claude when prompt exceeds MAX_PROMPT_CHARS" {
+    local args_log="${TEST_TMP}/claude_args"
+    make_stub_multiline claude \
+        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    DISCORD_WEBHOOK_URL=""
+    local long_prompt
+    long_prompt=$(printf '%*s' $((MAX_PROMPT_CHARS + 1)) '' | tr ' ' 'x')
+    run invoke_claude "${long_prompt}" "" "Issue" "1"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"too long"* ]]
+    [ ! -f "${args_log}" ]
+}
+
+@test "invoke_claude sends Discord notification when prompt exceeds MAX_PROMPT_CHARS" {
+    make_stub_multiline claude \
+        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    local long_prompt
+    long_prompt=$(printf '%*s' $((MAX_PROMPT_CHARS + 1)) '' | tr ' ' 'x')
+    run invoke_claude "${long_prompt}" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
+@test "invoke_claude dies and sends Discord notification when Claude returns is_error true" {
+    make_stub_multiline claude \
+        'printf '"'"'{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'"'"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"API Error"* ]]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
+@test "invoke_claude retries as new session when Claude returns blocking_limit on a resumed session" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg; do
+    [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
+done
+printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL=""
+    local result
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
+}
+
+@test "invoke_claude sends Discord notification when retrying after blocking_limit" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg; do
+    [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
+done
+printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
+@test "invoke_claude dies with Discord notification on blocking_limit for a new session" {
+    make_stub_multiline claude \
+        'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
+@test "invoke_claude dies if retry after blocking_limit also fails" {
+    make_stub_multiline claude \
+        'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
+
+    DISCORD_WEBHOOK_URL=""
+    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"failed after retry"* ]]
+}
+
+# --- notify_discord_claude_error -----------------------------------------------
+
+@test "notify_discord_claude_error does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_claude_error "Issue" "42" "Prompt is too long"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_claude_error calls curl with embed payload including issue URL and error message" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_claude_error "Issue" "42" "Prompt is too long"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "Prompt is too long" "${args_log}"
+}
+
+@test "notify_discord_claude_error calls curl with embed payload including PR URL" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_claude_error "PullRequest" "7" "API Error"
+    [ "${status}" -eq 0 ]
+    grep -q "https://github.com/org/repo/pull/7" "${args_log}"
+    grep -q "API Error" "${args_log}"
+}
+
+@test "notify_discord_claude_error uses repo URL when item type is unknown" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_claude_error "" "" "Some error"
+    [ "${status}" -eq 0 ]
+    grep -q "https://github.com/org/repo" "${args_log}"
+}
+
 # --- set_repo_context ---------------------------------------------------------
 
 @test "set_repo_context sets OWNER REPO REPO_FULL RULES_DIR REPO_WORK_DIR SESSION_BASE_DIR" {
@@ -612,10 +760,11 @@ setup_main_mocks() {
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
     tag_pr_closed_issue()       { return 0; }
-    load_discord_config()           { return 0; }
-    notify_discord_work_item()      { return 0; }
-    notify_discord_no_work()        { return 0; }
-    notify_discord_blocked_item()   { return 0; }
+    load_discord_config()             { return 0; }
+    notify_discord_work_item()        { return 0; }
+    notify_discord_no_work()          { return 0; }
+    notify_discord_blocked_item()     { return 0; }
+    notify_discord_claude_error()     { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
