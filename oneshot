@@ -355,6 +355,14 @@ is_valid_session_id() {
     [[ "$1" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
 }
 
+# Logs any partial output from a failed Claude invocation, cleans up the temp file, and dies.
+die_claude_failed() {
+    local tmpfile="$1"
+    [ -s "${tmpfile}" ] && { info "Claude output before failure:" >&2; cat "${tmpfile}" >&2; }
+    rm -f "${tmpfile}"
+    die "Claude invocation failed"
+}
+
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
@@ -379,7 +387,7 @@ invoke_claude() {
             --output-format json \
             --dangerously-skip-permissions \
             --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+            || die_claude_failed "${tmpfile}"
     else
         info "Starting new Claude session..." >&2
         printf '%s' "${prompt}" | "${claude_env_prefix[@]}" claude \
@@ -388,7 +396,7 @@ invoke_claude() {
             --output-format json \
             --dangerously-skip-permissions \
             --add-dir "${REPO_WORK_DIR}" > "${tmpfile}" \
-            || { rm -f "${tmpfile}"; die "Claude invocation failed"; }
+            || die_claude_failed "${tmpfile}"
     fi
 
     # Show Claude's text response so the caller can review what was done

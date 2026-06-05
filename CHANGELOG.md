@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Avoid gh pr list --author flag broken in gh 2.93.0 by filtering open PRs by author client-side using gh api user
 - Include Draft PRs in priority scan — Draft status indicates work still needed
 - Preserve /priorities API order — remove sort_by(.priority) that was overriding the server-defined priority ordering
+- Log claude output before dying on failed invocation
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
