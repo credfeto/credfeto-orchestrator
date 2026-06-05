@@ -28,6 +28,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord notification when Claude returns an application-level error (is_error: true), including the error message and a link to the affected issue or PR
 - Automatic session reset when a resumed Claude session exceeds the context limit (terminal_reason=blocking_limit) — retries as a new session, overwriting the stored session ID to break the stuck loop
 - Pre-send prompt length guard (MAX_PROMPT_CHARS=100000) that fails fast and notifies Discord before invoking Claude if the initial prompt is grossly oversized
+- Discord notification and automatic rate-limit backoff when Claude returns HTTP 429, with non-agentic parsing of the reset time from the error message
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub

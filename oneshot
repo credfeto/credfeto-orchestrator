@@ -374,7 +374,7 @@ die_claude_failed() {
 # Claude's text response is written to stderr so the caller can review what was done.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}"
-    local tmpfile new_session_id owner_token is_error terminal_reason result_text
+    local tmpfile new_session_id owner_token is_error terminal_reason api_error_status result_text reset_unix
 
     # Defensive pre-check: catch prompts that are grossly oversized before calling Claude.
     # The common failure mode is session history overflow on resumed sessions
@@ -420,6 +420,7 @@ invoke_claude() {
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
         terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
+        api_error_status=$(jq -r '.api_error_status // ""' "${tmpfile}" 2>/dev/null || printf '')
         result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
         info "Claude error: ${result_text}" >&2
 
@@ -445,6 +446,15 @@ invoke_claude() {
                 rm -f "${tmpfile}"
                 die "Claude invocation failed after retry: ${result_text}"
             fi
+        elif [ "${api_error_status}" = "429" ]; then
+            # Rate limit: parse the reset time from the error message, persist it so
+            # subsequent runs skip this owner until the limit lifts, then notify and die.
+            local reset_unix
+            reset_unix=$(parse_reset_time "${result_text}")
+            [ -n "${reset_unix}" ] && save_rate_limit "${reset_unix}"
+            notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${reset_unix}"
+            rm -f "${tmpfile}"
+            die "Claude rate limited: ${result_text}"
         else
             notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
             rm -f "${tmpfile}"
@@ -468,6 +478,75 @@ invoke_claude() {
         || die "Unexpected session_id format returned by Claude: ${new_session_id}"
 
     printf '%s' "${new_session_id}"
+}
+
+# Returns the path to the rate-limit file for the current owner.
+owner_rate_limit_file() {
+    printf '%s/.orchestrator/%s/rate-limit' "${HOME}" "${OWNER}"
+}
+
+# Saves a rate-limit reset unix timestamp for the current owner.
+save_rate_limit() {
+    local reset_unix="$1"
+    local rate_limit_file
+    rate_limit_file=$(owner_rate_limit_file)
+    mkdir -p "$(dirname "${rate_limit_file}")" \
+        || die "Failed to create rate-limit directory for owner ${OWNER}"
+    printf '%s\n' "${reset_unix}" > "${rate_limit_file}" \
+        || die "Failed to write rate-limit file: ${rate_limit_file}"
+}
+
+# Returns 0 (true) if the current owner is still rate-limited.
+# Clears the rate-limit file when the reset time has passed.
+is_owner_rate_limited() {
+    local rate_limit_file reset_unix now_unix
+    rate_limit_file=$(owner_rate_limit_file)
+    [ -f "${rate_limit_file}" ] || return 1
+    reset_unix=$(cat "${rate_limit_file}" 2>/dev/null) || return 1
+    [[ "${reset_unix}" =~ ^[0-9]+$ ]] || { rm -f "${rate_limit_file}"; return 1; }
+    now_unix=$(date +%s)
+    if [ "${now_unix}" -ge "${reset_unix}" ]; then
+        rm -f "${rate_limit_file}"
+        return 1
+    fi
+    return 0
+}
+
+# Parses a "resets Hpm (Timezone)" string from a Claude rate-limit error and
+# outputs the corresponding unix timestamp on stdout.  If the resolved time is
+# already in the past (i.e. the reset is tomorrow), adds 86400 seconds.
+# Outputs nothing and returns silently when parsing fails.
+parse_reset_time() {
+    local result_text="$1"
+    local hour ampm tz hour24 reset_unix now_unix
+    local regex='resets ([0-9]+)(am|pm) \(([^)]+)\)'
+
+    [[ "${result_text}" =~ $regex ]] || return 0
+
+    hour="${BASH_REMATCH[1]}"
+    ampm="${BASH_REMATCH[2]}"
+    tz="${BASH_REMATCH[3]}"
+
+    # Reject timezone strings with dangerous characters.
+    case "${tz}" in
+        *[!a-zA-Z0-9/_+-]*) return ;;
+    esac
+
+    # Convert 12-hour clock to 24-hour.
+    if [ "${ampm}" = "pm" ] && [ "${hour}" != "12" ]; then
+        hour24=$((hour + 12))
+    elif [ "${ampm}" = "am" ] && [ "${hour}" = "12" ]; then
+        hour24=0
+    else
+        hour24="${hour}"
+    fi
+
+    reset_unix=$(TZ="${tz}" date -d "today ${hour24}:00" +%s 2>/dev/null) || return
+    now_unix=$(date +%s)
+    if [ "${reset_unix}" -le "${now_unix}" ]; then
+        reset_unix=$(TZ="${tz}" date -d "tomorrow ${hour24}:00" +%s 2>/dev/null) || return
+    fi
+    printf '%s' "${reset_unix}"
 }
 
 save_session() {
@@ -782,6 +861,51 @@ notify_discord_claude_error() {
         || warn "Discord webhook notification failed"
 }
 
+# Sends a Discord embed notification when Claude returns a rate-limit error (HTTP 429).
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty),
+#            error_message, reset_unix (unix timestamp, may be empty)
+# When reset_unix is provided, includes a Discord timestamp field showing when
+# the limit resets in the user's local timezone.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_rate_limited() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" error_message="$3" reset_unix="${4:-}"
+    local url payload reset_display truncated_error
+
+    case "${item_type}" in
+        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           url="https://github.com/${REPO_FULL}" ;;
+    esac
+
+    truncated_error="${error_message:0:900}"
+
+    # Discord timestamp markup: <t:UNIX:t> = local time, <t:UNIX:R> = relative
+    if [ -n "${reset_unix}" ]; then
+        reset_display="<t:${reset_unix}:t> (<t:${reset_unix}:R>)"
+    else
+        reset_display=""
+    fi
+
+    payload=$(jq --null-input \
+        --argjson color 16776960 \
+        --arg title "Rate Limited: ${REPO_FULL}" \
+        --arg url "${url}" \
+        --arg error "${truncated_error}" \
+        --arg reset "${reset_display}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:(
+            [{name:"Error",value:$error,inline:false}] +
+            (if $reset != "" then [{name:"Resets",value:$reset,inline:true}] else [] end)
+        )}]}') \
+        || { warn "Discord: failed to build rate-limit payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being applied.
 tag_pr_closed_issue() {
@@ -883,6 +1007,11 @@ main() {
 
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
+
+        if is_owner_rate_limited; then
+            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
+            continue
+        fi
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
