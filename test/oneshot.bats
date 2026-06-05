@@ -760,11 +760,13 @@ setup_main_mocks() {
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
     tag_pr_closed_issue()       { return 0; }
+    is_owner_rate_limited()       { return 1; }
     load_discord_config()             { return 0; }
     notify_discord_work_item()        { return 0; }
     notify_discord_no_work()          { return 0; }
     notify_discord_blocked_item()     { return 0; }
     notify_discord_claude_error()     { return 0; }
+    notify_discord_rate_limited()     { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -1285,4 +1287,183 @@ setup_main_mocks() {
     run main
     [ "${status}" -eq 0 ]
     grep -q 'type=Issue id=10' "${_notif_log}"
+}
+
+# --- parse_reset_time ---------------------------------------------------------
+
+@test "parse_reset_time returns empty for non-matching input" {
+    run parse_reset_time "Some unrelated error message"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "parse_reset_time converts 3pm UTC to correct unix timestamp" {
+    # Use UTC so the test is timezone-independent.
+    local result
+    result=$(parse_reset_time "You've hit your limit · resets 3pm (UTC)")
+    [ -n "${result}" ]
+    [[ "${result}" =~ ^[0-9]+$ ]]
+    # The result must be in the future (either today at 15:00 UTC or tomorrow).
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${result}" -gt "${now_unix}" ]
+}
+
+@test "parse_reset_time converts 12am UTC to hour 0 and returns future timestamp" {
+    local result
+    result=$(parse_reset_time "hit your limit · resets 12am (UTC)")
+    [ -n "${result}" ]
+    [[ "${result}" =~ ^[0-9]+$ ]]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${result}" -gt "${now_unix}" ]
+}
+
+@test "parse_reset_time converts 12pm UTC to hour 12 and returns future timestamp" {
+    local result
+    result=$(parse_reset_time "hit your limit · resets 12pm (UTC)")
+    [ -n "${result}" ]
+    [[ "${result}" =~ ^[0-9]+$ ]]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${result}" -gt "${now_unix}" ]
+}
+
+@test "parse_reset_time rejects timezone strings with dangerous characters" {
+    run parse_reset_time "resets 3pm (UTC;rm -rf /)"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+# --- rate-limit file management -----------------------------------------------
+
+@test "is_owner_rate_limited returns false when no rate-limit file exists" {
+    run is_owner_rate_limited
+    [ "${status}" -ne 0 ]
+}
+
+@test "is_owner_rate_limited returns true when file has a future timestamp" {
+    local future_unix
+    future_unix=$(( $(date +%s) + 3600 ))
+    mkdir -p "${HOME}/.orchestrator/${OWNER}"
+    printf '%s\n' "${future_unix}" > "${HOME}/.orchestrator/${OWNER}/rate-limit"
+    run is_owner_rate_limited
+    [ "${status}" -eq 0 ]
+}
+
+@test "is_owner_rate_limited returns false and removes file when timestamp is in the past" {
+    local past_unix
+    past_unix=$(( $(date +%s) - 60 ))
+    mkdir -p "${HOME}/.orchestrator/${OWNER}"
+    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    printf '%s\n' "${past_unix}" > "${rate_file}"
+    run is_owner_rate_limited
+    [ "${status}" -ne 0 ]
+    [ ! -f "${rate_file}" ]
+}
+
+@test "is_owner_rate_limited returns false and removes file when content is non-numeric" {
+    mkdir -p "${HOME}/.orchestrator/${OWNER}"
+    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    printf 'not-a-number\n' > "${rate_file}"
+    run is_owner_rate_limited
+    [ "${status}" -ne 0 ]
+    [ ! -f "${rate_file}" ]
+}
+
+# --- notify_discord_rate_limited -----------------------------------------------
+
+@test "notify_discord_rate_limited does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_rate_limited "Issue" "42" "You've hit your Sonnet limit" ""
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_rate_limited calls curl with embed including issue URL and error" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_rate_limited "Issue" "42" "You've hit your Sonnet limit" ""
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "Sonnet limit" "${args_log}"
+}
+
+@test "notify_discord_rate_limited includes Discord timestamp markup when reset_unix is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_rate_limited "Issue" "42" "Sonnet limit" "1700000000"
+    [ "${status}" -eq 0 ]
+    grep -q '<t:1700000000:t>' "${args_log}"
+    grep -q '<t:1700000000:R>' "${args_log}"
+}
+
+# --- invoke_claude 429 handling ------------------------------------------------
+
+@test "invoke_claude saves rate-limit file and sends Discord notification on HTTP 429" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"rate limited"* ]]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
+@test "invoke_claude persists rate-limit file on HTTP 429 so subsequent runs skip the owner" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL=""
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    # Rate-limit file must exist and contain a future timestamp.
+    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    [ -f "${rate_file}" ]
+    local saved_unix
+    saved_unix=$(cat "${rate_file}")
+    [[ "${saved_unix}" =~ ^[0-9]+$ ]]
+    [ "${saved_unix}" -gt "$(date +%s)" ]
+}
+
+# --- main() rate-limit integration --------------------------------------------
+
+@test "main skips items for a rate-limited owner and continues to other owners" {
+    setup_main_mocks
+    # Let set_repo_context set OWNER so is_owner_rate_limited can check it.
+    set_repo_context() { OWNER="${1%%/*}"; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":2,"itemType":"Issue","repository":"other/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    is_owner_rate_limited() {
+        [ "${OWNER}" = "org" ] && return 0
+        return 1
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"rate-limited"* ]]
+    # org/repo skipped; other/repo must still be evaluated
+    [[ "${output}" == *"Issue #2 in other/repo is blocked"* ]]
 }
