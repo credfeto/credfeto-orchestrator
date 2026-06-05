@@ -384,7 +384,9 @@ run_claude_fresh() {
     local tmpfile="$1"
     shift
     info "Starting new Claude session in container ${DOCKER_CONTAINER_NAME}..." >&2
-    printf '%s' "${CLAUDE_PROMPT}" | docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" > "${tmpfile}" \
+    # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
+    # shellcheck disable=SC2024
+    printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" > "${tmpfile}" \
         || die_claude_failed "${tmpfile}"
 }
 
@@ -400,7 +402,9 @@ run_claude_resumed() {
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
 
     info "Resuming Claude session ${resume_id} in container ${DOCKER_CONTAINER_NAME}..." >&2
-    if printf '%s' "${CLAUDE_PROMPT}" | docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
+    # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
+    # shellcheck disable=SC2024
+    if printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
             --resume "${resume_id}" > "${tmpfile}" 2>"${stderrfile}"; then
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
@@ -496,7 +500,7 @@ invoke_claude() {
     container_name="orchestrator-${OWNER}"
 
     # Remove any pre-existing container with the same name to avoid conflicts.
-    docker rm -f "${container_name}" 2>/dev/null || true
+    sudo docker rm -f "${container_name}" 2>/dev/null || true
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
