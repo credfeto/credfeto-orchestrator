@@ -552,6 +552,40 @@ STUBEOF
     [[ "${output}" == *"failed after retry"* ]]
 }
 
+@test "invoke_claude retries as new session when Claude reports session no longer exists" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg; do
+    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n'; exit 1; }
+done
+printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL=""
+    local result
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
+}
+
+@test "invoke_claude sends Discord notification when retrying after invalid session" {
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg; do
+    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n'; exit 1; }
+done
+printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
 # --- notify_discord_claude_error -----------------------------------------------
 
 @test "notify_discord_claude_error does not call curl when DISCORD_WEBHOOK_URL is empty" {
