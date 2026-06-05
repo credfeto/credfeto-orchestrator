@@ -45,7 +45,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Log claude output before dying on failed invocation
 - Replaced 'git pull --ff-only' in systemd ExecStartPre with explicit 'git fetch origin' then 'git merge --ff-only origin/main' to avoid failure when pull.rebase=true is configured
 - Retry as a new session when Claude reports the stored session ID no longer exists ('No conversation found with session ID')
-- Session expired and blocking_limit retries no longer send Discord notifications — these are recoverable and logged to the console instead
+- Stored session expired retry no longer sends a Discord notification — this is a recoverable transient state already logged to the console
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
