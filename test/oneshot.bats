@@ -1491,7 +1491,7 @@ STUBEOF
 @test "main skips items for a rate-limited owner and continues to other owners" {
     setup_main_mocks
     # Let set_repo_context set OWNER so is_owner_rate_limited can check it.
-    set_repo_context() { OWNER="${1%%/*}"; }
+    set_repo_context() { OWNER="${1%%/*}"; REPO_FULL="$1"; REPO_WORK_DIR="/work/$1"; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":2,"itemType":"Issue","repository":"other/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
@@ -1500,12 +1500,15 @@ STUBEOF
         return 1
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 0; }
+    # Issues are open and non-blocked so they reach the rate-limit check (which now fires after prompt build).
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json() { printf 'fp-new\n'; }
+    load_issue_fingerprint()  { printf ''; }
 
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"rate-limited"* ]]
-    # org/repo skipped; other/repo must still be evaluated
-    [[ "${output}" == *"Issue #2 in other/repo is blocked"* ]]
+    # org/repo rate-limited before invoke_claude; other/repo must still be invoked
+    [[ "${output}" == *"Issue #2 in other/repo"* ]]
 }
