@@ -151,7 +151,7 @@ try_nonagentic_rebase() {
 
 check_required_tools() {
     local tool
-    for tool in curl jq claude gh git awk grep; do
+    for tool in curl jq claude gh git awk grep flock; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 
@@ -901,6 +901,17 @@ main() {
 
     check_required_tools
     load_discord_config
+
+    # Acquire an exclusive per-owner lock so concurrent invocations (e.g. two
+    # systemd timer firings) do not race on the same git working directories.
+    local lock_dir="${HOME}/.orchestrator/locks"
+    mkdir -p "${lock_dir}" || die "Failed to create lock directory at ${lock_dir}"
+    # fd 9 stays open (and lock held) until the process exits.
+    exec 9>"${lock_dir}/${owner_filter:-_global}.lock"
+    if ! flock --exclusive --nonblock 9; then
+        info "Another oneshot instance is already running for '${owner_filter:-global}' — exiting cleanly"
+        exit 0
+    fi
 
     local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."

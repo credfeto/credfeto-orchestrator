@@ -80,6 +80,8 @@ setup() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
+    grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
+    grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
     [ -f "${tmr}" ]
@@ -101,6 +103,8 @@ setup() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
+    grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
+    grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
     grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
 
     [ -f "${tmr}" ]
