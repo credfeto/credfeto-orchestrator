@@ -568,7 +568,7 @@ STUBEOF
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
-@test "invoke_claude sends Discord notification when retrying after invalid session" {
+@test "invoke_claude does not send Discord notification when retrying after invalid session" {
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
 #!/usr/bin/env bash
 for arg; do
@@ -583,7 +583,7 @@ STUBEOF
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
     invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
-    grep -q "https://discord.example.com/hook" "${args_log}"
+    run ! grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
 # --- notify_discord_claude_error -----------------------------------------------

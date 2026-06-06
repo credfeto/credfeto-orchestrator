@@ -341,7 +341,7 @@ run_claude_fresh() {
 
 # Runs claude with --resume, capturing stderr separately to detect the
 # "No conversation found" message that Claude writes to stderr on exit 1.
-# On invalid-session error: notifies Discord, retries fresh, returns 0.
+# On invalid-session error: logs to console, retries fresh, returns 0.
 # On other failure: dies.
 # Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
 CLAUDE_RESUMED_AS_FRESH=0
@@ -364,8 +364,6 @@ run_claude_resumed() {
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}" "${tmpfile}"
         warn "Session ${resume_id} no longer exists — retrying as a new session" >&2
-        notify_discord_claude_error "${item_type}" "${item_id}" \
-            "Stored session expired — restarting session for ${REPO_FULL}"
         tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
         run_claude_fresh "${tmpfile}"
         CLAUDE_RESUMED_AS_FRESH=1
