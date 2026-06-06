@@ -1088,13 +1088,17 @@ main() {
                 pr_fp=$(fingerprint_pr_json "${pr_json}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
+                pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                    info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                    continue
+                    if [ "${pr_is_draft}" != "true" ]; then
+                        info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                        continue
+                    fi
+                    info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
                 fi
 
-                # PR has changed — work on it.
+                # PR has changed (or is still in draft) — work on it.
                 item_id="${open_pr}"
                 item_type="PullRequest"
 
@@ -1149,10 +1153,14 @@ main() {
             pr_fp=$(fingerprint_pr_json "${pr_json}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
+            pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                continue
+                if [ "${pr_is_draft}" != "true" ]; then
+                    info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                    continue
+                fi
+                info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
             fi
             # Fall through to work block (item_type remains "PullRequest").
         fi
