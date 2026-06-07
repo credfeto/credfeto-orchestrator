@@ -66,6 +66,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Moved GitHub CLI comment body, label management, and CI check-once rules to cs-template global instructions; prompts now reference AI instructions instead of repeating inline rule blocks
 - Refactored invoke_claude into run_claude_fresh, run_claude_resumed, and handle_claude_is_error helpers for readability
 - Rate-limit backoff now waits until 1 hour past the token reset time (RATE_LIMIT_RESUME_BUFFER_SECS=3600) to avoid immediately hitting the limit again
+- No-work notification now includes counts of blocked, unchanged, and repo-active skips
 ### Deprecated
 ### Removed
 ### Deployment Changes

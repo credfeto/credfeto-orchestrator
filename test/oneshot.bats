@@ -1196,6 +1196,69 @@ setup_main_mocks() {
     grep -q "No actionable work items found" "${args_log}"
 }
 
+@test "notify_discord_no_work appends blocked count when count_blocked is non-zero" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 3 0 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+    grep -q "blocked: 3" "${args_log}"
+}
+
+@test "notify_discord_no_work appends unchanged count when count_unchanged is non-zero" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+    grep -q "unchanged: 5" "${args_log}"
+}
+
+@test "notify_discord_no_work appends repo-active count when count_active_repo is non-zero" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 0 0 2 0
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+    grep -q "repo-active: 2" "${args_log}"
+}
+
+@test "notify_discord_no_work appends not-open count when count_not_open is non-zero" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 0 0 0 1
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+    grep -q "not-open: 1" "${args_log}"
+}
+
+@test "notify_discord_no_work omits detail suffix when all counts are zero" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+    run ! grep -q "blocked:\|unchanged:\|repo-active:\|not-open:" "${args_log}"
+}
+
+@test "notify_discord_no_work includes all non-zero counts in detail" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "myorg" 2 3 1 4
+    [ "${status}" -eq 0 ]
+    grep -q "\[myorg\] No actionable work items found" "${args_log}"
+    grep -q "blocked: 2" "${args_log}"
+    grep -q "unchanged: 3" "${args_log}"
+    grep -q "repo-active: 1" "${args_log}"
+    grep -q "not-open: 4" "${args_log}"
+}
+
 # --- main() Discord notification integration ----------------------------------
 
 @test "main sends start notification when starting new work on an issue" {
@@ -1258,6 +1321,59 @@ setup_main_mocks() {
     run main --owner org
     [ "${status}" -eq 0 ]
     grep -q 'no_work owner=org' "${_notif_log}"
+}
+
+@test "main passes blocked count of 1 to no-work notification when a single issue is blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_no_work() { printf 'blocked=%s\n' "${2:-0}" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'blocked=1' "${_notif_log}"
+}
+
+@test "main passes unchanged count of 1 to no-work notification when a single issue fingerprint is unchanged" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()    { printf 'fp-same\n'; }
+    load_issue_fingerprint()    { printf 'fp-same\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_no_work() { printf 'unchanged=%s\n' "${3:-0}" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'unchanged=1' "${_notif_log}"
+}
+
+@test "main passes repo-active count to no-work notification when items are skipped for active repo" {
+    # PR #5 (org/repo): unchanged → adds org/repo to skip_repos, count_unchanged=1
+    # Issue #10 (org/repo): skipped because org/repo already in skip_repos, count_active_repo=1
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_no_work() { printf 'unchanged=%s active=%s\n' "${3:-0}" "${4:-0}" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'unchanged=1' "${_notif_log}"
+    grep -q 'active=1' "${_notif_log}"
 }
 
 # --- notify_discord_blocked_item -----------------------------------------------

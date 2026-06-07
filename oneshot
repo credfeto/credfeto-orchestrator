@@ -792,16 +792,28 @@ notify_discord_work_item() {
 }
 
 # Sends a Discord notification when no actionable work items are found.
+# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 notify_discord_no_work() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
-    local message payload
+    local count_blocked="${2:-0}"
+    local count_unchanged="${3:-0}"
+    local count_active_repo="${4:-0}"
+    local count_not_open="${5:-0}"
+    local prefix message detail payload
     if [ -n "${owner}" ]; then
-        message="[${owner}] No actionable work items found."
+        prefix="[${owner}] "
     else
-        message="No actionable work items found."
+        prefix=""
     fi
+    message="${prefix}No actionable work items found."
+    detail=""
+    [ "${count_blocked}" -gt 0 ]     && detail="${detail:+${detail}, }blocked: ${count_blocked}"
+    [ "${count_unchanged}" -gt 0 ]   && detail="${detail:+${detail}, }unchanged: ${count_unchanged}"
+    [ "${count_active_repo}" -gt 0 ] && detail="${detail:+${detail}, }repo-active: ${count_active_repo}"
+    [ "${count_not_open}" -gt 0 ]    && detail="${detail:+${detail}, }not-open: ${count_not_open}"
+    [ -n "${detail}" ] && message="${message} (${detail})"
     payload=$(jq --null-input --arg msg "${message}" '{"content":$msg}') \
         || { warn "Discord: failed to build no-work payload"; return 0; }
     curl --silent --fail --max-time 5 \
@@ -992,6 +1004,10 @@ main() {
     info "Found ${item_count} open work item(s) — scanning for actionable work..."
 
     local -a skip_repos=()
+    local count_blocked=0
+    local count_unchanged=0
+    local count_active_repo=0
+    local count_not_open=0
     local item_index=0
     # Declare all loop-body variables here so they are function-scoped.
     # 'local' inside a while loop is a no-op after the first iteration in bash,
@@ -1032,6 +1048,7 @@ main() {
         done
         if [ "${is_skipped}" = true ]; then
             info "Skipping ${item_type} #${item_id} in ${item_repo} — repo already has active work"
+            count_active_repo=$((count_active_repo + 1))
             continue
         fi
 
@@ -1057,11 +1074,13 @@ main() {
                 if [ "${issue_state}" != "OPEN" ]; then
                     info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
                     tag_pr_closed_issue "${open_pr}" "${item_id}"
+                    count_not_open=$((count_not_open + 1))
                     continue
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
                     notify_discord_blocked_item "Issue" "${item_id}"
+                    count_blocked=$((count_blocked + 1))
                     continue
                 fi
 
@@ -1073,12 +1092,14 @@ main() {
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
                 if [ "${pr_state}" != "OPEN" ]; then
                     info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
+                    count_not_open=$((count_not_open + 1))
                     continue
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}"; then
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
+                    count_blocked=$((count_blocked + 1))
                     continue
                 fi
 
@@ -1093,6 +1114,7 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if [ "${pr_is_draft}" != "true" ]; then
                         info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                        count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
                     info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
@@ -1110,12 +1132,14 @@ main() {
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
                     info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
+                    count_not_open=$((count_not_open + 1))
                     continue
                 fi
 
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
                     notify_discord_blocked_item "Issue" "${item_id}"
+                    count_blocked=$((count_blocked + 1))
                     continue
                 fi
 
@@ -1125,6 +1149,7 @@ main() {
 
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
                     info "Issue #${item_id} in ${item_repo} unchanged — skipping"
+                    count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
                 # Fall through to work block (item_type remains "Issue").
@@ -1138,12 +1163,14 @@ main() {
             pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
             if [ "${pr_state}" != "OPEN" ]; then
                 info "PR #${item_id} in ${item_repo} is no longer open — skipping"
+                count_not_open=$((count_not_open + 1))
                 continue
             fi
 
             if pr_json_has_blocked_label "${pr_json}"; then
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
                 notify_discord_blocked_item "PullRequest" "${item_id}"
+                count_blocked=$((count_blocked + 1))
                 continue
             fi
 
@@ -1158,6 +1185,7 @@ main() {
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                 if [ "${pr_is_draft}" != "true" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                    count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
                 info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
@@ -1244,8 +1272,8 @@ main() {
         exit 0
     done
 
-    notify_discord_no_work "${owner_filter}"
-    success "No actionable work items found across all priorities"
+    notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}"
+    success "No actionable work items found across all priorities (blocked: ${count_blocked}, unchanged: ${count_unchanged}, repo-active: ${count_active_repo}, not-open: ${count_not_open})"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
