@@ -15,8 +15,10 @@
 #   /home/developer/.ssh    — SSH keys               (read-only)
 #   /home/developer/.gnupg  — GPG keyring            (read/write)
 #   /home/developer/.gitconfig — host git config     (read-only)
-#   /home/developer/.claude — Claude session state   (read/write)
-#   /home/developer/.orchestrator — oneshot state    (read/write, persists sessions)
+#   /home/developer/.claude               — session state and memory     (read/write)
+#   /home/developer/.claude/settings.json — Claude Code settings         (read-only)
+#   /home/developer/.claude/CLAUDE.md     — global Claude instructions   (read-only)
+#   /home/developer/.orchestrator         — oneshot state                (read/write, persists sessions)
 #
 # Required runtime environment variables:
 #   CLAUDE_CODE_OAUTH_TOKEN — Anthropic OAuth token for claude
