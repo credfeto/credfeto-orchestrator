@@ -16,20 +16,24 @@
 #   /home/developer/.gnupg  — GPG keyring            (read/write)
 #   /home/developer/.gitconfig — host git config     (read-only)
 #   /home/developer/.claude               — session state and memory     (read/write)
-#   /home/developer/.claude/settings.json — Claude Code settings         (read-only)
-#   /home/developer/.claude/CLAUDE.md     — global Claude instructions   (read-only)
+#   /home/developer/.claude/settings.json — Claude Code settings         (read-only, overlays parent)
+#   /home/developer/.claude/CLAUDE.md     — global Claude instructions   (read-only, overlays parent)
 #   /home/developer/.orchestrator         — oneshot state                (read/write, persists sessions)
 #
 # Required runtime environment variables (no default — must be set):
 #   CLAUDE_CODE_OAUTH_TOKEN — Anthropic OAuth token for claude
 #
-# Inherited environment variables from development-tools (have defaults; can be overridden):
+# Inherited environment variables (have defaults from base images; can be overridden):
 #   GH_HOST             — GitHub API proxy hostname; override with "github.com" and
 #                         supply GH_TOKEN for direct access bypassing the proxy
+#                         (set by development-tools)
 #   GH_ENTERPRISE_TOKEN — proxy placeholder token substituted by OneCLI at egress;
 #                         not a real PAT — pass GH_TOKEN instead for direct access
-#   DOTNET_ROOT         — .NET SDK install path (/usr/share/dotnet)
+#                         (set by development-tools)
+#   DOTNET_ROOT         — .NET SDK install path (/usr/share/dotnet, do not override)
 #   DOTNET_*            — .NET runtime tuning flags (do not override)
+#   MSBUILDTERMINALLOGGER — MSBuild output mode (auto, do not override)
+#   NUGET_PACKAGES      — NuGet package cache (/home/developer/.nuget-cache, do not override)
 #   TMPDIR              — temporary directory (/tmp, do not override)
 
 # hadolint ignore=DL3007
