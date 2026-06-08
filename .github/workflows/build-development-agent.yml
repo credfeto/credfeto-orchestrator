@@ -1,0 +1,90 @@
+---
+name: "Build development-agent image"
+
+# Build and push the development-agent image — locked-down agent layer on top
+# of development-full with package-management and privilege-escalation tools
+# removed and an entrypoint that validates env vars before calling claude.
+#
+# Tags pushed:
+#   :latest       what consumers resolve by default
+#
+# Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
+# built-in GITHUB_TOKEN — no extra secrets to manage.
+
+on:
+  schedule:
+    # Every 30 minutes — keeps the image in sync with the parent development-full
+    # image which is rebuilt hourly.  The workflow_run trigger below also fires
+    # immediately when development-full finishes.
+    - cron: "*/30 * * * *"
+  workflow_run:
+    workflows: ["Build development-full base image"]
+    types:
+      - completed
+    branches:
+      - "main"
+  push:
+    branches: ["main"]
+    paths:
+      - "containers/agent/**"
+      - ".github/workflows/build-development-agent.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "build-development-agent-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: "ghcr.io"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-agent"
+
+permissions:
+  contents: "read"
+
+jobs:
+  build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 30
+    permissions:
+      contents: "read"
+      packages: "write"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v6.0.3
+        with:
+          fetch-depth: 1
+
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
+      - name: "Log in to GHCR"
+        uses: docker/login-action@v4.2.0
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v4.1.0
+
+      - name: "Build and push"
+        uses: docker/build-push-action@v7.2.0
+        with:
+          context: "containers/agent"
+          file: "containers/agent/Dockerfile"
+          pull: true
+          push: true
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          cache-from: "type=gha"
+          cache-to: "type=gha,mode=max"
+
+      - name: "Summarise"
+        shell: "bash"
+        run: |
+          {
+            echo "## development-agent image pushed"
+            echo ""
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
