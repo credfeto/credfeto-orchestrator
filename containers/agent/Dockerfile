@@ -20,12 +20,17 @@
 #   /home/developer/.claude/CLAUDE.md     — global Claude instructions   (read-only)
 #   /home/developer/.orchestrator         — oneshot state                (read/write, persists sessions)
 #
-# Required runtime environment variables:
+# Required runtime environment variables (no default — must be set):
 #   CLAUDE_CODE_OAUTH_TOKEN — Anthropic OAuth token for claude
 #
-# GitHub authentication is handled by the inherited GH_HOST + GH_ENTERPRISE_TOKEN
-# proxy configuration from development-tools.  Pass GH_TOKEN at runtime if direct
-# GitHub PAT authentication is needed instead of the proxy.
+# Inherited environment variables from development-tools (have defaults; can be overridden):
+#   GH_HOST             — GitHub API proxy hostname; override with "github.com" and
+#                         supply GH_TOKEN for direct access bypassing the proxy
+#   GH_ENTERPRISE_TOKEN — proxy placeholder token substituted by OneCLI at egress;
+#                         not a real PAT — pass GH_TOKEN instead for direct access
+#   DOTNET_ROOT         — .NET SDK install path (/usr/share/dotnet)
+#   DOTNET_*            — .NET runtime tuning flags (do not override)
+#   TMPDIR              — temporary directory (/tmp, do not override)
 
 # hadolint ignore=DL3007
 FROM ghcr.io/credfeto/development-full:latest
