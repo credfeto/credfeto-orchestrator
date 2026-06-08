@@ -3,9 +3,9 @@
 #
 # Adds on top of development-full:
 #   - Removal of all package-management binaries (apt, dpkg) and privilege-
-#     escalation binaries (sudo, su, newgrp) so the agent cannot modify its
+#     escalation binaries (sudo, su, newgrp, sg, pkexec) so the agent cannot modify its
 #     own environment at runtime.
-#   - /usr/local/bin/agent-entrypoint: validates required env vars and execs
+#   - /usr/local/bin/agent-entrypoint: validates the required env var and execs
 #     claude with all arguments passed to `docker run`.
 #   - /workspace/repo and /workspace/rules mount points (developer-owned).
 #
@@ -34,6 +34,10 @@
 #   DOTNET_*            — .NET runtime tuning flags (do not override)
 #   MSBUILDTERMINALLOGGER — MSBuild output mode (auto, do not override)
 #   NUGET_PACKAGES      — NuGet package cache (/home/developer/.nuget-cache, do not override)
+#   NPM_CONFIG_REGISTRY — npm registry proxy URL (https://npm.markridgwell.com/,
+#                         set by development-node; override for direct npm access)
+#   PATH                — extended with /home/developer/.dotnet/tools
+#                         (set by development-tools; do not override)
 #   TMPDIR              — temporary directory (/tmp, do not override)
 
 # hadolint ignore=DL3007
@@ -76,9 +80,7 @@ RUN rm -f \
 # Validates CLAUDE_CODE_OAUTH_TOKEN then execs claude with all passed arguments.
 # Owned root:root 0755 — readable and executable by all, not modifiable by
 # the unprivileged developer user the agent runs as.
-COPY entrypoint.sh /usr/local/bin/agent-entrypoint
-RUN chown root:root /usr/local/bin/agent-entrypoint \
-    && chmod 0755 /usr/local/bin/agent-entrypoint
+COPY --chown=root:root --chmod=0755 entrypoint.sh /usr/local/bin/agent-entrypoint
 
 # ---- Workspace mount points --------------------------------------------------
 # Create the directories that will receive the runtime mounts.
@@ -99,7 +101,9 @@ RUN mkdir -p /workspace/repo /workspace/rules \
 # hadolint ignore=DL3001,DL3059
 RUN set -e; \
     echo "== verify removed package-management/escalation tools are absent =="; \
-    for cmd in apt apt-get apt-cache dpkg sudo su newgrp; do \
+    for cmd in apt apt-get apt-cache apt-mark apt-key apt-config \
+               dpkg dpkg-deb dpkg-split dpkg-query dpkg-statoverride dpkg-reconfigure \
+               sudo su newgrp sg pkexec; do \
         if command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: '$cmd' should have been removed but is still on PATH" >&2; exit 1; \
         fi; \
