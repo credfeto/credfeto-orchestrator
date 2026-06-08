@@ -565,9 +565,12 @@ teardown() {
 @test "invoke_claude dies and sends Discord notification when Claude returns is_error true" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        '[ "$1" = "rm" ] && exit 0' \
-        'printf '"'"'{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'"'"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "rm" ] && exit 0
+printf '{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -622,9 +625,12 @@ STUBEOF
 @test "invoke_claude dies with Discord notification on blocking_limit for a new session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        '[ "$1" = "rm" ] && exit 0' \
-        'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "rm" ] && exit 0
+printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -638,9 +644,12 @@ STUBEOF
 @test "invoke_claude dies if retry after blocking_limit also fails" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        '[ "$1" = "rm" ] && exit 0' \
-        'printf '"'"'{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'"'"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "rm" ] && exit 0
+printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42"
