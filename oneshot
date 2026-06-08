@@ -1037,17 +1037,21 @@ main() {
         [[ "${item_repo}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]] \
             || die "Malformed repository from priorities API: ${item_repo}"
 
-        # Skip repos that already have an active (non-blocked) PR.
+        # Skip Issue items in repos that already have an active (non-blocked) PR.
+        # PullRequests are always evaluated regardless of skip_repos — the guard
+        # only prevents starting brand-new work from an Issue in an active repo.
         # Explicit reset — the 'local' initialiser above only fires once.
         is_skipped=false
-        for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
-            if [ "${skip_repo}" = "${item_repo}" ]; then
-                is_skipped=true
-                break
-            fi
-        done
+        if [ "${item_type}" = "Issue" ]; then
+            for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
+                if [ "${skip_repo}" = "${item_repo}" ]; then
+                    is_skipped=true
+                    break
+                fi
+            done
+        fi
         if [ "${is_skipped}" = true ]; then
-            info "Skipping ${item_type} #${item_id} in ${item_repo} — repo already has active work"
+            info "Skipping Issue #${item_id} in ${item_repo} — repo already has active work"
             count_active_repo=$((count_active_repo + 1))
             continue
         fi

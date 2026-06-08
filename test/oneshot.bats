@@ -857,6 +857,39 @@ setup_main_mocks() {
     [[ "${output}" == *"No actionable work items found"* ]]
 }
 
+@test "main evaluates second PR in same repo when first PR is unchanged" {
+    # Item 1 (PR #5, org/repo): open, non-blocked, unchanged → skip_repos += org/repo, continue
+    # Item 2 (PR #17, org/repo): same repo — PRs bypass the skip_repos guard → evaluated
+    #   PR #17 fingerprint differs from saved → actionable → Claude invoked → exit 0
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":17,"itemType":"PullRequest","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"branch-17"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       {
+        # First call (PR #5): return saved fingerprint so it is unchanged.
+        # Second call (PR #17): return a different fingerprint so it is actionable.
+        local _fp_call_file="${TEST_TMP}/_fp_call"
+        [ -f "${_fp_call_file}" ] || printf '0' > "${_fp_call_file}"
+        local _count
+        _count=$(cat "${_fp_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_fp_call_file}"
+        [ "${_count}" -eq 1 ] && printf 'fp-same\n' || printf 'fp-new\n'
+    }
+    load_pr_fingerprint()       {
+        # PR #5 has a saved fingerprint; PR #17 has none.
+        [ "$1" = "5" ] && printf 'fp-same\n' || printf ''
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo unchanged"* ]]
+    [[ "${output}" != *"Skipping PullRequest #17 in org/repo — repo already has active work"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #17 in org/repo"* ]]
+}
+
 @test "main does not add repo to skip_repos for a blocked PR in priorities so same-repo issue is still evaluated" {
     # Item 1 (PR #5, org/repo): blocked → skipped, NOT added to skip_repos
     # Item 2 (Issue #10, org/repo): must be evaluated; here it is also blocked → no work
