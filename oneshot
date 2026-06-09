@@ -7,7 +7,7 @@
 
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-full:latest}"
+ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
 
@@ -522,7 +522,6 @@ invoke_claude() {
     [ -n "${gh_token}" ]    && DOCKER_RUN_ARGS+=( --env "GH_TOKEN=${gh_token}" )
 
     DOCKER_CLAUDE_ARGS=(
-        claude
         --model opusplan
         --print
         --output-format json
