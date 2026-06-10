@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - notify_discord_no_work now accepts an optional owner argument; when --owner is set the Discord message is prefixed with [owner] to distinguish multiple orchestrator instances (fixes #90)
 - Non-agentic PR rebases now proceed even when the owner is rate-limited — only invoke_claude is blocked during the rate-limit window
 - development-agent Docker image based on development-full with package-management and privilege-escalation tools removed, and a build workflow that triggers every 30 minutes or when development-full is updated
+- Docker container execution for oneshot: named orchestrator-<owner>, uses development-agent image, mounts repo rw, rules ro, ssh ro, gnupg rw, passes Claude and GitHub CLI tokens
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
@@ -49,6 +50,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Stored session expired retry no longer sends a Discord notification — this is a recoverable transient state already logged to the console
 - Draft PRs no longer skipped when fingerprint is unchanged — a draft PR always has pending work
 - Orchestrator now evaluates all open PRs in a repository independently; previously a second PR in the same repo was silently skipped when an earlier PR had already been seen in the priority list
+- Use sudo docker for container invocations in invoke_claude
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did
@@ -69,6 +71,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Refactored invoke_claude into run_claude_fresh, run_claude_resumed, and handle_claude_is_error helpers for readability
 - Rate-limit backoff now waits until 1 hour past the token reset time (RATE_LIMIT_RESUME_BUFFER_SECS=3600) to avoid immediately hitting the limit again
 - No-work notification now includes counts of blocked, unchanged, and repo-active skips
+- Replace pre-run container removal with existence check — die if named container already exists; detect name-in-use race in docker run; remove host ~/.claude mount from container
 ### Deprecated
 ### Removed
 ### Deployment Changes
