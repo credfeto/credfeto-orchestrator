@@ -83,7 +83,9 @@ load_token_for_owner() {
 }
 
 # Outputs the GitHub CLI token for the given owner, or empty string if not configured.
-# Token files live at $XDG_CONFIG_HOME/orchestrator/gh-tokens/<owner> (mode 600).
+# Lookup order:
+#   1. $XDG_CONFIG_HOME/orchestrator/gh-tokens/<owner>  (per-owner, mode 600)
+#   2. GH_TOKEN= in $XDG_CONFIG_HOME/orchestrator/.env  (global fallback)
 load_gh_token_for_owner() {
     local owner="$1"
     local token
@@ -95,7 +97,26 @@ load_gh_token_for_owner() {
     token=$(read_token_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/gh-tokens/${owner}")
     if [ -n "${token}" ]; then
         printf '%s' "${token}"
+        return
     fi
+
+    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+    [ -f "${env_file}" ] || return 0
+    local line val
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in
+            GH_TOKEN=*)
+                val="${line#GH_TOKEN=}"
+                val="${val%$'\r'}"
+                case "${val}" in
+                    '"'*'"') val="${val#?}"; val="${val%?}" ;;
+                    "'"*"'") val="${val#?}"; val="${val%?}" ;;
+                esac
+                [ -n "${val}" ] && printf '%s' "${val}"
+                return
+                ;;
+        esac
+    done < "${env_file}"
 }
 
 # Maps a host file path to its container-internal equivalent.
@@ -537,7 +558,7 @@ invoke_claude() {
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
 
     [ -n "${owner_token}" ] && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
-    [ -n "${gh_token}" ]    && DOCKER_RUN_ARGS+=( --env "GH_TOKEN=${gh_token}" )
+    [ -n "${gh_token}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${gh_token}" )
 
     DOCKER_CLAUDE_ARGS=(
         --model opusplan
