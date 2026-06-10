@@ -289,7 +289,7 @@ find_ai_instructions() {
     fi
 }
 
-build_issue_prompt() {
+build_issue_claude_md() {
     local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}"
     cat <<EOF
 You are the Orchestrator agent.
@@ -310,7 +310,7 @@ Steps:
 EOF
 }
 
-build_pr_prompt() {
+build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}"
     local rebase_notice=""
     if [ "${merge_state}" = "BEHIND" ]; then
@@ -346,6 +346,18 @@ Steps:
 5. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
 6. All interaction with humans including status reports must be made as a comment to the pull request.
 EOF
+}
+
+build_issue_prompt() {
+    local item_id="$1" repo_path="${3:-${REPO_WORK_DIR}}"
+    printf 'Work on issue #%s in %s.\nThe repository is checked out at %s.\n' \
+        "${item_id}" "${REPO_FULL}" "${repo_path}"
+}
+
+build_pr_prompt() {
+    local item_id="$1" repo_path="${5:-${REPO_WORK_DIR}}"
+    printf 'Work on pull request #%s in %s.\nThe repository is checked out at %s.\n' \
+        "${item_id}" "${REPO_FULL}" "${repo_path}"
 }
 
 # Returns 0 if the value is a plain UUID (the format Claude returns for a session id).
@@ -392,6 +404,7 @@ run_claude_fresh() {
 # On other failure: dies.
 # Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
 CLAUDE_RESUMED_AS_FRESH=0
+CLAUDE_MD_TMPFILE=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile
@@ -487,7 +500,7 @@ handle_claude_is_error() {
 # Claude's text response is written to stderr so the caller can review what was done.
 # Runs claude inside a Docker container named orchestrator-<OWNER>.
 invoke_claude() {
-    local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}"
+    local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}" claude_md_content="${5:-}"
     local tmpfile new_session_id owner_token container_name
 
     local prompt_len=${#prompt}
@@ -504,6 +517,13 @@ invoke_claude() {
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
+    CLAUDE_MD_TMPFILE=""
+    if [ -n "${claude_md_content}" ]; then
+        CLAUDE_MD_TMPFILE=$(mktemp --suffix=.md) || die "Failed to create temp file for CLAUDE.md"
+        printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+        trap 'rm -f "${CLAUDE_MD_TMPFILE}"' EXIT
+    fi
+
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
     DOCKER_CONTAINER_NAME="${container_name}"
@@ -518,6 +538,7 @@ invoke_claude() {
     [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
     [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
+    [ -n "${CLAUDE_MD_TMPFILE}" ] && DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
 
     [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
@@ -556,13 +577,15 @@ invoke_claude() {
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}"; die "Failed to parse session_id from Claude output"; }
+        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
     rm -f "${tmpfile}"
 
-    [ -n "${new_session_id}" ] || die "No session_id returned by Claude"
+    [ -n "${new_session_id}" ] || { rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "No session_id returned by Claude"; }
     is_valid_session_id "${new_session_id}" \
-        || die "Unexpected session_id format returned by Claude: ${new_session_id}"
+        || { rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
+    rm -f "${CLAUDE_MD_TMPFILE}"
+    CLAUDE_MD_TMPFILE=""
     printf '%s' "${new_session_id}"
 }
 
@@ -1101,7 +1124,7 @@ main() {
     local skip_repo is_skipped
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp
-    local ai_instructions container_ai_instructions prompt new_session_id post_fp
+    local ai_instructions container_ai_instructions prompt claude_md_content new_session_id post_fp
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -1337,13 +1360,15 @@ main() {
 
         if [ "${item_type}" = "Issue" ]; then
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
         else
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}") \
+        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}" "${claude_md_content}") \
             || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
         save_session "${item_type}" "${item_id}" "${new_session_id}"
