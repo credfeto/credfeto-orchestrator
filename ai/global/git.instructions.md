@@ -6,17 +6,19 @@
 
 Verify all required languages and runtimes are installed. If any are missing, stop — do not scaffold code or make partial changes; ask the user to install them first.
 
-## Missing CLI Tools (MANDATORY)
-
-If a required CLI tool is not found, **stop immediately and ask the user to install it**. Never:
-
-- Search for the binary in alternative locations
-- Manipulate PATH to try to find it
-- Attempt to install it without being asked
-
 ## Environment Health (MANDATORY)
 
 If the environment is too broken to work in without first fixing infrastructure or tooling, **stop** and demand it be fixed. Do not work around broken tooling.
+
+## Pre-Commit Hook Verification (MANDATORY before blocking)
+
+Never block work based on inspecting config files and deducing that a tool might be missing. Always verify by actually running the hook:
+
+1. Stage your changes.
+2. Run the pre-commit hook directly: `<hooks-path>/pre-commit` (find the path with `git config --global core.hooksPath`).
+3. Only block if the hook **actually fails** with a real error.
+
+Inspecting `.pre-commit-config.yaml` and concluding a `language: system` tool is absent is not sufficient — the tool may be installed in a location not visible to `command -v` in the current shell context.
 
 ## Build and Test Verification (MANDATORY before any commit or push)
 
@@ -33,6 +35,21 @@ Before any commit, verify identity and GPG signing are correct — see [git.exam
 - Run `git branch --show-current` and confirm it is the expected working branch before staging or committing.
 - Never commit if the current branch is `main`.
 - If the branch has switched to `main` and the upstream no longer exists (merged and deleted), create a new branch before continuing.
+
+## GitHub CLI Comment Bodies (MANDATORY)
+
+When posting comment or PR bodies via the GitHub CLI (`gh issue comment`, `gh pr comment`, `gh pr create`, `gh pr edit`, etc.), always pass multi-line text using a HEREDOC so that real newline characters are embedded. **Never** use escaped `\n` sequences — GitHub renders them as literal characters, not line breaks:
+
+```bash
+gh issue comment <number> --repo <owner/repo> --body "$(cat <<'COMMENT'
+First paragraph.
+
+Second paragraph.
+COMMENT
+)"
+```
+
+This applies to any `--body` argument that contains or may contain newlines.
 
 ## GitHub Issues
 
