@@ -69,6 +69,21 @@ When creating or updating a PR linked to one or more issues:
 
 Repeat after every push or PR update.
 
+## Label Management (MANDATORY)
+
+- Always use `--add-label` when adding labels — **never** `--label`, which replaces all existing labels and destroys automatically-applied classification labels.
+- Never remove labels from issues or PRs. GitHub workflows add classification labels automatically; removing them breaks automation.
+
+## Missing CLI Tools (MANDATORY)
+
+If a required CLI tool is not found, **stop immediately and ask the user to install it**. Never:
+
+- Search for the binary in alternative locations
+- Manipulate PATH to try to find it
+- Attempt to install it without being asked
+
+**Exception — pre-commit hook tools:** Do not assume a tool is missing because `command -v` returns nothing in the current shell. Instead, follow the verification steps in [git.instructions.md](git.instructions.md) — stage your changes and run the hook directly. Only block if it actually fails.
+
 ## Rules Compliance for In-Flight Work
 
 Whenever an instruction file is added or updated, re-evaluate all open branches and PRs against the new rules. Fix any non-compliance before continuing — treat it the same as a CI failure.
