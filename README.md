@@ -68,12 +68,6 @@ The script can post notifications to a Discord channel via a webhook whenever:
 - An issue or PR is found to be **blocked** (has the `Blocked` label), with a link to the item.
 - **No actionable work items** are found after scanning all priorities.
 
-To enable, add a `DISCORD_WEBHOOK` entry to the config `.env` file:
-
-```dotenv
-DISCORD_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
-```
-
 **Config file location:**
 
 ```text
@@ -82,10 +76,31 @@ $XDG_CONFIG_HOME/orchestrator/.env
 
 (defaults to `~/.config/orchestrator/.env` when `$XDG_CONFIG_HOME` is not set)
 
-**File permissions — set `600` to prevent other users from reading the webhook URL:**
+**File permissions — set `600` to prevent credentials being read by other users:**
 
 ```sh
 chmod 600 "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+```
+
+### GitHub CLI proxy (`GH_HOST` + `GH_TOKEN`)
+
+When `GH_HOST` and `GH_TOKEN` are both set, `oneshot` exports them as `GH_HOST` and
+`GH_ENTERPRISE_TOKEN` so that all `gh` CLI calls — both on the host and inside the agent
+container — route through the same GitHub API proxy:
+
+```dotenv
+GH_HOST=github-api.example.com
+GH_TOKEN=ghp_<your-proxy-token>
+```
+
+If either key is absent, `gh` falls back to its own `~/.config/gh/hosts.yml` configuration.
+
+### Discord notifications (`DISCORD_WEBHOOK`)
+
+To enable, add a `DISCORD_WEBHOOK` entry:
+
+```dotenv
+DISCORD_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
 ```
 
 If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications are silently skipped.

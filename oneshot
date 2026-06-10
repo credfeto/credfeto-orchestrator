@@ -82,43 +82,6 @@ load_token_for_owner() {
     fi
 }
 
-# Outputs the GitHub CLI token for the given owner, or empty string if not configured.
-# Lookup order:
-#   1. $XDG_CONFIG_HOME/orchestrator/gh-tokens/<owner>  (per-owner, mode 600)
-#   2. GH_TOKEN= in $XDG_CONFIG_HOME/orchestrator/.env  (global fallback)
-load_gh_token_for_owner() {
-    local owner="$1"
-    local token
-
-    case "${owner}" in
-        *[!a-zA-Z0-9_-]*) return ;;
-    esac
-
-    token=$(read_token_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/gh-tokens/${owner}")
-    if [ -n "${token}" ]; then
-        printf '%s' "${token}"
-        return
-    fi
-
-    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
-    [ -f "${env_file}" ] || return 0
-    local line val
-    while IFS= read -r line || [ -n "${line}" ]; do
-        case "${line}" in
-            GH_TOKEN=*)
-                val="${line#GH_TOKEN=}"
-                val="${val%$'\r'}"
-                case "${val}" in
-                    '"'*'"') val="${val#?}"; val="${val%?}" ;;
-                    "'"*"'") val="${val#?}"; val="${val%?}" ;;
-                esac
-                [ -n "${val}" ] && printf '%s' "${val}"
-                return
-                ;;
-        esac
-    done < "${env_file}"
-}
-
 # Maps a host file path to its container-internal equivalent.
 # Paths under REPO_WORK_DIR map to CONTAINER_REPO_PATH; paths under RULES_DIR
 # map to CONTAINER_RULES_PATH.  Unrecognised paths are returned unchanged.
@@ -525,7 +488,7 @@ handle_claude_is_error() {
 # Runs claude inside a Docker container named orchestrator-<OWNER>.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}"
-    local tmpfile new_session_id owner_token gh_token container_name
+    local tmpfile new_session_id owner_token container_name
 
     local prompt_len=${#prompt}
     if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
@@ -535,7 +498,6 @@ invoke_claude() {
     fi
 
     owner_token=$(load_token_for_owner "${OWNER}")
-    gh_token=$(load_gh_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
     if sudo docker inspect "${container_name}" >/dev/null 2>&1; then
@@ -557,8 +519,9 @@ invoke_claude() {
     [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
 
-    [ -n "${owner_token}" ] && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
-    [ -n "${gh_token}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${gh_token}" )
+    [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
+    [ -n "${GH_HOST:-}" ]                && DOCKER_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
 
     DOCKER_CLAUDE_ARGS=(
         --model opusplan
@@ -832,27 +795,36 @@ issue_json_has_blocked_label() {
     printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
-# Reads DISCORD_WEBHOOK from ${XDG_CONFIG_HOME:-~/.config}/orchestrator/.env and sets
-# DISCORD_WEBHOOK_URL.  Silent when the file is absent or the key is missing.
-load_discord_config() {
+# Reads DISCORD_WEBHOOK, GH_TOKEN, and GH_HOST from orchestrator/.env.
+# Sets DISCORD_WEBHOOK_URL; exports GH_HOST and GH_ENTERPRISE_TOKEN when both are
+# present so host-side gh CLI calls use the same proxy as the agent container.
+# Silent when the file is absent or a key is missing.
+load_env_config() {
     DISCORD_WEBHOOK_URL=""
     local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
     [ -f "${env_file}" ] || return 0
-    local line val
+    local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*)
-                val="${line#DISCORD_WEBHOOK=}"
+            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*)
+                val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
                     '"'*'"') val="${val#?}"; val="${val%?}" ;;
                     "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
-                DISCORD_WEBHOOK_URL="${val}"
-                break
+                case "${line}" in
+                    DISCORD_WEBHOOK=*) DISCORD_WEBHOOK_URL="${val}" ;;
+                    GH_TOKEN=*)        gh_token="${val}" ;;
+                    GH_HOST=*)         gh_host="${val}" ;;
+                esac
                 ;;
         esac
     done < "${env_file}"
+    if [ -n "${gh_host}" ] && [ -n "${gh_token}" ]; then
+        export GH_HOST="${gh_host}"
+        export GH_ENTERPRISE_TOKEN="${gh_token}"
+    fi
 }
 
 # Sends a Discord embed notification when starting or resuming work on an item.
@@ -1079,7 +1051,7 @@ main() {
     done
 
     check_required_tools
-    load_discord_config
+    load_env_config
 
     local head_sha
     head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')

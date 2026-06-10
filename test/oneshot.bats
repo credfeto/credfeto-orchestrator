@@ -299,50 +299,6 @@ teardown() {
     [ -z "${output}" ]
 }
 
-@test "load_gh_token_for_owner rejects owners with invalid characters" {
-    local bad
-    # shellcheck disable=SC2016  # 'owner$x' is a deliberate literal — testing that a '$' in the owner is rejected
-    for bad in 'owner;rm' 'owner space' 'owner/slash' 'owner$x' 'owner.dot'; do
-        run load_gh_token_for_owner "${bad}"
-        [ "${status}" -eq 0 ]
-        [ -z "${output}" ]
-    done
-}
-
-@test "load_gh_token_for_owner reads a gh token for a valid owner with safe perms" {
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
-    printf 'gh-secret-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
-    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
-    run load_gh_token_for_owner credfeto
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "gh-secret-token" ]
-}
-
-@test "load_gh_token_for_owner returns empty when no gh token file exists" {
-    run load_gh_token_for_owner credfeto
-    [ "${status}" -eq 0 ]
-    [ -z "${output}" ]
-}
-
-@test "load_gh_token_for_owner falls back to GH_TOKEN in .env when no per-owner file exists" {
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
-    printf 'GH_TOKEN=env-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
-    run load_gh_token_for_owner credfeto
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "env-gh-token" ]
-}
-
-@test "load_gh_token_for_owner prefers per-owner file over .env fallback" {
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
-    printf 'per-owner-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
-    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
-    printf 'GH_TOKEN=env-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
-    run load_gh_token_for_owner credfeto
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "per-owner-token" ]
-}
-
 # --- host_to_container_path ---------------------------------------------------
 
 @test "host_to_container_path maps REPO_WORK_DIR to CONTAINER_REPO_PATH" {
@@ -829,12 +785,11 @@ STUBEOF
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
 }
 
-@test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when gh token is configured" {
+@test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when set" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
-    printf 'my-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
-    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    # shellcheck disable=SC2030
+    GH_ENTERPRISE_TOKEN="my-gh-token"
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
@@ -1081,7 +1036,7 @@ setup_main_mocks() {
     save_issue_fingerprint()    { return 0; }
     tag_pr_closed_issue()       { return 0; }
     is_owner_rate_limited()       { return 1; }
-    load_discord_config()             { return 0; }
+    load_env_config()             { return 0; }
     notify_discord_work_item()        { return 0; }
     notify_discord_no_work()          { return 0; }
     notify_discord_blocked_item()     { return 0; }
@@ -1361,65 +1316,96 @@ setup_main_mocks() {
     [ ! -f "${_tag_log}" ] || [ ! -s "${_tag_log}" ]
 }
 
-# --- load_discord_config ------------------------------------------------------
+# --- load_env_config ------------------------------------------------------
 
-@test "load_discord_config sets DISCORD_WEBHOOK_URL from env file" {
+@test "load_env_config sets DISCORD_WEBHOOK_URL from env file" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK=https://discord.example.com/webhook/123\n' \
         > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL=""
-    load_discord_config
+    load_env_config
     [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/123" ]
 }
 
-@test "load_discord_config strips double quotes from value" {
+@test "load_env_config strips double quotes from value" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK="https://discord.example.com/webhook/456"\n' \
         > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL=""
-    load_discord_config
+    load_env_config
     [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/456" ]
 }
 
-@test "load_discord_config strips single quotes from value" {
+@test "load_env_config strips single quotes from value" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf "DISCORD_WEBHOOK='https://discord.example.com/webhook/789'\n" \
         > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL=""
-    load_discord_config
+    load_env_config
     [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/webhook/789" ]
 }
 
-@test "load_discord_config leaves DISCORD_WEBHOOK_URL empty when file is absent" {
+@test "load_env_config leaves DISCORD_WEBHOOK_URL empty when file is absent" {
     DISCORD_WEBHOOK_URL="should-be-cleared"
-    load_discord_config
+    load_env_config
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
-@test "load_discord_config leaves DISCORD_WEBHOOK_URL empty when key is absent from file" {
+@test "load_env_config leaves DISCORD_WEBHOOK_URL empty when key is absent from file" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'OTHER_KEY=some-value\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL="should-be-cleared"
-    load_discord_config
+    load_env_config
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
-@test "load_discord_config strips trailing CR from CRLF env files" {
+@test "load_env_config strips trailing CR from CRLF env files" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK=https://discord.example.com/hook\r\n' \
         > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL=""
-    load_discord_config
+    load_env_config
     [ "${DISCORD_WEBHOOK_URL}" = "https://discord.example.com/hook" ]
 }
 
-@test "load_discord_config does not strip unmatched leading quote" {
+@test "load_env_config does not strip unmatched leading quote" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK="https://discord.example.com/hook\n' \
         > "${XDG_CONFIG_HOME}/orchestrator/.env"
     DISCORD_WEBHOOK_URL=""
-    load_discord_config
+    load_env_config
     [ "${DISCORD_WEBHOOK_URL}" = '"https://discord.example.com/hook' ]
+}
+
+@test "load_env_config reads GH_TOKEN and GH_HOST and exports them" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=ghp_testtoken\nGH_HOST=github-api.example.com\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GH_HOST}" = "github-api.example.com" ]
+    # shellcheck disable=SC2031
+    [ "${GH_ENTERPRISE_TOKEN}" = "ghp_testtoken" ]
+}
+
+@test "load_env_config does not export GH vars when GH_HOST is absent" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=ghp_testtoken\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset GH_HOST GH_ENTERPRISE_TOKEN || true
+    load_env_config
+    # shellcheck disable=SC2031
+    [ -z "${GH_ENTERPRISE_TOKEN:-}" ]
+}
+
+@test "load_env_config reads all three keys from the same env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://hook.example.com/1\nGH_TOKEN=ghp_abc\nGH_HOST=proxy.example.com\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    load_env_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://hook.example.com/1" ]
+    # shellcheck disable=SC2031
+    [ "${GH_ENTERPRISE_TOKEN}" = "ghp_abc" ]
+    [ "${GH_HOST}" = "proxy.example.com" ]
 }
 
 # --- notify_discord_work_item -------------------------------------------------
