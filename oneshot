@@ -379,15 +379,27 @@ die_claude_failed() {
 }
 
 # Runs a single docker-based claude invocation, writing JSON output to tmpfile.
-# On non-zero exit: prints any output then dies.
+# On non-zero exit: checks stderr for a container-name conflict before dying.
 run_claude_fresh() {
     local tmpfile="$1"
-    shift
+    local stderrfile
+    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for docker stderr"
     info "Starting new Claude session in container ${DOCKER_CONTAINER_NAME}..." >&2
-    # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
+    # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
+    # intentionally unprivileged.
     # shellcheck disable=SC2024
-    printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" > "${tmpfile}" \
-        || die_claude_failed "${tmpfile}"
+    if ! printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" > "${tmpfile}" 2>"${stderrfile}"; then
+        if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
+            cat "${stderrfile}" >&2
+            rm -f "${stderrfile}"
+            die "Container ${DOCKER_CONTAINER_NAME} is already in use — another invocation may be running"
+        fi
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}"
+        die_claude_failed "${tmpfile}"
+    fi
+    cat "${stderrfile}" >&2
+    rm -f "${stderrfile}"
 }
 
 # Runs docker-based claude with --resume, capturing stderr separately to detect the
@@ -422,6 +434,12 @@ run_claude_resumed() {
         # Propagate the new tmpfile path back to the caller via stdout.
         printf '%s' "${tmpfile}"
         return 0
+    fi
+
+    if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}"
+        die "Container ${DOCKER_CONTAINER_NAME} is already in use — another invocation may be running"
     fi
 
     cat "${stderrfile}" >&2
@@ -499,8 +517,9 @@ invoke_claude() {
     gh_token=$(load_gh_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
-    # Remove any pre-existing container with the same name to avoid conflicts.
-    sudo docker rm -f "${container_name}" 2>/dev/null || true
+    if sudo docker inspect "${container_name}" >/dev/null 2>&1; then
+        die "Container ${container_name} already exists — remove it manually before running"
+    fi
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -516,7 +535,6 @@ invoke_claude() {
     [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
     [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
-    [ -d "${HOME}/.claude" ]    && DOCKER_RUN_ARGS+=( --volume "${HOME}/.claude:/home/developer/.claude:rw" )
 
     [ -n "${owner_token}" ] && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
     [ -n "${gh_token}" ]    && DOCKER_RUN_ARGS+=( --env "GH_TOKEN=${gh_token}" )

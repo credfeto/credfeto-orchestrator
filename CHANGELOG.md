@@ -71,6 +71,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Refactored invoke_claude into run_claude_fresh, run_claude_resumed, and handle_claude_is_error helpers for readability
 - Rate-limit backoff now waits until 1 hour past the token reset time (RATE_LIMIT_RESUME_BUFFER_SECS=3600) to avoid immediately hitting the limit again
 - No-work notification now includes counts of blocked, unchanged, and repo-active skips
+- Replace pre-run container removal with existence check — die if named container already exists; detect name-in-use race in docker run; remove host ~/.claude mount from container
 ### Deprecated
 ### Removed
 ### Deployment Changes

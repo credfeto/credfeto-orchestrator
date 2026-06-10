@@ -506,9 +506,13 @@ teardown() {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
@@ -519,9 +523,13 @@ teardown() {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
@@ -533,9 +541,13 @@ teardown() {
 @test "invoke_claude fails fast before calling docker when prompt exceeds MAX_PROMPT_CHARS" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
     local long_prompt
@@ -548,8 +560,12 @@ teardown() {
 
 @test "invoke_claude sends Discord notification when prompt exceeds MAX_PROMPT_CHARS" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub_multiline docker \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -567,7 +583,7 @@ teardown() {
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 printf '{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -587,7 +603,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 for arg; do
     [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
 done
@@ -606,7 +622,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 for arg; do
     [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
 done
@@ -627,7 +643,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -646,7 +662,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -662,7 +678,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 for arg; do
     [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
@@ -681,7 +697,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 for arg; do
     [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
@@ -746,9 +762,13 @@ STUBEOF
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
@@ -758,9 +778,13 @@ STUBEOF
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
@@ -774,9 +798,13 @@ STUBEOF
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
@@ -789,9 +817,13 @@ STUBEOF
     printf 'my-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
     grep -qx 'GH_TOKEN=my-gh-token' "${args_log}"
@@ -801,13 +833,64 @@ STUBEOF
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    make_stub_multiline docker \
-        "$(printf 'printf "%%s\\n" "$@" >> "%s"' "${args_log}")" \
-        'printf '"'"'{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'"'"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
     grep -qx -- '--resume' "${args_log}"
     grep -qx '12345678-1234-1234-1234-123456789abc' "${args_log}"
+}
+
+@test "invoke_claude dies if container already exists" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"already exists"* ]]
+}
+
+@test "invoke_claude dies with specific message when docker run fails due to container name in use" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+printf 'docker: Error response from daemon: Conflict. The container name "/orchestrator-credfeto" is already in use\n' >&2
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    run invoke_claude "test prompt" "" "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"already in use"* ]]
+}
+
+@test "invoke_claude does not mount host .claude directory" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${HOME}/.claude"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" 2>/dev/null
+    run ! grep -q ".claude:/home/developer/.claude" "${args_log}"
 }
 
 # --- set_repo_context ---------------------------------------------------------
@@ -1815,7 +1898,7 @@ setup_main_mocks() {
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -1835,7 +1918,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
-[ "$1" = "rm" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
