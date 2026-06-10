@@ -52,6 +52,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Orchestrator now evaluates all open PRs in a repository independently; previously a second PR in the same repo was silently skipped when an earlier PR had already been seen in the priority list
 - Use sudo docker for container invocations in invoke_claude
 - Pass GH_ENTERPRISE_TOKEN (not GH_TOKEN) to the agent container so the GitHub API proxy authenticates correctly; fall back to GH_TOKEN in orchestrator .env when no per-owner token file exists
+- Configure host-side gh CLI with GH_HOST and GH_ENTERPRISE_TOKEN from orchestrator .env so oneshot uses the same proxy as the agent container
 ### Changed
 - oneshot session management now stores one session file per issue or pull request and falls back to a linked issue session when working on a PR with no existing session
 - oneshot now saves Claude output to a temp file and displays the text response after each session, making it possible to review what Claude did

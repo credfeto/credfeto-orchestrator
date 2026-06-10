@@ -1422,6 +1422,43 @@ setup_main_mocks() {
     [ "${DISCORD_WEBHOOK_URL}" = '"https://discord.example.com/hook' ]
 }
 
+@test "load_discord_config reads GH_TOKEN and GH_HOST and exports them" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=ghp_testtoken\nGH_HOST=github-api.example.com\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    ORCHESTRATOR_GH_TOKEN=""
+    ORCHESTRATOR_GH_HOST=""
+    load_discord_config
+    [ "${ORCHESTRATOR_GH_TOKEN}" = "ghp_testtoken" ]
+    [ "${ORCHESTRATOR_GH_HOST}" = "github-api.example.com" ]
+    [ "${GH_HOST}" = "github-api.example.com" ]
+    [ "${GH_ENTERPRISE_TOKEN}" = "ghp_testtoken" ]
+}
+
+@test "load_discord_config does not export GH vars when GH_HOST is absent" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=ghp_testtoken\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset GH_HOST GH_ENTERPRISE_TOKEN || true
+    ORCHESTRATOR_GH_TOKEN=""
+    ORCHESTRATOR_GH_HOST=""
+    load_discord_config
+    [ "${ORCHESTRATOR_GH_TOKEN}" = "ghp_testtoken" ]
+    [ -z "${GH_ENTERPRISE_TOKEN:-}" ]
+}
+
+@test "load_discord_config reads all three keys from the same env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://hook.example.com/1\nGH_TOKEN=ghp_abc\nGH_HOST=proxy.example.com\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL=""
+    ORCHESTRATOR_GH_TOKEN=""
+    ORCHESTRATOR_GH_HOST=""
+    load_discord_config
+    [ "${DISCORD_WEBHOOK_URL}" = "https://hook.example.com/1" ]
+    [ "${ORCHESTRATOR_GH_TOKEN}" = "ghp_abc" ]
+    [ "${ORCHESTRATOR_GH_HOST}" = "proxy.example.com" ]
+}
+
 # --- notify_discord_work_item -------------------------------------------------
 
 @test "notify_discord_work_item warns and returns for unknown msg_type without calling curl" {
