@@ -13,6 +13,7 @@
     <!-- Hide any test results -->
     <ItemGroup>
         <None Remove="TestResults\**\*" />
+        <None Remove="coverage.settings.xml" />
     </ItemGroup>
 
     <!-- if building in github reference the github actions test logger -->
@@ -34,7 +35,7 @@
 
     <Target Name="GenerateCoverageSettings" BeforeTargets="Build">
         <ItemGroup>
-            <!-- %3F = ?, %2A = * : percent-encode glob chars so MSBuild does not expand these items as filesystem globs -->
+            <!-- %3F = ?, %2A = *, %5C = \ : percent-encode special chars so MSBuild does not expand globs or normalise backslashes to / on Linux -->
             <_CoverageSettingsLines Include="&lt;Configuration&gt;" />
             <_CoverageSettingsLines Include="  &lt;CodeCoverage&gt;" />
             <_CoverageSettingsLines Include="    &lt;ModulePaths&gt;" />
@@ -42,6 +43,11 @@
             <_CoverageSettingsLines Include="        &lt;ModulePath&gt;.%2A$(_CoverageSisterAssembly).dll&lt;/ModulePath&gt;" />
             <_CoverageSettingsLines Include="      &lt;/Include&gt;" />
             <_CoverageSettingsLines Include="    &lt;/ModulePaths&gt;" />
+            <_CoverageSettingsLines Include="    &lt;Attributes&gt;" />
+            <_CoverageSettingsLines Include="      &lt;Exclude&gt;" />
+            <_CoverageSettingsLines Include="        &lt;Attribute&gt;^System%5C.CodeDom%5C.Compiler%5C.GeneratedCodeAttribute$&lt;/Attribute&gt;" />
+            <_CoverageSettingsLines Include="      &lt;/Exclude&gt;" />
+            <_CoverageSettingsLines Include="    &lt;/Attributes&gt;" />
             <_CoverageSettingsLines Include="  &lt;/CodeCoverage&gt;" />
             <_CoverageSettingsLines Include="&lt;/Configuration&gt;" />
         </ItemGroup>
