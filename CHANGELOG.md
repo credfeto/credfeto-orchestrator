@@ -74,6 +74,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Rate-limit backoff now waits until 1 hour past the token reset time (RATE_LIMIT_RESUME_BUFFER_SECS=3600) to avoid immediately hitting the limit again
 - No-work notification now includes counts of blocked, unchanged, and repo-active skips
 - Replace pre-run container removal with existence check — die if named container already exists; detect name-in-use race in docker run; remove host ~/.claude mount from container
+- SDK - Updated DotNet SDK to 10.0.301
 ### Deprecated
 ### Removed
 - Remove unused NanoClaw container/ directory and its dependabot tracking — never deployed, superseded by containers/ base images and oneshot
