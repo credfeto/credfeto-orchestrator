@@ -884,8 +884,8 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" "" "" "" 2>/dev/null
-    # Verify CLAUDE.md mount is absent — use grep exit code directly (not via run).
-    ! grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${TEST_TMP}/docker_args"
+    # Verify CLAUDE.md mount is absent.
+    run ! grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${TEST_TMP}/docker_args"
 }
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
