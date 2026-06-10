@@ -324,6 +324,25 @@ teardown() {
     [ -z "${output}" ]
 }
 
+@test "load_gh_token_for_owner falls back to GH_TOKEN in .env when no per-owner file exists" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=env-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    run load_gh_token_for_owner credfeto
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "env-gh-token" ]
+}
+
+@test "load_gh_token_for_owner prefers per-owner file over .env fallback" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
+    printf 'per-owner-token\n' > "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/gh-tokens/credfeto"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=env-gh-token\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    run load_gh_token_for_owner credfeto
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "per-owner-token" ]
+}
+
 # --- host_to_container_path ---------------------------------------------------
 
 @test "host_to_container_path maps REPO_WORK_DIR to CONTAINER_REPO_PATH" {
@@ -810,7 +829,7 @@ STUBEOF
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
 }
 
-@test "invoke_claude passes GH_TOKEN env var when gh token is configured" {
+@test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when gh token is configured" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/gh-tokens"
@@ -826,7 +845,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" 2>/dev/null
-    grep -qx 'GH_TOKEN=my-gh-token' "${args_log}"
+    grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
 }
 
 @test "invoke_claude passes --resume flag when session id is provided" {
