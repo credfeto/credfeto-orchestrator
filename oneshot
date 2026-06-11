@@ -138,7 +138,8 @@ ensure_repo_current() {
         current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
         if [ "${current_branch}" = "main" ]; then
             if ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet; then
-                die "Working tree has uncommitted changes on main — cannot rebase ${REPO_FULL}"
+                warn "Working tree has uncommitted changes on main for ${REPO_FULL} — handing off to agent to recover"
+                return 1
             fi
             info "Rebasing main with origin/main..."
             git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
@@ -1321,9 +1322,9 @@ main() {
         # ---- Work block: item_type and item_id are resolved ----
         info "Found actionable ${item_type} #${item_id} in ${item_repo} — preparing..."
 
-        ensure_repo_current
-
-        if [ "${item_type}" = "PullRequest" ]; then
+        if ! ensure_repo_current; then
+            info "Repo not clean for ${item_repo} — handing off to agent to recover"
+        elif [ "${item_type}" = "PullRequest" ]; then
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
             if [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ]; then
