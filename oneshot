@@ -517,11 +517,15 @@ invoke_claude() {
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
+    # Mount .claude/ as a host-owned temp directory so the developer user (uid 1000 = host
+    # uid) can write session-env and other runtime files inside it.  Mounting only the
+    # CLAUDE.md file causes Docker to create the parent directory as root-owned, which
+    # breaks every Bash tool call with EACCES.
     CLAUDE_MD_TMPFILE=""
     if [ -n "${claude_md_content}" ]; then
-        CLAUDE_MD_TMPFILE=$(mktemp --suffix=.md) || die "Failed to create temp file for CLAUDE.md"
-        printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
-        trap 'rm -f "${CLAUDE_MD_TMPFILE}"' EXIT
+        CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
+        printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
+        trap 'rm -rf "${CLAUDE_MD_TMPFILE}"' EXIT
     fi
 
     # Export invocation-scoped globals so helper functions can read them.
@@ -538,7 +542,7 @@ invoke_claude() {
     [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
     [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
-    [ -n "${CLAUDE_MD_TMPFILE}" ] && DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
+    [ -n "${CLAUDE_MD_TMPFILE}" ] && DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
     [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
@@ -577,14 +581,14 @@ invoke_claude() {
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
+        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
     rm -f "${tmpfile}"
 
-    [ -n "${new_session_id}" ] || { rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "No session_id returned by Claude"; }
+    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "No session_id returned by Claude"; }
     is_valid_session_id "${new_session_id}" \
-        || { rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
+        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
-    rm -f "${CLAUDE_MD_TMPFILE}"
+    rm -rf "${CLAUDE_MD_TMPFILE}"
     CLAUDE_MD_TMPFILE=""
     printf '%s' "${new_session_id}"
 }
@@ -1121,9 +1125,9 @@ main() {
     # so initialising them here (and resetting where needed at the top of each
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
-    local skip_repo is_skipped
+    local skip_repo is_skipped original_issue_id
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
-    local issue_json issue_state issue_fp
+    local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content new_session_id post_fp
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -1149,6 +1153,7 @@ main() {
         # only prevents starting brand-new work from an Issue in an active repo.
         # Explicit reset — the 'local' initialiser above only fires once.
         is_skipped=false
+        original_issue_id=""
         if [ "${item_type}" = "Issue" ]; then
             for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
                 if [ "${skip_repo}" = "${item_repo}" ]; then
@@ -1224,14 +1229,23 @@ main() {
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if [ "${pr_is_draft}" != "true" ]; then
-                        info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                        count_unchanged=$((count_unchanged + 1))
-                        continue
+                        # PR unchanged — also check whether the linked issue has new comments.
+                        issue_fp=$(fingerprint_issue_json "${issue_json}") \
+                            || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
+                        saved_issue_fp=$(load_issue_fingerprint "${item_id}")
+                        if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
+                            info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                            count_unchanged=$((count_unchanged + 1))
+                            continue
+                        fi
+                        info "Issue #${item_id} in ${item_repo} changed — re-running against PR #${open_pr}"
+                    else
+                        info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
                     fi
-                    info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
                 fi
 
-                # PR has changed (or is still in draft) — work on it.
+                # PR has changed (or issue changed, or still in draft) — work on it.
+                original_issue_id="${item_id}"
                 item_id="${open_pr}"
                 item_type="PullRequest"
 
@@ -1378,6 +1392,11 @@ main() {
             post_fp=$(compute_pr_fingerprint "${item_id}") \
                 || die "Failed to compute post-run fingerprint for PR #${item_id} in ${item_repo}"
             save_pr_fingerprint "${item_id}" "${post_fp}"
+            if [ -n "${original_issue_id}" ]; then
+                post_fp=$(compute_issue_fingerprint "${original_issue_id}") \
+                    || die "Failed to compute post-run fingerprint for Issue #${original_issue_id} in ${item_repo}"
+                save_issue_fingerprint "${original_issue_id}" "${post_fp}"
+            fi
         elif [ "${item_type}" = "Issue" ]; then
             post_fp=$(compute_issue_fingerprint "${item_id}") \
                 || die "Failed to compute post-run fingerprint for Issue #${item_id} in ${item_repo}"
