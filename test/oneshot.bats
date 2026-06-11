@@ -560,7 +560,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -577,7 +577,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -638,7 +638,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"API Error"* ]]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -659,7 +659,7 @@ STUBEOF
 
     DISCORD_WEBHOOK_URL=""
     local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
@@ -680,7 +680,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
@@ -698,7 +698,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
@@ -714,7 +714,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42"
+    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"failed after retry"* ]]
 }
@@ -734,7 +734,7 @@ STUBEOF
 
     DISCORD_WEBHOOK_URL=""
     local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
@@ -755,7 +755,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run ! grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
@@ -816,7 +816,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
 }
 
@@ -832,7 +832,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
@@ -862,30 +862,12 @@ STUBEOF
     grep -q ':/home/developer/.claude:rw' "${args_log}"
 }
 
-@test "invoke_claude does not mount .claude directory when claude_md_content is empty" {
+@test "invoke_claude dies when claude_md_content is empty" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/jq" << 'JQEOF'
-#!/usr/bin/env bash
-case "$2" in
-    '.is_error // false')    printf 'false\n' ;;
-    '.result // ""')         printf '\n' ;;
-    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
-esac
-JQEOF
-    chmod +x "${STUB_BIN}/jq"
-    # Use TEST_TMP (exported) directly as the args log path.
-    cat > "${STUB_BIN}/docker" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${TEST_TMP}/docker_args"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/docker"
-
-    invoke_claude "test prompt" "" "" "" "" 2>/dev/null
-    # Verify .claude directory mount is absent.
-    run ! grep -q ':/home/developer/.claude:rw' "${TEST_TMP}/docker_args"
+    run invoke_claude "test prompt" "" "" "" "" 2>/dev/null
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
@@ -927,7 +909,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
 }
 
@@ -945,7 +927,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
 }
 
@@ -961,7 +943,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--resume' "${args_log}"
     grep -qx '12345678-1234-1234-1234-123456789abc' "${args_log}"
 }
@@ -976,7 +958,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already exists"* ]]
 }
@@ -992,7 +974,7 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already in use"* ]]
 }
@@ -1009,7 +991,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run ! grep -q ".claude:/home/developer/.claude" "${args_log}"
 }
 
@@ -2136,7 +2118,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"rate limited"* ]]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -2153,7 +2135,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"

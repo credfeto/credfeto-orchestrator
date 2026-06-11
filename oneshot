@@ -517,16 +517,16 @@ invoke_claude() {
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
+    # CLAUDE.md content is mandatory — every invocation must supply it.
+    [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
+
     # Mount .claude/ as a host-owned temp directory so the developer user (uid 1000 = host
     # uid) can write session-env and other runtime files inside it.  Mounting only the
     # CLAUDE.md file causes Docker to create the parent directory as root-owned, which
     # breaks every Bash tool call with EACCES.
-    CLAUDE_MD_TMPFILE=""
-    if [ -n "${claude_md_content}" ]; then
-        CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
-        printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
-        trap 'rm -rf "${CLAUDE_MD_TMPFILE}"' EXIT
-    fi
+    CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
+    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -542,7 +542,7 @@ invoke_claude() {
     [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
     [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
-    [ -n "${CLAUDE_MD_TMPFILE}" ] && DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
+    DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
     [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
