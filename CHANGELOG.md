@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
 ### Changed
 ### Deprecated
@@ -45,7 +46,6 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 - Non-agentic PR rebases now proceed even when the owner is rate-limited — only invoke_claude is blocked during the rate-limit window
 - development-agent Docker image based on development-full with package-management and privilege-escalation tools removed, and a build workflow that triggers every 30 minutes or when development-full is updated
 - Docker container execution for oneshot: named orchestrator-<owner>, uses development-agent image, mounts repo rw, rules ro, ssh ro, gnupg rw, passes Claude and GitHub CLI tokens
-- Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
 - oneshot prompt now delivered to Claude via stdin, fixing empty-prompt error when using --print
 - oneshot now skips items from the priorities API that are already closed or merged on GitHub
