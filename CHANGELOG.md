@@ -11,6 +11,16 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+## [0.0.1] - 2026-06-11
+### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
 - loop script: continuous wrapper that runs oneshot every 5 minutes
 - oneshot now clones both cs-template rules and the target repo into $XDG_PROJECTS_DIR (or $HOME/work) before each Claude session, keeping both up-to-date
@@ -75,11 +85,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - No-work notification now includes counts of blocked, unchanged, and repo-active skips
 - Replace pre-run container removal with existence check — die if named container already exists; detect name-in-use race in docker run; remove host ~/.claude mount from container
 - SDK - Updated DotNet SDK to 10.0.301
-### Deprecated
 ### Removed
 - Remove unused NanoClaw container/ directory and its dependabot tracking — never deployed, superseded by containers/ base images and oneshot
-### Deployment Changes
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
+
 ## [0.0.0] - Project created
