@@ -560,7 +560,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -577,7 +577,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -638,7 +638,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"API Error"* ]]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -659,7 +659,7 @@ STUBEOF
 
     DISCORD_WEBHOOK_URL=""
     local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
@@ -680,7 +680,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
@@ -698,7 +698,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
@@ -714,7 +714,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42"
+    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"failed after retry"* ]]
 }
@@ -734,7 +734,7 @@ STUBEOF
 
     DISCORD_WEBHOOK_URL=""
     local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null)
+    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
     [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
 }
 
@@ -755,7 +755,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" 2>/dev/null
+    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run ! grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
@@ -816,7 +816,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
 }
 
@@ -832,12 +832,12 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
 
-@test "invoke_claude mounts CLAUDE.md read-only when claude_md_content is provided" {
+@test "invoke_claude mounts .claude directory read-write when claude_md_content is provided" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
@@ -859,33 +859,15 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
-    grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${args_log}"
+    grep -q ':/home/developer/.claude:rw' "${args_log}"
 }
 
-@test "invoke_claude does not mount CLAUDE.md when claude_md_content is empty" {
+@test "invoke_claude dies when claude_md_content is empty" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/jq" << 'JQEOF'
-#!/usr/bin/env bash
-case "$2" in
-    '.is_error // false')    printf 'false\n' ;;
-    '.result // ""')         printf '\n' ;;
-    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
-esac
-JQEOF
-    chmod +x "${STUB_BIN}/jq"
-    # Use TEST_TMP (exported) directly as the args log path.
-    cat > "${STUB_BIN}/docker" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${TEST_TMP}/docker_args"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/docker"
-
-    invoke_claude "test prompt" "" "" "" "" 2>/dev/null
-    # Verify CLAUDE.md mount is absent.
-    run ! grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${TEST_TMP}/docker_args"
+    run invoke_claude "test prompt" "" "" "" "" 2>/dev/null
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
@@ -927,7 +909,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
 }
 
@@ -945,7 +927,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
 }
 
@@ -961,7 +943,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" 2>/dev/null
+    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--resume' "${args_log}"
     grep -qx '12345678-1234-1234-1234-123456789abc' "${args_log}"
 }
@@ -976,7 +958,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already exists"* ]]
 }
@@ -992,7 +974,7 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already in use"* ]]
 }
@@ -1009,7 +991,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
-    invoke_claude "test prompt" "" 2>/dev/null
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run ! grep -q ".claude:/home/developer/.claude" "${args_log}"
 }
 
@@ -1182,6 +1164,8 @@ setup_main_mocks() {
     compute_issue_fingerprint() { printf 'new-fp\n'; }
     save_pr_fingerprint()       { return 0; }
     save_issue_fingerprint()    { return 0; }
+    fingerprint_issue_json()    { printf 'issue-fp-default\n'; }
+    load_issue_fingerprint()    { printf ''; }
     tag_pr_closed_issue()       { return 0; }
     is_owner_rate_limited()       { return 1; }
     load_env_config()             { return 0; }
@@ -1346,8 +1330,9 @@ setup_main_mocks() {
 
 @test "main skips same-repo issue when linked PR found via issue-to-PR pivot is unchanged" {
     # Item 1 (Issue #10, org/repo): find_open_nonblocked_pr_for_repo returns PR #99.
-    #   Issue is open and unblocked; PR is open, non-blocked, fingerprint matches saved
-    #   → "unchanged — skipping repo".  org/repo is added to skip_repos.
+    #   Issue is open and unblocked; PR is open, non-blocked, fingerprint matches saved;
+    #   issue fingerprint also matches saved → "unchanged — skipping repo".
+    #   org/repo is added to skip_repos.
     # Item 2 (Issue #20, org/repo): same repo → "repo already has active work".
     setup_main_mocks
     fetch_all_priorities() {
@@ -1359,12 +1344,85 @@ setup_main_mocks() {
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
 
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #99 in org/repo unchanged — skipping repo"* ]]
     [[ "${output}" == *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main re-runs via pivot PR when PR unchanged but issue has new comment" {
+    # Issue #10 has linked PR #99. PR fingerprint unchanged, but issue fingerprint changed
+    # (user added a comment). Expect agent to be invoked.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"body":"how to fix","updatedAt":"2024-01-01"}],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-new\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-old\n'; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo changed — re-running against PR #99"* ]]
+    [ -f "${_invoke_log}" ]
+}
+
+@test "main re-runs via pivot PR when PR unchanged and issue has no saved fingerprint" {
+    # Issue #10 has linked PR #99. PR fingerprint unchanged, but there is no saved issue
+    # fingerprint yet (first run after the fix was deployed). Expect agent to be invoked
+    # so the issue fingerprint is initialised.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-new\n'; }
+    load_issue_fingerprint()    { printf ''; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+}
+
+@test "main saves issue fingerprint after running agent on PR via issue pivot" {
+    # Issue #10 has linked PR #99. Issue fingerprint changed → agent runs on PR #99.
+    # Expect save_issue_fingerprint called with original issue ID (10), not PR ID (99).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-new\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-old\n'; }
+    local _save_issue_log="${TEST_TMP}/save_issue_log"
+    save_issue_fingerprint() { printf 'id=%s fp=%s\n' "$1" "$2" >> "${_save_issue_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'id=10' "${_save_issue_log}"
 }
 
 # --- repository name validation -----------------------------------------------
@@ -2060,7 +2118,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"rate limited"* ]]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -2077,7 +2135,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "" "Issue" "42"
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
