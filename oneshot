@@ -1326,12 +1326,16 @@ main() {
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                if [ "${pr_is_draft}" != "true" ]; then
+                pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+                if [ "${pr_is_draft}" = "true" ]; then
+                    info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
+                elif [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
+                    info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
+                else
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
-                info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
             fi
             # Fall through to work block (item_type remains "PullRequest").
         fi

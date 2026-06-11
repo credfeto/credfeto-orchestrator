@@ -19,6 +19,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Dirty working tree on any branch now hands off to agent with full state context including branch name and merge state
 - Agent now explicitly checks out PR branch as first git action, preventing accidental changes on main
 - Issue agent now explicitly required to create branch before making any repo changes
+- PR with BEHIND or DIRTY merge state no longer skipped when fingerprint is unchanged
 ### Changed
 ### Deprecated
 ### Removed
