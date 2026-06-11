@@ -20,6 +20,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent now explicitly checks out PR branch as first git action, preventing accidental changes on main
 - Issue agent now explicitly required to create branch before making any repo changes
 - PR with BEHIND or DIRTY merge state no longer skipped when fingerprint is unchanged
+- Rebase and dirty-branch recovery instructions embedded directly in numbered steps rather than floating IMPORTANT blocks
 ### Changed
 ### Deprecated
 ### Removed

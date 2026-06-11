@@ -314,36 +314,31 @@ EOF
 
 build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}"
-    local rebase_notice="" dirty_branch_notice=""
-    if [ -n "${dirty_branch}" ]; then
-        dirty_branch_notice="
-IMPORTANT — dirty working tree: The local working tree is on branch '${dirty_branch}' with
-uncommitted or staged changes, likely left by an interrupted previous session. These may be
-partial work for this PR. Before any other work, inspect the state:
-  git -C ${repo_path} status
-If the changes belong on branch '${branch_name}' (this PR), move them there:
-  git -C ${repo_path} stash
-  git -C ${repo_path} checkout ${branch_name}
-  git -C ${repo_path} stash pop
-If they are not relevant to this PR, discard them:
-  git -C ${repo_path} checkout -- .
-  git -C ${repo_path} reset HEAD
-"
-    fi
-    if [ "${merge_state}" = "BEHIND" ]; then
-        rebase_notice="
-IMPORTANT — mergeStateStatus=BEHIND: The branch is behind origin/main and must be rebased before
-any other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${repo_path},
-fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
-other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
-"
-    elif [ "${merge_state}" = "DIRTY" ]; then
-        rebase_notice="
-IMPORTANT — mergeStateStatus=DIRTY: The branch has merge conflicts and must be rebased before any
-other work. Act as the Rebase Agent: check out branch '${branch_name}' in ${repo_path},
-fetch origin, rebase onto origin/main (CHANGELOG.md conflicts: keep entries from both sides; any
-other conflict: report verbatim to the PR and stop), then force-push with --force-with-lease.
-"
+    local checkout_step
+    local needs_rebase=0
+    [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
+
+    if [ -n "${dirty_branch}" ] && [ "${needs_rebase}" = "1" ]; then
+        checkout_step="2. The working tree is on branch '${dirty_branch}' with uncommitted changes AND the PR is ${merge_state} — resolve both before any other work:
+   a. git -C ${repo_path} status   (inspect what is there)
+   b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
+      Otherwise: git -C ${repo_path} checkout -- . && git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout ${branch_name}
+   c. git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
+      CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
+   d. git -C ${repo_path} push --force-with-lease"
+    elif [ -n "${dirty_branch}" ]; then
+        checkout_step="2. The working tree is on branch '${dirty_branch}' with uncommitted changes — clean up before checking out the PR branch:
+   a. git -C ${repo_path} status   (inspect what is there)
+   b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
+      Otherwise: git -C ${repo_path} checkout -- . && git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout ${branch_name}"
+    elif [ "${needs_rebase}" = "1" ]; then
+        checkout_step="2. The PR is ${merge_state} — check out the branch and rebase immediately before any other work:
+   git -C ${repo_path} checkout ${branch_name}
+   git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
+   CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
+   git -C ${repo_path} push --force-with-lease"
+    else
+        checkout_step="2. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
     fi
     cat <<EOF
 You are the Orchestrator agent.
@@ -352,12 +347,12 @@ Read AI instructions from ${ai_instructions}.
 
 Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
-${dirty_branch_notice}${rebase_notice}
+
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}
+${checkout_step}
 3. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 4. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 5. Proceed to address all outstanding work
