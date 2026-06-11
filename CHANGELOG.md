@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
 ### Changed
 ### Deprecated

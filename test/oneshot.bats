@@ -12,54 +12,45 @@ teardown() {
     cleanup_stubs
 }
 
-# --- prompt building -------------------------------------------------------
+# --- prompt building (minimal bootstrap prompts) ---------------------------
 
-@test "build_issue_prompt includes issue number, repo, work dir and key instructions" {
+@test "build_issue_prompt includes issue number, repo, and work dir" {
     run build_issue_prompt 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"issue #42"* ]]
     [[ "${output}" == *"${REPO_FULL}"* ]]
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
-    [[ "${output}" == *"--add-label Blocked"* ]]
-    [[ "${output}" == *"gh issue edit 42 --repo ${REPO_FULL} --add-label Blocked"* ]]
-    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
-@test "build_issue_prompt references AI instructions for CLI and label rules" {
+@test "build_issue_prompt does not include detailed instructions (those are in CLAUDE.md)" {
     run build_issue_prompt 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
-    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
-    [[ "${output}" == *"label management"* ]]
+    [[ "${output}" != *"--add-label Blocked"* ]]
+    [[ "${output}" != *"Read AI instructions"* ]]
+    [[ "${output}" != *"mandatory rules"* ]]
 }
 
-@test "build_pr_prompt includes PR number, repo, work dir and Blocked instruction" {
+@test "build_pr_prompt includes PR number, repo, and work dir" {
     run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"pull request #7"* ]]
     [[ "${output}" == *"${REPO_FULL}"* ]]
     [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
-    [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
-    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
-    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
 }
 
-@test "build_pr_prompt references AI instructions for CLI, label, and CI rules" {
+@test "build_pr_prompt does not include detailed instructions (those are in CLAUDE.md)" {
     run build_pr_prompt 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
-    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
-    [[ "${output}" == *"label management"* ]]
-    [[ "${output}" == *"CI checks"* ]]
+    [[ "${output}" != *"--add-label Blocked"* ]]
+    [[ "${output}" != *"Read AI instructions"* ]]
+    [[ "${output}" != *"mandatory rules"* ]]
 }
 
-@test "build_pr_prompt with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
+@test "build_pr_prompt with BEHIND merge state does not include rebase notice (moved to CLAUDE.md)" {
     run build_pr_prompt 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"BEHIND"* ]]
-    [[ "${output}" == *"feat/my-branch"* ]]
-    [[ "${output}" == *"force-with-lease"* ]]
-    [[ "${output}" == *"rebase"* ]]
+    [[ "${output}" != *"force-with-lease"* ]]
+    [[ "${output}" != *"BEHIND"* ]]
 }
 
 @test "build_pr_prompt with CLEAN merge state does not include rebase notice" {
@@ -69,13 +60,11 @@ teardown() {
     [[ "${output}" != *"BEHIND"* ]]
 }
 
-@test "build_pr_prompt with DIRTY merge state includes rebase notice with branch name and force-with-lease" {
+@test "build_pr_prompt with DIRTY merge state does not include rebase notice (moved to CLAUDE.md)" {
     run build_pr_prompt 7 "/resolved/.ai-instructions" "DIRTY" "feat/my-branch"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"DIRTY"* ]]
-    [[ "${output}" == *"feat/my-branch"* ]]
-    [[ "${output}" == *"force-with-lease"* ]]
-    [[ "${output}" == *"rebase"* ]]
+    [[ "${output}" != *"force-with-lease"* ]]
+    [[ "${output}" != *"DIRTY"* ]]
 }
 
 @test "build_issue_prompt uses provided repo_path instead of REPO_WORK_DIR" {
@@ -85,8 +74,90 @@ teardown() {
     [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
 }
 
-@test "build_pr_prompt uses provided repo_path in rebase notice" {
+@test "build_pr_prompt uses provided repo_path" {
     run build_pr_prompt 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/workspace/repo"* ]]
+    [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
+}
+
+# --- CLAUDE.md content building -------------------------------------------
+
+@test "build_issue_claude_md includes role, ai instructions, issue number, repo, work dir and steps" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Orchestrator agent"* ]]
+    [[ "${output}" == *"issue #42"* ]]
+    [[ "${output}" == *"${REPO_FULL}"* ]]
+    [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
+    [[ "${output}" == *"--add-label Blocked"* ]]
+    [[ "${output}" == *"gh issue edit 42 --repo ${REPO_FULL} --add-label Blocked"* ]]
+    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
+}
+
+@test "build_issue_claude_md references AI instructions for CLI and label rules" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
+    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
+    [[ "${output}" == *"label management"* ]]
+}
+
+@test "build_issue_claude_md uses provided repo_path instead of REPO_WORK_DIR" {
+    run build_issue_claude_md 42 "/workspace/rules/.ai-instructions" "/workspace/repo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/workspace/repo"* ]]
+    [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
+}
+
+@test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Orchestrator agent"* ]]
+    [[ "${output}" == *"pull request #7"* ]]
+    [[ "${output}" == *"${REPO_FULL}"* ]]
+    [[ "${output}" == *"${REPO_WORK_DIR}"* ]]
+    [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
+    [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
+    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+}
+
+@test "build_pr_claude_md references AI instructions for CLI, label, and CI rules" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"mandatory rules from the AI instructions"* ]]
+    [[ "${output}" == *"GitHub CLI comment bodies"* ]]
+    [[ "${output}" == *"label management"* ]]
+    [[ "${output}" == *"CI checks"* ]]
+}
+
+@test "build_pr_claude_md with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"BEHIND"* ]]
+    [[ "${output}" == *"feat/my-branch"* ]]
+    [[ "${output}" == *"force-with-lease"* ]]
+    [[ "${output}" == *"rebase"* ]]
+}
+
+@test "build_pr_claude_md with CLEAN merge state does not include rebase notice" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"force-with-lease"* ]]
+    [[ "${output}" != *"BEHIND"* ]]
+}
+
+@test "build_pr_claude_md with DIRTY merge state includes rebase notice with branch name and force-with-lease" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "DIRTY" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"DIRTY"* ]]
+    [[ "${output}" == *"feat/my-branch"* ]]
+    [[ "${output}" == *"force-with-lease"* ]]
+    [[ "${output}" == *"rebase"* ]]
+}
+
+@test "build_pr_claude_md uses provided repo_path in rebase notice" {
+    run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"/workspace/repo"* ]]
     [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
@@ -94,7 +165,7 @@ teardown() {
     [[ "${output}" == *"force-with-lease"* ]]
 }
 
-@test "main passes DIRTY merge state and branch name to build_pr_prompt" {
+@test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -102,13 +173,13 @@ teardown() {
     fetch_pr_json()           { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}\n'; }
     fingerprint_pr_json()     { printf 'fp-new\n'; }
     load_pr_fingerprint()     { printf 'fp-old\n'; }
-    local _prompt_log="${TEST_TMP}/prompt_log"
-    build_pr_prompt() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${_prompt_log}"; printf 'mock-pr-prompt\n'; }
+    # Use TEST_TMP directly (exported) to avoid local-variable subprocess isolation issue.
+    build_pr_claude_md() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${TEST_TMP}/claude_md_log"; printf 'mock-pr-claude-md\n'; }
 
     run main
     [ "${status}" -eq 0 ]
-    grep -q 'merge_state=DIRTY' "${_prompt_log}"
-    grep -q 'branch=feat/test' "${_prompt_log}"
+    grep -q 'merge_state=DIRTY' "${TEST_TMP}/claude_md_log"
+    grep -q 'branch=feat/test' "${TEST_TMP}/claude_md_log"
 }
 
 @test "main performs non-agentic rebase for BEHIND PR, saves fingerprint, and continues without invoking agent" {
@@ -123,16 +194,16 @@ teardown() {
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 0; }
-    local _claude_log="${TEST_TMP}/claude_log"
-    invoke_claude() { printf 'called\n' >> "${_claude_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    # Use TEST_TMP directly (exported) to avoid local-variable subprocess isolation issue.
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"rebased non-agentically"* ]]
-    [ ! -f "${_claude_log}" ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
 }
 
-@test "main passes BEHIND merge state and branch name to build_pr_prompt" {
+@test "main passes BEHIND merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -140,13 +211,13 @@ teardown() {
     fetch_pr_json()           { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
     fingerprint_pr_json()     { printf 'fp-new\n'; }
     load_pr_fingerprint()     { printf 'fp-old\n'; }
-    local _prompt_log="${TEST_TMP}/prompt_log"
-    build_pr_prompt() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${_prompt_log}"; printf 'mock-pr-prompt\n'; }
+    # Use TEST_TMP directly (exported) to avoid local-variable subprocess isolation issue.
+    build_pr_claude_md() { printf 'merge_state=%s branch=%s\n' "$3" "$4" > "${TEST_TMP}/claude_md_log"; printf 'mock-pr-claude-md\n'; }
 
     run main
     [ "${status}" -eq 0 ]
-    grep -q 'merge_state=BEHIND' "${_prompt_log}"
-    grep -q 'branch=feat/test' "${_prompt_log}"
+    grep -q 'merge_state=BEHIND' "${TEST_TMP}/claude_md_log"
+    grep -q 'branch=feat/test' "${TEST_TMP}/claude_md_log"
 }
 
 # --- --owner argument ---------------------------------------------------------
@@ -766,6 +837,81 @@ STUBEOF
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
 
+@test "invoke_claude mounts CLAUDE.md read-only when claude_md_content is provided" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${args_log}"
+}
+
+@test "invoke_claude does not mount CLAUDE.md when claude_md_content is empty" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    # Use TEST_TMP (exported) directly as the args log path.
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${TEST_TMP}/docker_args"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "" 2>/dev/null
+    # Verify CLAUDE.md mount is absent.
+    run ! grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${TEST_TMP}/docker_args"
+}
+
+@test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    CLAUDE_MD_TMPFILE="sentinel"
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    [ -z "${CLAUDE_MD_TMPFILE}" ]
+}
+
 @test "invoke_claude passes CLAUDE_CODE_OAUTH_TOKEN env var when owner token is configured" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
@@ -1028,6 +1174,8 @@ setup_main_mocks() {
     load_session()              { SESSION_ID=""; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
     build_pr_prompt()           { printf 'mock-pr-prompt\n'; }
+    build_issue_claude_md()     { printf 'mock-issue-claude-md\n'; }
+    build_pr_claude_md()        { printf 'mock-pr-claude-md\n'; }
     invoke_claude()             { printf '12345678-1234-1234-1234-123456789abc\n'; }
     save_session()              { return 0; }
     compute_pr_fingerprint()    { printf 'new-fp\n'; }
