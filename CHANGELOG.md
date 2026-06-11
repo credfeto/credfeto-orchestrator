@@ -17,6 +17,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Issue comment changes ignored when linked PR fingerprint was unchanged — orchestrator now re-runs when the issue fingerprint changes even if the PR has not
 - Dirty main in working tree now hands off to agent instead of aborting
 - Dirty working tree on any branch now hands off to agent with full state context including branch name and merge state
+- Agent now explicitly checks out PR branch as first git action, preventing accidental changes on main
 ### Changed
 ### Deprecated
 ### Removed

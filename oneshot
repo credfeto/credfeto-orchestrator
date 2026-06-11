@@ -357,11 +357,12 @@ Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, 
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
-4. Proceed to address all outstanding work
-5. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
-6. All interaction with humans including status reports must be made as a comment to the pull request.
+2. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}
+3. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+4. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+5. Proceed to address all outstanding work
+6. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
+7. All interaction with humans including status reports must be made as a comment to the pull request.
 EOF
 }
 
