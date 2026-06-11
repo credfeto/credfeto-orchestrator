@@ -136,11 +136,12 @@ ensure_repo_current() {
 
         local current_branch
         current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+        if ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet; then
+            DIRTY_BRANCH="${current_branch}"
+            warn "Working tree has uncommitted changes on '${current_branch}' for ${REPO_FULL} — handing off to agent to recover"
+            return 1
+        fi
         if [ "${current_branch}" = "main" ]; then
-            if ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet; then
-                warn "Working tree has uncommitted changes on main for ${REPO_FULL} — handing off to agent to recover"
-                return 1
-            fi
             info "Rebasing main with origin/main..."
             git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
         fi
@@ -306,14 +307,29 @@ Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first in comments on the issue. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 3. Reply to every issue comment that prompted an action with "<one sentence description>"
-4. When ready to start work: create a new branch, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
+4. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
 5. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
 EOF
 }
 
 build_pr_claude_md() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}"
-    local rebase_notice=""
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}"
+    local rebase_notice="" dirty_branch_notice=""
+    if [ -n "${dirty_branch}" ]; then
+        dirty_branch_notice="
+IMPORTANT — dirty working tree: The local working tree is on branch '${dirty_branch}' with
+uncommitted or staged changes, likely left by an interrupted previous session. These may be
+partial work for this PR. Before any other work, inspect the state:
+  git -C ${repo_path} status
+If the changes belong on branch '${branch_name}' (this PR), move them there:
+  git -C ${repo_path} stash
+  git -C ${repo_path} checkout ${branch_name}
+  git -C ${repo_path} stash pop
+If they are not relevant to this PR, discard them:
+  git -C ${repo_path} checkout -- .
+  git -C ${repo_path} reset HEAD
+"
+    fi
     if [ "${merge_state}" = "BEHIND" ]; then
         rebase_notice="
 IMPORTANT — mergeStateStatus=BEHIND: The branch is behind origin/main and must be rebased before
@@ -336,16 +352,17 @@ Read AI instructions from ${ai_instructions}.
 
 Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
-${rebase_notice}
+${dirty_branch_notice}${rebase_notice}
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-3. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
-4. Proceed to address all outstanding work
-5. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
-6. All interaction with humans including status reports must be made as a comment to the pull request.
+2. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}
+3. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+4. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+5. Proceed to address all outstanding work
+6. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
+7. All interaction with humans including status reports must be made as a comment to the pull request.
 EOF
 }
 
@@ -1322,11 +1339,17 @@ main() {
         # ---- Work block: item_type and item_id are resolved ----
         info "Found actionable ${item_type} #${item_id} in ${item_repo} — preparing..."
 
+        merge_state=""
+        branch_name=""
+        DIRTY_BRANCH=""
+        if [ "${item_type}" = "PullRequest" ]; then
+            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+        fi
+
         if ! ensure_repo_current; then
             info "Repo not clean for ${item_repo} — handing off to agent to recover"
         elif [ "${item_type}" = "PullRequest" ]; then
-            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
-            branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
             if [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ]; then
                 if try_nonagentic_rebase "${branch_name}"; then
                     info "PR #${item_id} in ${item_repo} rebased non-agentically — updating fingerprint"
@@ -1378,7 +1401,7 @@ main() {
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
         else
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
