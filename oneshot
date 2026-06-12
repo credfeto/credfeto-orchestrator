@@ -176,7 +176,7 @@ recover_orphaned_branch() {
         && return 1
 
     warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
-    git -C "${REPO_WORK_DIR}" checkout main \
+    git -C "${REPO_WORK_DIR}" checkout -f main \
         || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
     git -C "${REPO_WORK_DIR}" rebase origin/main \
         || die "Failed to rebase origin/main after orphaned branch recovery for ${REPO_FULL}"

@@ -29,6 +29,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add /opt/pre-commit/src/scripts to PATH in development-full so run-bats and other hook helpers are found by pre-commit
 - Handle docker pull subcommand in bats test stubs so invoke_claude tests pass after PR #155 added a pull before every run
 - Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
+- recover_orphaned_branch now uses git checkout -f to discard unstaged changes when switching to main, preventing indefinite retry loops when the working tree is dirty
 ### Changed
 - Always pull the latest container image before starting each run
 ### Deprecated
