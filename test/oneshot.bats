@@ -866,7 +866,13 @@ STUBEOF
 @test "invoke_claude dies when claude_md_content is empty" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
-    run invoke_claude "test prompt" "" "" "" "" 2>/dev/null
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    run invoke_claude "test prompt" "" "" "" ""
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
@@ -2417,4 +2423,144 @@ STUBEOF
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qF ".gitconfig" "${args_log}"
     [ "${status}" -ne 0 ]
+}
+
+# --- add_gpg_docker_args unit tests --------------------------------------------
+
+make_gpg_stubs() {
+    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
+    # Create a real socket file so [ -S ] passes.
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
+    cat > "${STUB_BIN}/gpgconf" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "${extra_socket}"
+STUBEOF
+    chmod +x "${STUB_BIN}/gpgconf"
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+# Simulate export producing real bytes, or import succeeding.
+if [[ "$*" == *"--export"* ]]; then
+    printf 'FAKEPUBKEYDATA\n'
+    exit 0
+fi
+if [[ "$*" == *"--import"* ]]; then
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+}
+
+@test "add_gpg_docker_args uses socket forwarding when extra socket and signing key are available" {
+    make_gpg_stubs
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_docker_args
+    # Should contain at least one --volume arg referencing /home/developer/.gnupg
+    local found=0
+    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+        [[ "${arg}" == *":/home/developer/.gnupg"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
+}
+
+@test "add_gpg_docker_args mounts extra socket at /home/developer/.gnupg/S.gpg-agent:ro" {
+    make_gpg_stubs
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_docker_args
+    local found=0
+    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+        [[ "${arg}" == *":/home/developer/.gnupg/S.gpg-agent:ro"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
+}
+
+@test "add_gpg_docker_args sets GPG_PUBKEY_TMPDIR when forwarding succeeds" {
+    make_gpg_stubs
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    GPG_PUBKEY_TMPDIR=""
+    add_gpg_docker_args
+    [ -n "${GPG_PUBKEY_TMPDIR}" ]
+    [ -d "${GPG_PUBKEY_TMPDIR}" ]
+}
+
+@test "add_gpg_docker_args falls back to ~/.gnupg mount when extra socket is absent" {
+    # No gpgconf stub → gpgconf fails, extra_socket is empty, [ -S "" ] is false.
+    make_stub gpgconf 'exit 1'
+    mkdir -p "${HOME}/.gnupg"
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_docker_args 2>/dev/null
+    local found=0
+    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
+}
+
+@test "add_gpg_docker_args falls back to ~/.gnupg mount when gpg export fails" {
+    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
+    cat > "${STUB_BIN}/gpgconf" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "${extra_socket}"
+STUBEOF
+    chmod +x "${STUB_BIN}/gpgconf"
+    # gpg export produces empty output → import fails
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"--export"* ]]; then printf ''; exit 0; fi
+if [[ "$*" == *"--import"* ]]; then exit 1; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    mkdir -p "${HOME}/.gnupg"
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_docker_args 2>/dev/null
+    local found=0
+    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
+}
+
+@test "add_gpg_docker_args skips all mounts when GIT_SIGNING_KEY is empty and ~/.gnupg absent" {
+    make_stub gpgconf 'exit 1'
+    DOCKER_RUN_ARGS=()
+    GIT_SIGNING_KEY=""
+    add_gpg_docker_args 2>/dev/null
+    local found=0
+    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+        [[ "${arg}" == *".gnupg"* ]] && found=1
+    done
+    [ "${found}" -eq 0 ]
+}
+
+@test "add_gpg_docker_args GPG_PUBKEY_TMPDIR is cleaned up by invoke_claude on success" {
+    make_gpg_stubs
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    GIT_SIGNING_KEY="ABCD1234"
+    GPG_PUBKEY_TMPDIR=""
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    [ -z "${GPG_PUBKEY_TMPDIR}" ]
 }
