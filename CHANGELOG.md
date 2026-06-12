@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR with BEHIND or DIRTY merge state no longer skipped when fingerprint is unchanged
 - Rebase and dirty-branch recovery instructions embedded directly in numbered steps rather than floating IMPORTANT blocks
 - Orchestrator now automatically recovers when a managed repo is left on a branch that has been deleted from origin, instead of silently skipping the work item on every subsequent run
+- Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
 ### Changed
 - Always pull the latest container image before starting each run
 ### Deprecated
