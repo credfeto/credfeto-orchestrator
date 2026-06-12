@@ -2310,6 +2310,23 @@ setup_local_git_remote() {
     [[ "${output}" == *"no longer exists on origin"* ]]
 }
 
+@test "recover_orphaned_branch returns 0 and resets to main when branch is gone from remote and working tree has unstaged changes" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/dirty >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/dirty >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/dirty >/dev/null 2>&1
+    printf 'unstaged change\n' >> "${REPO_WORK_DIR}/CHANGELOG.md"
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 0 ]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+}
+
 # --- main() integration: orphaned-branch fingerprint bypass --------------------
 
 @test "main re-runs issue with matching fingerprint when recover_orphaned_branch detects orphaned branch" {
