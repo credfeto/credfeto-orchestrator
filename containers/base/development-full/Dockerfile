@@ -191,8 +191,9 @@ RUN mkdir -p /opt/git-global-hooks \
     && chmod 0755 /opt/git-global-hooks/pre-commit \
     && chown -R root:root /opt/git-global-hooks
 
-# Scripts in /opt/pre-commit/src/scripts/ (e.g. run-bats) must be on PATH so
-# pre-commit hook entries that reference them by name resolve correctly.
+# Make pre-commit helper scripts available on PATH so pre-commit hooks that
+# invoke them (e.g. run-bats, buildcheck) can be found without a full path.
+# The directory is root-owned (traversable but not writable by the agent user).
 ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
 
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
