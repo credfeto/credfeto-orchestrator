@@ -34,12 +34,6 @@ setup_isolated_env() {
     STUB_BIN_DIRS+=("${STUB_BIN}")
     mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${SESSION_BASE_DIR}"
 
-    # Provide a minimal git global config so that build_minimal_gitconfig can read
-    # identity values without touching the real host config.  Tests that need different
-    # values overwrite this file directly.
-    printf '[user]\n\tname = Test User\n\temail = test@example.com\n\tsigningkey = TESTKEY1234\n[commit]\n\tgpgsign = true\n' \
-        > "${HOME}/.gitconfig"
-
     # Put the stub directory first so any stubs we create take precedence.
     export PATH="${STUB_BIN}:${PATH}"
 }

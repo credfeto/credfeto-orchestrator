@@ -2299,61 +2299,110 @@ setup_local_git_remote() {
     [[ "${output}" != *"Found actionable Issue #42"* ]]
 }
 
-# --- build_minimal_gitconfig unit tests ----------------------------------------
+# --- load_env_config git identity tests ----------------------------------------
 
-@test "build_minimal_gitconfig includes user name and email from global config" {
-    run build_minimal_gitconfig
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"name = Test User"* ]]
-    [[ "${output}" == *"email = test@example.com"* ]]
+@test "load_env_config reads GIT_USER_NAME from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME=Alice\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_USER_NAME}" = "Alice" ]
 }
 
-@test "build_minimal_gitconfig includes signingkey and sets gpgsign=true when key is present" {
-    run build_minimal_gitconfig
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"signingkey = TESTKEY1234"* ]]
-    [[ "${output}" == *"gpgsign = true"* ]]
+@test "load_env_config reads GIT_USER_EMAIL from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_EMAIL=alice@example.com\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_USER_EMAIL}" = "alice@example.com" ]
 }
 
-@test "build_minimal_gitconfig sets gpgsign=false and omits signingkey when none in global config" {
-    printf '[user]\n\tname = Test User\n\temail = test@example.com\n' > "${HOME}/.gitconfig"
-    run build_minimal_gitconfig
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"gpgsign = false"* ]]
-    [[ "${output}" != *"signingkey"* ]]
+@test "load_env_config reads GIT_SIGNING_KEY from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_SIGNING_KEY=ABCD1234\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_SIGNING_KEY}" = "ABCD1234" ]
 }
 
-@test "build_minimal_gitconfig does not include gpg.program" {
-    run build_minimal_gitconfig
-    [ "${status}" -eq 0 ]
-    [[ "${output}" != *"gpg.program"* ]]
-    [[ "${output}" != *"program"* ]]
+@test "load_env_config leaves git identity vars empty when absent from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://example.com/hook\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ -z "${GIT_USER_NAME}" ]
+    [ -z "${GIT_USER_EMAIL}" ]
+    [ -z "${GIT_SIGNING_KEY}" ]
 }
 
-@test "build_minimal_gitconfig includes init.defaultBranch and pull.rebase" {
-    run build_minimal_gitconfig
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"defaultBranch = main"* ]]
-    [[ "${output}" == *"rebase = true"* ]]
+# --- invoke_claude git identity env var passing --------------------------------
+
+@test "invoke_claude passes GIT_USER_NAME as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_NAME="Alice"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
 }
 
-@test "build_minimal_gitconfig dies when user.name is absent from global config" {
-    printf '[user]\n\temail = test@example.com\n' > "${HOME}/.gitconfig"
-    run build_minimal_gitconfig
+@test "invoke_claude passes GIT_USER_EMAIL as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_EMAIL="alice@example.com"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_USER_EMAIL=alice@example.com' "${args_log}"
+}
+
+@test "invoke_claude passes GIT_SIGNING_KEY as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_SIGNING_KEY="ABCD1234"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_SIGNING_KEY=ABCD1234' "${args_log}"
+}
+
+@test "invoke_claude does not pass GIT_USER_NAME when not set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_NAME=""
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -qx 'GIT_USER_NAME=' "${args_log}"
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"user.name is not set"* ]]
 }
 
-@test "build_minimal_gitconfig dies when user.email is absent from global config" {
-    printf '[user]\n\tname = Test User\n' > "${HOME}/.gitconfig"
-    run build_minimal_gitconfig
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"user.email is not set"* ]]
-}
-
-# --- invoke_claude gitconfig mount tests ----------------------------------------
-
-@test "invoke_claude mounts a generated gitconfig file at /home/developer/.gitconfig:ro" {
+@test "invoke_claude does not mount the host HOME gitconfig" {
     local args_log="${TEST_TMP}/docker_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub sudo '"$@"'
@@ -2366,46 +2415,6 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -q ':/home/developer/.gitconfig:ro' "${args_log}"
-}
-
-@test "invoke_claude does not mount the host HOME gitconfig directly" {
-    local args_log="${TEST_TMP}/docker_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/docker"
-
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    run grep -qF "${HOME}/.gitconfig" "${args_log}"
+    run grep -qF ".gitconfig" "${args_log}"
     [ "${status}" -ne 0 ]
-}
-
-@test "invoke_claude cleans up GITCONFIG_TMPFILE after successful invocation" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/jq" << 'JQEOF'
-#!/usr/bin/env bash
-case "$2" in
-    '.is_error // false')    printf 'false\n' ;;
-    '.result // ""')         printf '\n' ;;
-    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
-esac
-JQEOF
-    chmod +x "${STUB_BIN}/jq"
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "inspect" ] && exit 1
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/docker"
-
-    GITCONFIG_TMPFILE="sentinel"
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
-    [ -z "${GITCONFIG_TMPFILE}" ]
 }
