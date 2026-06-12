@@ -11,6 +11,15 @@ ARG DOTNET_TOOLS_CACHE_BUST
 ARG CREDFETO_PRECOMMIT_CACHE_BUST
 ARG PRECOMMIT_UPSTREAM=https://github.com/credfeto/credfeto-global-pre-commit.git
 ARG MARKDOWN_LINTER_FIXER_REF=v1.5.4
+# Commit hashes for external GitHub repo clones. Pins each clone to a specific,
+# verified commit so a force-push or tag mutation on the upstream cannot silently
+# change what is baked into the image. Update each ARG intentionally when pulling
+# in new upstream changes.
+ARG DOTNET_CLAUDE_KIT_COMMIT=9a9a91107596b3ac3ad1d0ad5ec5eef189e74515
+ARG WSHOBSON_AGENTS_COMMIT=cc37bfdd292ce520ba1c44df7a3a70d5f8137236
+ARG CC_DEVOPS_SKILLS_COMMIT=feaf2b2f3c9544aa559836731cc80e363183f788
+ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
+ARG CREDFETO_PRECOMMIT_COMMIT=dcd40f11d35abb06db1066e27f7619c09d323356
 
 # ---- NuGet package sources (FunFair private feeds) ---------------------------
 # NuGet.Config is baked in root:root mode 0444 so the agent (running as the
@@ -107,13 +116,16 @@ RUN su developer -c '\
     ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint'
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
+# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
 RUN git clone --depth 1 https://github.com/codewithmukesh/dotnet-claude-kit.git /opt/dotnet-claude-kit \
+    && test "$(git -C /opt/dotnet-claude-kit rev-parse HEAD)" = "${DOTNET_CLAUDE_KIT_COMMIT}" \
     && chown -R root:root /opt/dotnet-claude-kit
 
 # ---- wshobson/agents marketplace — sparse-checkout three plugins -------------
 # The full repo is ~78 plugins; we only want javascript-typescript, python-
 # development, and shell-scripting. `--filter=blob:none --sparse` pulls only
 # the metadata up front, then sparse-checkout materialises just those subtrees.
+# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
 # hadolint ignore=DL3059
 RUN git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/wshobson/agents.git /opt/wshobson-agents \
@@ -121,17 +133,24 @@ RUN git clone --depth 1 --filter=blob:none --sparse \
         plugins/javascript-typescript \
         plugins/python-development \
         plugins/shell-scripting \
+    && test "$(git -C /opt/wshobson-agents rev-parse HEAD)" = "${WSHOBSON_AGENTS_COMMIT}" \
     && chown -R root:root /opt/wshobson-agents
 
 # ---- akin-ozer/cc-devops-skills (GitHub Actions et al) ----------------------
+# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
 # hadolint ignore=DL3059
 RUN git clone --depth 1 https://github.com/akin-ozer/cc-devops-skills.git /opt/cc-devops-skills \
+    && test "$(git -C /opt/cc-devops-skills rev-parse HEAD)" = "${CC_DEVOPS_SKILLS_COMMIT}" \
     && chown -R root:root /opt/cc-devops-skills
 
 # ---- s2005/markdown-linter-fixer-skill (pinned) -----------------------------
+# MARKDOWN_LINTER_FIXER_REF is the git tag used for the shallow clone.
+# MARKDOWN_LINTER_FIXER_COMMIT is the full commit SHA that tag currently resolves
+# to; the build verifies the two match so a tag mutation is caught immediately.
 # hadolint ignore=DL3059
 RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
         https://github.com/s2005/markdown-linter-fixer-skill.git /opt/markdown-linter-fixer \
+    && test "$(git -C /opt/markdown-linter-fixer rev-parse HEAD)" = "${MARKDOWN_LINTER_FIXER_COMMIT}" \
     && chown -R root:root /opt/markdown-linter-fixer
 
 # ---- /opt/pre-commit (global pre-commit config) ------------------------------
@@ -141,9 +160,14 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
 # config file the build fails right here.
 # Owned by root so the unprivileged `developer` user can read + execute but
 # cannot modify anything in here.
+# CREDFETO_PRECOMMIT_CACHE_BUST is updated daily by the build workflow to ensure
+# the latest hook config is always pulled in. CREDFETO_PRECOMMIT_COMMIT records
+# the expected HEAD SHA and is updated alongside CACHE_BUST; the build fails if
+# the two diverge, catching any unexpected upstream change between daily runs.
 # hadolint ignore=DL3059
 RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
     git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
+    && test "$(git -C /opt/pre-commit rev-parse HEAD)" = "${CREDFETO_PRECOMMIT_COMMIT}" \
     && test -f /opt/pre-commit/src/.pre-commit-config.yaml \
     && HEAD_SHA="$(git -C /opt/pre-commit rev-parse HEAD)" \
     && rm -rf /opt/pre-commit/.git \
