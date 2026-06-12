@@ -561,6 +561,9 @@ invoke_claude() {
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
+    info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
+    sudo docker pull "${ORCHESTRATOR_IMAGE}" || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
+
     # CLAUDE.md content is mandatory — every invocation must supply it.
     [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
 

@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Rebase and dirty-branch recovery instructions embedded directly in numbered steps rather than floating IMPORTANT blocks
 - Orchestrator now automatically recovers when a managed repo is left on a branch that has been deleted from origin, instead of silently skipping the work item on every subsequent run
 ### Changed
+- Always pull the latest container image before starting each run
 ### Deprecated
 ### Removed
 ### Deployment Changes
