@@ -290,6 +290,11 @@ load_session() {
     session_file=$(session_file_path "${item_type}" "${item_id}")
     if [ -f "${session_file}" ]; then
         SESSION_ID=$(cat "${session_file}")
+        if ! is_valid_session_id "${SESSION_ID}"; then
+            warn "Session file for ${item_type} #${item_id} contains invalid session ID — discarding"
+            rm -f "${session_file}"
+            SESSION_ID=""
+        fi
         return
     fi
 
@@ -304,6 +309,11 @@ load_session() {
             if [ -f "${linked_session_file}" ]; then
                 info "No session for PR #${item_id} — inheriting session from linked issue #${linked_issue_id}"
                 SESSION_ID=$(cat "${linked_session_file}")
+                if ! is_valid_session_id "${SESSION_ID}"; then
+                    warn "Linked session file for Issue #${linked_issue_id} contains invalid session ID — discarding"
+                    rm -f "${linked_session_file}"
+                    SESSION_ID=""
+                fi
             fi
         fi
     fi
