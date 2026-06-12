@@ -583,10 +583,13 @@ invoke_claude() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
-    [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
-    [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
-    [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
+    [ -d "${HOME}/.ssh" ]   && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    [ -d "${HOME}/.gnupg" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
+
+    [ -n "${GIT_USER_NAME}" ]  && DOCKER_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
+    [ -n "${GIT_USER_EMAIL}" ] && DOCKER_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
+    [ -n "${GIT_SIGNING_KEY}" ] && DOCKER_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
 
     [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
@@ -866,18 +869,23 @@ issue_json_has_blocked_label() {
     printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
-# Reads DISCORD_WEBHOOK, GH_TOKEN, and GH_HOST from orchestrator/.env.
+# Reads DISCORD_WEBHOOK, GH_TOKEN, GH_HOST, GIT_USER_NAME, GIT_USER_EMAIL, and
+# GIT_SIGNING_KEY from orchestrator/.env.
 # Sets DISCORD_WEBHOOK_URL; exports GH_HOST and GH_ENTERPRISE_TOKEN when both are
 # present so host-side gh CLI calls use the same proxy as the agent container.
+# GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
 # Silent when the file is absent or a key is missing.
 load_env_config() {
     DISCORD_WEBHOOK_URL=""
+    GIT_USER_NAME=""
+    GIT_USER_EMAIL=""
+    GIT_SIGNING_KEY=""
     local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
     [ -f "${env_file}" ] || return 0
     local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*)
+            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*)
                 val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
@@ -888,6 +896,9 @@ load_env_config() {
                     DISCORD_WEBHOOK=*) DISCORD_WEBHOOK_URL="${val}" ;;
                     GH_TOKEN=*)        gh_token="${val}" ;;
                     GH_HOST=*)         gh_host="${val}" ;;
+                    GIT_USER_NAME=*)   GIT_USER_NAME="${val}" ;;
+                    GIT_USER_EMAIL=*)  GIT_USER_EMAIL="${val}" ;;
+                    GIT_SIGNING_KEY=*) GIT_SIGNING_KEY="${val}" ;;
                 esac
                 ;;
         esac

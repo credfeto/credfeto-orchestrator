@@ -2298,3 +2298,123 @@ setup_local_git_remote() {
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
 }
+
+# --- load_env_config git identity tests ----------------------------------------
+
+@test "load_env_config reads GIT_USER_NAME from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME=Alice\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_USER_NAME}" = "Alice" ]
+}
+
+@test "load_env_config reads GIT_USER_EMAIL from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_EMAIL=alice@example.com\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_USER_EMAIL}" = "alice@example.com" ]
+}
+
+@test "load_env_config reads GIT_SIGNING_KEY from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_SIGNING_KEY=ABCD1234\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GIT_SIGNING_KEY}" = "ABCD1234" ]
+}
+
+@test "load_env_config leaves git identity vars empty when absent from .env" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://example.com/hook\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ -z "${GIT_USER_NAME}" ]
+    [ -z "${GIT_USER_EMAIL}" ]
+    [ -z "${GIT_SIGNING_KEY}" ]
+}
+
+# --- invoke_claude git identity env var passing --------------------------------
+
+@test "invoke_claude passes GIT_USER_NAME as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_NAME="Alice"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
+}
+
+@test "invoke_claude passes GIT_USER_EMAIL as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_EMAIL="alice@example.com"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_USER_EMAIL=alice@example.com' "${args_log}"
+}
+
+@test "invoke_claude passes GIT_SIGNING_KEY as Docker env var when set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_SIGNING_KEY="ABCD1234"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'GIT_SIGNING_KEY=ABCD1234' "${args_log}"
+}
+
+@test "invoke_claude does not pass GIT_USER_NAME when not set" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    GIT_USER_NAME=""
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -qx 'GIT_USER_NAME=' "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "invoke_claude does not mount the host HOME gitconfig" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -qF ".gitconfig" "${args_log}"
+    [ "${status}" -ne 0 ]
+}

@@ -14,7 +14,6 @@
 #   /workspace/rules  — cs-template rules clone      (read-only)
 #   /home/developer/.ssh    — SSH keys               (read-only)
 #   /home/developer/.gnupg  — GPG keyring            (read/write)
-#   /home/developer/.gitconfig — host git config     (read-only)
 #   /home/developer/.claude               — session state and memory     (read/write)
 #   /home/developer/.claude/settings.json — Claude Code settings         (read-only, overlays parent)
 #   /home/developer/.claude/CLAUDE.md     — global Claude instructions   (read-only, overlays parent)
@@ -22,6 +21,11 @@
 #
 # Required runtime environment variables (no default — must be set):
 #   CLAUDE_CODE_OAUTH_TOKEN — Anthropic OAuth token for claude
+#
+# Git identity environment variables (set by oneshot from ~/.config/orchestrator/.env):
+#   GIT_USER_NAME   — git user.name for commits (must be set together with GIT_USER_EMAIL)
+#   GIT_USER_EMAIL  — git user.email for commits (must be set together with GIT_USER_NAME)
+#   GIT_SIGNING_KEY — GPG key ID for commit signing; also enables commit.gpgsign=true
 #
 # Inherited environment variables (have defaults from base images; can be overridden):
 #   GH_HOST             — GitHub API proxy hostname; override with "github.com" and
@@ -156,6 +160,13 @@ RUN set -e; \
     echo "== all agent build-time checks passed =="
 
 USER developer
+
+# Bake static git settings that do not vary per deployment.
+# Identity (user.name, user.email, user.signingkey) is injected at runtime
+# via GIT_USER_NAME / GIT_USER_EMAIL / GIT_SIGNING_KEY env vars in entrypoint.sh.
+RUN git config --global init.defaultBranch main \
+    && git config --global pull.rebase true
+
 WORKDIR /workspace/repo
 
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]
