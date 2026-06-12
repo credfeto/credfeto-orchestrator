@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
