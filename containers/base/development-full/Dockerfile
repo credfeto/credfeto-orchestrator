@@ -167,6 +167,10 @@ RUN mkdir -p /opt/git-global-hooks \
     && chmod 0755 /opt/git-global-hooks/pre-commit \
     && chown -R root:root /opt/git-global-hooks
 
+# Scripts in /opt/pre-commit/src/scripts/ (e.g. run-bats) must be on PATH so
+# pre-commit hook entries that reference them by name resolve correctly.
+ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
+
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
 # `developer` user the agent runs as has no way to modify it.
@@ -188,7 +192,7 @@ RUN ln -sf /usr/bin/gpg /usr/bin/gpg2
 # hadolint ignore=DL3059
 RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
-    for cmd in git gh dotnet python3 gpg curl sqlite3 \
+    for cmd in git gh dotnet python3 gpg curl jq sqlite3 \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
                trufflehog hadolint dotenv-linter sqlcmd pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \
@@ -238,6 +242,8 @@ RUN set -e; \
         || { echo "FATAL sanity: /opt/pre-commit/src/.pre-commit-config.yaml is missing" >&2; exit 1; }; \
     test -x /opt/git-global-hooks/pre-commit \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-commit is not executable" >&2; exit 1; }; \
+    command -v run-bats >/dev/null 2>&1 \
+        || { echo "FATAL sanity: run-bats not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     echo "== all build-time checks passed =="
 
 # ---- /opt/pre-commit acceptance suite (end-to-end hook orchestrator test) ---
