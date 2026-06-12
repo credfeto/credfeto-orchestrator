@@ -34,8 +34,11 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Handle docker pull subcommand in bats test stubs so invoke_claude tests pass after PR #155 added a pull before every run
 - Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
 - Fix dotenv-linter ARM64 asset name from arm64 to aarch64 to match the actual release filename on the dotenv-linter GitHub releases page
+- Pass CREDFETO_PRECOMMIT_COMMIT build arg from workflow to development-full Dockerfile so the supply chain commit hash check uses the dynamically fetched HEAD rather than the stale hardcoded default
+- Add systemctl stub to install-timer and uninstall-timer bats tests so they pass in environments without systemd
 ### Changed
 - Always pull the latest container image before starting each run
+- Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 ### Deprecated
 ### Removed
 ### Deployment Changes
