@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Verify SHA-256 checksums for hadolint, dotenv-linter, and sqlcmd binary downloads in development-tools container to detect supply chain tampering at build time
 - Replace curl|bash installer patterns for actionlint and trufflehog in development-tools container with direct binary downloads and pinned SHA-256 verification
 - Pin all external GitHub repository clones in development-full container to specific commit hashes; build fails if upstream HEAD diverges from the expected SHA
+- Add CPU, memory, and PID resource limits to agent container invocation to prevent a compromised container from exhausting host resources
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
