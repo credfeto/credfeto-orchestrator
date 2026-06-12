@@ -12,6 +12,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
 - Replace ~/.gitconfig volume mount with git identity env vars (GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) passed into the container; entrypoint.sh now configures git from those vars and dies if any required value is absent
+- Verify SHA-256 checksums for hadolint, dotenv-linter, and sqlcmd binary downloads in development-tools container to detect supply chain tampering at build time
+- Replace curl|bash installer patterns for actionlint and trufflehog in development-tools container with direct binary downloads and pinned SHA-256 verification
+- Pin all external GitHub repository clones in development-full container to specific commit hashes; build fails if upstream HEAD diverges from the expected SHA
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
@@ -24,6 +27,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR with BEHIND or DIRTY merge state no longer skipped when fingerprint is unchanged
 - Rebase and dirty-branch recovery instructions embedded directly in numbered steps rather than floating IMPORTANT blocks
 - Orchestrator now automatically recovers when a managed repo is left on a branch that has been deleted from origin, instead of silently skipping the work item on every subsequent run
+- Fix dotenv-linter ARM64 asset name from arm64 to aarch64 to match the actual release filename on the dotenv-linter GitHub releases page
 ### Changed
 - Always pull the latest container image before starting each run
 ### Deprecated
