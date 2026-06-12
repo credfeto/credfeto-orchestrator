@@ -449,6 +449,7 @@ run_claude_fresh() {
 # Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
 CLAUDE_RESUMED_AS_FRESH=0
 CLAUDE_MD_TMPFILE=""
+GPG_PUBKEY_TMPDIR=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile
@@ -540,6 +541,35 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Appends GPG volume/socket args to DOCKER_RUN_ARGS.
+# Preferred path: creates a tmpdir containing only the public key and forwards
+# the gpg-agent extra socket into it.  Falls back to the full ~/.gnupg rw mount
+# with a warning when the socket is absent or the key export fails.
+add_gpg_docker_args() {
+    local extra_socket
+    extra_socket=$(gpgconf --list-dirs agent-extra-socket 2>/dev/null) || extra_socket=""
+
+    if [ -n "${GIT_SIGNING_KEY}" ] && [ -S "${extra_socket}" ]; then
+        GPG_PUBKEY_TMPDIR=$(mktemp -d --suffix=.gnupghome) \
+            || die "Failed to create tmpdir for GPG pubkey gnupghome"
+        chmod 0700 "${GPG_PUBKEY_TMPDIR}"
+        if gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
+                | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null; then
+            DOCKER_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
+            DOCKER_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
+            return
+        fi
+        warn "GPG public key export failed for ${GIT_SIGNING_KEY} — falling back to ~/.gnupg mount"
+        rm -rf "${GPG_PUBKEY_TMPDIR}"
+        GPG_PUBKEY_TMPDIR=""
+    elif [ -n "${GIT_SIGNING_KEY}" ]; then
+        warn "GPG agent extra socket not available — falling back to ~/.gnupg mount"
+    fi
+    if [ -d "${HOME}/.gnupg" ]; then
+        DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
+    fi
+}
+
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 # Runs claude inside a Docker container named orchestrator-<OWNER>.
@@ -562,7 +592,7 @@ invoke_claude() {
     fi
 
     info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
-    sudo docker pull "${ORCHESTRATOR_IMAGE}" || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
+    sudo docker pull "${ORCHESTRATOR_IMAGE}" >&2 || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
@@ -573,7 +603,7 @@ invoke_claude() {
     # breaks every Bash tool call with EACCES.
     CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"' EXIT
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -586,8 +616,8 @@ invoke_claude() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
-    [ -d "${HOME}/.ssh" ]   && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
-    [ -d "${HOME}/.gnupg" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
+    [ -d "${HOME}/.ssh" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    add_gpg_docker_args
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
     [ -n "${GIT_USER_NAME}" ]  && DOCKER_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
@@ -631,15 +661,17 @@ invoke_claude() {
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
+        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Failed to parse session_id from Claude output"; }
     rm -f "${tmpfile}"
 
-    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "No session_id returned by Claude"; }
+    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "No session_id returned by Claude"; }
     is_valid_session_id "${new_session_id}" \
-        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
+        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
     rm -rf "${CLAUDE_MD_TMPFILE}"
     CLAUDE_MD_TMPFILE=""
+    rm -rf "${GPG_PUBKEY_TMPDIR}"
+    GPG_PUBKEY_TMPDIR=""
     printf '%s' "${new_session_id}"
 }
 
