@@ -49,15 +49,24 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Pin CLI versions for reproducibility. Bump deliberately — unpinned installs
 # silently pick up the latest and can break in lockstep across all users.
 ARG HADOLINT_VERSION=v2.14.0
+ARG HADOLINT_SHA256_AMD64=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
+ARG HADOLINT_SHA256_ARM64=331f1d3511b84a4f1e3d18d52fec284723e4019552f4f47b19322a53ce9a40ed
 ARG DOTENV_LINTER_VERSION=v4.0.0
+ARG DOTENV_LINTER_SHA256_AMD64=9e2f1f6eb88a71ac15ef209f78f5a68644db82f132d2677112b4f80ec2bd2127
+ARG DOTENV_LINTER_SHA256_ARM64=c4113aafd35e5f9095b2f757061d07cc8eb5cc0bcd755249877af08b7ffafb9a
 ARG SQLCMD_VERSION=v1.10.0
-# actionlint: the download-actionlint.bash script resolves "latest" to the
-# current release natively. Override via --build-arg ACTIONLINT_VERSION=vX.Y.Z
-# to pin a specific release for reproducible builds.
-ARG ACTIONLINT_VERSION=latest
-# trufflehog: the upstream install.sh selects the current release when no
-# version is given (empty ARG). Override via --build-arg TRUFFLEHOG_VERSION=vX.Y.Z.
-ARG TRUFFLEHOG_VERSION
+ARG SQLCMD_SHA256_AMD64=92516d98c63d99b0994de5b61350c91f6915f9b76f139a59039fbcb225c2e987
+ARG SQLCMD_SHA256_ARM64=9faaa981f9c374f319ac796dedb4678499b8596c87d5b6c512e9b0e7a3b74f8e
+# actionlint: pinned to a specific release for reproducible, verifiable builds.
+# Update ACTIONLINT_VERSION and both SHA256 ARGs together when bumping.
+ARG ACTIONLINT_VERSION=1.7.12
+ARG ACTIONLINT_SHA256_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+ARG ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+# trufflehog: pinned to a specific release for reproducible, verifiable builds.
+# Update TRUFFLEHOG_VERSION and both SHA256 ARGs together when bumping.
+ARG TRUFFLEHOG_VERSION=3.95.5
+ARG TRUFFLEHOG_SHA256_AMD64=8d151a19465973bec226be5992a2a11b053f4ab92c77861f642089892ae9aa58
+ARG TRUFFLEHOG_SHA256_ARM64=bb876c4e5a84fa4fdbda4fc24143ed2d12eac32cfd3f7e41c79cbd7d33607b4a
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
@@ -156,28 +165,33 @@ ENV GH_ENTERPRISE_TOKEN=ghp_PLACEHOLDER_OneCLI_substitutes_this_at_egress
 # ---- hadolint — Dockerfile linter -------------------------------------------
 # Static binary; arch suffix differs (x86_64 / arm64). Downloaded from the
 # GitHub releases page for the pinned HADOLINT_VERSION.
+# SHA256 verified against the per-file .sha256 published alongside each release.
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
-         amd64) HL_ARCH=x86_64 ;; \
-         arm64) HL_ARCH=arm64  ;; \
+         amd64) HL_ARCH=x86_64; SHA256="${HADOLINT_SHA256_AMD64}" ;; \
+         arm64) HL_ARCH=arm64;  SHA256="${HADOLINT_SHA256_ARM64}" ;; \
          *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
        esac \
     && curl -fsSL "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-${HL_ARCH}" \
         -o /usr/local/bin/hadolint \
+    && echo "${SHA256}  /usr/local/bin/hadolint" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/hadolint \
     && hadolint --version
 
 # ---- dotenv-linter — .env file linter ----------------------------------------
 # Static binary shipped as a .tar.gz archive. Arch suffix follows the dotenv-
-# linter release naming convention (x86_64 / arm64).
+# linter release naming convention (x86_64 / aarch64 — note: Linux arm64 assets
+# are named aarch64, not arm64).
+# SHA256 verified against the downloaded archive before extraction.
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
-         amd64) DL_ARCH=x86_64 ;; \
-         arm64) DL_ARCH=arm64  ;; \
+         amd64) DL_ARCH=x86_64;  SHA256="${DOTENV_LINTER_SHA256_AMD64}" ;; \
+         arm64) DL_ARCH=aarch64; SHA256="${DOTENV_LINTER_SHA256_ARM64}" ;; \
          *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
        esac \
     && curl -fsSL "https://github.com/dotenv-linter/dotenv-linter/releases/download/${DOTENV_LINTER_VERSION}/dotenv-linter-linux-${DL_ARCH}.tar.gz" \
         -o /tmp/dotenv-linter.tgz \
+    && echo "${SHA256}  /tmp/dotenv-linter.tgz" | sha256sum -c - \
     && tar -xzf /tmp/dotenv-linter.tgz -C /usr/local/bin dotenv-linter \
     && chmod 0755 /usr/local/bin/dotenv-linter \
     && rm /tmp/dotenv-linter.tgz \
@@ -186,33 +200,57 @@ RUN ARCH=$(dpkg --print-architecture) \
 # ---- sqlcmd (microsoft/go-sqlcmd) — modern SQL Server CLI -------------------
 # Static Go binary; replaces the legacy mssql-tools sqlcmd. Asset name is
 # unversioned (sqlcmd-linux-<arch>.tar.bz2) — version comes from the URL path.
+# SHA256 verified against the downloaded archive before extraction.
 RUN ARCH=$(dpkg --print-architecture) \
     && case "$ARCH" in \
-         amd64) SC_ARCH=amd64 ;; \
-         arm64) SC_ARCH=arm64 ;; \
+         amd64) SC_ARCH=amd64; SHA256="${SQLCMD_SHA256_AMD64}" ;; \
+         arm64) SC_ARCH=arm64; SHA256="${SQLCMD_SHA256_ARM64}" ;; \
          *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
        esac \
     && curl -fsSL "https://github.com/microsoft/go-sqlcmd/releases/download/${SQLCMD_VERSION}/sqlcmd-linux-${SC_ARCH}.tar.bz2" \
         -o /tmp/sqlcmd.tar.bz2 \
+    && echo "${SHA256}  /tmp/sqlcmd.tar.bz2" | sha256sum -c - \
     && tar -xjf /tmp/sqlcmd.tar.bz2 -C /usr/local/bin sqlcmd \
     && chmod 0755 /usr/local/bin/sqlcmd \
     && rm /tmp/sqlcmd.tar.bz2 \
     && sqlcmd --version
 
 # ---- actionlint — GitHub Actions workflow linter ----------------------------
-# Static binary; the upstream installer script handles arch detection and
-# downloads from the GitHub release page.
-RUN curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
-        -o /tmp/install-actionlint.sh \
-    && bash /tmp/install-actionlint.sh "${ACTIONLINT_VERSION}" /usr/local/bin \
-    && rm /tmp/install-actionlint.sh \
+# Static binary; downloaded directly from GitHub releases and verified against
+# the pinned SHA256 checksum. Replaces the former curl|bash installer to avoid
+# executing remotely-fetched code without integrity verification.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) AL_ARCH=amd64; SHA256="${ACTIONLINT_SHA256_AMD64}" ;; \
+         arm64) AL_ARCH=arm64; SHA256="${ACTIONLINT_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${AL_ARCH}.tar.gz" \
+        -o /tmp/actionlint.tar.gz \
+    && echo "${SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint \
+    && rm /tmp/actionlint.tar.gz \
+    && chmod 0755 /usr/local/bin/actionlint \
     && actionlint -version
 
 # ---- trufflehog — secret scanner --------------------------------------------
-# No Debian package available; upstream's install.sh handles arch detection
-# and pulls a static binary from the GitHub release.
-RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-        | sh -s -- -b /usr/local/bin ${TRUFFLEHOG_VERSION:+"$TRUFFLEHOG_VERSION"} \
+# Static binary; downloaded directly from GitHub releases and verified against
+# the pinned SHA256 checksum. Replaces the former curl|bash installer to avoid
+# executing remotely-fetched code without integrity verification.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) TH_ARCH=amd64; SHA256="${TRUFFLEHOG_SHA256_AMD64}" ;; \
+         arm64) TH_ARCH=arm64; SHA256="${TRUFFLEHOG_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_${TH_ARCH}.tar.gz" \
+        -o /tmp/trufflehog.tar.gz \
+    && echo "${SHA256}  /tmp/trufflehog.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog \
+    && rm /tmp/trufflehog.tar.gz \
+    && chmod 0755 /usr/local/bin/trufflehog \
     && trufflehog --version
 
 # ---- composite-action-lint --------------------------------------------------
