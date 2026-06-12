@@ -491,6 +491,31 @@ teardown() {
     [ -z "${SESSION_ID}" ]
 }
 
+@test "load_session discards a corrupted session file and resets SESSION_ID to empty" {
+    local session_file="${SESSION_BASE_DIR}/Issue_9.env"
+    mkdir -p "${SESSION_BASE_DIR}"
+    # Write a file whose content is NOT a valid UUID (simulates docker pull output contamination)
+    printf 'latest: Pulling from some/image\nlayer1: Pull complete\ndeadbeef-0000-0000-0000-000000000000\n' \
+        > "${session_file}"
+
+    SESSION_ID="sentinel"
+    load_session Issue 9
+    [ -z "${SESSION_ID}" ]
+    [ ! -f "${session_file}" ]
+}
+
+@test "load_session discards a corrupted linked-issue session file and leaves SESSION_ID empty" {
+    local linked_file="${SESSION_BASE_DIR}/Issue_5.env"
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'not-a-uuid\n' > "${linked_file}"
+
+    make_stub gh 'printf "5\n"'
+    SESSION_ID="sentinel"
+    load_session PullRequest 77
+    [ -z "${SESSION_ID}" ]
+    [ ! -f "${linked_file}" ]
+}
+
 # --- fingerprinting --------------------------------------------------------
 
 @test "hash_sha256 is deterministic and matches the known SHA-256 of 'hello'" {
