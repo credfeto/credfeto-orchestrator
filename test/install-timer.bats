@@ -6,6 +6,7 @@ setup() {
     setup_isolated_env
 
     mkdir -p "${TEST_TMP}/units"
+    make_stub systemctl 'exit 0'
 
     # Override id as a bash function so CURRENT_USER resolves to "testuser"
     # when install-timer is sourced.  The function must be exported so that
@@ -35,6 +36,10 @@ setup() {
     }
     export -f sudo
 
+}
+
+teardown() {
+    cleanup_stubs
 }
 
 @test "sourcing install-timer defines main without executing it" {

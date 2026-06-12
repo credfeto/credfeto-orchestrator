@@ -13,6 +13,10 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
 - Replace ~/.gitconfig volume mount with git identity env vars (GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) passed into the container; entrypoint.sh now configures git from those vars and dies if any required value is absent
 - Replace ~/.gnupg read-write volume mount with GPG agent extra-socket forwarding; a public-key-only gnupghome tmpdir is created per invocation so no private key material enters the container
+- Verify SHA-256 checksums for hadolint, dotenv-linter, and sqlcmd binary downloads in development-tools container to detect supply chain tampering at build time
+- Replace curl|bash installer patterns for actionlint and trufflehog in development-tools container with direct binary downloads and pinned SHA-256 verification
+- Pin all external GitHub repository clones in development-full container to specific commit hashes; build fails if upstream HEAD diverges from the expected SHA
+- Add CPU, memory, and PID resource limits to agent container invocation to prevent a compromised container from exhausting host resources
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
@@ -30,8 +34,12 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Handle docker pull subcommand in bats test stubs so invoke_claude tests pass after PR #155 added a pull before every run
 - Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
 - recover_orphaned_branch now uses git checkout -f to discard unstaged changes when switching to main, preventing indefinite retry loops when the working tree is dirty
+- Fix dotenv-linter ARM64 asset name from arm64 to aarch64 to match the actual release filename on the dotenv-linter GitHub releases page
+- Pass CREDFETO_PRECOMMIT_COMMIT build arg from workflow to development-full Dockerfile so the supply chain commit hash check uses the dynamically fetched HEAD rather than the stale hardcoded default
+- Add systemctl stub to install-timer and uninstall-timer bats tests so they pass in environments without systemd
 ### Changed
 - Always pull the latest container image before starting each run
+- Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 ### Deprecated
 ### Removed
 ### Deployment Changes
