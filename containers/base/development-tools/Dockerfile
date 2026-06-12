@@ -105,6 +105,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         devscripts \
         git \
         gnupg \
+        jq \
         libicu76 \
         openssh-client \
         python3 \
@@ -302,7 +303,7 @@ RUN { \
 # hadolint ignore=DL3001
 RUN set -e; \
     echo "== binary presence + version probe =="; \
-    for cmd in git gpg curl dotnet shellcheck shfmt bats sqlite3 gh \
+    for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog \
                python3 ansible-lint flake8 pylint \
                yamllint pre-commit xmllint; do \
