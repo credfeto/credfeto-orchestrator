@@ -449,6 +449,7 @@ run_claude_fresh() {
 # Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
 CLAUDE_RESUMED_AS_FRESH=0
 CLAUDE_MD_TMPFILE=""
+GITCONFIG_TMPFILE=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile
@@ -540,6 +541,32 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Writes a minimal gitconfig for the container to stdout.
+# Reads identity from the host's global git config; dies if required fields are absent.
+# gpg.program is intentionally omitted — the container image provides its own gpg.
+build_minimal_gitconfig() {
+    local git_name git_email git_signingkey gpgsign
+
+    git_name=$(git config --global user.name 2>/dev/null) || true
+    git_email=$(git config --global user.email 2>/dev/null) || true
+    git_signingkey=$(git config --global user.signingkey 2>/dev/null) || true
+
+    [ -n "${git_name}" ]  || die "git user.name is not set in global config — cannot build container gitconfig"
+    [ -n "${git_email}" ] || die "git user.email is not set in global config — cannot build container gitconfig"
+
+    if [ -n "${git_signingkey}" ]; then
+        gpgsign="true"
+    else
+        gpgsign="false"
+    fi
+
+    printf '[user]\n\tname = %s\n\temail = %s\n' "${git_name}" "${git_email}"
+    [ -n "${git_signingkey}" ] && printf '\tsigningkey = %s\n' "${git_signingkey}"
+    printf '[commit]\n\tgpgsign = %s\n' "${gpgsign}"
+    printf '[init]\n\tdefaultBranch = main\n'
+    printf '[pull]\n\trebase = true\n'
+}
+
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
 # Runs claude inside a Docker container named orchestrator-<OWNER>.
@@ -570,7 +597,9 @@ invoke_claude() {
     # breaks every Bash tool call with EACCES.
     CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"' EXIT
+    GITCONFIG_TMPFILE=$(mktemp --suffix=.gitconfig) || die "Failed to create temp file for gitconfig"
+    build_minimal_gitconfig > "${GITCONFIG_TMPFILE}"
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -f "${GITCONFIG_TMPFILE}"' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -583,9 +612,9 @@ invoke_claude() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
-    [ -d "${HOME}/.ssh" ]       && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
-    [ -d "${HOME}/.gnupg" ]     && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
-    [ -f "${HOME}/.gitconfig" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gitconfig:/home/developer/.gitconfig:ro" )
+    [ -d "${HOME}/.ssh" ]   && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    [ -d "${HOME}/.gnupg" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
+    DOCKER_RUN_ARGS+=( --volume "${GITCONFIG_TMPFILE}:/home/developer/.gitconfig:ro" )
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
     [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
@@ -625,15 +654,17 @@ invoke_claude() {
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
+        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -f "${GITCONFIG_TMPFILE}"; GITCONFIG_TMPFILE=""; die "Failed to parse session_id from Claude output"; }
     rm -f "${tmpfile}"
 
-    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "No session_id returned by Claude"; }
+    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -f "${GITCONFIG_TMPFILE}"; GITCONFIG_TMPFILE=""; die "No session_id returned by Claude"; }
     is_valid_session_id "${new_session_id}" \
-        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
+        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -f "${GITCONFIG_TMPFILE}"; GITCONFIG_TMPFILE=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
     rm -rf "${CLAUDE_MD_TMPFILE}"
     CLAUDE_MD_TMPFILE=""
+    rm -f "${GITCONFIG_TMPFILE}"
+    GITCONFIG_TMPFILE=""
     printf '%s' "${new_session_id}"
 }
 

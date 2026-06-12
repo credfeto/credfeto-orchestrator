@@ -2298,3 +2298,114 @@ setup_local_git_remote() {
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
 }
+
+# --- build_minimal_gitconfig unit tests ----------------------------------------
+
+@test "build_minimal_gitconfig includes user name and email from global config" {
+    run build_minimal_gitconfig
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"name = Test User"* ]]
+    [[ "${output}" == *"email = test@example.com"* ]]
+}
+
+@test "build_minimal_gitconfig includes signingkey and sets gpgsign=true when key is present" {
+    run build_minimal_gitconfig
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"signingkey = TESTKEY1234"* ]]
+    [[ "${output}" == *"gpgsign = true"* ]]
+}
+
+@test "build_minimal_gitconfig sets gpgsign=false and omits signingkey when none in global config" {
+    printf '[user]\n\tname = Test User\n\temail = test@example.com\n' > "${HOME}/.gitconfig"
+    run build_minimal_gitconfig
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"gpgsign = false"* ]]
+    [[ "${output}" != *"signingkey"* ]]
+}
+
+@test "build_minimal_gitconfig does not include gpg.program" {
+    run build_minimal_gitconfig
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"gpg.program"* ]]
+    [[ "${output}" != *"program"* ]]
+}
+
+@test "build_minimal_gitconfig includes init.defaultBranch and pull.rebase" {
+    run build_minimal_gitconfig
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"defaultBranch = main"* ]]
+    [[ "${output}" == *"rebase = true"* ]]
+}
+
+@test "build_minimal_gitconfig dies when user.name is absent from global config" {
+    printf '[user]\n\temail = test@example.com\n' > "${HOME}/.gitconfig"
+    run build_minimal_gitconfig
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"user.name is not set"* ]]
+}
+
+@test "build_minimal_gitconfig dies when user.email is absent from global config" {
+    printf '[user]\n\tname = Test User\n' > "${HOME}/.gitconfig"
+    run build_minimal_gitconfig
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"user.email is not set"* ]]
+}
+
+# --- invoke_claude gitconfig mount tests ----------------------------------------
+
+@test "invoke_claude mounts a generated gitconfig file at /home/developer/.gitconfig:ro" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -q ':/home/developer/.gitconfig:ro' "${args_log}"
+}
+
+@test "invoke_claude does not mount the host HOME gitconfig directly" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -qF "${HOME}/.gitconfig" "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "invoke_claude cleans up GITCONFIG_TMPFILE after successful invocation" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+
+    GITCONFIG_TMPFILE="sentinel"
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    [ -z "${GITCONFIG_TMPFILE}" ]
+}
