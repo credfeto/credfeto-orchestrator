@@ -610,6 +610,40 @@ STUBEOF
     grep -qx 'opusplan' "${args_log}"
 }
 
+@test "invoke_claude passes resource limit flags to docker run" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    # Stub jq to return canned values matching the docker stub's JSON output.
+    # Needed in environments where jq is not installed.
+    cat > "${STUB_BIN}/jq" << 'JQSTUB'
+#!/usr/bin/env bash
+# Minimal stub: reads the last argument (file path) and returns canned values
+# for the specific queries invoke_claude makes in the happy path.
+case "$*" in
+    *".is_error"*)   printf 'false\n' ;;
+    *".result"*)     printf 'done\n' ;;
+    *".session_id"*) printf '12345678-1234-1234-1234-123456789abc\n' ;;
+    *)               printf '\n' ;;
+esac
+JQSTUB
+    chmod +x "${STUB_BIN}/jq"
+
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    [ -f "${args_log}" ]
+    grep -qFx -- '--cpus=2' "${args_log}"
+    grep -qFx -- '--memory=4g' "${args_log}"
+    grep -qFx -- '--memory-swap=4g' "${args_log}"
+    grep -qFx -- '--pids-limit=512' "${args_log}"
+}
+
 # --- invoke_claude error handling ---------------------------------------------
 
 @test "invoke_claude fails fast before calling docker when prompt exceeds MAX_PROMPT_CHARS" {
