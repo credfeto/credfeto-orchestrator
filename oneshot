@@ -132,7 +132,7 @@ ensure_rules_current() {
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
         info "Fetching latest changes for ${REPO_FULL}..."
-        git -C "${REPO_WORK_DIR}" fetch origin || die "Failed to fetch from origin for ${REPO_FULL}"
+        git -C "${REPO_WORK_DIR}" fetch --prune origin || die "Failed to fetch from origin for ${REPO_FULL}"
 
         local current_branch
         current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
@@ -140,6 +140,13 @@ ensure_repo_current() {
             DIRTY_BRANCH="${current_branch}"
             warn "Working tree has uncommitted changes on '${current_branch}' for ${REPO_FULL} — handing off to agent to recover"
             return 1
+        fi
+        if [ "${current_branch}" != "main" ] \
+                && ! git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1; then
+            warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
+            git -C "${REPO_WORK_DIR}" checkout main \
+                || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
+            current_branch="main"
         fi
         if [ "${current_branch}" = "main" ]; then
             info "Rebasing main with origin/main..."
@@ -150,6 +157,30 @@ ensure_repo_current() {
         mkdir -p "$(dirname "${REPO_WORK_DIR}")" || die "Failed to create parent directory for ${REPO_WORK_DIR}"
         git clone "git@github.com:${OWNER}/${REPO}.git" "${REPO_WORK_DIR}" || die "Failed to clone ${REPO_FULL} to ${REPO_WORK_DIR}"
     fi
+}
+
+# Returns 0 if the repo was on a branch that no longer exists on origin AND has been
+# reset to main; returns 1 in all other cases (repo absent, already on main, branch still
+# live on remote, or any git failure).  Performs its own fetch --prune because it is
+# called before ensure_repo_current in the fingerprint-skip path.
+recover_orphaned_branch() {
+    [ -d "${REPO_WORK_DIR}/.git" ] || return 1
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current 2>/dev/null) || return 1
+    [ "${current_branch}" = "main" ] && return 1
+
+    git -C "${REPO_WORK_DIR}" fetch --prune origin 2>/dev/null || return 1
+
+    git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1 \
+        && return 1
+
+    warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
+    git -C "${REPO_WORK_DIR}" checkout main \
+        || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
+    git -C "${REPO_WORK_DIR}" rebase origin/main \
+        || die "Failed to rebase origin/main after orphaned branch recovery for ${REPO_FULL}"
+    return 0
 }
 
 # Attempts a non-agentic rebase of branch_name onto origin/main.
@@ -1286,9 +1317,12 @@ main() {
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
-                    info "Issue #${item_id} in ${item_repo} unchanged — skipping"
-                    count_unchanged=$((count_unchanged + 1))
-                    continue
+                    if ! recover_orphaned_branch; then
+                        info "Issue #${item_id} in ${item_repo} unchanged — skipping"
+                        count_unchanged=$((count_unchanged + 1))
+                        continue
+                    fi
+                    info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
                 fi
                 # Fall through to work block (item_type remains "Issue").
             fi

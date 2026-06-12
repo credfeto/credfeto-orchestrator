@@ -5,13 +5,21 @@
 
 > Load when: investigating orchestrator misbehaviour, diagnosing a stalled or skipped work item, or any time you need to understand the live state of the running orchestrator before making changes.
 
-## Before Debugging — SSH to nanoclaw.lan
+## Headless Operation Principle (MANDATORY)
 
-Always connect to `markr@nanoclaw.lan` and review the live state **before** drawing conclusions or making changes. The machine is where the orchestrator runs; local repo state alone is insufficient.
+The orchestrator is designed to run **completely unattended**.  Any condition that requires a human to intervene — deleting a file, resetting a branch, restarting a service, running a manual command — is a **bug** and must be fixed in code so the orchestrator recovers automatically on the next run.
+
+**Never ask the user to perform a manual recovery step.**  If you identify a problem, either fix it in the orchestrator's code, or (while the fix is being developed) perform the recovery yourself via SSH.
+
+## Before Debugging — SSH to nanoclaw.lan (MANDATORY)
+
+When asked to diagnose a problem with the orchestrator, or when something is behaving unexpectedly, **you must SSH to `markr@nanoclaw.lan` and inspect the live state yourself.**  Do not ask the user to run commands or collect information — go and look yourself.
 
 ```bash
 ssh markr@nanoclaw.lan
 ```
+
+Run the relevant commands from the State Inventory below, interpret the output, and report your findings.  Only after you have done this should you propose a fix or ask the user a question.
 
 ## State Inventory
 
@@ -141,11 +149,11 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 
 ## After Reviewing State
 
-Summarise what you found before proposing any fix:
+Summarise what you found, then act:
 
 - Which state files are present, and what they contain
 - Whether any containers are running or stale
 - Whether the lock is held
 - The current git state of the orchestrator repo itself
 
-Only then proceed with a diagnosis or change.
+If the problem required any manual action to resolve (deleting a file, resetting a branch, removing a container), **that manual action is a bug**.  Fix it in the orchestrator's code so it cannot recur — raise a GitHub issue if a code fix is non-trivial.

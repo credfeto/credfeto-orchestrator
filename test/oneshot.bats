@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
+# shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
 
 load test_helper
 
@@ -1150,6 +1151,7 @@ setup_main_mocks() {
     set_repo_context()          { return 0; }
     ensure_rules_current()      { return 0; }
     ensure_repo_current()       { return 0; }
+    recover_orphaned_branch()   { return 1; }
     try_nonagentic_rebase()     { return 1; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
     host_to_container_path()    { printf '%s\n' "$1"; }
@@ -2175,4 +2177,124 @@ STUBEOF
     [[ "${output}" == *"rate-limited"* ]]
     # org/repo rate-limited before ensure_rules_current; other/repo must still be invoked
     [[ "${output}" == *"Issue #2 in other/repo"* ]]
+}
+
+# --- recover_orphaned_branch unit tests ----------------------------------------
+
+# Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
+# recover_orphaned_branch can perform real git operations without network calls.
+setup_local_git_remote() {
+    local remote_dir="${TEST_TMP}/remote.git"
+    git init --bare "${remote_dir}" >/dev/null 2>&1
+    git -C "${remote_dir}" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
+
+    mkdir -p "$(dirname "${REPO_WORK_DIR}")"
+    git clone "${remote_dir}" "${REPO_WORK_DIR}" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" config user.email "test@example.com"
+    git -C "${REPO_WORK_DIR}" config user.name "Test"
+    git -C "${REPO_WORK_DIR}" config core.hooksPath /dev/null
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin main >/dev/null 2>&1
+
+    printf '%s\n' "${remote_dir}"
+}
+
+@test "recover_orphaned_branch returns 1 when repo directory does not exist" {
+    REPO_WORK_DIR="${TEST_TMP}/nonexistent/repo"
+    run recover_orphaned_branch
+    [ "${status}" -eq 1 ]
+}
+
+@test "recover_orphaned_branch returns 1 when repo is on main" {
+    setup_local_git_remote >/dev/null
+    run recover_orphaned_branch
+    [ "${status}" -eq 1 ]
+}
+
+@test "recover_orphaned_branch returns 1 when branch still exists on remote" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/active >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/active >/dev/null 2>&1
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 1 ]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "feature/active" ]
+}
+
+@test "recover_orphaned_branch returns 0 and resets to main when branch is gone from remote" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/merged >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/merged >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/merged >/dev/null 2>&1
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 0 ]
+
+    local current_branch
+    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
+    [ "${current_branch}" = "main" ]
+}
+
+@test "recover_orphaned_branch output warns about the orphaned branch name" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/gone >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/gone >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/gone >/dev/null 2>&1
+
+    run recover_orphaned_branch
+    [[ "${output}" == *"feature/gone"* ]]
+    [[ "${output}" == *"no longer exists on origin"* ]]
+}
+
+# --- main() integration: orphaned-branch fingerprint bypass --------------------
+
+@test "main re-runs issue with matching fingerprint when recover_orphaned_branch detects orphaned branch" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 0; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"orphaned branch"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+}
+
+@test "main still skips issue with matching fingerprint when branch is not orphaned" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" != *"Found actionable Issue #42"* ]]
 }
