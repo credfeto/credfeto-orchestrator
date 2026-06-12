@@ -556,6 +556,7 @@ teardown() {
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -573,6 +574,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -591,6 +593,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -610,6 +613,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -631,6 +635,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -651,6 +656,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 for arg; do
     [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
 done
@@ -670,6 +676,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 for arg; do
     [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
 done
@@ -691,6 +698,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -710,6 +718,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -726,6 +735,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 for arg; do
     [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
@@ -745,6 +755,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 for arg; do
     [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
 done
@@ -812,6 +823,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -828,6 +840,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -854,6 +867,7 @@ JQEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -869,6 +883,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "pull" ] && exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -892,6 +907,7 @@ JQEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -911,6 +927,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -929,6 +946,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -945,6 +963,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -961,6 +980,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 0
+[ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -976,6 +996,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf 'docker: Error response from daemon: Conflict. The container name "/orchestrator-credfeto" is already in use\n' >&2
 exit 1
 STUBEOF
@@ -993,6 +1014,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2118,6 +2140,7 @@ setup_main_mocks() {
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -2138,6 +2161,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
@@ -2347,6 +2371,7 @@ setup_local_git_remote() {
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2364,6 +2389,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2381,6 +2407,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2398,6 +2425,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2415,6 +2443,7 @@ STUBEOF
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2555,6 +2584,7 @@ JQEOF
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/docker"
