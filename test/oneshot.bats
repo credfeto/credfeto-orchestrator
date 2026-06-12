@@ -555,6 +555,7 @@ teardown() {
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -573,6 +574,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -591,6 +593,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
@@ -613,10 +616,10 @@ JQSTUB
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${args_log}" ]
-    grep -qFx -- '--cpus=2' "${args_log}"
-    grep -qFx -- '--memory=4g' "${args_log}"
-    grep -qFx -- '--memory-swap=4g' "${args_log}"
-    grep -qFx -- '--pids-limit=512' "${args_log}"
+    grep -qFx -- '--cpus=4' "${args_log}"
+    grep -qFx -- '--memory=12g' "${args_log}"
+    grep -qFx -- '--memory-swap=12g' "${args_log}"
+    grep -qFx -- '--pids-limit=1024' "${args_log}"
 }
 
 # --- invoke_claude error handling ---------------------------------------------
@@ -626,6 +629,7 @@ JQSTUB
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -646,6 +650,7 @@ STUBEOF
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
@@ -668,6 +673,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'
@@ -689,6 +695,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 for arg; do
@@ -709,6 +716,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 for arg; do
@@ -731,6 +739,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
@@ -751,6 +760,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
@@ -768,6 +778,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 for arg; do
@@ -788,6 +799,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 for arg; do
@@ -856,6 +868,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -873,6 +886,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -900,6 +914,7 @@ JQEOF
     chmod +x "${STUB_BIN}/jq"
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -940,6 +955,7 @@ JQEOF
     chmod +x "${STUB_BIN}/jq"
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
@@ -960,6 +976,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -979,6 +996,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -996,6 +1014,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -1029,6 +1048,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf 'docker: Error response from daemon: Conflict. The container name "/orchestrator-credfeto" is already in use\n' >&2
@@ -1047,6 +1067,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -2173,6 +2194,7 @@ setup_main_mocks() {
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
@@ -2194,6 +2216,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
@@ -2404,6 +2427,7 @@ setup_local_git_remote() {
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -2422,6 +2446,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -2440,6 +2465,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -2458,6 +2484,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
@@ -2476,6 +2503,7 @@ STUBEOF
     make_stub sudo '"$@"'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 [ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"

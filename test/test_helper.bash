@@ -36,6 +36,13 @@ setup_isolated_env() {
 
     # Put the stub directory first so any stubs we create take precedence.
     export PATH="${STUB_BIN}:${PATH}"
+
+    # Unset host-level env vars that leak from the container/agent environment
+    # and change script behaviour in ways the tests do not expect.
+    unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY
+    unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
+    unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
+    unset DISCORD_WEBHOOK_URL
 }
 
 # Sources the oneshot script so its functions are defined without running main.
