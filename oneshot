@@ -623,10 +623,10 @@ invoke_claude() {
         --name "${container_name}"
         --rm
         --interactive
-        --cpus="2"
-        --memory="4g"
-        --memory-swap="4g"
-        --pids-limit=512
+        --cpus="4"
+        --memory="12g"
+        --memory-swap="12g"
+        --pids-limit=1024
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
