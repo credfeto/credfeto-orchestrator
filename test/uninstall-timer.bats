@@ -5,6 +5,8 @@ load test_helper
 setup() {
     setup_isolated_env
 
+    make_stub systemctl 'exit 0'
+
     # shellcheck disable=SC2329
     id() { echo "testuser"; }
     export -f id
@@ -18,6 +20,10 @@ setup() {
         printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
     }
     export -f sudo
+}
+
+teardown() {
+    cleanup_stubs
 }
 
 @test "sourcing uninstall-timer defines main without executing it" {
