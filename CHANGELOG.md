@@ -28,6 +28,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add jq to development-tools container image so bats tests and scripts that require it do not fail
 - Add /opt/pre-commit/src/scripts to PATH in development-full so run-bats and other hook helpers are found by pre-commit
 - Handle docker pull subcommand in bats test stubs so invoke_claude tests pass after PR #155 added a pull before every run
+- Validate session ID read from file in load_session; discard and reset if content is not a valid UUID to prevent corrupted session files from causing repeated failures
 ### Changed
 - Always pull the latest container image before starting each run
 ### Deprecated
