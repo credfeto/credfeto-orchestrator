@@ -10,8 +10,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
-- Bump sqlfluff from 4.1.0 to 4.2.2 to resolve CVE-2026-46374
-- Skip sqlcmd, actionlint, and composite-action-lint in Trivy scan until upstream releases new builds compiled against the patched Go stdlib (CVE-2026-42504, CVE-2026-39820, CVE-2026-33810, CVE-2026-32280 et al.)
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
 - Replace ~/.gitconfig volume mount with git identity env vars (GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) passed into the container; entrypoint.sh now configures git from those vars and dies if any required value is absent
 - Replace ~/.gnupg read-write volume mount with GPG agent extra-socket forwarding; a public-key-only gnupghome tmpdir is created per invocation so no private key material enters the container
