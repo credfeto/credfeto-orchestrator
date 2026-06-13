@@ -41,6 +41,12 @@ STUBEOF
 
     # ssh-keygen stub: always succeeds (simulates successful sign operation).
     make_stub ssh-keygen 'exit 0'
+
+    # gpg-connect-agent stub: always succeeds (simulates responsive gpg-agent).
+    make_stub gpg-connect-agent 'exit 0'
+
+    # gpg stub: always succeeds (simulates key present + test sign succeeds).
+    make_stub gpg 'exit 0'
 }
 
 # --- CLAUDE_CODE_OAUTH_TOKEN validation ----------------------------------------
@@ -267,6 +273,60 @@ run_entrypoint_with_hooks_env() {
 }
 
 @test "entrypoint succeeds when SSH agent has keys and signing works" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+# --- verify_gpg_signing -----------------------------------------------------------
+
+@test "entrypoint dies when gpg-agent is not responding" {
+    setup_entrypoint_stubs
+    make_stub gpg-connect-agent 'exit 1'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"gpg-agent is not responding"* ]]
+}
+
+@test "entrypoint dies when GIT_SIGNING_KEY is not in the GPG keyring" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    [ "${arg}" = "--list-secret-keys" ] && exit 1
+done
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found in GPG keyring"* ]]
+}
+
+@test "entrypoint dies when GPG signing test fails" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    [ "${arg}" = "--detach-sign" ] && exit 1
+done
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GPG signing test failed"* ]]
+}
+
+@test "entrypoint succeeds when GPG agent responds, key is present, and signing works" {
     setup_entrypoint_stubs
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \

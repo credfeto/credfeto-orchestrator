@@ -37,6 +37,16 @@ verify_hooks_fresh() {
     fi
 }
 
+verify_gpg_signing() {
+    gpg-connect-agent /bye >/dev/null 2>&1 \
+        || die "gpg-agent is not responding — run 'gpgconf --launch gpg-agent' on the host"
+    gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+        || die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
+    printf 'test' | gpg --batch --no-tty --armor --detach-sign \
+        --default-key "${GIT_SIGNING_KEY}" --output - >/dev/null 2>&1 \
+        || die "GPG signing test failed — ensure key ${GIT_SIGNING_KEY} is unlocked and the agent is accessible"
+}
+
 verify_ssh_signing() {
     [ -n "${SSH_AUTH_SOCK:-}" ] \
         || die "SSH_AUTH_SOCK is not set — SSH agent forwarding is required"
@@ -59,6 +69,7 @@ verify_ssh_signing() {
         || die "SSH signing test failed — ensure the loaded SSH key supports signing"
 }
 
+verify_gpg_signing
 verify_ssh_signing
 
 verify_hooks_fresh
