@@ -70,7 +70,11 @@ verify_ssh_signing() {
 }
 
 verify_gpg_signing
-verify_ssh_signing
+if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+    verify_ssh_signing
+else
+    printf '\n\033[33m!\033[0m %s\n' "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations may fail" >&2
+fi
 
 verify_hooks_fresh
 
