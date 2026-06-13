@@ -42,6 +42,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 - Configure Trivy to suppress vulnerability reports where no fix is available
+- Skip dotnet tools store when scanning for vulnerabilities with Trivy to suppress CVEs in TSQLLint bundled dependencies
 ### Deprecated
 ### Removed
 ### Deployment Changes

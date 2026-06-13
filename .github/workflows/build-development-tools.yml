@@ -89,6 +89,7 @@ jobs:
           output: "trivy-results.sarif"
           severity: "CRITICAL"
           ignore-unfixed: true
+          skip-dirs: "/home/developer/.dotnet/tools/.store"
           exit-code: "1"
 
       - name: "Upload vulnerability scan results to GitHub Security"
