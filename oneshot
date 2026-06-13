@@ -560,7 +560,7 @@ preload_ssh_keys() {
     ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
     [ "${ssh_keys_status}" -eq 1 ] || return 0  # 0 = already loaded; 2 = no agent
     ssh-add -q 2>/dev/null \
-        || warn "ssh-add: could not load SSH keys — SSH git operations may fail"
+        || die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
 }
 
 # Posts a comment on the current GitHub work item and adds the Blocked label.
