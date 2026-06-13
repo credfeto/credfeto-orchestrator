@@ -27,6 +27,7 @@ on:
     paths:
       - "containers/base/development-python/**"
       - ".github/workflows/build-development-python.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:

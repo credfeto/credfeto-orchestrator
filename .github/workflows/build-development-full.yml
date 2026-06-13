@@ -37,6 +37,7 @@ on:
     paths:
       - "containers/base/development-full/**"
       - ".github/workflows/build-development-full.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:
