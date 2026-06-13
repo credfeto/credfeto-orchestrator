@@ -16,6 +16,7 @@ runs:
         format: "sarif"
         output: "trivy-results.sarif"
         severity: "CRITICAL"
+        scanners: "vuln"
         ignore-unfixed: true
         skip-dirs: "/home/developer/.dotnet/tools/.store"
         skip-files: "/usr/local/bin/sqlcmd,/usr/local/bin/actionlint,/opt/composite-action-lint/composite-action-lint"
