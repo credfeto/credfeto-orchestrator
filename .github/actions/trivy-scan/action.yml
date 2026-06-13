@@ -1,0 +1,27 @@
+--- # Scan a container image for vulnerabilities and upload results to GitHub Security
+name: "Scan container image for vulnerabilities"
+description: "Runs Trivy against a container image, fails on unfixed CRITICAL CVEs, and uploads SARIF to GitHub Security"
+inputs:
+  image-ref:
+    description: "Fully-qualified container image reference to scan (e.g. ghcr.io/owner/image:latest)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Scan image for vulnerabilities"
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        image-ref: "${{inputs.image-ref}}"
+        format: "sarif"
+        output: "trivy-results.sarif"
+        severity: "CRITICAL"
+        ignore-unfixed: true
+        skip-dirs: "/home/developer/.dotnet/tools/.store"
+        exit-code: "1"
+
+    - name: "Upload vulnerability scan results to GitHub Security"
+      if: "${{ always() }}"
+      uses: github/codeql-action/upload-sarif@v4.36.2
+      with:
+        sarif_file: "trivy-results.sarif"
