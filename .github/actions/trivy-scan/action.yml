@@ -18,6 +18,7 @@ runs:
         severity: "CRITICAL"
         scanners: "vuln"
         ignore-unfixed: true
+        limit-severities-for-sarif: true
         skip-dirs: "/home/developer/.dotnet/tools/.store"
         skip-files: "/usr/local/bin/sqlcmd,/usr/local/bin/actionlint,/opt/composite-action-lint/composite-action-lint,/usr/local/bin/trufflehog"
         exit-code: "1"
