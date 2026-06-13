@@ -22,6 +22,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Bump sqlfluff from 4.1.0 to 4.2.2 to resolve CVE-2026-46374
 - Skip sqlcmd, actionlint, and composite-action-lint in Trivy scan until upstream releases new builds compiled against the patched Go stdlib (CVE-2026-42504, CVE-2026-39820, CVE-2026-33810, CVE-2026-32280 et al.)
 - Validate SSH agent is forwarded and can sign commits at container startup — fails fast if SSH_AUTH_SOCK is missing, agent has no keys, or signing test fails
+- Disable Trivy secret scanning for image scans to eliminate false positive from gcp-service-account pattern in /opt/pre-commit/.gitleaks.toml (secret scanning already covered by TruffleHog in pre-commit hooks)
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 - SSH agent validation on container start: verify SSH_AUTH_SOCK socket exists, agent has keys loaded, and signing with the loaded key succeeds
