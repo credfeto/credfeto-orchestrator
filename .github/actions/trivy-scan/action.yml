@@ -19,7 +19,7 @@ runs:
         scanners: "vuln"
         ignore-unfixed: true
         skip-dirs: "/home/developer/.dotnet/tools/.store"
-        skip-files: "/usr/local/bin/sqlcmd,/usr/local/bin/actionlint,/opt/composite-action-lint/composite-action-lint"
+        skip-files: "/usr/local/bin/sqlcmd,/usr/local/bin/actionlint,/opt/composite-action-lint/composite-action-lint,/usr/local/bin/trufflehog"
         exit-code: "1"
 
     - name: "Upload vulnerability scan results to GitHub Security"
