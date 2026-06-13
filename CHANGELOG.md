@@ -47,6 +47,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 - Configure Trivy to suppress vulnerability reports where no fix is available
 - Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
+- Pre-load SSH keys into the agent at startup so they are available before the container is launched
 ### Deprecated
 ### Removed
 ### Deployment Changes

@@ -2729,6 +2729,69 @@ STUBEOF
     [ -z "${GPG_PUBKEY_TMPDIR}" ]
 }
 
+# --- preload_ssh_keys unit tests ----------------------------------------------
+
+@test "preload_ssh_keys is a no-op when SSH_AUTH_SOCK is unset" {
+    unset SSH_AUTH_SOCK
+    make_stub ssh-add 'exit 1'
+    run preload_ssh_keys
+    [ "${status}" -eq 0 ]
+}
+
+@test "preload_ssh_keys is a no-op when SSH_AUTH_SOCK is not a socket" {
+    export SSH_AUTH_SOCK="${TEST_TMP}/not-a-socket"
+    make_stub ssh-add 'exit 1'
+    run preload_ssh_keys
+    [ "${status}" -eq 0 ]
+}
+
+@test "preload_ssh_keys is a no-op when keys are already loaded (ssh-add -l exits 0)" {
+    local ssh_sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
+    export SSH_AUTH_SOCK="${ssh_sock}"
+    # ssh-add -l returns 0 = keys present; ssh-add (load) should never be called
+    cat > "${STUB_BIN}/ssh-add" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "-l" ] && exit 0
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-add"
+    run preload_ssh_keys
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"could not load"* ]]
+}
+
+@test "preload_ssh_keys calls ssh-add when agent has no keys (ssh-add -l exits 1)" {
+    local ssh_sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
+    export SSH_AUTH_SOCK="${ssh_sock}"
+    local add_log="${TEST_TMP}/ssh-add.log"
+    cat > "${STUB_BIN}/ssh-add" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${add_log}"
+[ "\$1" = "-l" ] && exit 1
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-add"
+    preload_ssh_keys
+    grep -qx "\-q" "${add_log}"
+}
+
+@test "preload_ssh_keys warns when ssh-add fails to load keys" {
+    local ssh_sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
+    export SSH_AUTH_SOCK="${ssh_sock}"
+    cat > "${STUB_BIN}/ssh-add" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "-l" ] && exit 1
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-add"
+    run preload_ssh_keys
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"could not load SSH keys"* ]]
+}
+
 # --- SSH agent socket forwarding unit tests -----------------------------------
 
 @test "invoke_claude mounts SSH_AUTH_SOCK as /tmp/ssh-agent.sock and sets env var" {
