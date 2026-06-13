@@ -114,3 +114,81 @@ STUBEOF
     grep -qx 'opus' "${TEST_TMP}/claude_args"
     grep -qx -- '--print' "${TEST_TMP}/claude_args"
 }
+
+# --- verify_hooks_fresh -----------------------------------------------------------
+
+# Shared env vars for verify_hooks_fresh tests.
+run_entrypoint_with_hooks_env() {
+    local extra_env=("$@")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        "${extra_env[@]}" \
+        bash "${ENTRYPOINT}"
+}
+
+@test "entrypoint skips hooks check when rules .env is absent" {
+    setup_entrypoint_stubs
+    # No WORKSPACE_RULES_ENV set and no /workspace/rules/.env on host → no-op.
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${TEST_TMP}/nonexistent.env"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint skips hooks check when curl is unavailable" {
+    setup_entrypoint_stubs
+    # Create a rules .env with a SHA but hide curl so the function exits early.
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    make_stub curl 'exit 127'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint skips hooks check when remote is unreachable" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    # curl exits non-zero → remote_sha stays empty → no-op.
+    make_stub curl 'exit 1'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint proceeds when installed SHA matches remote SHA" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    make_stub curl 'printf "abc1234\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies when installed SHA is stale" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    make_stub curl 'printf "def5678\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"out of date"* ]]
+    [[ "${output}" == *"abc1234"* ]]
+    [[ "${output}" == *"def5678"* ]]
+}
+
+@test "entrypoint skips hooks check when remote returns non-SHA output" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    # curl returns something that is not a valid hex SHA → treated as unreachable.
+    make_stub curl 'printf "Not Found\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint skips hooks check when rules .env has no SHA line" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'OTHER=value\n' > "${env_file}"
+    make_stub curl 'printf "def5678\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
