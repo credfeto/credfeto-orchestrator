@@ -2505,6 +2505,8 @@ STUBEOF
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_SIGNING_KEY="ABCD1234"
     make_stub sudo '"$@"'
+    make_stub gpg-connect-agent 'exit 0'
+    make_stub gpg 'exit 0'
     cat > "${STUB_BIN}/docker" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
@@ -2571,7 +2573,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/gpgconf"
     cat > "${STUB_BIN}/gpg" << 'STUBEOF'
 #!/usr/bin/env bash
-# Simulate export producing real bytes, or import succeeding.
+# Simulate export producing real bytes, import succeeding, and key listing succeeding.
 if [[ "$*" == *"--export"* ]]; then
     printf 'FAKEPUBKEYDATA\n'
     exit 0
@@ -2579,9 +2581,13 @@ fi
 if [[ "$*" == *"--import"* ]]; then
     exit 0
 fi
+if [[ "$*" == *"--list-secret-keys"* ]]; then
+    exit 0
+fi
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gpg"
+    make_stub gpg-connect-agent 'exit 0'
 }
 
 @test "add_gpg_docker_args uses socket forwarding when extra socket and signing key are available" {
@@ -2697,4 +2703,118 @@ STUBEOF
     GPG_PUBKEY_TMPDIR=""
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${GPG_PUBKEY_TMPDIR}" ]
+}
+
+# --- notify_github_blocked unit tests -----------------------------------------
+
+@test "notify_github_blocked posts issue comment and adds Blocked label for Issue" {
+    cat > "${STUB_BIN}/gh" << 'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo"
+    notify_github_blocked "Issue" "42" "test message"
+    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
+    grep -q "issue edit 42 --repo owner/repo --add-label Blocked" "${TEST_TMP}/gh.log"
+}
+
+@test "notify_github_blocked posts pr comment and adds Blocked label for PullRequest" {
+    cat > "${STUB_BIN}/gh" << 'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo"
+    notify_github_blocked "PullRequest" "7" "test message"
+    grep -q "pr comment 7 --repo owner/repo" "${TEST_TMP}/gh.log"
+    grep -q "pr edit 7 --repo owner/repo --add-label Blocked" "${TEST_TMP}/gh.log"
+}
+
+@test "notify_github_blocked is silent when item_type is empty" {
+    cat > "${STUB_BIN}/gh" << 'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo"
+    notify_github_blocked "" "42" "test message"
+    [ ! -f "${TEST_TMP}/gh.log" ]
+}
+
+# --- verify_gpg_signing_ready unit tests --------------------------------------
+
+@test "verify_gpg_signing_ready passes when agent is running and key is present" {
+    make_stub gpg-connect-agent 'exit 0'
+    make_stub gpg 'exit 0'
+    GIT_SIGNING_KEY="ABCD1234"
+    run verify_gpg_signing_ready "" ""
+    [ "${status}" -eq 0 ]
+}
+
+@test "verify_gpg_signing_ready is a no-op when GIT_SIGNING_KEY is empty" {
+    make_stub gpg-connect-agent 'exit 1'
+    GIT_SIGNING_KEY=""
+    run verify_gpg_signing_ready "" ""
+    [ "${status}" -eq 0 ]
+}
+
+@test "verify_gpg_signing_ready dies when gpg-agent is not running" {
+    make_stub gpg-connect-agent 'exit 1'
+    make_stub gh 'exit 0'
+    GIT_SIGNING_KEY="ABCD1234"
+    run verify_gpg_signing_ready "" ""
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"gpg-agent is not running"* ]]
+}
+
+@test "verify_gpg_signing_ready dies when signing key is absent from keyring" {
+    make_stub gpg-connect-agent 'exit 0'
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"--list-secret-keys"* ]]; then exit 1; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    make_stub gh 'exit 0'
+    GIT_SIGNING_KEY="ABCD1234"
+    run verify_gpg_signing_ready "" ""
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found in GPG keyring"* ]]
+}
+
+@test "verify_gpg_signing_ready notifies GitHub when gpg-agent is not running" {
+    make_stub gpg-connect-agent 'exit 1'
+    cat > "${STUB_BIN}/gh" << 'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo"
+    GIT_SIGNING_KEY="ABCD1234"
+    run verify_gpg_signing_ready "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [ -f "${TEST_TMP}/gh.log" ]
+    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
+}
+
+@test "verify_gpg_signing_ready notifies GitHub when signing key is absent" {
+    make_stub gpg-connect-agent 'exit 0'
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"--list-secret-keys"* ]]; then exit 1; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    cat > "${STUB_BIN}/gh" << 'GHEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo"
+    GIT_SIGNING_KEY="ABCD1234"
+    run verify_gpg_signing_ready "Issue" "42"
+    [ "${status}" -ne 0 ]
+    [ -f "${TEST_TMP}/gh.log" ]
+    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
 }
