@@ -56,7 +56,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Build development-agent image immediately when development-full finishes even when the Trivy scan fails — the base image is already pushed before Trivy runs so the conclusion=failure check was incorrectly suppressing the chain
 - Trigger development-full image rebuild immediately via repository_dispatch when credfeto-global-pre-commit is pushed to main, eliminating the up-to-one-hour delay from the hourly schedule
 - Add .github/actions/trivy-scan/** to paths trigger for all image build workflows so trivy action changes trigger image rebuilds
-- systemd service unit now uses gpg-agent SSH socket (S.gpg-agent.ssh) for SSH_AUTH_SOCK instead of starting a fresh empty ssh-agent that had no keys loaded, and oneshot falls back to the gpg-agent SSH socket when SSH_AUTH_SOCK is unset or invalid
+- systemd service unit embedded wrong UID in SSH_AUTH_SOCK and ssh-agent socket path: %U in a system service expands to the service manager UID (root=0), not the User= directive UID; install-timer now embeds the real UID via id -u at install time and cleans any stale socket before starting ssh-agent
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
