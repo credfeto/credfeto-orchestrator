@@ -13,7 +13,8 @@ teardown() {
     cleanup_stubs
 }
 
-# Writes a git stub that records config calls and a claude stub that exits 0.
+# Writes a git stub that records config calls and a claude stub that exits 0,
+# and creates a fake SSH agent socket with ssh-add/ssh-keygen stubs that succeed.
 setup_entrypoint_stubs() {
     cat > "${STUB_BIN}/git" << 'GITEOF'
 #!/usr/bin/env bash
@@ -22,6 +23,24 @@ exit 0
 GITEOF
     chmod +x "${STUB_BIN}/git"
     make_stub claude 'exit 0'
+
+    # Create a fake Unix socket so [ -S "$SSH_AUTH_SOCK" ] passes.
+    local sock="${TEST_TMP}/fake-agent.sock"
+    python3 -c "import socket, sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])" "${sock}"
+    export SSH_AUTH_SOCK="${sock}"
+
+    # ssh-add stub: -l exits 0 (keys loaded), -L prints a fake public key.
+    cat > "${STUB_BIN}/ssh-add" << 'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+    -L) printf "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTesting fake@test\n" ;;
+    *) exit 0 ;;
+esac
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-add"
+
+    # ssh-keygen stub: always succeeds (simulates successful sign operation).
+    make_stub ssh-keygen 'exit 0'
 }
 
 # --- CLAUDE_CODE_OAUTH_TOKEN validation ----------------------------------------
@@ -190,5 +209,67 @@ run_entrypoint_with_hooks_env() {
     printf 'OTHER=value\n' > "${env_file}"
     make_stub curl 'printf "def5678\n"'
     run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+}
+
+# --- verify_ssh_signing -----------------------------------------------------------
+
+@test "entrypoint dies when SSH_AUTH_SOCK is not set" {
+    setup_entrypoint_stubs
+    run env -u SSH_AUTH_SOCK \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"SSH_AUTH_SOCK is not set"* ]]
+}
+
+@test "entrypoint dies when SSH_AUTH_SOCK path is not a socket" {
+    setup_entrypoint_stubs
+    local not_a_socket="${TEST_TMP}/regular-file"
+    printf 'not a socket\n' > "${not_a_socket}"
+    run env SSH_AUTH_SOCK="${not_a_socket}" \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"does not exist"* ]]
+}
+
+@test "entrypoint dies when SSH agent has no keys loaded" {
+    setup_entrypoint_stubs
+    make_stub ssh-add 'exit 1'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"no keys loaded"* ]]
+}
+
+@test "entrypoint dies when SSH agent is not responding" {
+    setup_entrypoint_stubs
+    make_stub ssh-add 'exit 2'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not responding"* ]]
+}
+
+@test "entrypoint dies when SSH signing test fails" {
+    setup_entrypoint_stubs
+    make_stub ssh-keygen 'exit 1'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"SSH signing test failed"* ]]
+}
+
+@test "entrypoint succeeds when SSH agent has keys and signing works" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
 }

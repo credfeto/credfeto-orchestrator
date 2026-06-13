@@ -37,6 +37,30 @@ verify_hooks_fresh() {
     fi
 }
 
+verify_ssh_signing() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] \
+        || die "SSH_AUTH_SOCK is not set — SSH agent forwarding is required"
+    [ -S "${SSH_AUTH_SOCK}" ] \
+        || die "SSH agent socket ${SSH_AUTH_SOCK} does not exist — check SSH agent forwarding"
+
+    local ssh_status=0
+    ssh-add -l >/dev/null 2>&1 || ssh_status=$?
+    case "${ssh_status}" in
+        0) ;;
+        1) die "SSH agent has no keys loaded — run 'ssh-add' on the host before starting the container" ;;
+        *) die "SSH agent at ${SSH_AUTH_SOCK} is not responding (ssh-add -l exited ${ssh_status})" ;;
+    esac
+
+    local pubkey
+    pubkey=$(ssh-add -L 2>/dev/null | head -1)
+    [ -n "${pubkey}" ] || die "SSH agent returned no public keys"
+
+    printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - >/dev/null 2>&1 \
+        || die "SSH signing test failed — ensure the loaded SSH key supports signing"
+}
+
+verify_ssh_signing
+
 verify_hooks_fresh
 
 git config --global user.name      "${GIT_USER_NAME}"
