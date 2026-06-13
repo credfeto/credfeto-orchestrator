@@ -181,15 +181,27 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
 # Global hooks directory referenced by core.hooksPath. The shim execs the
 # upstream credfeto orchestrator (hooks/pre-commit), which is the entry
 # point that runs the full chain. Owned by root for the same reason as the
-# clone above. Explicit chmod on the orchestrator is belt-and-braces in
-# case upstream loses the +x bit.
+# clone above.
+# Regenerate src/hooks/pre-commit using the container's own pre-commit binary
+# so the embedded version SHA always matches this image's pre-commit package.
+# Without this, the hook script committed to the upstream repo would become
+# stale whenever the pre-commit package is updated, causing
+# "Hooks installation is out of date" errors in the agent at runtime.
 # hadolint ignore=DL3059
-RUN mkdir -p /opt/git-global-hooks \
+RUN mkdir -p /opt/git-global-hooks /tmp/pre-commit-install \
+    && git -C /tmp/pre-commit-install init \
+    && git -C /tmp/pre-commit-install config user.email "build@localhost" \
+    && git -C /tmp/pre-commit-install config user.name "Build" \
+    && printf 'repos: []\n' > /tmp/pre-commit-install/.pre-commit-config.yaml \
+    && GIT_CONFIG_GLOBAL=/dev/null pre-commit install --config /tmp/pre-commit-install/.pre-commit-config.yaml \
+        -C /tmp/pre-commit-install \
+    && cp /tmp/pre-commit-install/.git/hooks/pre-commit /opt/pre-commit/src/hooks/pre-commit \
     && chmod 0755 /opt/pre-commit/src/hooks/pre-commit \
+    && rm -rf /tmp/pre-commit-install \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-commit "$@"\n' \
         > /opt/git-global-hooks/pre-commit \
     && chmod 0755 /opt/git-global-hooks/pre-commit \
-    && chown -R root:root /opt/git-global-hooks
+    && chown -R root:root /opt/git-global-hooks /opt/pre-commit/src/hooks/pre-commit
 
 # Make pre-commit helper scripts available on PATH so pre-commit hooks that
 # invoke them (e.g. run-bats, buildcheck) can be found without a full path.
