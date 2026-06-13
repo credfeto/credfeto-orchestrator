@@ -86,8 +86,10 @@ teardown() {
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/%U" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -qE "ExecStartPre=-?.*/ssh-agent -a /run/user/%U/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
@@ -111,8 +113,10 @@ teardown() {
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/%U" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -qE "ExecStartPre=-?.*/ssh-agent -a /run/user/%U/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
 

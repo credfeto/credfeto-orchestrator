@@ -2729,6 +2729,86 @@ STUBEOF
     [ -z "${GPG_PUBKEY_TMPDIR}" ]
 }
 
+# --- SSH agent socket forwarding unit tests -----------------------------------
+
+@test "invoke_claude mounts SSH_AUTH_SOCK as /tmp/ssh-agent.sock and sets env var" {
+    local args_log="${TEST_TMP}/docker_args"
+    local ssh_sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    SSH_AUTH_SOCK="${ssh_sock}"
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -q "${ssh_sock}:/tmp/ssh-agent.sock:ro" "${args_log}"
+    grep -qx "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "${args_log}"
+}
+
+@test "invoke_claude warns and skips SSH mount when SSH_AUTH_SOCK is unset" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    unset SSH_AUTH_SOCK
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"SSH_AUTH_SOCK is not set"* ]]
+}
+
+@test "invoke_claude warns and skips SSH mount when SSH_AUTH_SOCK path is not a socket" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    export SSH_AUTH_SOCK="${TEST_TMP}/nonexistent-sock"
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"SSH_AUTH_SOCK is not set or socket is absent"* ]]
+}
+
+@test "invoke_claude does not mount ~/.ssh directory" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${HOME}/.ssh"
+    unset SSH_AUTH_SOCK
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -q "\.ssh:/home/developer/.ssh" "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
 # --- notify_github_blocked unit tests -----------------------------------------
 
 @test "notify_github_blocked posts issue comment and adds Blocked label for Issue" {

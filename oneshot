@@ -666,7 +666,12 @@ invoke_claude() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
-    [ -d "${HOME}/.ssh" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+        DOCKER_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
+        DOCKER_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
+    else
+        warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
+    fi
     verify_gpg_signing_ready "${item_type}" "${item_id}"
     add_gpg_docker_args
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
