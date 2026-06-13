@@ -44,6 +44,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Die at startup if GIT_SIGNING_KEY is configured but the key is absent from the GPG keyring
 - Require all four environment variables (CLAUDE_CODE_OAUTH_TOKEN, GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) in the agent entrypoint — die immediately if any are missing
 - Regenerate pre-commit hook script at image build time using the container's own pre-commit binary so the embedded version SHA always matches the installed package; prevents "Hooks installation is out of date" errors caused by the upstream-committed hook being stale after a pre-commit package update
+- Build development-agent image immediately when development-full finishes even when the Trivy scan fails — the base image is already pushed before Trivy runs so the conclusion=failure check was incorrectly suppressing the chain
+- Trigger development-full image rebuild immediately via repository_dispatch when credfeto-global-pre-commit is pushed to main, eliminating the up-to-one-hour delay from the hourly schedule
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
