@@ -18,7 +18,7 @@ on:
     # hours hit cache fully (only a layer-validation / tag-push noop runs).
     - cron: "0 * * * *"
   push:
-    branches: ["main"]
+    branches: ["main", "fix/trivy-skip-shfmt"]
     paths:
       - "containers/base/development-tools/**"
       - ".github/workflows/build-development-tools.yml"
