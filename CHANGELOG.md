@@ -39,6 +39,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pass CREDFETO_PRECOMMIT_COMMIT build arg from workflow to development-full Dockerfile so the supply chain commit hash check uses the dynamically fetched HEAD rather than the stale hardcoded default
 - Add systemctl stub to install-timer and uninstall-timer bats tests so they pass in environments without systemd
 - Start gpg-agent before running oneshot in the systemd service so that commit signing works in headless scheduled-task environments
+- Fast-fail before launching the agent container if gpg-agent is not running or the signing key is absent, and post a Blocked comment on the GitHub work item
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

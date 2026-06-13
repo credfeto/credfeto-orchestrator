@@ -551,6 +551,42 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Posts a comment on the current GitHub work item and adds the Blocked label.
+# Silent when item_type or item_id is unset.
+notify_github_blocked() {
+    local item_type="$1" item_id="$2" message="$3"
+    [ -n "${item_type}" ] && [ -n "${item_id}" ] || return 0
+    case "${item_type}" in
+        Issue)
+            gh issue comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
+            gh issue edit   "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
+            ;;
+        PullRequest)
+            gh pr comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
+            gh pr edit    "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
+            ;;
+    esac
+}
+
+# Fast-fails if GIT_SIGNING_KEY is set but gpg-agent is not running or the key
+# is absent from the keyring.  Posts a GitHub comment and adds Blocked before dying.
+verify_gpg_signing_ready() {
+    local item_type="$1" item_id="$2"
+    [ -n "${GIT_SIGNING_KEY}" ] || return 0
+
+    if ! gpg-connect-agent /bye >/dev/null 2>&1; then
+        notify_github_blocked "${item_type}" "${item_id}" \
+            "Cannot start agent session: \`gpg-agent\` is not running on the host. Run \`gpgconf --launch gpg-agent\` and retry."
+        die "gpg-agent is not running — run 'gpgconf --launch gpg-agent' to start it"
+    fi
+
+    if ! gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1; then
+        notify_github_blocked "${item_type}" "${item_id}" \
+            "Cannot start agent session: signing key \`${GIT_SIGNING_KEY}\` is not in the GPG keyring. Import it with \`gpg --import <key-file>\` on the host."
+        die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
+    fi
+}
+
 # Appends GPG volume/socket args to DOCKER_RUN_ARGS.
 # Preferred path: creates a tmpdir containing only the public key and forwards
 # the gpg-agent extra socket into it.  Falls back to the full ~/.gnupg rw mount
@@ -631,6 +667,7 @@ invoke_claude() {
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
     [ -d "${HOME}/.ssh" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    verify_gpg_signing_ready "${item_type}" "${item_id}"
     add_gpg_docker_args
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
