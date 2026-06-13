@@ -59,6 +59,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - systemd service unit embedded wrong UID in SSH_AUTH_SOCK and ssh-agent socket path: %U in a system service expands to the service manager UID (root=0), not the User= directive UID; install-timer now embeds the real UID via id -u at install time and cleans any stale socket before starting ssh-agent
 - systemd service unit cleanup step used rm -f which cannot remove a directory; changed to rm -rf so a stale directory at the ssh-agent socket path (created by docker when a bind-mount source went missing mid-run) is cleared before each ssh-agent start
 - validate all docker bind-mount source paths exist with the correct type immediately before calling sudo docker run; docker silently creates missing sources as root-owned directories which then block ssh-agent from binding a socket at the same path on the next service start
+- two owner services on the same host raced on the shared ssh-agent socket path; each owner now gets a dedicated socket at /run/user/<uid>/ssh-agent-<owner>.socket so simultaneous starts cannot interfere
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

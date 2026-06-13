@@ -58,6 +58,11 @@ create_service_unit() {
     # User= directive's UID.  Embed the real UID at install time instead.
     local current_uid
     current_uid=$(id -u)
+    # Each owner gets a dedicated ssh-agent socket so multiple owner services
+    # starting simultaneously do not race on creating or removing the same path.
+    local ssh_socket_name="ssh-agent.socket"
+    [ -n "${owner_filter}" ] && ssh_socket_name="ssh-agent-${owner_filter}.socket"
+    local ssh_socket="/run/user/${current_uid}/${ssh_socket_name}"
     local content
     content="[Unit]
 Description=Credfeto Orchestrator for ${CURRENT_USER}
@@ -68,12 +73,12 @@ Wants=network-online.target
 Type=oneshot
 User=${CURRENT_USER}
 Environment=XDG_RUNTIME_DIR=/run/user/${current_uid}
-Environment=SSH_AUTH_SOCK=/run/user/${current_uid}/ssh-agent.socket
+Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
-ExecStartPre=-/usr/bin/rm -rf /run/user/${current_uid}/ssh-agent.socket
-ExecStartPre=/usr/bin/ssh-agent -a /run/user/${current_uid}/ssh-agent.socket
+ExecStartPre=-/usr/bin/rm -rf ${ssh_socket}
+ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
