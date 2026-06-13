@@ -49,6 +49,7 @@ jobs:
     permissions:
       contents: "read"
       packages: "write"
+      security-events: "write"
     steps:
       - name: "Checkout source"
         uses: actions/checkout@v6.0.3
@@ -77,6 +78,11 @@ jobs:
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
+
+      - name: "Scan image for vulnerabilities"
+        uses: ./.github/actions/trivy-scan
+        with:
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       - name: "Summarise"
         shell: "bash"
