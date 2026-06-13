@@ -72,7 +72,7 @@ Environment=SSH_AUTH_SOCK=/run/user/${current_uid}/ssh-agent.socket
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
-ExecStartPre=-/usr/bin/rm -f /run/user/${current_uid}/ssh-agent.socket
+ExecStartPre=-/usr/bin/rm -rf /run/user/${current_uid}/ssh-agent.socket
 ExecStartPre=/usr/bin/ssh-agent -a /run/user/${current_uid}/ssh-agent.socket
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 ExecStart=${exec_start}"

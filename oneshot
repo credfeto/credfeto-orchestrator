@@ -434,6 +434,7 @@ run_claude_fresh() {
     local tmpfile="$1"
     local stderrfile
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for docker stderr"
+    validate_bind_mounts
     info "Starting new Claude session in container ${DOCKER_CONTAINER_NAME}..." >&2
     # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
     # intentionally unprivileged.
@@ -464,7 +465,7 @@ run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
-
+    validate_bind_mounts
     info "Resuming Claude session ${resume_id} in container ${DOCKER_CONTAINER_NAME}..." >&2
     # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
     # shellcheck disable=SC2024
@@ -626,6 +627,35 @@ add_gpg_docker_args() {
     if [ -d "${HOME}/.gnupg" ]; then
         DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     fi
+}
+
+# Verify all --volume source paths in DOCKER_RUN_ARGS exist with the expected
+# type before calling docker run.  Docker auto-creates any missing bind-mount
+# source as a root-owned directory; if that path is later expected to be a
+# socket, the directory blocks ssh-agent from binding there on the next run.
+validate_bind_mounts() {
+    local i=0 take_next=0 src
+    local n=${#DOCKER_RUN_ARGS[@]}
+    while [ "${i}" -lt "${n}" ]; do
+        local arg="${DOCKER_RUN_ARGS[$i]}"
+        if [ "${take_next}" = "1" ]; then
+            take_next=0
+            src="${arg%%:*}"
+            case "${src}" in
+                *.sock|*/S.gpg-agent|*/S.gpg-agent.extra)
+                    [ -S "${src}" ] \
+                        || die "Bind-mount source must be a socket but is missing or wrong type: ${src}"
+                    ;;
+                *)
+                    [ -e "${src}" ] \
+                        || die "Bind-mount source does not exist: ${src}"
+                    ;;
+            esac
+        elif [ "${arg}" = "--volume" ]; then
+            take_next=1
+        fi
+        i=$(( i + 1 ))
+    done
 }
 
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
