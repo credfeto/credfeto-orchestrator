@@ -28,6 +28,7 @@ on:
     paths:
       - "containers/agent/**"
       - ".github/workflows/build-development-agent.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:
