@@ -2463,6 +2463,7 @@ setup_local_git_remote() {
 # --- main startup GPG key check -----------------------------------------------
 
 @test "main dies at startup when GIT_SIGNING_KEY is set but absent from the keyring" {
+    check_required_tools() { return 0; }
     make_stub gpg 'exit 1'
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'GIT_SIGNING_KEY=ABCD1234\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"

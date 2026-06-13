@@ -37,6 +37,41 @@ verify_hooks_fresh() {
     fi
 }
 
+verify_gpg_signing() {
+    gpg-connect-agent /bye >/dev/null 2>&1 \
+        || die "gpg-agent is not responding — run 'gpgconf --launch gpg-agent' on the host"
+    gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+        || die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
+    printf 'test' | gpg --batch --no-tty --armor --detach-sign \
+        --default-key "${GIT_SIGNING_KEY}" --output - >/dev/null 2>&1 \
+        || die "GPG signing test failed — ensure key ${GIT_SIGNING_KEY} is unlocked and the agent is accessible"
+}
+
+verify_ssh_signing() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] \
+        || die "SSH_AUTH_SOCK is not set — SSH agent forwarding is required"
+    [ -S "${SSH_AUTH_SOCK}" ] \
+        || die "SSH agent socket ${SSH_AUTH_SOCK} does not exist — check SSH agent forwarding"
+
+    local ssh_status=0
+    ssh-add -l >/dev/null 2>&1 || ssh_status=$?
+    case "${ssh_status}" in
+        0) ;;
+        1) die "SSH agent has no keys loaded — run 'ssh-add' on the host before starting the container" ;;
+        *) die "SSH agent at ${SSH_AUTH_SOCK} is not responding (ssh-add -l exited ${ssh_status})" ;;
+    esac
+
+    local pubkey
+    pubkey=$(ssh-add -L 2>/dev/null | head -1)
+    [ -n "${pubkey}" ] || die "SSH agent returned no public keys"
+
+    printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - >/dev/null 2>&1 \
+        || die "SSH signing test failed — ensure the loaded SSH key supports signing"
+}
+
+verify_gpg_signing
+verify_ssh_signing
+
 verify_hooks_fresh
 
 git config --global user.name      "${GIT_USER_NAME}"
