@@ -4,7 +4,7 @@ FROM ghcr.io/credfeto/development-node:latest
 
 # ---- Build-time arguments ----------------------------------------------------
 # Trixie ships an old sqlfluff (3.3.1) — pinned-pip install gives us 4.x.
-ARG SQLFLUFF_VERSION=4.1.0
+ARG SQLFLUFF_VERSION=4.2.2
 
 # ---- Python tooling not available in apt -------------------------------------
 # The development-tools base image installs yamllint / ansible-lint / flake8 /

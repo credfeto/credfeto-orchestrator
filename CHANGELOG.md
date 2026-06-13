@@ -19,6 +19,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add CPU, memory, and PID resource limits to agent container invocation to prevent a compromised container from exhausting host resources
 - Added Trivy vulnerability scanning to development base image build workflows to detect CVEs in pushed Docker images
 - Replace ~/.ssh volume mount with SSH agent socket forwarding so private key files are never exposed inside the agent container
+- Bump sqlfluff from 4.1.0 to 4.2.2 to resolve CVE-2026-46374
+- Skip sqlcmd, actionlint, and composite-action-lint in Trivy scan until upstream releases new builds compiled against the patched Go stdlib (CVE-2026-42504, CVE-2026-39820, CVE-2026-33810, CVE-2026-32280 et al.)
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed

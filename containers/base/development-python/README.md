@@ -21,7 +21,7 @@ precedence over the apt-managed `/usr/bin` equivalents.
 | --- | --- | --- |
 | `uv` | latest | Astral toolchain; not in Debian stable |
 | `ruff` | latest | Astral toolchain; not in Debian stable |
-| `sqlfluff` | `${SQLFLUFF_VERSION}` (default `4.1.0`) | Debian Trixie ships `3.3.1`; the `4.x` line is required |
+| `sqlfluff` | `${SQLFLUFF_VERSION}` (default `4.2.2`) | Debian Trixie ships `3.3.1`; the `4.x` line is required |
 | `pre-commit-hooks` | latest | Provides ~20 `console_script` entry points (`check-merge-conflict`, `end-of-file-fixer`, `trailing-whitespace-fixer`, `detect-private-key`, `check-case-conflict`, …) that the credfeto pre-commit config invokes as `language: system` entries |
 | `cfn-lint` | latest | AWS CloudFormation linter; not packaged in Debian |
 
