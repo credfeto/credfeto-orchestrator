@@ -2460,6 +2460,30 @@ setup_local_git_remote() {
     [ -z "${GIT_SIGNING_KEY}" ]
 }
 
+# --- main startup GPG key check -----------------------------------------------
+
+@test "main dies at startup when GIT_SIGNING_KEY is set but absent from the keyring" {
+    make_stub gpg 'exit 1'
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_SIGNING_KEY=ABCD1234\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found in the GPG keyring"* ]]
+}
+
+@test "main does not check the keyring when GIT_SIGNING_KEY is absent from .env" {
+    make_stub gpg 'exit 1'
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://example.com/hook\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    # Should not reach the gpg check — verify it doesn't die due to gpg failure
+    make_stub gh 'printf "{\"items\":[]}\n"'
+    make_stub curl 'exit 0'
+    make_stub flock 'shift; shift; exec "$@"'
+    run main 2>/dev/null
+    # As long as it doesn't die with a GPG error message, the check was skipped
+    [[ "${output}" != *"not found in the GPG keyring"* ]]
+}
+
 # --- invoke_claude git identity env var passing --------------------------------
 
 @test "invoke_claude passes GIT_USER_NAME as Docker env var when set" {

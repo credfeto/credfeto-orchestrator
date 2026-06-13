@@ -1220,6 +1220,10 @@ main() {
 
     check_required_tools
     load_env_config
+    if [ -n "${GIT_SIGNING_KEY}" ]; then
+        gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+            || die "Signing key ${GIT_SIGNING_KEY} is set in .env but not found in the GPG keyring — import it with 'gpg --import <key-file>'"
+    fi
 
     local head_sha
     head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
