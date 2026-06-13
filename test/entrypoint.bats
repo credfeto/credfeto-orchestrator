@@ -37,20 +37,20 @@ GITEOF
 
 # --- GIT_USER_NAME / GIT_USER_EMAIL validation ---------------------------------
 
-@test "entrypoint dies when GIT_USER_NAME is set but GIT_USER_EMAIL is absent" {
-    setup_entrypoint_stubs
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" GIT_SIGNING_KEY="ABCD1234" \
-        bash "${ENTRYPOINT}"
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"GIT_USER_NAME and GIT_USER_EMAIL must both be set or both absent"* ]]
-}
-
-@test "entrypoint dies when GIT_USER_EMAIL is set but GIT_USER_NAME is absent" {
+@test "entrypoint dies when GIT_USER_NAME is not set" {
     setup_entrypoint_stubs
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"GIT_USER_NAME and GIT_USER_EMAIL must both be set or both absent"* ]]
+    [[ "${output}" == *"GIT_USER_NAME is required"* ]]
+}
+
+@test "entrypoint dies when GIT_USER_EMAIL is not set" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GIT_USER_EMAIL is required"* ]]
 }
 
 # --- GIT_SIGNING_KEY validation ------------------------------------------------
@@ -95,17 +95,6 @@ GITEOF
         GIT_SIGNING_KEY="ABCD1234" bash "${ENTRYPOINT}" 2>/dev/null
     grep -qx 'commit.gpgsign' "${TEST_TMP}/git_args"
     grep -qx 'true' "${TEST_TMP}/git_args"
-}
-
-@test "entrypoint skips git identity config when both name and email are absent" {
-    setup_entrypoint_stubs
-    CLAUDE_CODE_OAUTH_TOKEN=token GIT_SIGNING_KEY="ABCD1234" bash "${ENTRYPOINT}" 2>/dev/null || true
-    run test -f "${TEST_TMP}/git_args"
-    # git stub should not have been called for identity config when both are absent
-    if [ -f "${TEST_TMP}/git_args" ]; then
-        run grep -qx 'user.name' "${TEST_TMP}/git_args"
-        [ "${status}" -ne 0 ]
-    fi
 }
 
 # --- claude delegation ---------------------------------------------------------
