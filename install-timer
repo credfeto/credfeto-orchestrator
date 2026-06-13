@@ -64,9 +64,11 @@ Wants=network-online.target
 Type=oneshot
 User=${CURRENT_USER}
 Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=SSH_AUTH_SOCK=/run/user/%U/ssh-agent.socket
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
+ExecStartPre=-/usr/bin/ssh-agent -a /run/user/%U/ssh-agent.socket
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"

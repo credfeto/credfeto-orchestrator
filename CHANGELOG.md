@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pin all external GitHub repository clones in development-full container to specific commit hashes; build fails if upstream HEAD diverges from the expected SHA
 - Add CPU, memory, and PID resource limits to agent container invocation to prevent a compromised container from exhausting host resources
 - Added Trivy vulnerability scanning to development base image build workflows to detect CVEs in pushed Docker images
+- Replace ~/.ssh volume mount with SSH agent socket forwarding so private key files are never exposed inside the agent container
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 ### Fixed
@@ -46,6 +47,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 - Configure Trivy to suppress vulnerability reports where no fix is available
 - Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
+- Pre-load SSH keys into the agent at startup so they are available before the container is launched
 ### Deprecated
 ### Removed
 ### Deployment Changes

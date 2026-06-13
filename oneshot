@@ -551,6 +551,18 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
+# currently holds no keys.  Silent when keys are already loaded (avoids
+# redundant re-adds across timer firings); warns rather than dies on failure.
+preload_ssh_keys() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] || return 0
+    local ssh_keys_status=0
+    ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
+    [ "${ssh_keys_status}" -eq 1 ] || return 0  # 0 = already loaded; 2 = no agent
+    ssh-add -q 2>/dev/null \
+        || die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
+}
+
 # Posts a comment on the current GitHub work item and adds the Blocked label.
 # Silent when item_type or item_id is unset.
 notify_github_blocked() {
@@ -666,7 +678,12 @@ invoke_claude() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
-    [ -d "${HOME}/.ssh" ] && DOCKER_RUN_ARGS+=( --volume "${HOME}/.ssh:/home/developer/.ssh:ro" )
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+        DOCKER_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
+        DOCKER_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
+    else
+        warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
+    fi
     verify_gpg_signing_ready "${item_type}" "${item_id}"
     add_gpg_docker_args
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
@@ -1224,6 +1241,7 @@ main() {
         gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
             || die "Signing key ${GIT_SIGNING_KEY} is set in .env but not found in the GPG keyring — import it with 'gpg --import <key-file>'"
     fi
+    preload_ssh_keys
 
     local head_sha
     head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')

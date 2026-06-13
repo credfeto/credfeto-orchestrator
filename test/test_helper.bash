@@ -43,6 +43,7 @@ setup_isolated_env() {
     unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL
+    unset SSH_AUTH_SOCK
 }
 
 # Sources the oneshot script so its functions are defined without running main.
