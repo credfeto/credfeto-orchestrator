@@ -2777,7 +2777,7 @@ STUBEOF
     grep -qx "\-q" "${add_log}"
 }
 
-@test "preload_ssh_keys warns when ssh-add fails to load keys" {
+@test "preload_ssh_keys dies when ssh-add fails to load keys" {
     local ssh_sock="${TEST_TMP}/ssh-agent.sock"
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
     export SSH_AUTH_SOCK="${ssh_sock}"
@@ -2788,8 +2788,8 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/ssh-add"
     run preload_ssh_keys
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"could not load SSH keys"* ]]
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"no SSH keys could be loaded"* ]]
 }
 
 # --- SSH agent socket forwarding unit tests -----------------------------------
