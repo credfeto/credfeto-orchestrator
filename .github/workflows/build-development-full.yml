@@ -20,6 +20,12 @@ on:
     # from credfeto-global-pre-commit; unchanged hours hit the GHA cache
     # fully (only a layer-validation / tag-push noop runs).
     - cron: "45 * * * *"
+  repository_dispatch:
+    # Fired by credfeto-global-pre-commit on every push to main so the image
+    # is rebuilt immediately when the pre-commit hook config is updated rather
+    # than waiting up to an hour for the scheduled run.
+    types:
+      - pre-commit-updated
   workflow_run:
     workflows: ["Build development-python base image"]
     types:
