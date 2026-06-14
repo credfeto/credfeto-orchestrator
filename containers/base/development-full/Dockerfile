@@ -186,7 +186,9 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
 RUN mkdir -p /opt/git-global-hooks \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-commit "$@"\n' \
         > /opt/git-global-hooks/pre-commit \
-    && chmod 0755 /opt/git-global-hooks/pre-commit \
+    && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-push "$@"\n' \
+        > /opt/git-global-hooks/pre-push \
+    && chmod 0755 /opt/git-global-hooks/pre-commit /opt/git-global-hooks/pre-push \
     && chown -R root:root /opt/git-global-hooks
 
 # Make pre-commit helper scripts available on PATH so pre-commit hooks that
@@ -265,6 +267,8 @@ RUN set -e; \
         || { echo "FATAL sanity: /opt/pre-commit/src/.pre-commit-config.yaml is missing" >&2; exit 1; }; \
     test -x /opt/git-global-hooks/pre-commit \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-commit is not executable" >&2; exit 1; }; \
+    test -x /opt/git-global-hooks/pre-push \
+        || { echo "FATAL sanity: /opt/git-global-hooks/pre-push is not executable" >&2; exit 1; }; \
     command -v run-bats >/dev/null 2>&1 \
         || { echo "FATAL sanity: run-bats not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     echo "== all build-time checks passed =="
