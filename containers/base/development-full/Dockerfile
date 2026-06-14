@@ -153,17 +153,10 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
     && test "$(git -C /opt/markdown-linter-fixer rev-parse HEAD)" = "${MARKDOWN_LINTER_FIXER_COMMIT}" \
     && chown -R root:root /opt/markdown-linter-fixer
 
-# ---- /opt/pre-commit (global pre-commit config) ------------------------------
-# Cloned read-only into the image. After cloning, the .git directory is
-# deleted and provenance is recorded in /opt/pre-commit/.env (SHA=<sha>).
-# Hard build-time assertion: if upstream ever renames or removes the
-# config file the build fails right here.
-# Owned by root so the unprivileged `developer` user can read + execute but
-# cannot modify anything in here.
-# CREDFETO_PRECOMMIT_CACHE_BUST is updated daily by the build workflow to ensure
-# the latest hook config is always pulled in. CREDFETO_PRECOMMIT_COMMIT records
-# the expected HEAD SHA and is updated alongside CACHE_BUST; the build fails if
-# the two diverge, catching any unexpected upstream change between daily runs.
+# ---- /opt/pre-commit (global pre-commit config) + hook shims ----------------
+# Clone the upstream config repo, verify the HEAD SHA matches the expected
+# commit, record provenance in .env, strip git metadata, then wire up shims
+# in /opt/git-global-hooks (referenced by core.hooksPath in /etc/gitconfig).
 # hadolint ignore=DL3059
 RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
     git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
@@ -176,20 +169,13 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
               /opt/pre-commit/ai \
               /opt/pre-commit/CLAUDE.md \
     && printf 'SHA=%s\n' "$HEAD_SHA" > /opt/pre-commit/.env \
-    && chown -R root:root /opt/pre-commit
-
-# Global hooks directory referenced by core.hooksPath. The shim execs the
-# upstream credfeto orchestrator (hooks/pre-commit), which is the entry
-# point that runs the full chain. Owned by root for the same reason as the
-# clone above.
-# hadolint ignore=DL3059
-RUN mkdir -p /opt/git-global-hooks \
+    && mkdir -p /opt/git-global-hooks \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-commit "$@"\n' \
         > /opt/git-global-hooks/pre-commit \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-push "$@"\n' \
         > /opt/git-global-hooks/pre-push \
     && chmod 0755 /opt/git-global-hooks/pre-commit /opt/git-global-hooks/pre-push \
-    && chown -R root:root /opt/git-global-hooks
+    && chown -R root:root /opt/pre-commit /opt/git-global-hooks
 
 # Make pre-commit helper scripts available on PATH so pre-commit hooks that
 # invoke them (e.g. run-bats, buildcheck) can be found without a full path.
