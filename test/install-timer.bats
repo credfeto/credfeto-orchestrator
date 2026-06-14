@@ -8,11 +8,17 @@ setup() {
     mkdir -p "${TEST_TMP}/units"
     make_stub systemctl 'exit 0'
 
-    # Override id as a bash function so CURRENT_USER resolves to "testuser"
-    # when install-timer is sourced.  The function must be exported so that
-    # command substitution subshells in the script see it.
+    # Override id as a bash function so CURRENT_USER and current_uid resolve to
+    # predictable test values when install-timer is sourced.  Both functions must
+    # be exported so command substitution subshells in the script see them.
     # shellcheck disable=SC2329
-    id() { echo "testuser"; }
+    id() {
+        case "$*" in
+            -un) echo "testuser" ;;
+            -u)  echo "1001" ;;
+            *)   echo "testuser" ;;
+        esac
+    }
     export -f id
 
     unset CLAUDECODE
@@ -85,11 +91,12 @@ teardown() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
-    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/%U" "${svc}"
-    grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/ssh-agent.socket" "${svc}"
+    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/user/1001/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -qE "ExecStartPre=-?.*/ssh-agent -a /run/user/%U/ssh-agent.socket$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/rm -rf /run/user/1001/ssh-agent.socket" "${svc}"
+    grep -qE "ExecStartPre=.*/ssh-agent -a /run/user/1001/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
@@ -112,11 +119,12 @@ teardown() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
-    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/%U" "${svc}"
-    grep -q "Environment=SSH_AUTH_SOCK=/run/user/%U/ssh-agent.socket" "${svc}"
+    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/user/1001/ssh-agent-myorg.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -qE "ExecStartPre=-?.*/ssh-agent -a /run/user/%U/ssh-agent.socket$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/rm -rf /run/user/1001/ssh-agent-myorg.socket" "${svc}"
+    grep -qE "ExecStartPre=.*/ssh-agent -a /run/user/1001/ssh-agent-myorg.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
 
