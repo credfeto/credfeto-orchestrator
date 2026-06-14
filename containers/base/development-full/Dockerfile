@@ -187,14 +187,13 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
 # Without this, the hook script committed to the upstream repo would become
 # stale whenever the pre-commit package is updated, causing
 # "Hooks installation is out of date" errors in the agent at runtime.
-# hadolint ignore=DL3059
+# hadolint ignore=DL3059,DL3003
 RUN mkdir -p /opt/git-global-hooks /tmp/pre-commit-install \
     && git -C /tmp/pre-commit-install init \
     && git -C /tmp/pre-commit-install config user.email "build@localhost" \
     && git -C /tmp/pre-commit-install config user.name "Build" \
     && printf 'repos: []\n' > /tmp/pre-commit-install/.pre-commit-config.yaml \
-    && GIT_CONFIG_GLOBAL=/dev/null pre-commit install --config /tmp/pre-commit-install/.pre-commit-config.yaml \
-        -C /tmp/pre-commit-install \
+    && (cd /tmp/pre-commit-install && GIT_CONFIG_GLOBAL=/dev/null pre-commit install --config .pre-commit-config.yaml) \
     && cp /tmp/pre-commit-install/.git/hooks/pre-commit /opt/pre-commit/src/hooks/pre-commit \
     && chmod 0755 /opt/pre-commit/src/hooks/pre-commit \
     && rm -rf /tmp/pre-commit-install \
