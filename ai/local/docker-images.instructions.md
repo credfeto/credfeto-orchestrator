@@ -19,6 +19,16 @@ debian:trixie-slim
 
 Each image is built and pushed to `ghcr.io/<owner>/<image>:latest`.
 
+## Local Build Before Any Change (MANDATORY)
+
+Before making any change to a Dockerfile or its associated workflow, build the affected image locally and confirm it succeeds:
+
+```bash
+docker build -t <image-name>:local containers/base/<stage>/
+```
+
+Do not commit, push, or raise a PR until the local build passes. A broken image must be caught locally — not by CI.
+
 ## Lock-Down Requirements (MANDATORY)
 
 Every file and directory installed by the build that an agent must not modify MUST be owned `root:root` with write permission removed:
