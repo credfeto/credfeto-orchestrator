@@ -63,12 +63,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Docker build: clone pre-commit hook repo directly and wire shims from it rather than regenerating the hook script via a temp install
 - Output helpers (info/success/die/warn) now suppress ANSI escape codes when stdout/stderr is not a terminal, fixing grep-based task-completion polling inside Docker containers
 - agent-entrypoint pre-seeds ~/.claude.json on startup to suppress the configuration-file-not-found warning from Claude Code
+- Update pids-limit test assertion from 1024 to 4096 to match the increased resource limit, and replace run ! negation syntax with compatible two-line equivalents to fix bats version compatibility
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
 - Configure Trivy to suppress vulnerability reports where no fix is available
 - Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
 - Pre-load SSH keys into the agent at startup so they are available before the container is launched
+- Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
 ### Deprecated
 ### Removed
 ### Deployment Changes
