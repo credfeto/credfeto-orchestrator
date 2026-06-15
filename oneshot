@@ -732,6 +732,11 @@ invoke_claude() {
     fi
     verify_gpg_signing_ready "${item_type}" "${item_id}"
     add_gpg_docker_args
+    if [ -f "${HOME}/.database" ]; then
+        DOCKER_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
+    else
+        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
+    fi
     DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
     [ -n "${GIT_USER_NAME}" ]  && DOCKER_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
