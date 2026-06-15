@@ -2877,6 +2877,47 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# --- $HOME/.database mount tests ----------------------------------------------
+
+@test "invoke_claude mounts \$HOME/.database read-only when file exists" {
+    local args_log="${TEST_TMP}/docker_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    printf 'fake-db-credentials\n' > "${HOME}/.database"
+    unset SSH_AUTH_SOCK
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -q "${HOME}/.database:/home/developer/.database:ro" "${args_log}"
+}
+
+@test "invoke_claude warns and skips .database mount when \$HOME/.database is absent" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    /bin/rm -f "${HOME}/.database"
+    unset SSH_AUTH_SOCK
+    make_stub sudo '"$@"'
+    make_gpg_stubs
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    GIT_SIGNING_KEY=""
+    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *".database not found"* ]]
+}
+
 # --- notify_github_blocked unit tests -----------------------------------------
 
 @test "notify_github_blocked posts issue comment and adds Blocked label for Issue" {
