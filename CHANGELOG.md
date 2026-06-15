@@ -61,6 +61,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - validate all docker bind-mount source paths exist with the correct type immediately before calling sudo docker run; docker silently creates missing sources as root-owned directories which then block ssh-agent from binding a socket at the same path on the next service start
 - two owner services on the same host raced on the shared ssh-agent socket path; each owner now gets a dedicated socket at /run/user/<uid>/ssh-agent-<owner>.socket so simultaneous starts cannot interfere
 - Docker build: clone pre-commit hook repo directly and wire shims from it rather than regenerating the hook script via a temp install
+- Output helpers (info/success/die/warn) now suppress ANSI escape codes when stdout/stderr is not a terminal, fixing grep-based task-completion polling inside Docker containers
+- agent-entrypoint pre-seeds ~/.claude.json on startup to suppress the configuration-file-not-found warning from Claude Code
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

@@ -79,4 +79,13 @@ git config --global user.email     "${GIT_USER_EMAIL}"
 git config --global user.signingkey "${GIT_SIGNING_KEY}"
 git config --global commit.gpgsign  true
 
+# Claude Code requires ~/.claude.json to exist; without it every invocation prints
+# a "configuration file not found" warning on stderr before backing up and continuing.
+# Pre-seeding it silences that noise.  Claude will overwrite it with full config on
+# first run; the only required key is firstStartTime.
+if [ ! -f "${HOME}/.claude.json" ]; then
+    printf '{"firstStartTime":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+        > "${HOME}/.claude.json"
+fi
+
 exec claude "$@"
