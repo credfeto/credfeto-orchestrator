@@ -644,7 +644,7 @@ JQSTUB
     grep -qFx -- '--cpus=4' "${args_log}"
     grep -qFx -- '--memory=12g' "${args_log}"
     grep -qFx -- '--memory-swap=12g' "${args_log}"
-    grep -qFx -- '--pids-limit=1024' "${args_log}"
+    grep -qFx -- '--pids-limit=4096' "${args_log}"
 }
 
 # --- invoke_claude error handling ---------------------------------------------
@@ -839,7 +839,8 @@ STUBEOF
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
     invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
-    run ! grep -q "https://discord.example.com/hook" "${args_log}"
+    run grep -q "https://discord.example.com/hook" "${args_log}"
+    [ "${status}" -ne 0 ]
 }
 
 # --- notify_discord_claude_error -----------------------------------------------
@@ -1101,7 +1102,8 @@ STUBEOF
     chmod +x "${STUB_BIN}/docker"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    run ! grep -q ".claude:/home/developer/.claude" "${args_log}"
+    run grep -q ".claude:/home/developer/.claude" "${args_log}"
+    [ "${status}" -ne 0 ]
 }
 
 # --- set_repo_context ---------------------------------------------------------
@@ -1809,7 +1811,8 @@ setup_main_mocks() {
     run notify_discord_no_work
     [ "${status}" -eq 0 ]
     # Should NOT have bracket-prefixed owner
-    run ! grep -q "\[.*\] No actionable" "${args_log}"
+    run grep -q "\[.*\] No actionable" "${args_log}"
+    [ "${status}" -ne 0 ]
     grep -q "No actionable work items found" "${args_log}"
 }
 
@@ -1860,7 +1863,8 @@ setup_main_mocks() {
     run notify_discord_no_work "" 0 0 0 0
     [ "${status}" -eq 0 ]
     grep -q "No actionable work items found" "${args_log}"
-    run ! grep -q "blocked:\|unchanged:\|repo-active:\|not-open:" "${args_log}"
+    run grep -q "blocked:\|unchanged:\|repo-active:\|not-open:" "${args_log}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "notify_discord_no_work includes all non-zero counts in detail" {
