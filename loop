@@ -6,16 +6,28 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 SLEEP_SECONDS=300
 
 die() {
-    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
     exit 1
 }
 
 success() {
-    printf '\n\033[32m✓\033[0m %s\n' "$*"
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
 }
 
 info() {
-    printf '\n\033[32m→\033[0m %s\n' "$*"
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
 }
 
 # Returns true (0) when running inside a Claude Code Bash-tool session.

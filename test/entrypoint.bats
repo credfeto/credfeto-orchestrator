@@ -333,3 +333,26 @@ STUBEOF
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
 }
+
+# --- .claude.json bootstrapping ------------------------------------------------
+
+@test "entrypoint creates ~/.claude.json when it does not exist" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ -f "${HOME}/.claude.json" ]
+    grep -q '"firstStartTime"' "${HOME}/.claude.json"
+}
+
+@test "entrypoint does not overwrite ~/.claude.json when it already exists" {
+    setup_entrypoint_stubs
+    printf '{"firstStartTime":"2020-01-01T00:00:00.000Z","custom":"value"}\n' \
+        > "${HOME}/.claude.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -q '"custom":"value"' "${HOME}/.claude.json"
+}
