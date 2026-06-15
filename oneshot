@@ -720,7 +720,7 @@ invoke_claude() {
         --cpus="4"
         --memory="12g"
         --memory-swap="12g"
-        --pids-limit=1024
+        --pids-limit=4096
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )

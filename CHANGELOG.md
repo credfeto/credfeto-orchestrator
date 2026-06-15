@@ -69,6 +69,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Configure Trivy to suppress vulnerability reports where no fix is available
 - Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
 - Pre-load SSH keys into the agent at startup so they are available before the container is launched
+- Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
 ### Deprecated
 ### Removed
 ### Deployment Changes
