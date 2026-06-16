@@ -65,6 +65,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Output helpers (info/success/die/warn) now suppress ANSI escape codes when stdout/stderr is not a terminal, fixing grep-based task-completion polling inside Docker containers
 - agent-entrypoint pre-seeds ~/.claude.json on startup to suppress the configuration-file-not-found warning from Claude Code
 - Update pids-limit test assertion from 1024 to 4096 to match the increased resource limit, and replace run ! negation syntax with compatible two-line equivalents to fix bats version compatibility
+- ssh-agent socket path now uses systemd RuntimeDirectory so the service starts correctly when no user session is active
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

@@ -91,12 +91,14 @@ teardown() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
-    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
-    grep -q "Environment=SSH_AUTH_SOCK=/run/user/1001/ssh-agent.socket" "${svc}"
+    grep -q "RuntimeDirectory=credfeto-orchestrator-testuser" "${svc}"
+    grep -q "RuntimeDirectoryMode=0700" "${svc}"
+    grep -q "Environment=XDG_RUNTIME_DIR=/run/credfeto-orchestrator-testuser" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -q "ExecStartPre=-/usr/bin/rm -rf /run/user/1001/ssh-agent.socket" "${svc}"
-    grep -qE "ExecStartPre=.*/ssh-agent -a /run/user/1001/ssh-agent.socket$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
+    grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
@@ -119,12 +121,14 @@ teardown() {
 
     [ -f "${svc}" ]
     grep -q "User=testuser" "${svc}"
-    grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
-    grep -q "Environment=SSH_AUTH_SOCK=/run/user/1001/ssh-agent-myorg.socket" "${svc}"
+    grep -q "RuntimeDirectory=credfeto-orchestrator-testuser-myorg" "${svc}"
+    grep -q "RuntimeDirectoryMode=0700" "${svc}"
+    grep -q "Environment=XDG_RUNTIME_DIR=/run/credfeto-orchestrator-testuser-myorg" "${svc}"
+    grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -q "ExecStartPre=-/usr/bin/rm -rf /run/user/1001/ssh-agent-myorg.socket" "${svc}"
-    grep -qE "ExecStartPre=.*/ssh-agent -a /run/user/1001/ssh-agent-myorg.socket$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
+    grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
     grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
 
