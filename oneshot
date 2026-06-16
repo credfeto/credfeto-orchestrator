@@ -22,6 +22,12 @@ MAX_PROMPT_CHARS=100000
 # Avoids hitting the limit again immediately after it lifts.
 RATE_LIMIT_RESUME_BUFFER_SECS=3600
 
+# Hard limit on how long a single agent container may run. Prevents a stuck
+# Monitor loop from holding resources indefinitely.
+# Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
+AGENT_TIMEOUT_MINUTES="${AGENT_TIMEOUT_MINUTES:-90}"
+AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
+
 die() {
     if [ -t 2 ]; then
         printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -230,7 +236,7 @@ try_nonagentic_rebase() {
 
 check_required_tools() {
     local tool
-    for tool in curl jq docker gh git awk grep flock; do
+    for tool in curl jq docker gh git awk grep flock timeout; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 
@@ -366,6 +372,7 @@ Steps:
 3. Reply to every issue comment that prompted an action with "<one sentence description>"
 4. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
 5. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
+6. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
 }
 
@@ -415,6 +422,7 @@ ${checkout_step}
 5. Proceed to address all outstanding work
 6. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
 7. All interaction with humans including status reports must be made as a comment to the pull request.
+8. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
 }
 
@@ -445,17 +453,30 @@ die_claude_failed() {
 }
 
 # Runs a single docker-based claude invocation, writing JSON output to tmpfile.
-# On non-zero exit: checks stderr for a container-name conflict before dying.
+# On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
 run_claude_fresh() {
-    local tmpfile="$1"
-    local stderrfile
+    local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
+    local stderrfile docker_exit=0
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for docker stderr"
     validate_bind_mounts
     info "Starting new Claude session in container ${DOCKER_CONTAINER_NAME}..." >&2
     # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
     # intentionally unprivileged.
     # shellcheck disable=SC2024
-    if ! printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" > "${tmpfile}" 2>"${stderrfile}"; then
+    printf '%s' "${CLAUDE_PROMPT}" \
+        | timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
+            sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
+            > "${tmpfile}" 2>"${stderrfile}" \
+        || docker_exit=$?
+    if [ "${docker_exit}" -ne 0 ]; then
+        if [ "${docker_exit}" -eq 124 ]; then
+            cat "${stderrfile}" >&2
+            rm -f "${stderrfile}"
+            sudo docker rm -f "${DOCKER_CONTAINER_NAME}" > /dev/null 2>&1 || true
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+            die "Agent container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
+        fi
         if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
             cat "${stderrfile}" >&2
             rm -f "${stderrfile}"
@@ -471,6 +492,7 @@ run_claude_fresh() {
 
 # Runs docker-based claude with --resume, capturing stderr separately to detect the
 # "No conversation found" message that Claude writes to stderr on exit 1.
+# On timeout (exit 124): kills container, notifies Discord, dies.
 # On invalid-session error: logs to console, retries fresh, returns 0.
 # On other failure: dies.
 # Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
@@ -479,17 +501,32 @@ CLAUDE_MD_TMPFILE=""
 GPG_PUBKEY_TMPDIR=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
-    local stderrfile
+    local stderrfile docker_exit=0
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
     validate_bind_mounts
     info "Resuming Claude session ${resume_id} in container ${DOCKER_CONTAINER_NAME}..." >&2
     # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
     # shellcheck disable=SC2024
-    if printf '%s' "${CLAUDE_PROMPT}" | sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
-            --resume "${resume_id}" > "${tmpfile}" 2>"${stderrfile}"; then
+    printf '%s' "${CLAUDE_PROMPT}" \
+        | timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
+            sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
+            --resume "${resume_id}" > "${tmpfile}" 2>"${stderrfile}" \
+        || docker_exit=$?
+
+    if [ "${docker_exit}" -eq 0 ]; then
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
         return 0
+    fi
+
+    # Timed out — clean up and notify.
+    if [ "${docker_exit}" -eq 124 ]; then
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}"
+        sudo docker rm -f "${DOCKER_CONTAINER_NAME}" > /dev/null 2>&1 || true
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+        die "Agent container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
     fi
 
     # Non-zero exit — check stderr for the known invalid-session message.
@@ -498,7 +535,7 @@ run_claude_resumed() {
         rm -f "${stderrfile}" "${tmpfile}"
         warn "Session ${resume_id} no longer exists — retrying as a new session" >&2
         tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-        run_claude_fresh "${tmpfile}"
+        run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
         CLAUDE_RESUMED_AS_FRESH=1
         # Propagate the new tmpfile path back to the caller via stdout.
         printf '%s' "${tmpfile}"
@@ -765,7 +802,7 @@ invoke_claude() {
         [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
         [ "${CLAUDE_RESUMED_AS_FRESH}" = "1" ] && resume_session_id=""
     else
-        run_claude_fresh "${tmpfile}"
+        run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
     local is_error
