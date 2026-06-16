@@ -111,6 +111,13 @@ teardown() {
     [[ "${output}" != *"${REPO_WORK_DIR}"* ]]
 }
 
+@test "build_issue_claude_md warns against branch-name poll patterns in Monitor loops" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"branch names contain slashes"* ]]
+    [[ "${output}" == *"foreground"* ]]
+}
+
 @test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
@@ -130,6 +137,13 @@ teardown() {
     [[ "${output}" == *"GitHub CLI comment bodies"* ]]
     [[ "${output}" == *"label management"* ]]
     [[ "${output}" == *"CI checks"* ]]
+}
+
+@test "build_pr_claude_md warns against branch-name poll patterns in Monitor loops" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"branch names contain slashes"* ]]
+    [[ "${output}" == *"foreground"* ]]
 }
 
 @test "build_pr_claude_md with BEHIND merge state includes rebase notice with branch name and force-with-lease" {
@@ -435,6 +449,18 @@ teardown() {
     [[ "${output}" == *"Required tool not found: docker"* ]]
 }
 
+@test "check_required_tools dies when timeout is missing" {
+    command() {
+        if [ "$1" = "-v" ] && [ "$2" = "timeout" ]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    run check_required_tools
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Required tool not found: timeout"* ]]
+}
+
 @test "check_required_tools succeeds when all tools are present" {
     make_stub curl 'exit 0'
     make_stub jq 'exit 0'
@@ -445,6 +471,7 @@ teardown() {
     make_stub grep 'exit 0'
     make_stub flock 'exit 0'
     make_stub sha256sum 'exit 0'
+    make_stub timeout 'exit 0'
     run check_required_tools
     [ "${status}" -eq 0 ]
 }
@@ -841,6 +868,47 @@ STUBEOF
     invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run grep -q "https://discord.example.com/hook" "${args_log}"
     [ "${status}" -ne 0 ]
+}
+
+@test "invoke_claude dies with a timeout message when the container exceeds AGENT_TIMEOUT_MINUTES" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "rm" ] && exit 0
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    make_stub timeout 'exit 124'
+
+    DISCORD_WEBHOOK_URL=""
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"timed out"* ]]
+}
+
+@test "invoke_claude sends Discord notification when the container times out" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub sudo '"$@"'
+    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "rm" ] && exit 0
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/docker"
+    make_stub timeout 'exit 124'
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
 # --- notify_discord_claude_error -----------------------------------------------
