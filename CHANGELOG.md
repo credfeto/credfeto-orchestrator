@@ -66,6 +66,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - agent-entrypoint pre-seeds ~/.claude.json on startup to suppress the configuration-file-not-found warning from Claude Code
 - Update pids-limit test assertion from 1024 to 4096 to match the increased resource limit, and replace run ! negation syntax with compatible two-line equivalents to fix bats version compatibility
 - ssh-agent socket path now uses systemd RuntimeDirectory so the service starts correctly when no user session is active
+- Monitor loop no longer hangs forever when the branch name contains a slash — the generated CLAUDE.md now explicitly warns agents that poll patterns derived from branch prefixes (e.g. \[perf\]) cannot match branches like perf/my-branch, and instructs agents to run git commit/push in the foreground
+- Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
