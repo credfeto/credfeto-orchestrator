@@ -31,6 +31,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Set limit-severities-for-sarif on Trivy scan so exit-code 1 only fires when CRITICAL findings exist in the SARIF; without this, non-critical dotnet/gh findings filled the SARIF and triggered a false failure
 - Mount $HOME/.database read-only into the agent container at /home/developer/.database so database credentials are available to the agent; warns and skips if the file is absent
 - setup-owner script to provision a system user for the orchestrator with sudo, dotfiles, repo clone, and systemd timer
+- setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
+- oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
 ### Fixed
 - Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
 - Issue comment changes ignored when linked PR fingerprint was unchanged — orchestrator now re-runs when the issue fingerprint changes even if the PR has not
@@ -69,6 +71,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - ssh-agent socket path now uses systemd RuntimeDirectory so the service starts correctly when no user session is active
 - Monitor loop no longer hangs forever when the branch name contains a slash — the generated CLAUDE.md now explicitly warns agents that poll patterns derived from branch prefixes (e.g. \[perf\]) cannot match branches like perf/my-branch, and instructs agents to run git commit/push in the foreground
 - Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
+- setup-owner: always overwrite config files on re-run so token rotation and .env changes propagate; die with clear error when clone destination exists but is not a git repo
+- oneshot tests: stub validate_config in setup_main_mocks and supply full env in GPG keyring test so tests pass with the new startup validation
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
