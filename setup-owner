@@ -351,6 +351,8 @@ configure_podman_storage() {
 
     info "Configuring Podman storage driver (${driver}) for ${owner}..."
     sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    sudo chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
+    sudo chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
     {
         printf '[storage]\n'
         printf 'driver = "%s"\n' "${driver}"
