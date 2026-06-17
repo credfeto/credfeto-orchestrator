@@ -101,3 +101,34 @@ teardown() {
     run declare -F ensure_sudoers
     [ "${status}" -ne 0 ]
 }
+
+@test "configure_podman_storage creates storage.conf with vfs driver" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    # Override getent to return a home dir inside TEST_TMP
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # Override sudo to safely perform mkdir/tee/chown/chmod in TEST_TMP
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            mkdir) shift; mkdir "$@" ;;
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_podman_storage "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Podman storage configured"* ]]
+
+    local storage_conf="${test_home}/.config/containers/storage.conf"
+    [ -f "${storage_conf}" ]
+    grep -q 'driver = "vfs"' "${storage_conf}"
+    grep -q '\[storage\]' "${storage_conf}"
+}
