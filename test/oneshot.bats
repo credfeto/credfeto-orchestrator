@@ -439,14 +439,14 @@ teardown() {
     # Override the shell builtin used for presence checks so that a chosen tool
     # reports as absent, deterministically and without altering the real system.
     command() {
-        if [ "$1" = "-v" ] && [ "$2" = "docker" ]; then
+        if [ "$1" = "-v" ] && [ "$2" = "podman" ]; then
             return 1
         fi
         builtin command "$@"
     }
     run check_required_tools
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"Required tool not found: docker"* ]]
+    [[ "${output}" == *"Required tool not found: podman"* ]]
 }
 
 @test "check_required_tools dies when timeout is missing" {
@@ -464,7 +464,7 @@ teardown() {
 @test "check_required_tools succeeds when all tools are present" {
     make_stub curl 'exit 0'
     make_stub jq 'exit 0'
-    make_stub docker 'exit 0'
+    make_stub podman 'exit 0'
     make_stub gh 'exit 0'
     make_stub git 'exit 0'
     make_stub awk 'exit 0'
@@ -521,7 +521,7 @@ teardown() {
 @test "load_session discards a corrupted session file and resets SESSION_ID to empty" {
     local session_file="${SESSION_BASE_DIR}/Issue_9.env"
     mkdir -p "${SESSION_BASE_DIR}"
-    # Write a file whose content is NOT a valid UUID (simulates docker pull output contamination)
+    # Write a file whose content is NOT a valid UUID (simulates podman pull output contamination)
     printf 'latest: Pulling from some/image\nlayer1: Pull complete\ndeadbeef-0000-0000-0000-000000000000\n' \
         > "${session_file}"
 
@@ -601,11 +601,10 @@ teardown() {
 
 # --- model selection -----------------------------------------------------------
 
-@test "invoke_claude passes --model opusplan to docker claude command for a new session" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes --model opusplan to podman claude command for a new session" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -613,18 +612,17 @@ teardown() {
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
 
-@test "invoke_claude passes --model opusplan to docker claude command when resuming a session" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes --model opusplan to podman claude command when resuming a session" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -632,26 +630,25 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
 
-@test "invoke_claude passes resource limit flags to docker run" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes resource limit flags to podman run" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
-    # Stub jq to return canned values matching the docker stub's JSON output.
+    chmod +x "${STUB_BIN}/podman"
+    # Stub jq to return canned values matching the podman stub's JSON output.
     # Needed in environments where jq is not installed.
     cat > "${STUB_BIN}/jq" << 'JQSTUB'
 #!/usr/bin/env bash
@@ -672,14 +669,15 @@ JQSTUB
     grep -qFx -- '--memory=12g' "${args_log}"
     grep -qFx -- '--memory-swap=12g' "${args_log}"
     grep -qFx -- '--pids-limit=4096' "${args_log}"
+    grep -qFx -- '--userns=keep-id' "${args_log}"
 }
 
 # --- invoke_claude error handling ---------------------------------------------
 
-@test "invoke_claude fails fast before calling docker when prompt exceeds MAX_PROMPT_CHARS" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude fails fast before calling podman when prompt exceeds MAX_PROMPT_CHARS" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -687,7 +685,7 @@ JQSTUB
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
     local long_prompt
@@ -700,14 +698,14 @@ STUBEOF
 
 @test "invoke_claude sends Discord notification when prompt exceeds MAX_PROMPT_CHARS" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -722,15 +720,14 @@ STUBEOF
 
 @test "invoke_claude dies and sends Discord notification when Claude returns is_error true" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"api_error","session_id":"12345678-1234-1234-1234-123456789abc","result":"API Error"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -744,8 +741,7 @@ STUBEOF
 
 @test "invoke_claude retries as new session when Claude returns blocking_limit on a resumed session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
@@ -755,7 +751,7 @@ for arg; do
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
     local result
@@ -765,8 +761,7 @@ STUBEOF
 
 @test "invoke_claude sends Discord notification when retrying after blocking_limit" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
@@ -776,7 +771,7 @@ for arg; do
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -788,15 +783,14 @@ STUBEOF
 
 @test "invoke_claude dies with Discord notification on blocking_limit for a new session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -809,15 +803,14 @@ STUBEOF
 
 @test "invoke_claude dies if retry after blocking_limit also fails" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
@@ -827,8 +820,7 @@ STUBEOF
 
 @test "invoke_claude retries as new session when Claude reports session no longer exists" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
@@ -838,7 +830,7 @@ for arg; do
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
     local result
@@ -848,8 +840,7 @@ STUBEOF
 
 @test "invoke_claude does not send Discord notification when retrying after invalid session" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
@@ -859,7 +850,7 @@ for arg; do
 done
 printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -872,15 +863,14 @@ STUBEOF
 
 @test "invoke_claude dies with a timeout message when the container exceeds AGENT_TIMEOUT_MINUTES" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "rm" ] && exit 0
 exit 0
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     make_stub timeout 'exit 124'
 
     DISCORD_WEBHOOK_URL=""
@@ -891,15 +881,14 @@ STUBEOF
 
 @test "invoke_claude sends Discord notification when the container times out" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "rm" ] && exit 0
 exit 0
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     make_stub timeout 'exit 124'
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
@@ -957,10 +946,9 @@ STUBEOF
 }
 
 @test "invoke_claude uses container name orchestrator-OWNER" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -968,17 +956,16 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
 }
 
 @test "invoke_claude mounts REPO_WORK_DIR read-write and RULES_DIR read-only" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -986,7 +973,7 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
@@ -994,9 +981,8 @@ STUBEOF
 }
 
 @test "invoke_claude mounts .claude directory read-write when claude_md_content is provided" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/jq" << 'JQEOF'
 #!/usr/bin/env bash
 case "$2" in
@@ -1006,7 +992,7 @@ case "$2" in
 esac
 JQEOF
     chmod +x "${STUB_BIN}/jq"
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -1014,7 +1000,7 @@ JQEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
     grep -q ':/home/developer/.claude:rw' "${args_log}"
@@ -1022,14 +1008,13 @@ STUBEOF
 
 @test "invoke_claude dies when claude_md_content is empty" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "pull" ] && exit 0
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     run invoke_claude "test prompt" "" "" "" ""
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"claude_md_content is required"* ]]
@@ -1037,7 +1022,6 @@ STUBEOF
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/jq" << 'JQEOF'
 #!/usr/bin/env bash
 case "$2" in
@@ -1047,14 +1031,14 @@ case "$2" in
 esac
 JQEOF
     chmod +x "${STUB_BIN}/jq"
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     CLAUDE_MD_TMPFILE="sentinel"
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
@@ -1062,13 +1046,12 @@ STUBEOF
 }
 
 @test "invoke_claude passes CLAUDE_CODE_OAUTH_TOKEN env var when owner token is configured" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -1076,19 +1059,18 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
 }
 
 @test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when set" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     # shellcheck disable=SC2030
     GH_ENTERPRISE_TOKEN="my-gh-token"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -1096,17 +1078,16 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
 }
 
 @test "invoke_claude passes --resume flag when session id is provided" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -1114,7 +1095,7 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--resume' "${args_log}"
@@ -1123,32 +1104,30 @@ STUBEOF
 
 @test "invoke_claude dies if container already exists" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 0
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already exists"* ]]
 }
 
-@test "invoke_claude dies with specific message when docker run fails due to container name in use" {
+@test "invoke_claude dies with specific message when podman run fails due to container name in use" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
-printf 'docker: Error response from daemon: Conflict. The container name "/orchestrator-credfeto" is already in use\n' >&2
+printf 'Error: container name "orchestrator-credfeto" is already in use by container abc123def456\n' >&2
 exit 1
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
@@ -1156,10 +1135,9 @@ STUBEOF
 }
 
 @test "invoke_claude does not mount host .claude directory" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${HOME}/.claude"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -1167,7 +1145,7 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -q ".claude:/home/developer/.claude" "${args_log}"
@@ -2289,15 +2267,14 @@ setup_main_mocks() {
 
 @test "invoke_claude saves rate-limit file and sends Discord notification on HTTP 429" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     local args_log="${TEST_TMP}/curl_args"
@@ -2311,15 +2288,14 @@ STUBEOF
 
 @test "invoke_claude persists rate-limit file on HTTP 429 so subsequent runs skip the owner" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '%s\n' '{"is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit \u00b7 resets 3pm (UTC)"}'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
@@ -2562,12 +2538,11 @@ setup_local_git_remote() {
 
 # --- invoke_claude git identity env var passing --------------------------------
 
-@test "invoke_claude passes GIT_USER_NAME as Docker env var when set" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes GIT_USER_NAME as container env var when set" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_USER_NAME="Alice"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -2575,18 +2550,17 @@ setup_local_git_remote() {
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
 }
 
-@test "invoke_claude passes GIT_USER_EMAIL as Docker env var when set" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_USER_EMAIL="alice@example.com"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -2594,20 +2568,19 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_EMAIL=alice@example.com' "${args_log}"
 }
 
-@test "invoke_claude passes GIT_SIGNING_KEY as Docker env var when set" {
-    local args_log="${TEST_TMP}/docker_args"
+@test "invoke_claude passes GIT_SIGNING_KEY as container env var when set" {
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_SIGNING_KEY="ABCD1234"
-    make_stub sudo '"$@"'
     make_stub gpg-connect-agent 'exit 0'
     make_stub gpg 'exit 0'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -2615,18 +2588,17 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_SIGNING_KEY=ABCD1234' "${args_log}"
 }
 
 @test "invoke_claude does not pass GIT_USER_NAME when not set" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_USER_NAME=""
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -2634,7 +2606,7 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qx 'GIT_USER_NAME=' "${args_log}"
@@ -2642,10 +2614,9 @@ STUBEOF
 }
 
 @test "invoke_claude does not mount the host HOME gitconfig" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
@@ -2653,14 +2624,14 @@ STUBEOF
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qF ".gitconfig" "${args_log}"
     [ "${status}" -ne 0 ]
 }
 
-# --- add_gpg_docker_args unit tests --------------------------------------------
+# --- add_gpg_podman_args unit tests --------------------------------------------
 
 make_gpg_stubs() {
     local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
@@ -2690,56 +2661,56 @@ STUBEOF
     make_stub gpg-connect-agent 'exit 0'
 }
 
-@test "add_gpg_docker_args uses socket forwarding when extra socket and signing key are available" {
+@test "add_gpg_podman_args uses socket forwarding when extra socket and signing key are available" {
     make_gpg_stubs
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_docker_args
+    add_gpg_podman_args
     # Should contain at least one --volume arg referencing /home/developer/.gnupg
     local found=0
-    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
         [[ "${arg}" == *":/home/developer/.gnupg"* ]] && found=1
     done
     [ "${found}" -eq 1 ]
 }
 
-@test "add_gpg_docker_args mounts extra socket at /home/developer/.gnupg/S.gpg-agent:ro" {
+@test "add_gpg_podman_args mounts extra socket at /home/developer/.gnupg/S.gpg-agent:ro" {
     make_gpg_stubs
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_docker_args
+    add_gpg_podman_args
     local found=0
-    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
         [[ "${arg}" == *":/home/developer/.gnupg/S.gpg-agent:ro"* ]] && found=1
     done
     [ "${found}" -eq 1 ]
 }
 
-@test "add_gpg_docker_args sets GPG_PUBKEY_TMPDIR when forwarding succeeds" {
+@test "add_gpg_podman_args sets GPG_PUBKEY_TMPDIR when forwarding succeeds" {
     make_gpg_stubs
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
     GPG_PUBKEY_TMPDIR=""
-    add_gpg_docker_args
+    add_gpg_podman_args
     [ -n "${GPG_PUBKEY_TMPDIR}" ]
     [ -d "${GPG_PUBKEY_TMPDIR}" ]
 }
 
-@test "add_gpg_docker_args falls back to ~/.gnupg mount when extra socket is absent" {
+@test "add_gpg_podman_args falls back to ~/.gnupg mount when extra socket is absent" {
     # No gpgconf stub → gpgconf fails, extra_socket is empty, [ -S "" ] is false.
     make_stub gpgconf 'exit 1'
     mkdir -p "${HOME}/.gnupg"
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_docker_args 2>/dev/null
+    add_gpg_podman_args 2>/dev/null
     local found=0
-    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
         [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
     done
     [ "${found}" -eq 1 ]
 }
 
-@test "add_gpg_docker_args falls back to ~/.gnupg mount when gpg export fails" {
+@test "add_gpg_podman_args falls back to ~/.gnupg mount when gpg export fails" {
     local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
     cat > "${STUB_BIN}/gpgconf" << STUBEOF
@@ -2756,32 +2727,31 @@ exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gpg"
     mkdir -p "${HOME}/.gnupg"
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_docker_args 2>/dev/null
+    add_gpg_podman_args 2>/dev/null
     local found=0
-    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
         [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
     done
     [ "${found}" -eq 1 ]
 }
 
-@test "add_gpg_docker_args skips all mounts when GIT_SIGNING_KEY is empty and ~/.gnupg absent" {
+@test "add_gpg_podman_args skips all mounts when GIT_SIGNING_KEY is empty and ~/.gnupg absent" {
     make_stub gpgconf 'exit 1'
-    DOCKER_RUN_ARGS=()
+    PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY=""
-    add_gpg_docker_args 2>/dev/null
+    add_gpg_podman_args 2>/dev/null
     local found=0
-    for arg in "${DOCKER_RUN_ARGS[@]}"; do
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
         [[ "${arg}" == *".gnupg"* ]] && found=1
     done
     [ "${found}" -eq 0 ]
 }
 
-@test "add_gpg_docker_args GPG_PUBKEY_TMPDIR is cleaned up by invoke_claude on success" {
+@test "add_gpg_podman_args GPG_PUBKEY_TMPDIR is cleaned up by invoke_claude on success" {
     make_gpg_stubs
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_stub sudo '"$@"'
     cat > "${STUB_BIN}/jq" << 'JQEOF'
 #!/usr/bin/env bash
 case "$2" in
@@ -2791,13 +2761,13 @@ case "$2" in
 esac
 JQEOF
     chmod +x "${STUB_BIN}/jq"
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "inspect" ] && exit 1
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
 
     GIT_SIGNING_KEY="ABCD1234"
     GPG_PUBKEY_TMPDIR=""
@@ -2871,21 +2841,20 @@ STUBEOF
 # --- SSH agent socket forwarding unit tests -----------------------------------
 
 @test "invoke_claude mounts SSH_AUTH_SOCK as /tmp/ssh-agent.sock and sets env var" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     local ssh_sock="${TEST_TMP}/ssh-agent.sock"
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     SSH_AUTH_SOCK="${ssh_sock}"
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${ssh_sock}:/tmp/ssh-agent.sock:ro" "${args_log}"
@@ -2895,15 +2864,14 @@ STUBEOF
 @test "invoke_claude warns and skips SSH mount when SSH_AUTH_SOCK is unset" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     unset SSH_AUTH_SOCK
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
@@ -2913,15 +2881,14 @@ STUBEOF
 @test "invoke_claude warns and skips SSH mount when SSH_AUTH_SOCK path is not a socket" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     export SSH_AUTH_SOCK="${TEST_TMP}/nonexistent-sock"
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
@@ -2929,19 +2896,18 @@ STUBEOF
 }
 
 @test "invoke_claude does not mount ~/.ssh directory" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${HOME}/.ssh"
     unset SSH_AUTH_SOCK
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -q "\.ssh:/home/developer/.ssh" "${args_log}"
@@ -2951,20 +2917,19 @@ STUBEOF
 # --- $HOME/.database mount tests ----------------------------------------------
 
 @test "invoke_claude mounts \$HOME/.database read-only when file exists" {
-    local args_log="${TEST_TMP}/docker_args"
+    local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     printf 'fake-db-credentials\n' > "${HOME}/.database"
     unset SSH_AUTH_SOCK
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << STUBEOF
+    cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${HOME}/.database:/home/developer/.database:ro" "${args_log}"
@@ -2974,15 +2939,14 @@ STUBEOF
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     /bin/rm -f "${HOME}/.database"
     unset SSH_AUTH_SOCK
-    make_stub sudo '"$@"'
     make_gpg_stubs
-    cat > "${STUB_BIN}/docker" << 'STUBEOF'
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
 [ "$1" = "pull" ] && exit 0
 [ "$1" = "inspect" ] && exit 1
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
-    chmod +x "${STUB_BIN}/docker"
+    chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
     run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
