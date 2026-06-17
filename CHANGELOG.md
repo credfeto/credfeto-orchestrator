@@ -35,6 +35,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner script to provision a system user for the orchestrator with sudo, dotfiles, repo clone, and systemd timer
 - setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
+- document absolute path requirement and gpg socket permission rationale as comments in generated systemd service unit
 ### Fixed
 - oneshot: prefer XDG_RUNTIME_DIR gpg-agent extra socket over the gpgconf-listed path; prevents stale socket files left in ~/.gnupg by a SIGKILL'd agent being mounted into the container where they appear live but are unresponsive
 - setup-owner: write ~/.gitconfig for the owner with user identity and GPG signing config from .env so non-agentic git operations (e.g. rebase) can commit without requiring global git config on the host
