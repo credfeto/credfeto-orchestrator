@@ -168,7 +168,7 @@ copy_dotfiles() {
 
     copy_dotdir   "${owner}" "${owner_home}" ".ssh"
     sync_gnupg    "${owner}" "${owner_home}"
-    configure_git "${owner}"
+    configure_git "${owner}" "${owner_home}"
     copy_dotfile  "${owner}" "${owner_home}" ".database"
 }
 
@@ -290,6 +290,7 @@ sync_gnupg() {
 
 configure_git() {
     local owner="$1"
+    local owner_home="$2"
 
     local env_file="${SOURCE_CONFIG}/orchestrator/.env"
     local git_user_name git_user_email git_signing_key
@@ -306,18 +307,21 @@ configure_git() {
     fi
 
     info "Configuring git for ${owner}..."
-    sudo -u "${owner}" git config --global user.name "${git_user_name}" \
-        || die "Failed to set git user.name for ${owner}"
-    sudo -u "${owner}" git config --global user.email "${git_user_email}" \
-        || die "Failed to set git user.email for ${owner}"
-    if [ -n "${git_signing_key}" ]; then
-        sudo -u "${owner}" git config --global user.signingkey "${git_signing_key}" \
-            || die "Failed to set git user.signingkey for ${owner}"
-        sudo -u "${owner}" git config --global commit.gpgsign true \
-            || die "Failed to set git commit.gpgsign for ${owner}"
-        sudo -u "${owner}" git config --global tag.gpgSign true \
-            || die "Failed to set git tag.gpgSign for ${owner}"
-    fi
+    local gitconfig="${owner_home}/.gitconfig"
+    # Write .gitconfig directly — sudo git config --global fails when invoked from a
+    # directory the owner cannot stat (git safe.directory check rejects non-owner dirs)
+    {
+        printf '[user]\n'
+        printf '\tname = %s\n' "${git_user_name}"
+        printf '\temail = %s\n' "${git_user_email}"
+        if [ -n "${git_signing_key}" ]; then
+            printf '\tsigningkey = %s\n' "${git_signing_key}"
+            printf '[commit]\n\tgpgsign = true\n'
+            printf '[tag]\n\tgpgSign = true\n'
+        fi
+    } | sudo tee "${gitconfig}" > /dev/null || die "Failed to write ${gitconfig}"
+    sudo chown "${owner}:${owner}" "${gitconfig}" || die "Failed to chown ${gitconfig}"
+    sudo chmod 644 "${gitconfig}" || die "Failed to set permissions on ${gitconfig}"
     success "Git configured for ${owner}"
 }
 
