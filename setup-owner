@@ -44,7 +44,7 @@ SUDOERS_DIR="${SUDOERS_DIR:-/etc/sudoers.d}"
 
 check_required_tools() {
     local tool
-    for tool in id sudo useradd getent git; do
+    for tool in id sudo useradd getent git loginctl; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 }
@@ -97,6 +97,13 @@ ensure_user_exists() {
     sudo useradd -m -s /bin/bash "${owner}" || die "Failed to create user ${owner}"
     sudo passwd -l "${owner}" || die "Failed to lock password for ${owner}"
     success "User ${owner} created"
+}
+
+enable_linger() {
+    local owner="$1"
+    info "Enabling linger for ${owner} (creates persistent systemd user session)..."
+    sudo loginctl enable-linger "${owner}" || die "Failed to enable linger for ${owner}"
+    success "Linger enabled for ${owner}"
 }
 
 revoke_sudoers() {
@@ -429,6 +436,7 @@ main() {
     info "Provisioning orchestrator for owner: ${owner}"
 
     ensure_user_exists "${owner}"
+    enable_linger "${owner}"
     revoke_sudoers "${owner}"
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"

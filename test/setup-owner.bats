@@ -26,6 +26,7 @@ setup() {
     make_stub useradd 'exit 0'
     make_stub getent 'exit 1'
     make_stub git 'exit 0'
+    make_stub loginctl 'exit 0'
 
     unset CLAUDECODE
 
@@ -79,6 +80,13 @@ teardown() {
     }
     run check_required_tools
     [ "${status}" -eq 0 ]
+}
+
+@test "enable_linger invokes loginctl enable-linger for the owner" {
+    run enable_linger "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Linger enabled for testowner"* ]]
+    grep -q "loginctl enable-linger testowner" "${TEST_TMP}/sudo.log"
 }
 
 @test "revoke_sudoers is a no-op when the sudoers file does not exist" {
