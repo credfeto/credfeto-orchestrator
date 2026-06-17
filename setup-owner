@@ -340,16 +340,29 @@ configure_podman_storage() {
 
     local config_dir="${owner_home}/.config/containers"
     local storage_conf="${config_dir}/storage.conf"
+    local work_dir="${owner_home}/work"
     local driver="vfs"
+    local graphroot=""
     local mount_program=""
 
-    # fuse-overlayfs lets rootless Podman use the overlay storage driver on any
-    # filesystem (btrfs, ext4) without requiring kernel user.overlay xattr support.
-    # Fall back to vfs when fuse-overlayfs is not available — vfs always works but
-    # copies entire layers on every pull, so it is slower and uses more disk space.
+    # Use fuse-overlayfs when available: allows the overlay storage driver on any
+    # filesystem (btrfs, ext4) without kernel user.overlay xattr support.
+    # Otherwise vfs always works but copies entire layers on every pull.
     if command -v fuse-overlayfs >/dev/null 2>&1; then
         driver="overlay"
         mount_program=$(command -v fuse-overlayfs)
+    fi
+
+    # Place the graphroot on ~/work when it is a btrfs mount.  This applies
+    # to both overlay (via fuse-overlayfs) and vfs: the btrfs volume has much
+    # more space than the ext4 home partition, which matters especially for vfs
+    # since it copies entire layers rather than sharing them via copy-on-write.
+    if [ -d "${work_dir}" ] && command -v findmnt >/dev/null 2>&1; then
+        local fstype
+        fstype=$(findmnt -T "${work_dir}" -o FSTYPE -n 2>/dev/null | tr -d '[:space:]')
+        if [ "${fstype}" = "btrfs" ]; then
+            graphroot="${work_dir}/.containers/storage"
+        fi
     fi
 
     info "Configuring Podman storage driver (${driver}) for ${owner}..."
@@ -359,6 +372,7 @@ configure_podman_storage() {
     {
         printf '[storage]\n'
         printf 'driver = "%s"\n' "${driver}"
+        [ -n "${graphroot}" ] && printf 'graphroot = "%s"\n' "${graphroot}"
         if [ -n "${mount_program}" ]; then
             printf '[storage.options.overlay]\n'
             printf 'mount_program = "%s"\n' "${mount_program}"
