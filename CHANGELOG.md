@@ -34,7 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
 ### Fixed
-- setup-owner: build owner .gnupg in classic mode (no-use-keyboxd) so GPG uses pubring.kbx instead of keyboxd; the keyboxd pubring.db lock file embeds the source user PID which causes the owner keyboxd to hang indefinitely waiting for a lock it can never acquire
+- setup-owner: sync GPG keyring by export/import rather than directory copy; avoids keyboxd database lock (source PID embedded in lock file) that caused owner keyboxd to hang indefinitely
 - setup-owner: replace .gnupg by killing owner keyboxd/gpg-agent then doing a clean directory copy, bypassing keyboxd import which fails when systemd socket-activates the daemon before the write completes
 - setup-owner: use sudo -u to check clone directory existence so permission checks run as the owner user (fixes false negative when owner home dir is mode 700)
 - Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
