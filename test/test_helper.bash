@@ -75,6 +75,12 @@ source_uninstall_timer() {
     source "${REPO_ROOT}/uninstall-timer"
 }
 
+# Sources the setup-owner script so its functions are defined without running main.
+source_setup_owner() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/setup-owner"
+}
+
 # Creates a unique fixture directory inside the repository tree and assigns its path
 # to the variable named REPO_FIXTURE_DIR. The loop script checks `[ -x oneshot ]`;
 # some sandboxes do not honour the execute bit for files created under the system temp

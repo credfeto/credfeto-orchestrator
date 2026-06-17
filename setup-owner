@@ -40,10 +40,11 @@ is_ai_agent() {
 REPO_URL="git@github.com:credfeto/credfeto-orchestrator.git"
 SOURCE_HOME="${HOME}"
 SOURCE_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}"
+SUDOERS_DIR="${SUDOERS_DIR:-/etc/sudoers.d}"
 
 check_required_tools() {
     local tool
-    for tool in id sudo useradd getent git visudo; do
+    for tool in id sudo useradd getent git; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 }
@@ -98,23 +99,16 @@ ensure_user_exists() {
     success "User ${owner} created"
 }
 
-ensure_sudoers() {
+revoke_sudoers() {
     local owner="$1"
-    local sudoers_file="/etc/sudoers.d/${owner}"
-    if [ -f "${sudoers_file}" ]; then
-        info "Sudoers file ${sudoers_file} already exists — skipping"
+    local sudoers_file="${SUDOERS_DIR}/${owner}"
+    if [ ! -f "${sudoers_file}" ]; then
+        info "No sudoers entry for ${owner} — nothing to revoke"
         return 0
     fi
-    info "Creating sudoers entry for ${owner}..."
-    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "${owner}" \
-        | sudo tee "${sudoers_file}" >/dev/null \
-        || die "Failed to write ${sudoers_file}"
-    sudo chmod 440 "${sudoers_file}" || die "Failed to set permissions on ${sudoers_file}"
-    if ! sudo visudo -c -f "${sudoers_file}" >/dev/null 2>&1; then
-        sudo rm -f "${sudoers_file}"
-        die "Sudoers file validation failed — file removed"
-    fi
-    success "Sudoers entry created for ${owner}"
+    info "Revoking sudoers entry for ${owner}..."
+    sudo rm -f "${sudoers_file}" || die "Failed to remove ${sudoers_file}"
+    success "Sudoers entry revoked for ${owner}"
 }
 
 copy_dotdir() {
@@ -355,7 +349,7 @@ main() {
     info "Provisioning orchestrator for owner: ${owner}"
 
     ensure_user_exists "${owner}"
-    ensure_sudoers "${owner}"
+    revoke_sudoers "${owner}"
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"
     clone_or_pull_repo "${owner}"
