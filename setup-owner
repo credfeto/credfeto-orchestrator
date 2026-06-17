@@ -251,16 +251,48 @@ sync_gnupg() {
         return 0
     fi
 
-    info "Syncing .gnupg keyring for ${owner}..."
-    sudo rm -rf "${dst}" || die "Failed to remove ${dst}"
-    sudo cp -r "${src}" "${dst}" || die "Failed to copy .gnupg to ${dst}"
-    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
-    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
-    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
-    sudo pkill -u "${owner}" keyboxd 2>/dev/null || true
-    sudo pkill -u "${owner}" gpg-agent 2>/dev/null || true
-    success "Synced .gnupg for ${owner}"
+    local env_file="${SOURCE_CONFIG}/orchestrator/.env"
+    local key_id
+    key_id=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+
+    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
+    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+
+    info "Syncing .gnupg keyring for ${owner} (classic mode, no keyboxd)..."
+    sudo rm -rf "${dst}" \
+        || die "Failed to remove ${dst}"
+    sudo mkdir -p "${dst}/private-keys-v1.d" \
+        || die "Failed to create ${dst}"
+
+    # Use classic keybox format to avoid the keyboxd cross-process database lock
+    printf 'no-use-keyboxd\n' | sudo tee "${dst}/common.conf" > /dev/null \
+        || die "Failed to write ${dst}/common.conf"
+
+    if [ -d "${src}/private-keys-v1.d" ]; then
+        sudo cp "${src}/private-keys-v1.d/." "${dst}/private-keys-v1.d/" 2>/dev/null || true
+    fi
+    [ -f "${src}/trustdb.gpg" ] && sudo cp "${src}/trustdb.gpg" "${dst}/" \
+        || true
+    [ -f "${src}/sshcontrol" ] && sudo cp "${src}/sshcontrol" "${dst}/" \
+        || true
+
+    sudo chown -R "${owner}:${owner}" "${dst}" \
+        || die "Failed to chown ${dst}"
+    sudo find "${dst}" -type d -exec chmod 700 {} + \
+        || die "Failed to set dir permissions in ${dst}"
+    sudo find "${dst}" -type f -exec chmod 600 {} + \
+        || die "Failed to set file permissions in ${dst}"
+
+    if [ -n "${key_id}" ]; then
+        gpg --batch --no-tty --export "${key_id}" \
+            | sudo -u "${owner}" gpg --homedir "${dst}" --batch --no-tty --import \
+            || die "Failed to import public key ${key_id} for ${owner}"
+    fi
+
+    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
+    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    success "GPG keyring synced for ${owner}"
 }
 
 clone_or_pull_repo() {

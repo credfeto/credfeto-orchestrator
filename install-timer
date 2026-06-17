@@ -77,10 +77,8 @@ ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
-ExecStartPre=-/usr/bin/pkill -u %u keyboxd
 ExecStartPre=-/usr/bin/pkill -u %u gpg-agent
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
-ExecStartPre=/usr/bin/gpgconf --launch keyboxd
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
 }
