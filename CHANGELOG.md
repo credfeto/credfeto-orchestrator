@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
 ### Fixed
+- setup-owner: explicitly import GPG key into owner keyring so oneshot can sign commits even when .gnupg dir pre-exists from agent auto-init
 - setup-owner: use sudo -u to check clone directory existence so permission checks run as the owner user (fixes false negative when owner home dir is mode 700)
 - Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
 - Issue comment changes ignored when linked PR fingerprint was unchanged — orchestrator now re-runs when the issue fingerprint changes even if the PR has not
