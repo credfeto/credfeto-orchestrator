@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Disable Trivy secret scanning for image scans to eliminate false positive from gcp-service-account pattern in /opt/pre-commit/.gitleaks.toml (secret scanning already covered by TruffleHog in pre-commit hooks)
 - Skip trufflehog in Trivy scan until upstream releases a build compiled against the patched Go stdlib (same Go CVEs as sqlcmd/actionlint/composite-action-lint)
 - Replace rooted Docker with rootless Podman for agent container execution
+- Revoke sudo access granted by setup-owner — no longer required with rootless Podman
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 - SSH agent validation on container start: verify SSH_AUTH_SOCK socket exists, agent has keys loaded, and signing with the loaded key succeeds
