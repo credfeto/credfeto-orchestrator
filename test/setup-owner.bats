@@ -16,9 +16,10 @@ setup() {
     # shellcheck disable=SC2329
     id() {
         case "$*" in
-            -un) echo "testuser" ;;
-            -u)  echo "1001" ;;
-            *)   echo "testuser" ;;
+            -un)   echo "testuser" ;;
+            -u)    echo "1001" ;;
+            "-u "*)echo "1001" ;;
+            *)     echo "testuser" ;;
         esac
     }
     export -f id
@@ -234,7 +235,7 @@ teardown() {
     grep -q 'driver = "vfs"' "${storage_conf}"
 }
 
-@test "configure_podman_engine writes containers.conf with cgroupfs" {
+@test "configure_podman_engine writes containers.conf with cgroupfs and user session cgroup_parent" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"
 
@@ -260,4 +261,5 @@ teardown() {
     local containers_conf="${test_home}/.config/containers/containers.conf"
     [ -f "${containers_conf}" ]
     grep -q 'cgroup_manager = "cgroupfs"' "${containers_conf}"
+    grep -q 'cgroup_parent = "user.slice/user-1001.slice/user@1001.service"' "${containers_conf}"
 }

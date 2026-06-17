@@ -389,6 +389,10 @@ configure_podman_engine() {
     owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
 
+    local owner_uid
+    owner_uid=$(id -u "${owner}" 2>/dev/null) || die "Failed to get UID for ${owner}"
+    [ -n "${owner_uid}" ] || die "No UID found for ${owner}"
+
     local config_dir="${owner_home}/.config/containers"
     local containers_conf="${config_dir}/containers.conf"
 
@@ -397,13 +401,18 @@ configure_podman_engine() {
     sudo chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
     sudo chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
     # Use cgroupfs instead of the systemd cgroup manager.  The systemd manager
-    # requires runc to talk to the user session D-Bus to create libpod scope
-    # units in user.slice; from inside a system service that D-Bus call is
-    # denied even with DBUS_SESSION_BUS_ADDRESS set and Delegate=yes in the
-    # unit.  cgroupfs bypasses D-Bus entirely and works reliably.
+    # requires runc to create libpod scope units via D-Bus; from inside a system
+    # service this is denied even with Delegate=yes.  cgroupfs is used instead,
+    # but must target the user's own session cgroup where the owner has write
+    # access (granted by loginctl enable-linger which keeps user@<uid>.service
+    # alive).  /sys/fs/cgroup/system.slice is not writable by non-root.
     {
         printf '[engine]\n'
         printf 'cgroup_manager = "cgroupfs"\n'
+        printf '\n'
+        printf '[containers]\n'
+        printf 'cgroup_parent = "user.slice/user-%s.slice/user@%s.service"\n' \
+            "${owner_uid}" "${owner_uid}"
     } | sudo tee "${containers_conf}" > /dev/null || die "Failed to write ${containers_conf}"
     sudo chown "${owner}:${owner}" "${containers_conf}" || die "Failed to chown ${containers_conf}"
     sudo chmod 600 "${containers_conf}" || die "Failed to set permissions on ${containers_conf}"
