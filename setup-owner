@@ -39,12 +39,47 @@ is_ai_agent() {
 
 REPO_URL="git@github.com:credfeto/credfeto-orchestrator.git"
 SOURCE_HOME="${HOME}"
+SOURCE_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}"
 
 check_required_tools() {
     local tool
     for tool in id sudo useradd getent git visudo; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
+}
+
+# Validates that all required source config files exist before we touch anything.
+# Prints a clear error for each missing file/directory and dies when any are absent.
+validate_source_config() {
+    local owner="$1"
+    local errors=0
+
+    if [ ! -d "${SOURCE_CONFIG}/gh" ] || [ ! -f "${SOURCE_CONFIG}/gh/hosts.yml" ]; then
+        printf '\n✗ %s\n' "${SOURCE_CONFIG}/gh/hosts.yml is missing — run 'gh auth login' first" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "${SOURCE_CONFIG}/orchestrator/.env" ]; then
+        printf '\n✗ %s\n' "${SOURCE_CONFIG}/orchestrator/.env is missing" >&2
+        printf '  Create it with: GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY, DISCORD_WEBHOOK\n' >&2
+        errors=$((errors + 1))
+    fi
+
+    local token_file="${SOURCE_CONFIG}/orchestrator/tokens/${owner}"
+    if [ ! -f "${token_file}" ]; then
+        printf '\n✗ %s\n' "${token_file} is missing — create it with the Claude OAuth token (chmod 600)" >&2
+        errors=$((errors + 1))
+    else
+        local perms
+        perms=$(stat -c '%a' "${token_file}" 2>/dev/null)
+        case "${perms}" in
+            600|400) ;;
+            *) printf '\n✗ %s\n' "${token_file} has permissions ${perms} — must be 600 (run: chmod 600 ${token_file})" >&2
+               errors=$((errors + 1)) ;;
+        esac
+    fi
+
+    [ "${errors}" -eq 0 ] || die "Pre-flight checks failed — fix the above and re-run"
 }
 
 get_owner_home() {
@@ -142,6 +177,75 @@ copy_dotfiles() {
     copy_dotfile "${owner}" "${owner_home}" ".database"
 }
 
+# Copies a single file from SOURCE_CONFIG into the owner's XDG config dir,
+# creating parent directories as needed.  Skips if destination already exists.
+copy_config_file() {
+    local owner="$1"
+    local owner_home="$2"
+    local rel_path="$3"   # path relative to ~/.config/
+    local perms="${4:-600}"
+    local src="${SOURCE_CONFIG}/${rel_path}"
+    local dst_dir owner_config_dir
+    owner_config_dir="${owner_home}/.config"
+    dst_dir="${owner_config_dir}/$(dirname "${rel_path}")"
+    local dst="${owner_config_dir}/${rel_path}"
+
+    if [ -f "${dst}" ]; then
+        info ".config/${rel_path} already present for ${owner} — skipping"
+        return 0
+    fi
+    if [ ! -f "${src}" ]; then
+        die "Expected source file ${src} is missing — this should have been caught by validate_source_config"
+    fi
+    info "Copying .config/${rel_path}..."
+    sudo mkdir -p "${dst_dir}" || die "Failed to create ${dst_dir}"
+    sudo chown -R "${owner}:${owner}" "${owner_config_dir}" || die "Failed to chown ${owner_config_dir}"
+    sudo chmod 700 "${owner_config_dir}" || die "Failed to set permissions on ${owner_config_dir}"
+    sudo chmod 700 "${dst_dir}" || die "Failed to set permissions on ${dst_dir}"
+    sudo cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    sudo chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod "${perms}" "${dst}" || die "Failed to set permissions on ${dst}"
+    success "Copied .config/${rel_path}"
+}
+
+# Copies a directory from SOURCE_CONFIG into the owner's XDG config dir.
+# Skips if destination already exists.
+copy_config_dir() {
+    local owner="$1"
+    local owner_home="$2"
+    local rel_path="$3"   # path relative to ~/.config/
+    local src="${SOURCE_CONFIG}/${rel_path}"
+    local owner_config_dir="${owner_home}/.config"
+    local dst="${owner_config_dir}/${rel_path}"
+
+    if [ -d "${dst}" ]; then
+        info ".config/${rel_path}/ already present for ${owner} — skipping"
+        return 0
+    fi
+    if [ ! -d "${src}" ]; then
+        die "Expected source directory ${src} is missing — this should have been caught by validate_source_config"
+    fi
+    info "Copying .config/${rel_path}/..."
+    sudo mkdir -p "${owner_config_dir}" || die "Failed to create ${owner_config_dir}"
+    sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    success "Copied .config/${rel_path}/"
+}
+
+copy_config_files() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+
+    copy_config_dir  "${owner}" "${owner_home}" "gh"
+    copy_config_file "${owner}" "${owner_home}" "orchestrator/.env" "600"
+    copy_config_file "${owner}" "${owner_home}" "orchestrator/tokens/${owner}" "600"
+}
+
 clone_or_pull_repo() {
     local owner="$1"
     local owner_home
@@ -198,12 +302,14 @@ main() {
     is_ai_agent && die "setup-owner must not be run inside a Claude Code session"
 
     check_required_tools
+    validate_source_config "${owner}"
 
     info "Provisioning orchestrator for owner: ${owner}"
 
     ensure_user_exists "${owner}"
     ensure_sudoers "${owner}"
     copy_dotfiles "${owner}"
+    copy_config_files "${owner}"
     clone_or_pull_repo "${owner}"
     run_install_timer "${owner}"
 
