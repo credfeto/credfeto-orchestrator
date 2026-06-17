@@ -325,6 +325,42 @@ configure_git() {
     success "Git configured for ${owner}"
 }
 
+configure_podman_storage() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+
+    local config_dir="${owner_home}/.config/containers"
+    local storage_conf="${config_dir}/storage.conf"
+    local work_dir="${owner_home}/work"
+    local driver="vfs"
+    local graphroot=""
+
+    # btrfs supports overlay natively without user.overlay xattrs, so prefer it
+    # when ~/work is available on btrfs.  Fall back to vfs on ext4 and other
+    # filesystems where overlay requires kernel support that may be absent.
+    if [ -d "${work_dir}" ] && command -v findmnt >/dev/null 2>&1; then
+        local fstype
+        fstype=$(findmnt -T "${work_dir}" -o FSTYPE -n 2>/dev/null | tr -d '[:space:]')
+        if [ "${fstype}" = "btrfs" ]; then
+            driver="overlay"
+            graphroot="${work_dir}/.containers/storage"
+        fi
+    fi
+
+    info "Configuring Podman storage driver (${driver}) for ${owner}..."
+    sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    {
+        printf '[storage]\n'
+        printf 'driver = "%s"\n' "${driver}"
+        [ -n "${graphroot}" ] && printf 'graphroot = "%s"\n' "${graphroot}"
+    } | sudo tee "${storage_conf}" > /dev/null || die "Failed to write ${storage_conf}"
+    sudo chown "${owner}:${owner}" "${storage_conf}" || die "Failed to chown ${storage_conf}"
+    sudo chmod 600 "${storage_conf}" || die "Failed to set permissions on ${storage_conf}"
+    success "Podman storage configured with ${driver} driver for ${owner}"
+}
+
 clone_or_pull_repo() {
     local owner="$1"
     local owner_home
@@ -394,6 +430,7 @@ main() {
     revoke_sudoers "${owner}"
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"
+    configure_podman_storage "${owner}"
     clone_or_pull_repo "${owner}"
     run_install_timer "${owner}"
 

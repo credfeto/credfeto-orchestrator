@@ -74,6 +74,9 @@ User=${CURRENT_USER}
 RuntimeDirectory=${runtime_dir}
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
+# Delegate=yes grants this service ownership of its cgroup subtree, which
+# rootless Podman requires to create user namespaces from a system service.
+Delegate=yes
 Environment=XDG_RUNTIME_DIR=/run/${runtime_dir}
 Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
