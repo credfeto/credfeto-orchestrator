@@ -57,9 +57,9 @@ create_service_unit() {
     # RuntimeDirectory creates /run/<name>/ owned by User= before the service
     # starts, providing an isolated location for the ssh-agent socket.
     # XDG_RUNTIME_DIR must point to the user's real session dir (/run/user/<uid>)
-    # so that Podman can locate the systemd user session socket and use the
-    # systemd cgroup manager — without this, rootless Podman falls back to cgroupfs
-    # and fails to re-exec into the user namespace.
+    # so that Podman stores container state there instead of a root-owned path.
+    # containers.conf sets cgroup_manager=cgroupfs; the systemd manager requires
+    # D-Bus access that is denied for non-root users in system services.
     local runtime_dir="${SERVICE_NAME}"
     local ssh_socket="/run/${runtime_dir}/ssh-agent.socket"
     local owner_uid
@@ -79,10 +79,14 @@ RuntimeDirectoryPreserve=yes
 # Delegate=yes grants this service ownership of its cgroup subtree, which
 # rootless Podman requires to create user namespaces from a system service.
 Delegate=yes
-# XDG_RUNTIME_DIR must be the real user session dir so Podman finds the
-# systemd socket and uses the systemd cgroup manager.  SSH_AUTH_SOCK is set
-# separately so the ssh-agent socket stays isolated in RuntimeDirectory.
+# XDG_RUNTIME_DIR must be the real user session dir so Podman uses the correct
+# runtime state directory for the owner's session.
+# DBUS_SESSION_BUS_ADDRESS points at the user session bus; not required for
+# cgroupfs but ensures other D-Bus Podman operations find the right socket.
+# SSH_AUTH_SOCK is set separately so the ssh-agent socket stays isolated in
+# RuntimeDirectory.
 Environment=XDG_RUNTIME_DIR=/run/user/${owner_uid}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${owner_uid}/bus
 Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin

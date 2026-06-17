@@ -94,6 +94,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Podman storage uses fuse-overlayfs (overlay driver) when available, falling back to vfs — removes the incorrect btrfs-detection logic that caused overlay-over-btrfs failures on the hardened kernel
 - setup-owner: place Podman graphroot in ~/work/.containers/storage when ~/work is a btrfs mount, avoiding VFS layer copies from filling the ext4 home partition
 - setup-owner: write containers.conf with cgroup_manager=cgroupfs; the systemd cgroup manager requires runc to create libpod scope units via D-Bus which is denied from inside a system service even with Delegate=yes
+- install-timer: add DBUS_SESSION_BUS_ADDRESS to generated service unit so Podman finds the user session D-Bus socket for other D-Bus operations
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
