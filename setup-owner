@@ -388,6 +388,7 @@ main() {
 
     [ -n "${owner}" ] || die "Usage: $(basename "$0") --owner <name>"
 
+    [ "$(id -u)" -ne 0 ] || die "setup-owner must not be run as root — run as yourself; it uses sudo internally"
     is_ai_agent && die "setup-owner must not be run inside a Claude Code session"
 
     check_required_tools
