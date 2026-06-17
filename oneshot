@@ -236,7 +236,7 @@ try_nonagentic_rebase() {
 
 check_required_tools() {
     local tool
-    for tool in curl jq docker gh git awk grep flock timeout; do
+    for tool in curl jq podman gh git awk grep flock timeout; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 
@@ -452,35 +452,35 @@ die_claude_failed() {
     die "Claude invocation failed"
 }
 
-# Runs a single docker-based claude invocation, writing JSON output to tmpfile.
+# Runs a single podman-based claude invocation, writing JSON output to tmpfile.
 # On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
 run_claude_fresh() {
     local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
-    local stderrfile docker_exit=0
-    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for docker stderr"
+    local stderrfile podman_exit=0
+    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for podman stderr"
     validate_bind_mounts
-    info "Starting new Claude session in container ${DOCKER_CONTAINER_NAME}..." >&2
+    info "Starting new Claude session in container ${PODMAN_CONTAINER_NAME}..." >&2
     # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
     # intentionally unprivileged.
     # shellcheck disable=SC2024
     printf '%s' "${CLAUDE_PROMPT}" \
         | timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
-            sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
+            podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" \
             > "${tmpfile}" 2>"${stderrfile}" \
-        || docker_exit=$?
-    if [ "${docker_exit}" -ne 0 ]; then
-        if [ "${docker_exit}" -eq 124 ]; then
+        || podman_exit=$?
+    if [ "${podman_exit}" -ne 0 ]; then
+        if [ "${podman_exit}" -eq 124 ]; then
             cat "${stderrfile}" >&2
             rm -f "${stderrfile}"
-            sudo docker rm -f "${DOCKER_CONTAINER_NAME}" > /dev/null 2>&1 || true
+            podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
             notify_discord_claude_error "${item_type}" "${item_id}" \
-                "Container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
-            die "Agent container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
+                "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+            die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
         fi
         if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
             cat "${stderrfile}" >&2
             rm -f "${stderrfile}"
-            die "Container ${DOCKER_CONTAINER_NAME} is already in use — another invocation may be running"
+            die "Container ${PODMAN_CONTAINER_NAME} is already in use — another invocation may be running"
         fi
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
@@ -490,7 +490,7 @@ run_claude_fresh() {
     rm -f "${stderrfile}"
 }
 
-# Runs docker-based claude with --resume, capturing stderr separately to detect the
+# Runs podman-based claude with --resume, capturing stderr separately to detect the
 # "No conversation found" message that Claude writes to stderr on exit 1.
 # On timeout (exit 124): kills container, notifies Discord, dies.
 # On invalid-session error: logs to console, retries fresh, returns 0.
@@ -501,32 +501,32 @@ CLAUDE_MD_TMPFILE=""
 GPG_PUBKEY_TMPDIR=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
-    local stderrfile docker_exit=0
+    local stderrfile podman_exit=0
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
     validate_bind_mounts
-    info "Resuming Claude session ${resume_id} in container ${DOCKER_CONTAINER_NAME}..." >&2
+    info "Resuming Claude session ${resume_id} in container ${PODMAN_CONTAINER_NAME}..." >&2
     # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
     # shellcheck disable=SC2024
     printf '%s' "${CLAUDE_PROMPT}" \
         | timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
-            sudo docker "${DOCKER_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${DOCKER_CLAUDE_ARGS[@]}" \
+            podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" \
             --resume "${resume_id}" > "${tmpfile}" 2>"${stderrfile}" \
-        || docker_exit=$?
+        || podman_exit=$?
 
-    if [ "${docker_exit}" -eq 0 ]; then
+    if [ "${podman_exit}" -eq 0 ]; then
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
         return 0
     fi
 
     # Timed out — clean up and notify.
-    if [ "${docker_exit}" -eq 124 ]; then
+    if [ "${podman_exit}" -eq 124 ]; then
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
-        sudo docker rm -f "${DOCKER_CONTAINER_NAME}" > /dev/null 2>&1 || true
+        podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
         notify_discord_claude_error "${item_type}" "${item_id}" \
-            "Container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
-        die "Agent container ${DOCKER_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
+            "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+        die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
     fi
 
     # Non-zero exit — check stderr for the known invalid-session message.
@@ -545,7 +545,7 @@ run_claude_resumed() {
     if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
-        die "Container ${DOCKER_CONTAINER_NAME} is already in use — another invocation may be running"
+        die "Container ${PODMAN_CONTAINER_NAME} is already in use — another invocation may be running"
     fi
 
     cat "${stderrfile}" >&2
@@ -653,11 +653,11 @@ verify_gpg_signing_ready() {
     fi
 }
 
-# Appends GPG volume/socket args to DOCKER_RUN_ARGS.
+# Appends GPG volume/socket args to PODMAN_RUN_ARGS.
 # Preferred path: creates a tmpdir containing only the public key and forwards
 # the gpg-agent extra socket into it.  Falls back to the full ~/.gnupg rw mount
 # with a warning when the socket is absent or the key export fails.
-add_gpg_docker_args() {
+add_gpg_podman_args() {
     local extra_socket
     extra_socket=$(gpgconf --list-dirs agent-extra-socket 2>/dev/null) || extra_socket=""
 
@@ -667,8 +667,8 @@ add_gpg_docker_args() {
         chmod 0700 "${GPG_PUBKEY_TMPDIR}"
         if gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
                 | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null; then
-            DOCKER_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
-            DOCKER_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
+            PODMAN_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
+            PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
             return
         fi
         warn "GPG public key export failed for ${GIT_SIGNING_KEY} — falling back to ~/.gnupg mount"
@@ -678,19 +678,19 @@ add_gpg_docker_args() {
         warn "GPG agent extra socket not available — falling back to ~/.gnupg mount"
     fi
     if [ -d "${HOME}/.gnupg" ]; then
-        DOCKER_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
+        PODMAN_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
     fi
 }
 
-# Verify all --volume source paths in DOCKER_RUN_ARGS exist with the expected
-# type before calling docker run.  Docker auto-creates any missing bind-mount
-# source as a root-owned directory; if that path is later expected to be a
-# socket, the directory blocks ssh-agent from binding there on the next run.
+# Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected
+# type before calling podman run.  Podman auto-creates any missing bind-mount
+# source as a directory; if that path is later expected to be a socket, the
+# directory blocks ssh-agent from binding there on the next run.
 validate_bind_mounts() {
     local i=0 take_next=0 src
-    local n=${#DOCKER_RUN_ARGS[@]}
+    local n=${#PODMAN_RUN_ARGS[@]}
     while [ "${i}" -lt "${n}" ]; do
-        local arg="${DOCKER_RUN_ARGS[$i]}"
+        local arg="${PODMAN_RUN_ARGS[$i]}"
         if [ "${take_next}" = "1" ]; then
             take_next=0
             src="${arg%%:*}"
@@ -713,7 +713,7 @@ validate_bind_mounts() {
 
 # Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
 # Claude's text response is written to stderr so the caller can review what was done.
-# Runs claude inside a Docker container named orchestrator-<OWNER>.
+# Runs claude inside a rootless Podman container named orchestrator-<OWNER>.
 invoke_claude() {
     local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}" claude_md_content="${5:-}"
     local tmpfile new_session_id owner_token container_name
@@ -728,32 +728,33 @@ invoke_claude() {
     owner_token=$(load_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
-    if sudo docker inspect "${container_name}" >/dev/null 2>&1; then
+    if podman inspect "${container_name}" >/dev/null 2>&1; then
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
     info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
-    sudo docker pull "${ORCHESTRATOR_IMAGE}" >&2 || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
+    podman pull "${ORCHESTRATOR_IMAGE}" >&2 || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
 
-    # Mount .claude/ as a host-owned temp directory so the developer user (uid 1000 = host
-    # uid) can write session-env and other runtime files inside it.  Mounting only the
-    # CLAUDE.md file causes Docker to create the parent directory as root-owned, which
-    # breaks every Bash tool call with EACCES.
+    # Mount .claude/ as a host-owned temp directory so the developer user can write
+    # session-env and other runtime files inside it.  Mounting only the CLAUDE.md file
+    # causes Podman to create the parent directory with wrong ownership, which breaks
+    # every Bash tool call with EACCES.
     CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
     trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
-    DOCKER_CONTAINER_NAME="${container_name}"
-    DOCKER_RUN_ARGS=(
+    PODMAN_CONTAINER_NAME="${container_name}"
+    PODMAN_RUN_ARGS=(
         run
         --name "${container_name}"
         --rm
         --interactive
+        --userns=keep-id
         --cpus="4"
         --memory="12g"
         --memory-swap="12g"
@@ -762,29 +763,29 @@ invoke_claude() {
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
     )
     if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
-        DOCKER_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
-        DOCKER_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
+        PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
+        PODMAN_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
     else
         warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
     fi
     verify_gpg_signing_ready "${item_type}" "${item_id}"
-    add_gpg_docker_args
+    add_gpg_podman_args
     if [ -f "${HOME}/.database" ]; then
-        DOCKER_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
+        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
     else
         warn "\$HOME/.database not found — database credentials will not be available in the agent container"
     fi
-    DOCKER_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
+    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
 
-    [ -n "${GIT_USER_NAME}" ]  && DOCKER_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
-    [ -n "${GIT_USER_EMAIL}" ] && DOCKER_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
-    [ -n "${GIT_SIGNING_KEY}" ] && DOCKER_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
+    [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
+    [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
+    [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
 
-    [ -n "${owner_token}" ]              && DOCKER_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
-    [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && DOCKER_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
-    [ -n "${GH_HOST:-}" ]                && DOCKER_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
+    [ -n "${owner_token}" ]              && PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && PODMAN_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
+    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
 
-    DOCKER_CLAUDE_ARGS=(
+    PODMAN_CLAUDE_ARGS=(
         --model opusplan
         --print
         --output-format json
