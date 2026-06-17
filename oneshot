@@ -1100,6 +1100,60 @@ load_env_config() {
     fi
 }
 
+# Validates that all required config files exist and are populated correctly.
+# Collects all errors and dies once at the end so every problem is visible at once.
+# Must be called after load_env_config so GIT_* variables are already populated.
+validate_config() {
+    local owner_filter="$1"
+    local config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}"
+    local errors=0
+
+    if [ ! -f "${config_dir}/orchestrator/.env" ]; then
+        printf '\n✗ %s\n' "${config_dir}/orchestrator/.env is missing" >&2
+        printf '  Create it with: GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY, DISCORD_WEBHOOK\n' >&2
+        errors=$((errors + 1))
+    else
+        [ -n "${GIT_USER_NAME}" ] || {
+            printf '\n✗ %s\n' "GIT_USER_NAME is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+        [ -n "${GIT_USER_EMAIL}" ] || {
+            printf '\n✗ %s\n' "GIT_USER_EMAIL is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+        [ -n "${GIT_SIGNING_KEY}" ] || {
+            printf '\n✗ %s\n' "GIT_SIGNING_KEY is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+    fi
+
+    # gh needs either the local credential store or a proxy token from .env.
+    if [ -z "${GH_HOST:-}" ] || [ -z "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        if [ ! -f "${config_dir}/gh/hosts.yml" ]; then
+            printf '\n✗ %s\n' "${config_dir}/gh/hosts.yml is missing — run 'gh auth login' first" >&2
+            errors=$((errors + 1))
+        fi
+    fi
+
+    if [ -n "${owner_filter}" ]; then
+        local token_file="${config_dir}/orchestrator/tokens/${owner_filter}"
+        if [ ! -f "${token_file}" ]; then
+            printf '\n✗ %s\n' "${token_file} is missing — create it with the Claude OAuth token (chmod 600)" >&2
+            errors=$((errors + 1))
+        else
+            local perms
+            perms=$(stat -c '%a' "${token_file}" 2>/dev/null)
+            case "${perms}" in
+                600|400) ;;
+                *) printf '\n✗ %s\n' "${token_file} has permissions ${perms} — must be 600 (run: chmod 600 ${token_file})" >&2
+                   errors=$((errors + 1)) ;;
+            esac
+        fi
+    fi
+
+    [ "${errors}" -eq 0 ] || die "Config validation failed — fix the above and re-run"
+}
+
 # Sends a Discord embed notification when starting or resuming work on an item.
 # Arguments: msg_type (start|resume), item_type, item_id, item_title
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
@@ -1325,6 +1379,7 @@ main() {
 
     check_required_tools
     load_env_config
+    validate_config "${owner_filter}"
     if [ -n "${GIT_SIGNING_KEY}" ]; then
         gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
             || die "Signing key ${GIT_SIGNING_KEY} is set in .env but not found in the GPG keyring — import it with 'gpg --import <key-file>'"
