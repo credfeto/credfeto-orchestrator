@@ -79,7 +79,6 @@ ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 ExecStartPre=-/usr/bin/pkill -u %u gpg-agent
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
-ExecStartPre=/usr/bin/chmod 0666 %h/.gnupg/S.gpg-agent.extra
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
 }
