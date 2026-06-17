@@ -80,6 +80,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
 - setup-owner: always overwrite config files on re-run so token rotation and .env changes propagate; die with clear error when clone destination exists but is not a git repo
 - oneshot tests: stub validate_config in setup_main_mocks and supply full env in GPG keyring test so tests pass with the new startup validation
+- use 0660 group permissions on gpg-agent extra socket and pass owner GID to container via --group-add for secure socket access
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
