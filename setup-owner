@@ -325,6 +325,24 @@ configure_git() {
     success "Git configured for ${owner}"
 }
 
+configure_podman_storage() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+
+    local config_dir="${owner_home}/.config/containers"
+    local storage_conf="${config_dir}/storage.conf"
+
+    info "Configuring Podman storage driver (vfs) for ${owner}..."
+    sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    printf '[storage]\ndriver = "vfs"\n' | sudo tee "${storage_conf}" > /dev/null \
+        || die "Failed to write ${storage_conf}"
+    sudo chown "${owner}:${owner}" "${storage_conf}" || die "Failed to chown ${storage_conf}"
+    sudo chmod 600 "${storage_conf}" || die "Failed to set permissions on ${storage_conf}"
+    success "Podman storage configured with vfs driver for ${owner}"
+}
+
 clone_or_pull_repo() {
     local owner="$1"
     local owner_home
@@ -394,6 +412,7 @@ main() {
     revoke_sudoers "${owner}"
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"
+    configure_podman_storage "${owner}"
     clone_or_pull_repo "${owner}"
     run_install_timer "${owner}"
 

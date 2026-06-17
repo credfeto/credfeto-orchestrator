@@ -7,6 +7,7 @@ setup() {
 
     mkdir -p "${TEST_TMP}/units"
     make_stub systemctl 'exit 0'
+    make_stub getent 'echo "testuser:x:1001:1001:Test User:/home/testuser:/bin/bash"'
 
     # Override id as a bash function so CURRENT_USER and current_uid resolve to
     # predictable test values when install-timer is sourced.  Both functions must
@@ -93,6 +94,7 @@ teardown() {
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
+    grep -q "Delegate=yes" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/credfeto-orchestrator-testuser" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
@@ -123,6 +125,7 @@ teardown() {
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser-myorg" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
+    grep -q "Delegate=yes" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/credfeto-orchestrator-testuser-myorg" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
