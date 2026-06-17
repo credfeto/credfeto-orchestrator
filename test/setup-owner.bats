@@ -233,3 +233,31 @@ teardown() {
     [ -f "${storage_conf}" ]
     grep -q 'driver = "vfs"' "${storage_conf}"
 }
+
+@test "configure_podman_engine writes containers.conf with cgroupfs" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            mkdir) shift; mkdir "$@" ;;
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_podman_engine "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cgroupfs"* ]]
+
+    local containers_conf="${test_home}/.config/containers/containers.conf"
+    [ -f "${containers_conf}" ]
+    grep -q 'cgroup_manager = "cgroupfs"' "${containers_conf}"
+}

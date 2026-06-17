@@ -383,6 +383,33 @@ configure_podman_storage() {
     success "Podman storage configured with ${driver} driver for ${owner}"
 }
 
+configure_podman_engine() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+
+    local config_dir="${owner_home}/.config/containers"
+    local containers_conf="${config_dir}/containers.conf"
+
+    info "Configuring Podman engine (cgroupfs) for ${owner}..."
+    sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    sudo chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
+    sudo chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
+    # Use cgroupfs instead of the systemd cgroup manager.  The systemd manager
+    # requires runc to talk to the user session D-Bus to create libpod scope
+    # units in user.slice; from inside a system service that D-Bus call is
+    # denied even with DBUS_SESSION_BUS_ADDRESS set and Delegate=yes in the
+    # unit.  cgroupfs bypasses D-Bus entirely and works reliably.
+    {
+        printf '[engine]\n'
+        printf 'cgroup_manager = "cgroupfs"\n'
+    } | sudo tee "${containers_conf}" > /dev/null || die "Failed to write ${containers_conf}"
+    sudo chown "${owner}:${owner}" "${containers_conf}" || die "Failed to chown ${containers_conf}"
+    sudo chmod 600 "${containers_conf}" || die "Failed to set permissions on ${containers_conf}"
+    success "Podman engine configured with cgroupfs for ${owner}"
+}
+
 clone_or_pull_repo() {
     local owner="$1"
     local owner_home
@@ -454,6 +481,7 @@ main() {
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"
     configure_podman_storage "${owner}"
+    configure_podman_engine "${owner}"
     clone_or_pull_repo "${owner}"
     run_install_timer "${owner}"
 
