@@ -246,56 +246,48 @@ sync_gnupg() {
     local src="${SOURCE_HOME}/.gnupg"
     local dst="${owner_home}/.gnupg"
 
-    if [ ! -d "${src}" ]; then
-        info "No .gnupg in ${SOURCE_HOME} — skipping"
-        return 0
-    fi
-
     local env_file="${SOURCE_CONFIG}/orchestrator/.env"
     local key_id
     key_id=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
         | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
 
-    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
-    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
-
-    info "Syncing .gnupg keyring for ${owner} (classic mode, no keyboxd)..."
-    sudo rm -rf "${dst}" \
-        || die "Failed to remove ${dst}"
-    sudo mkdir -p "${dst}/private-keys-v1.d" \
-        || die "Failed to create ${dst}"
-
-    # Empty common.conf overrides any system-level use-keyboxd, keeping GPG
-    # in classic pubring.kbx mode and avoiding the keyboxd database lock issue
-    sudo touch "${dst}/common.conf" \
-        || die "Failed to create ${dst}/common.conf"
-
-    if [ -d "${src}/private-keys-v1.d" ]; then
-        sudo find "${src}/private-keys-v1.d" -maxdepth 1 -name '*.key' \
-            -exec sudo cp {} "${dst}/private-keys-v1.d/" \; \
-            || die "Failed to copy private key stubs from ${src}/private-keys-v1.d"
-    fi
-    [ -f "${src}/trustdb.gpg" ] && sudo cp "${src}/trustdb.gpg" "${dst}/" \
-        || true
-    [ -f "${src}/sshcontrol" ] && sudo cp "${src}/sshcontrol" "${dst}/" \
-        || true
-
-    sudo chown -R "${owner}:${owner}" "${dst}" \
-        || die "Failed to chown ${dst}"
-    sudo find "${dst}" -type d -exec chmod 700 {} + \
-        || die "Failed to set dir permissions in ${dst}"
-    sudo find "${dst}" -type f -exec chmod 600 {} + \
-        || die "Failed to set file permissions in ${dst}"
-
-    if [ -n "${key_id}" ]; then
-        gpg --batch --no-tty --export "${key_id}" \
-            | sudo -u "${owner}" gpg --homedir "${dst}" --batch --no-tty --import \
-            || die "Failed to import public key ${key_id} for ${owner}"
+    if [ -z "${key_id}" ]; then
+        info "GIT_SIGNING_KEY not set in .env — skipping GPG keyring sync"
+        return 0
     fi
 
     sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
     sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
-    success "GPG keyring synced for ${owner}"
+
+    info "Importing GPG key ${key_id} for ${owner}..."
+    sudo rm -rf "${dst}" || die "Failed to remove ${dst}"
+    sudo mkdir -p "${dst}" || die "Failed to create ${dst}"
+
+    # Empty common.conf ensures classic pubring.kbx mode regardless of system config
+    sudo touch "${dst}/common.conf" || die "Failed to create ${dst}/common.conf"
+
+    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+
+    # Export secret key (includes public key) and import into owner's fresh keyring
+    gpg --batch --no-tty --export-secret-keys "${key_id}" \
+        | sudo -u "${owner}" gpg --homedir "${dst}" --batch --no-tty --import \
+        || die "Failed to import GPG key ${key_id} for ${owner}"
+
+    if [ -f "${src}/trustdb.gpg" ]; then
+        sudo cp "${src}/trustdb.gpg" "${dst}/" || die "Failed to copy trustdb.gpg"
+    fi
+    if [ -f "${src}/sshcontrol" ]; then
+        sudo cp "${src}/sshcontrol" "${dst}/" || die "Failed to copy sshcontrol"
+    fi
+
+    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+
+    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
+    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    success "GPG key ${key_id} imported for ${owner}"
 }
 
 clone_or_pull_repo() {
