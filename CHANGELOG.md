@@ -34,7 +34,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
 ### Fixed
-- install-timer: add RuntimeDirectoryPreserve=yes and explicit keyboxd kill/launch so GPG sockets survive between service runs; without this, keyboxd's socket is removed when the oneshot exits, causing the next run to time out connecting to it
+- install-timer: use pkill -u %u to force-kill keyboxd and gpg-agent by PID before relaunching; gpgconf --kill only signals via socket which doesn't work when the leftover process has a stale socket path
+- setup-owner: kill keyboxd and gpg-agent AFTER copying .gnupg so they restart from the new keyring rather than being able to socket-activate with the old one during the copy
 - setup-owner: replace .gnupg by killing owner keyboxd/gpg-agent then doing a clean directory copy, bypassing keyboxd import which fails when systemd socket-activates the daemon before the write completes
 - setup-owner: use sudo -u to check clone directory existence so permission checks run as the owner user (fixes false negative when owner home dir is mode 700)
 - Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
