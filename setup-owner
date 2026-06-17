@@ -166,9 +166,10 @@ copy_dotfiles() {
     owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
 
-    copy_dotdir  "${owner}" "${owner_home}" ".ssh"
-    sync_gnupg   "${owner}" "${owner_home}"
-    copy_dotfile "${owner}" "${owner_home}" ".database"
+    copy_dotdir   "${owner}" "${owner_home}" ".ssh"
+    sync_gnupg    "${owner}" "${owner_home}"
+    configure_git "${owner}"
+    copy_dotfile  "${owner}" "${owner_home}" ".database"
 }
 
 # Copies a single file from SOURCE_CONFIG into the owner's XDG config dir,
@@ -281,7 +282,43 @@ sync_gnupg() {
 
     sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
     sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    # Remove socket files left behind by SIGKILL so oneshot does not mount a stale
+    # socket when gpg-agent has moved to XDG_RUNTIME_DIR on the next service run.
+    sudo find "${dst}" -maxdepth 1 -type s -delete 2>/dev/null || true
     success "GPG key ${key_id} imported for ${owner}"
+}
+
+configure_git() {
+    local owner="$1"
+
+    local env_file="${SOURCE_CONFIG}/orchestrator/.env"
+    local git_user_name git_user_email git_signing_key
+    git_user_name=$(grep '^GIT_USER_NAME=' "${env_file}" 2>/dev/null \
+        | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//")
+    git_user_email=$(grep '^GIT_USER_EMAIL=' "${env_file}" 2>/dev/null \
+        | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//")
+    git_signing_key=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+
+    if [ -z "${git_user_name}" ] || [ -z "${git_user_email}" ]; then
+        info "GIT_USER_NAME/GIT_USER_EMAIL not set in .env — skipping git config"
+        return 0
+    fi
+
+    info "Configuring git for ${owner}..."
+    sudo -u "${owner}" git config --global user.name "${git_user_name}" \
+        || die "Failed to set git user.name for ${owner}"
+    sudo -u "${owner}" git config --global user.email "${git_user_email}" \
+        || die "Failed to set git user.email for ${owner}"
+    if [ -n "${git_signing_key}" ]; then
+        sudo -u "${owner}" git config --global user.signingkey "${git_signing_key}" \
+            || die "Failed to set git user.signingkey for ${owner}"
+        sudo -u "${owner}" git config --global commit.gpgsign true \
+            || die "Failed to set git commit.gpgsign for ${owner}"
+        sudo -u "${owner}" git config --global tag.gpgSign true \
+            || die "Failed to set git tag.gpgSign for ${owner}"
+    fi
+    success "Git configured for ${owner}"
 }
 
 clone_or_pull_repo() {
