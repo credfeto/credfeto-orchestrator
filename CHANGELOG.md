@@ -35,7 +35,11 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner script to provision a system user for the orchestrator with sudo, dotfiles, repo clone, and systemd timer
 - setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
+- document absolute path requirement and gpg socket permission rationale as comments in generated systemd service unit
 ### Fixed
+- oneshot: prefer XDG_RUNTIME_DIR gpg-agent extra socket over the gpgconf-listed path; prevents stale socket files left in ~/.gnupg by a SIGKILL'd agent being mounted into the container where they appear live but are unresponsive
+- setup-owner: write ~/.gitconfig for the owner with user identity and GPG signing config from .env so non-agentic git operations (e.g. rebase) can commit without requiring global git config on the host
+- setup-owner: remove stale gpg-agent socket files from ~/.gnupg after killing the agent so they cannot be mistaken for live sockets by subsequent oneshot runs
 - setup-owner: sync GPG keyring by export/import rather than directory copy; avoids keyboxd database lock (source PID embedded in lock file) that caused owner keyboxd to hang indefinitely
 - setup-owner: replace .gnupg by killing owner keyboxd/gpg-agent then doing a clean directory copy, bypassing keyboxd import which fails when systemd socket-activates the daemon before the write completes
 - setup-owner: use sudo -u to check clone directory existence so permission checks run as the owner user (fixes false negative when owner home dir is mode 700)
@@ -78,6 +82,10 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
 - setup-owner: always overwrite config files on re-run so token rotation and .env changes propagate; die with clear error when clone destination exists but is not a git repo
 - oneshot tests: stub validate_config in setup_main_mocks and supply full env in GPG keyring test so tests pass with the new startup validation
+- use 0660 group permissions on gpg-agent extra socket and pass owner GID to container via --group-add for secure socket access
+- abort setup-owner with a clear error when run as root
+- abort install-timer with a clear error when run as root
+- use absolute home directory path in service unit chmod instead of %h specifier which expands to root home
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

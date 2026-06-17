@@ -661,6 +661,16 @@ add_gpg_podman_args() {
     local extra_socket
     extra_socket=$(gpgconf --list-dirs agent-extra-socket 2>/dev/null) || extra_socket=""
 
+    # When the service runs with XDG_RUNTIME_DIR set, gpg-agent creates its sockets
+    # in $XDG_RUNTIME_DIR/gnupg/ rather than ~/.gnupg/.  gpgconf --list-dirs may
+    # still return the ~/.gnupg path, which could be a stale socket file left behind
+    # when a previous gpg-agent was killed with SIGKILL.  Prefer the live runtime-dir
+    # socket when it exists.
+    if [ -n "${XDG_RUNTIME_DIR}" ]; then
+        local runtime_extra="${XDG_RUNTIME_DIR}/gnupg/S.gpg-agent.extra"
+        [ -S "${runtime_extra}" ] && extra_socket="${runtime_extra}"
+    fi
+
     if [ -n "${GIT_SIGNING_KEY}" ] && [ -S "${extra_socket}" ]; then
         GPG_PUBKEY_TMPDIR=$(mktemp -d --suffix=.gnupghome) \
             || die "Failed to create tmpdir for GPG pubkey gnupghome"
@@ -669,6 +679,9 @@ add_gpg_podman_args() {
                 | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null; then
             PODMAN_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
             PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
+            # The socket is 0660 (owner + primary group).  Pass the owner's primary GID to
+            # the container as a supplementary group so the developer user can connect.
+            PODMAN_RUN_ARGS+=( --group-add "$(id -g)" )
             return
         fi
         warn "GPG public key export failed for ${GIT_SIGNING_KEY} — falling back to ~/.gnupg mount"

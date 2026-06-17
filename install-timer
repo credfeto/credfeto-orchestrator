@@ -58,6 +58,10 @@ create_service_unit() {
     # starts. This works when no user session is active (no /run/user/<uid>/).
     local runtime_dir="${SERVICE_NAME}"
     local ssh_socket="/run/${runtime_dir}/ssh-agent.socket"
+    local owner_home
+    owner_home=$(getent passwd "${CURRENT_USER}" | cut -d: -f6) \
+        || die "Failed to look up home directory for ${CURRENT_USER}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${CURRENT_USER}"
     local content
     content="[Unit]
 Description=Credfeto Orchestrator for ${CURRENT_USER}
@@ -77,8 +81,13 @@ ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
+# All paths below must be absolute. The %h specifier expands to the home of
+# the user that launched systemd (root), not the service User= home directory.
 ExecStartPre=-/usr/bin/pkill -u %u gpg-agent
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
+# 0660 = owner + group only. The container gains the owner's primary GID via
+# --group-add in oneshot so the developer user can connect without world access.
+ExecStartPre=/usr/bin/chmod 0660 ${owner_home}/.gnupg/S.gpg-agent.extra
 ExecStart=${exec_start}"
     write_unit_file "${dest}" "${content}"
 }
@@ -118,6 +127,7 @@ main() {
         esac
     done
 
+    [ "$(id -u)" -ne 0 ] || die "install-timer must not be run as root — run as yourself; it uses sudo internally"
     is_ai_agent && die "install-timer must not be run inside a Claude Code session"
 
     check_required_tools
