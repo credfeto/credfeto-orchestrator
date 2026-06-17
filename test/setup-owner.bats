@@ -132,6 +132,7 @@ teardown() {
     [ -f "${storage_conf}" ]
     grep -q 'driver = "overlay"' "${storage_conf}"
     grep -q "graphroot = \"${work_dir}/.containers/storage\"" "${storage_conf}"
+    grep -q "chown testowner:testowner ${test_home}/.config/containers" "${TEST_TMP}/sudo.log"
 }
 
 @test "configure_podman_storage falls back to vfs when work dir is not on btrfs" {
