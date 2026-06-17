@@ -87,6 +87,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - abort install-timer with a clear error when run as root
 - use absolute home directory path in service unit chmod instead of %h specifier which expands to root home
 - Rootless Podman now works in system services: added Delegate=yes for cgroup delegation and configured overlay driver on btrfs ~/work mounts (vfs fallback for ext4)
+- containers config directory is now owned by the service user so Podman can read storage.conf
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
