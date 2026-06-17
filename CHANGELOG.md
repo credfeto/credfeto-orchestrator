@@ -31,6 +31,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Set limit-severities-for-sarif on Trivy scan so exit-code 1 only fires when CRITICAL findings exist in the SARIF; without this, non-critical dotnet/gh findings filled the SARIF and triggered a false failure
 - Mount $HOME/.database read-only into the agent container at /home/developer/.database so database credentials are available to the agent; warns and skips if the file is absent
 - setup-owner script to provision a system user for the orchestrator with sudo, dotfiles, repo clone, and systemd timer
+- setup-owner: validate required config files (.config/gh, .config/orchestrator/.env, .config/orchestrator/tokens/<owner>) before provisioning and copy them into the new user's home
 ### Fixed
 - Docker .claude directory created as root-owned causing EACCES on every Bash tool call — now mounted as a host-owned temp directory
 - Issue comment changes ignored when linked PR fingerprint was unchanged — orchestrator now re-runs when the issue fingerprint changes even if the PR has not
