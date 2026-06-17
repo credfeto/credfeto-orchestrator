@@ -1,0 +1,215 @@
+#!/bin/bash
+
+# Provisions a system user for the orchestrator on this machine.
+# Idempotent: already-done steps are skipped.
+# Usage: setup-owner --owner <name>
+
+die() {
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
+    exit 1
+}
+
+success() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
+}
+
+info() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
+}
+
+# Returns true (0) when running inside a Claude Code Bash-tool session.
+# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
+# that value is inherited by subprocesses (e.g. git hooks).
+# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+REPO_URL="git@github.com:credfeto/credfeto-orchestrator.git"
+SOURCE_HOME="${HOME}"
+
+check_required_tools() {
+    local tool
+    for tool in id sudo useradd getent git visudo; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+get_owner_home() {
+    getent passwd "$1" | cut -d: -f6
+}
+
+ensure_user_exists() {
+    local owner="$1"
+    if id "${owner}" >/dev/null 2>&1; then
+        info "User ${owner} already exists — skipping"
+        return 0
+    fi
+    info "Creating user ${owner}..."
+    sudo useradd -m -s /bin/bash "${owner}" || die "Failed to create user ${owner}"
+    sudo passwd -l "${owner}" || die "Failed to lock password for ${owner}"
+    success "User ${owner} created"
+}
+
+ensure_sudoers() {
+    local owner="$1"
+    local sudoers_file="/etc/sudoers.d/${owner}"
+    if [ -f "${sudoers_file}" ]; then
+        info "Sudoers file ${sudoers_file} already exists — skipping"
+        return 0
+    fi
+    info "Creating sudoers entry for ${owner}..."
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "${owner}" \
+        | sudo tee "${sudoers_file}" >/dev/null \
+        || die "Failed to write ${sudoers_file}"
+    sudo chmod 440 "${sudoers_file}" || die "Failed to set permissions on ${sudoers_file}"
+    if ! sudo visudo -c -f "${sudoers_file}" >/dev/null 2>&1; then
+        sudo rm -f "${sudoers_file}"
+        die "Sudoers file validation failed — file removed"
+    fi
+    success "Sudoers entry created for ${owner}"
+}
+
+copy_dotdir() {
+    local owner="$1"
+    local owner_home="$2"
+    local name="$3"
+    local src="${SOURCE_HOME}/${name}"
+    local dst="${owner_home}/${name}"
+
+    if [ -d "${dst}" ]; then
+        info "${name} already present for ${owner} — skipping"
+        return 0
+    fi
+    if [ ! -d "${src}" ]; then
+        info "No ${name} in ${SOURCE_HOME} — skipping"
+        return 0
+    fi
+    info "Copying ${name}..."
+    sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    if [ "${name}" = ".ssh" ]; then
+        sudo find "${dst}" -type f -name "*.pub" -exec chmod 644 {} + \
+            || die "Failed to set .pub permissions in ${dst}"
+    fi
+    success "Copied ${name}"
+}
+
+copy_dotfile() {
+    local owner="$1"
+    local owner_home="$2"
+    local name="$3"
+    local src="${SOURCE_HOME}/${name}"
+    local dst="${owner_home}/${name}"
+
+    if [ -f "${dst}" ]; then
+        info "${name} already present for ${owner} — skipping"
+        return 0
+    fi
+    if [ ! -f "${src}" ]; then
+        info "No ${name} in ${SOURCE_HOME} — skipping"
+        return 0
+    fi
+    info "Copying ${name}..."
+    sudo cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    sudo chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod 600 "${dst}" || die "Failed to set permissions on ${dst}"
+    success "Copied ${name}"
+}
+
+copy_dotfiles() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+
+    copy_dotdir  "${owner}" "${owner_home}" ".ssh"
+    copy_dotdir  "${owner}" "${owner_home}" ".gnupg"
+    copy_dotfile "${owner}" "${owner_home}" ".database"
+}
+
+clone_or_pull_repo() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+    local clone_dir="${owner_home}/credfeto-orchestrator"
+
+    if [ -d "${clone_dir}/.git" ]; then
+        info "Repository already cloned — pulling..."
+        sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
+            || die "Failed to pull repository in ${clone_dir}"
+    else
+        info "Cloning orchestrator repository..."
+        sudo -u "${owner}" git clone "${REPO_URL}" "${clone_dir}" \
+            || die "Failed to clone ${REPO_URL} to ${clone_dir}"
+    fi
+    success "Repository ready at ${clone_dir}"
+}
+
+run_install_timer() {
+    local owner="$1"
+    local owner_home
+    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
+    local clone_dir="${owner_home}/credfeto-orchestrator"
+
+    info "Running install-timer --owner ${owner}..."
+    sudo -u "${owner}" "${clone_dir}/install-timer" --owner "${owner}" \
+        || die "install-timer failed"
+    success "Timer installed for ${owner}"
+}
+
+main() {
+    local owner=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --owner)
+                shift
+                [ -n "${1:-}" ] || die "--owner requires a value"
+                [[ "$1" =~ ^[a-z][a-z0-9_-]*$ ]] \
+                    || die "--owner value contains invalid characters: $1"
+                owner="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "${owner}" ] || die "Usage: $(basename "$0") --owner <name>"
+
+    is_ai_agent && die "setup-owner must not be run inside a Claude Code session"
+
+    check_required_tools
+
+    info "Provisioning orchestrator for owner: ${owner}"
+
+    ensure_user_exists "${owner}"
+    ensure_sudoers "${owner}"
+    copy_dotfiles "${owner}"
+    clone_or_pull_repo "${owner}"
+    run_install_timer "${owner}"
+
+    success "Setup complete for owner: ${owner}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
