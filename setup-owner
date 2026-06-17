@@ -259,6 +259,7 @@ import_gpg_key() {
     fi
 
     info "Importing GPG key ${key_id} into keyring for ${owner}..."
+    sudo -u "${owner}" gpgconf --kill gpg-agent 2>/dev/null || true
     gpg --batch --no-tty --export-secret-keys "${key_id}" \
         | sudo -u "${owner}" gpg --batch --no-tty --import \
         || die "Failed to import GPG key ${key_id} for ${owner} — ensure the key is in your keyring"
