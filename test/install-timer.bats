@@ -7,7 +7,6 @@ setup() {
 
     mkdir -p "${TEST_TMP}/units"
     make_stub systemctl 'exit 0'
-    make_stub getent 'echo "testuser:x:1001:1001:Test User:/home/testuser:/bin/bash"'
 
     # Override id as a bash function so CURRENT_USER and current_uid resolve to
     # predictable test values when install-timer is sourced.  Both functions must
@@ -102,6 +101,7 @@ teardown() {
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
+    grep -qF "ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'" "${svc}"
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
     [ -f "${tmr}" ]
@@ -133,6 +133,7 @@ teardown() {
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
+    grep -qF "ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'" "${svc}"
     grep -qE "ExecStart=.*/oneshot --owner myorg$" "${svc}"
 
     [ -f "${tmr}" ]
