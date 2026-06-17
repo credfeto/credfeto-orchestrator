@@ -71,6 +71,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - ssh-agent socket path now uses systemd RuntimeDirectory so the service starts correctly when no user session is active
 - Monitor loop no longer hangs forever when the branch name contains a slash — the generated CLAUDE.md now explicitly warns agents that poll patterns derived from branch prefixes (e.g. \[perf\]) cannot match branches like perf/my-branch, and instructs agents to run git commit/push in the foreground
 - Agent container is now bounded by a configurable timeout (default 90 minutes, overridable via AGENT_TIMEOUT_MINUTES); on expiry the container is killed, Discord is notified, and the orchestrator exits cleanly so the next timer tick retries
+- setup-owner: always overwrite config files on re-run so token rotation and .env changes propagate; die with clear error when clone destination exists but is not a git repo
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

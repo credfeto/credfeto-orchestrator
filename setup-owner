@@ -178,7 +178,8 @@ copy_dotfiles() {
 }
 
 # Copies a single file from SOURCE_CONFIG into the owner's XDG config dir,
-# creating parent directories as needed.  Skips if destination already exists.
+# creating parent directories as needed.  Always overwrites so re-runs pick
+# up rotated tokens or updated config (analogous to git pull vs clone).
 copy_config_file() {
     local owner="$1"
     local owner_home="$2"
@@ -190,10 +191,6 @@ copy_config_file() {
     dst_dir="${owner_config_dir}/$(dirname "${rel_path}")"
     local dst="${owner_config_dir}/${rel_path}"
 
-    if [ -f "${dst}" ]; then
-        info ".config/${rel_path} already present for ${owner} — skipping"
-        return 0
-    fi
     if [ ! -f "${src}" ]; then
         die "Expected source file ${src} is missing — this should have been caught by validate_source_config"
     fi
@@ -209,7 +206,7 @@ copy_config_file() {
 }
 
 # Copies a directory from SOURCE_CONFIG into the owner's XDG config dir.
-# Skips if destination already exists.
+# Always overwrites so re-runs pick up credential refreshes (analogous to git pull vs clone).
 copy_config_dir() {
     local owner="$1"
     local owner_home="$2"
@@ -218,15 +215,12 @@ copy_config_dir() {
     local owner_config_dir="${owner_home}/.config"
     local dst="${owner_config_dir}/${rel_path}"
 
-    if [ -d "${dst}" ]; then
-        info ".config/${rel_path}/ already present for ${owner} — skipping"
-        return 0
-    fi
     if [ ! -d "${src}" ]; then
         die "Expected source directory ${src} is missing — this should have been caught by validate_source_config"
     fi
     info "Copying .config/${rel_path}/..."
     sudo mkdir -p "${owner_config_dir}" || die "Failed to create ${owner_config_dir}"
+    sudo rm -rf "${dst}" || die "Failed to remove existing ${dst}"
     sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
     sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
     sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
@@ -253,10 +247,14 @@ clone_or_pull_repo() {
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
     local clone_dir="${owner_home}/credfeto-orchestrator"
 
-    if [ -d "${clone_dir}/.git" ]; then
-        info "Repository already cloned — pulling..."
-        sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
-            || die "Failed to pull repository in ${clone_dir}"
+    if [ -d "${clone_dir}" ]; then
+        if [ -d "${clone_dir}/.git" ]; then
+            info "Repository already cloned — pulling..."
+            sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
+                || die "Failed to pull repository in ${clone_dir}"
+        else
+            die "${clone_dir} exists but is not a git repository — remove it and re-run"
+        fi
     else
         info "Cloning orchestrator repository..."
         sudo -u "${owner}" git clone "${REPO_URL}" "${clone_dir}" \
