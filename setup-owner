@@ -247,8 +247,8 @@ clone_or_pull_repo() {
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
     local clone_dir="${owner_home}/credfeto-orchestrator"
 
-    if [ -d "${clone_dir}" ]; then
-        if [ -d "${clone_dir}/.git" ]; then
+    if sudo -u "${owner}" test -d "${clone_dir}"; then
+        if sudo -u "${owner}" test -d "${clone_dir}/.git"; then
             info "Repository already cloned — pulling..."
             sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
                 || die "Failed to pull repository in ${clone_dir}"
