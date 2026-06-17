@@ -271,7 +271,9 @@ sync_gnupg() {
         || die "Failed to create ${dst}/common.conf"
 
     if [ -d "${src}/private-keys-v1.d" ]; then
-        sudo cp "${src}/private-keys-v1.d/." "${dst}/private-keys-v1.d/" 2>/dev/null || true
+        sudo find "${src}/private-keys-v1.d" -maxdepth 1 -name '*.key' \
+            -exec sudo cp {} "${dst}/private-keys-v1.d/" \; \
+            || die "Failed to copy private key stubs from ${src}/private-keys-v1.d"
     fi
     [ -f "${src}/trustdb.gpg" ] && sudo cp "${src}/trustdb.gpg" "${dst}/" \
         || true
