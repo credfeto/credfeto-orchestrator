@@ -251,9 +251,6 @@ sync_gnupg() {
         return 0
     fi
 
-    sudo pkill -u "${owner}" keyboxd 2>/dev/null || true
-    sudo pkill -u "${owner}" gpg-agent 2>/dev/null || true
-
     info "Syncing .gnupg keyring for ${owner}..."
     sudo rm -rf "${dst}" || die "Failed to remove ${dst}"
     sudo cp -r "${src}" "${dst}" || die "Failed to copy .gnupg to ${dst}"
@@ -261,6 +258,8 @@ sync_gnupg() {
     sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
     sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
     sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    sudo pkill -u "${owner}" keyboxd 2>/dev/null || true
+    sudo pkill -u "${owner}" gpg-agent 2>/dev/null || true
     success "Synced .gnupg for ${owner}"
 }
 
