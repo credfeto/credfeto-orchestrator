@@ -173,7 +173,7 @@ copy_dotfiles() {
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
 
     copy_dotdir  "${owner}" "${owner_home}" ".ssh"
-    copy_dotdir  "${owner}" "${owner_home}" ".gnupg"
+    sync_gnupg   "${owner}" "${owner_home}"
     copy_dotfile "${owner}" "${owner_home}" ".database"
 }
 
@@ -240,31 +240,28 @@ copy_config_files() {
     copy_config_file "${owner}" "${owner_home}" "orchestrator/tokens/${owner}" "600"
 }
 
-import_gpg_key() {
+sync_gnupg() {
     local owner="$1"
+    local owner_home="$2"
+    local src="${SOURCE_HOME}/.gnupg"
+    local dst="${owner_home}/.gnupg"
 
-    local env_file="${SOURCE_CONFIG}/orchestrator/.env"
-    local key_id
-    key_id=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
-        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
-
-    if [ -z "${key_id}" ]; then
-        info "GIT_SIGNING_KEY not set in .env — skipping GPG key import"
+    if [ ! -d "${src}" ]; then
+        info "No .gnupg in ${SOURCE_HOME} — skipping"
         return 0
     fi
 
-    if sudo -u "${owner}" gpg --batch --no-tty --list-secret-keys "${key_id}" >/dev/null 2>&1; then
-        info "GPG key ${key_id} already in keyring for ${owner} — skipping"
-        return 0
-    fi
-
-    info "Importing GPG key ${key_id} into keyring for ${owner}..."
     sudo pkill -u "${owner}" keyboxd 2>/dev/null || true
     sudo pkill -u "${owner}" gpg-agent 2>/dev/null || true
-    gpg --batch --no-tty --export-secret-keys "${key_id}" \
-        | sudo -u "${owner}" gpg --batch --no-tty --import \
-        || die "Failed to import GPG key ${key_id} for ${owner} — ensure the key is in your keyring"
-    success "GPG key ${key_id} imported for ${owner}"
+
+    info "Syncing .gnupg keyring for ${owner}..."
+    sudo rm -rf "${dst}" || die "Failed to remove ${dst}"
+    sudo cp -r "${src}" "${dst}" || die "Failed to copy .gnupg to ${dst}"
+    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    success "Synced .gnupg for ${owner}"
 }
 
 clone_or_pull_repo() {
@@ -335,7 +332,6 @@ main() {
     ensure_sudoers "${owner}"
     copy_dotfiles "${owner}"
     copy_config_files "${owner}"
-    import_gpg_key "${owner}"
     clone_or_pull_repo "${owner}"
     run_install_timer "${owner}"
 
