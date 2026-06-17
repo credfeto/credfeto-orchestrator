@@ -1349,6 +1349,7 @@ setup_main_mocks() {
     tag_pr_closed_issue()       { return 0; }
     is_owner_rate_limited()       { return 1; }
     load_env_config()             { return 0; }
+    validate_config()             { return 0; }
     notify_discord_work_item()        { return 0; }
     notify_discord_no_work()          { return 0; }
     notify_discord_blocked_item()     { return 0; }
@@ -2537,8 +2538,10 @@ setup_local_git_remote() {
 @test "main dies at startup when GIT_SIGNING_KEY is set but absent from the keyring" {
     check_required_tools() { return 0; }
     make_stub gpg 'exit 1'
-    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
-    printf 'GIT_SIGNING_KEY=ABCD1234\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator" "${XDG_CONFIG_HOME}/gh"
+    printf 'GIT_USER_NAME=Test User\nGIT_USER_EMAIL=test@example.com\nGIT_SIGNING_KEY=ABCD1234\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    printf 'github.com:\n' > "${XDG_CONFIG_HOME}/gh/hosts.yml"
     run main
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"not found in the GPG keyring"* ]]
