@@ -1055,24 +1055,35 @@ STUBEOF
     [ -z "${CLAUDE_MD_TMPFILE}" ]
 }
 
-@test "invoke_claude passes CLAUDE_CODE_OAUTH_TOKEN env var when owner token is configured" {
+@test "invoke_claude creates Podman secret and uses --secret for owner token instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
+    local secret_log="${TEST_TMP}/podman_secret"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
+    # Secret was created with the owner-scoped name
+    grep -q "create" "${secret_log}"
+    grep -q "claude-oauth-credfeto" "${secret_log}"
+    # Token is NOT passed via --env
+    run grep -q 'CLAUDE_CODE_OAUTH_TOKEN=' "${args_log}"
+    [ "${status}" -ne 0 ]
+    # --secret flag IS present in the podman run args
+    grep -q 'claude-oauth-credfeto' "${args_log}"
 }
 
 @test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when set" {
@@ -2658,13 +2669,12 @@ STUBEOF
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_SIGNING_KEY="ABCD1234"
-    make_stub gpg-connect-agent 'exit 0'
-    make_stub gpg 'exit 0'
+    make_gpg_stubs
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "secret" ] && exit 0
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2776,21 +2786,24 @@ STUBEOF
     [ -d "${GPG_PUBKEY_TMPDIR}" ]
 }
 
-@test "add_gpg_podman_args falls back to ~/.gnupg mount when extra socket is absent" {
+@test "add_gpg_podman_args dies when extra socket is absent and GIT_SIGNING_KEY is set" {
     # No gpgconf stub → gpgconf fails, extra_socket is empty, [ -S "" ] is false.
     make_stub gpgconf 'exit 1'
     mkdir -p "${HOME}/.gnupg"
     PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_podman_args 2>/dev/null
+    run add_gpg_podman_args
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GPG agent extra socket not available"* ]]
+    # No ~/.gnupg mount should be added — there is no safe fallback
     local found=0
     for arg in "${PODMAN_RUN_ARGS[@]}"; do
-        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+        [[ "${arg}" == *".gnupg"* ]] && found=1
     done
-    [ "${found}" -eq 1 ]
+    [ "${found}" -eq 0 ]
 }
 
-@test "add_gpg_podman_args falls back to ~/.gnupg mount when gpg export fails" {
+@test "add_gpg_podman_args dies when gpg export fails" {
     local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
     cat > "${STUB_BIN}/gpgconf" << STUBEOF
@@ -2809,12 +2822,15 @@ STUBEOF
     mkdir -p "${HOME}/.gnupg"
     PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_podman_args 2>/dev/null
+    run add_gpg_podman_args
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GPG public key export/import failed"* ]]
+    # No ~/.gnupg mount should be added — there is no safe fallback
     local found=0
     for arg in "${PODMAN_RUN_ARGS[@]}"; do
-        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+        [[ "${arg}" == *".gnupg"* ]] && found=1
     done
-    [ "${found}" -eq 1 ]
+    [ "${found}" -eq 0 ]
 }
 
 @test "add_gpg_podman_args skips all mounts when GIT_SIGNING_KEY is empty and ~/.gnupg absent" {

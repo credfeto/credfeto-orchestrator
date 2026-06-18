@@ -111,7 +111,25 @@ ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # Use gpgconf to find the socket path dynamically: with loginctl enable-linger
 # the socket lives under XDG_RUNTIME_DIR, not ~/.gnupg.
 ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'
-ExecStart=${exec_start}"
+ExecStart=${exec_start}
+# Security hardening — prevent privilege escalation and limit the blast radius
+# if the service is compromised.
+# NoNewPrivileges prevents setuid/setgid binaries from gaining extra privileges.
+# PrivateTmp gives the service its own /tmp so container temp files are isolated.
+# ProtectSystem=full makes /usr, /boot, and /etc read-only; the home directory
+# and /dev remain writable (rootless Podman needs /dev/fuse for fuse-overlayfs).
+# CapabilityBoundingSet= and AmbientCapabilities= remove all Linux capabilities;
+# rootless Podman does not require capabilities when running as an unprivileged user.
+# LockPersonality prevents changing the execution domain (e.g. via personality(2)).
+# MemoryDenyWriteExecute=no is explicit: containers and JIT compilers need pages
+# that are both writable and executable, so this restriction must remain off.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=yes
+MemoryDenyWriteExecute=no"
     write_unit_file "${dest}" "${content}"
 }
 
