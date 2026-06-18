@@ -98,6 +98,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner: set cgroup_parent in containers.conf to user@<uid>.service so cgroupfs containers have write permission to their cgroup directory
 - rootless Podman container launch from system service: move oneshot into a cgroup leaf before running podman so resource limits work without cgroup permission errors
 - enable pids/memory/cpu/io controllers in service cgroup subtree_control after moving to proc leaf so container cgroups get resource-limit files
+- use Delegate=cpu memory pids io in service unit so systemd enables cgroup domain controllers before process starts and places it in a leaf sub-cgroup; update setup_cgroup_leaf to strip the systemd leaf suffix from the cgroup path
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

@@ -608,45 +608,36 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
-# In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
-# directly contains processes from having child cgroups with domain controllers
-# (memory, cpu, pids).  When oneshot runs inside a system service the process
-# lands in system.slice/<service>.service directly; rootless Podman's cgroupfs
-# mode cannot then create resource-limited child cgroups there.
+# When oneshot runs from a system service with Delegate=cpu memory pids io,
+# systemd enables domain controllers in the service cgroup's subtree_control
+# before the process starts AND places the process in a leaf sub-cgroup
+# automatically (systemd >= 244 on cgroupv2).  The service cgroup itself is
+# therefore free to be the cgroup parent for podman containers.
 #
-# Fix: move this process into a "proc" leaf cgroup within the service's
-# delegated subtree, which frees the parent to act as the container cgroup
-# parent.  Sets PODMAN_CGROUP_PARENT so invoke_claude can pass
-# --cgroup-parent to every podman run call.
+# This function reads the process's current cgroup path from /proc/self/cgroup
+# and, when running inside system.slice, strips the leaf sub-cgroup suffix
+# appended by systemd so that PODMAN_CGROUP_PARENT points at the service cgroup
+# (not the inner leaf), which is the correct parent for container cgroups.
 #
-# No-op when not running from a system service (cgroup path does not start
-# with /system.slice/).
+# No-op when not running from a system service.
 setup_cgroup_leaf() {
-    local svcgroup leaf_dir
+    local svcgroup
     svcgroup=$(cut -d: -f3 /proc/self/cgroup 2>/dev/null) || return 0
 
     case "${svcgroup}" in
-        /system.slice/*) ;;
-        *) return 0 ;;
+        /system.slice/*/*)
+            # systemd placed us in a leaf sub-cgroup like
+            # /system.slice/<service>.service/0 — strip the last component
+            # to get the service cgroup itself as the container parent.
+            svcgroup="${svcgroup%/*}"
+            ;;
+        /system.slice/*)
+            # Process is directly in the service cgroup; use as-is.
+            ;;
+        *)
+            return 0
+            ;;
     esac
-
-    leaf_dir="/sys/fs/cgroup${svcgroup}/proc"
-
-    mkdir -p "${leaf_dir}" 2>/dev/null \
-        || { warn "Cannot create leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
-
-    printf '%s\n' "$$" > "${leaf_dir}/cgroup.procs" 2>/dev/null \
-        || { warn "Cannot move process to leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
-
-    # With Delegate=yes, systemd grants write access to the service cgroup
-    # subtree but leaves cgroup.subtree_control empty.  Enable domain
-    # controllers so that child cgroups created by podman/runc (libpod-<id>)
-    # get controller files (pids.max, memory.max, etc.).  Each controller is
-    # enabled individually so an unavailable controller does not block others.
-    local ctrl
-    for ctrl in pids memory cpu io; do
-        printf '+%s\n' "${ctrl}" > "/sys/fs/cgroup${svcgroup}/cgroup.subtree_control" 2>/dev/null || true
-    done
 
     PODMAN_CGROUP_PARENT="${svcgroup}"
 }
