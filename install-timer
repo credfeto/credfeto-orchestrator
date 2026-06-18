@@ -117,8 +117,8 @@ create_timer_unit() {
 Description=Credfeto Orchestrator Timer for ${CURRENT_USER}
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
+OnBootSec=30sec
+OnUnitActiveSec=30sec
 Unit=${SERVICE_NAME}.service
 
 [Install]
