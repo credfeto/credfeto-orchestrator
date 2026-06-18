@@ -2775,6 +2775,30 @@ STUBEOF
     [ "${found}" -eq 0 ]
 }
 
+@test "add_gpg_podman_args prefers XDG_RUNTIME_DIR socket over gpgconf path when available" {
+    local runtime_socket="${TEST_TMP}/runtime/gnupg/S.gpg-agent.extra"
+    mkdir -p "${TEST_TMP}/runtime/gnupg"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${runtime_socket}')"
+    # gpgconf returns a path with no actual socket; the XDG runtime path should win.
+    make_stub gpgconf 'printf "/no/such/socket\n"'
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"--export"* ]]; then printf 'FAKEPUBKEYDATA\n'; exit 0; fi
+if [[ "$*" == *"--import"* ]]; then exit 0; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    PODMAN_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_podman_args
+    local found=0
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
+        [[ "${arg}" == "${runtime_socket}"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
+}
+
 @test "add_gpg_podman_args GPG_PUBKEY_TMPDIR is cleaned up by invoke_claude on success" {
     make_gpg_stubs
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"

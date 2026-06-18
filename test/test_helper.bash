@@ -44,6 +44,11 @@ setup_isolated_env() {
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL
     unset SSH_AUTH_SOCK
+    # Prevent the host gpg-agent's runtime socket from leaking into tests that
+    # exercise add_gpg_podman_args — a live socket at $XDG_RUNTIME_DIR/gnupg/
+    # S.gpg-agent.extra would bypass the "socket absent" code path and fail the
+    # isolation test.  Tests that need this path set it explicitly.
+    unset XDG_RUNTIME_DIR
 }
 
 # Sources the oneshot script so its functions are defined without running main.
