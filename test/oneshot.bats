@@ -450,12 +450,22 @@ teardown() {
 }
 
 @test "check_required_tools dies when timeout is missing" {
+    make_stub curl 'exit 0'
+    make_stub jq 'exit 0'
+    make_stub podman 'exit 0'
+    make_stub gh 'exit 0'
+    make_stub git 'exit 0'
+    make_stub awk 'exit 0'
+    make_stub grep 'exit 0'
+    make_stub flock 'exit 0'
+    # shellcheck disable=SC2329
     command() {
         if [ "$1" = "-v" ] && [ "$2" = "timeout" ]; then
             return 1
         fi
         builtin command "$@"
     }
+    export -f command
     run check_required_tools
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Required tool not found: timeout"* ]]

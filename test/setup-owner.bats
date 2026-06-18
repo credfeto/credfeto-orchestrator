@@ -16,9 +16,10 @@ setup() {
     # shellcheck disable=SC2329
     id() {
         case "$*" in
-            -un) echo "testuser" ;;
-            -u)  echo "1001" ;;
-            *)   echo "testuser" ;;
+            -un)   echo "testuser" ;;
+            -u)    echo "1001" ;;
+            "-u "*)echo "1001" ;;
+            *)     echo "testuser" ;;
         esac
     }
     export -f id
@@ -110,12 +111,11 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
-@test "configure_podman_storage uses overlay driver and sets graphroot when work dir is on btrfs" {
+@test "configure_podman_storage uses overlay driver with fuse-overlayfs mount_program when fuse-overlayfs is available" {
     local test_home="${TEST_TMP}/owner_home"
-    local work_dir="${test_home}/work"
-    mkdir -p "${work_dir}"
+    mkdir -p "${test_home}"
 
-    make_stub findmnt 'echo "btrfs"'
+    make_stub fuse-overlayfs 'exit 0'
 
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
@@ -139,11 +139,53 @@ teardown() {
     local storage_conf="${test_home}/.config/containers/storage.conf"
     [ -f "${storage_conf}" ]
     grep -q 'driver = "overlay"' "${storage_conf}"
-    grep -q "graphroot = \"${work_dir}/.containers/storage\"" "${storage_conf}"
-    grep -q "chown testowner:testowner ${test_home}/.config/containers" "${TEST_TMP}/sudo.log"
+    grep -q 'mount_program' "${storage_conf}"
+    grep -qF "fuse-overlayfs" "${storage_conf}"
 }
 
-@test "configure_podman_storage falls back to vfs when work dir is not on btrfs" {
+@test "configure_podman_storage sets graphroot on btrfs work dir even with vfs driver" {
+    local test_home="${TEST_TMP}/owner_home"
+    local work_dir="${test_home}/work"
+    mkdir -p "${work_dir}"
+
+    make_stub findmnt 'echo "btrfs"'
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            mkdir) shift; mkdir "$@" ;;
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
+    run configure_podman_storage "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"vfs"* ]]
+
+    local storage_conf="${test_home}/.config/containers/storage.conf"
+    [ -f "${storage_conf}" ]
+    grep -q 'driver = "vfs"' "${storage_conf}"
+    grep -q "graphroot = \"${work_dir}/.containers/storage\"" "${storage_conf}"
+}
+
+@test "configure_podman_storage falls back to vfs without graphroot when fuse-overlayfs absent and work dir not btrfs" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"
 
@@ -164,6 +206,16 @@ teardown() {
     }
     export -f sudo
 
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"vfs"* ]]
@@ -171,7 +223,7 @@ teardown() {
     local storage_conf="${test_home}/.config/containers/storage.conf"
     [ -f "${storage_conf}" ]
     grep -q 'driver = "vfs"' "${storage_conf}"
-    run grep -q 'graphroot' "${storage_conf}"
+    run grep -q 'mount_program' "${storage_conf}"
     [ "${status}" -ne 0 ]
 }
 
@@ -194,6 +246,16 @@ teardown() {
     }
     export -f sudo
 
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"vfs"* ]]
@@ -201,4 +263,34 @@ teardown() {
     local storage_conf="${test_home}/.config/containers/storage.conf"
     [ -f "${storage_conf}" ]
     grep -q 'driver = "vfs"' "${storage_conf}"
+}
+
+@test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            mkdir) shift; mkdir "$@" ;;
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_podman_engine "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cgroupfs"* ]]
+
+    local containers_conf="${test_home}/.config/containers/containers.conf"
+    [ -f "${containers_conf}" ]
+    grep -q 'cgroup_manager = "cgroupfs"' "${containers_conf}"
+    run grep -q 'cgroup_parent' "${containers_conf}"
+    [ "${status}" -ne 0 ]
 }

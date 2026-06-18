@@ -90,6 +90,13 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - containers config directory is now owned by the service user so Podman can read storage.conf
 - GPG agent socket path in install-timer now resolved dynamically via gpgconf rather than a hardcoded ~/.gnupg path, preventing failures when loginctl enable-linger relocates sockets to XDG_RUNTIME_DIR
 - setup-owner now calls loginctl enable-linger so the service owner always has a persistent systemd user session available for rootless Podman
+- XDG_RUNTIME_DIR in the systemd service unit now points to the real user session (/run/user/<uid>) so rootless Podman can locate the systemd cgroup manager socket; the ssh-agent socket stays isolated in RuntimeDirectory via SSH_AUTH_SOCK
+- Podman storage uses fuse-overlayfs (overlay driver) when available, falling back to vfs — removes the incorrect btrfs-detection logic that caused overlay-over-btrfs failures on the hardened kernel
+- setup-owner: place Podman graphroot in ~/work/.containers/storage when ~/work is a btrfs mount, avoiding VFS layer copies from filling the ext4 home partition
+- setup-owner: write containers.conf with cgroup_manager=cgroupfs; the systemd cgroup manager requires runc to create libpod scope units via D-Bus which is denied from inside a system service even with Delegate=yes
+- install-timer: add DBUS_SESSION_BUS_ADDRESS to generated service unit so Podman finds the user session D-Bus socket for other D-Bus operations
+- setup-owner: set cgroup_parent in containers.conf to user@<uid>.service so cgroupfs containers have write permission to their cgroup directory
+- rootless Podman container launch from system service: move oneshot into a cgroup leaf before running podman so resource limits work without cgroup permission errors
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
