@@ -156,6 +156,12 @@ ensure_rules_current() {
 
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
+        # Reset the remote URL to SSH on every iteration. The agent running inside
+        # the container may have changed it to HTTPS; that URL is stored in
+        # .git/config and would cause the host-side fetch to fail because the
+        # service user has no HTTPS credential helper.
+        git -C "${REPO_WORK_DIR}" remote set-url origin "git@github.com:${OWNER}/${REPO}.git"
+        git -C "${REPO_WORK_DIR}" config --unset remote.origin.pushurl 2>/dev/null || true
         info "Fetching latest changes for ${REPO_FULL}..."
         git -C "${REPO_WORK_DIR}" fetch --prune origin || die "Failed to fetch from origin for ${REPO_FULL}"
 

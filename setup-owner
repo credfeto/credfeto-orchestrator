@@ -326,6 +326,24 @@ configure_git() {
             printf '[commit]\n\tgpgsign = true\n'
             printf '[tag]\n\tgpgSign = true\n'
         fi
+
+        printf '\n'
+        # Ensure that we rewrite tp SSH URLs for GitHub, GitLab, and Bitbucket so we don't need needing HTTPS
+        # credentials too.
+        printf '# Rewrite common HTTPS clone URLs to their SSH equivalents so anything the\n'
+        printf '# agent clones from these hosts uses the mounted ~/.ssh keys rather than\n'
+        printf '# needing an HTTPS credential helper.\n'
+        printf '[url "git@github.com:"]\n'
+        printf '	insteadOf = https://github.com/\n'
+        printf '	pushInsteadOf = https://github.com/\n'
+        printf '\n'
+        printf '[url "git@gitlab.com:"]\n'
+        printf '	insteadOf = https://gitlab.com/\n'
+        printf '	pushInsteadOf = https://gitlab.com/\n'
+        printf '\n'
+        printf '[url "git@bitbucket.org:"]\n'
+        printf '	insteadOf = https://bitbucket.org/\n'
+        printf '	pushInsteadOf = https://bitbucket.org/\n'
     } | sudo tee "${gitconfig}" > /dev/null || die "Failed to write ${gitconfig}"
     sudo chown "${owner}:${owner}" "${gitconfig}" || die "Failed to chown ${gitconfig}"
     sudo chmod 644 "${gitconfig}" || die "Failed to set permissions on ${gitconfig}"
