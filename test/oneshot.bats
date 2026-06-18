@@ -679,7 +679,7 @@ JQSTUB
     grep -qFx -- '--memory=12g' "${args_log}"
     grep -qFx -- '--memory-swap=12g' "${args_log}"
     grep -qFx -- '--pids-limit=4096' "${args_log}"
-    grep -qFx -- '--userns=keep-id' "${args_log}"
+    grep -qFx -- '--userns=keep-id:uid=1000,gid=1000' "${args_log}"
 }
 
 # --- invoke_claude error handling ---------------------------------------------
