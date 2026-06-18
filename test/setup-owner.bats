@@ -165,6 +165,16 @@ teardown() {
     }
     export -f sudo
 
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"vfs"* ]]
@@ -196,6 +206,16 @@ teardown() {
     }
     export -f sudo
 
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"vfs"* ]]
@@ -226,6 +246,16 @@ teardown() {
     }
     export -f sudo
 
+    # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
+    # shellcheck disable=SC2329
+    command() {
+        case "$*" in
+            "-v fuse-overlayfs") return 1 ;;
+            *) builtin command "$@" ;;
+        esac
+    }
+    export -f command
+
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"vfs"* ]]
@@ -235,7 +265,7 @@ teardown() {
     grep -q 'driver = "vfs"' "${storage_conf}"
 }
 
-@test "configure_podman_engine writes containers.conf with cgroupfs and user session cgroup_parent" {
+@test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"
 
@@ -261,5 +291,6 @@ teardown() {
     local containers_conf="${test_home}/.config/containers/containers.conf"
     [ -f "${containers_conf}" ]
     grep -q 'cgroup_manager = "cgroupfs"' "${containers_conf}"
-    grep -q 'cgroup_parent = "user.slice/user-1001.slice/user@1001.service"' "${containers_conf}"
+    run grep -q 'cgroup_parent' "${containers_conf}"
+    [ "${status}" -ne 0 ]
 }
