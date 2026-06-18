@@ -77,11 +77,11 @@ RuntimeDirectory=${runtime_dir}
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 # Delegate=cpu memory pids io grants this service ownership of its cgroup
-# subtree AND enables domain controllers before the process starts (while the
-# cgroup is empty).  oneshot then moves itself into a leaf sub-cgroup so the
-# service cgroup has no direct tasks and container sub-cgroups created by
-# podman/runc can use pids.max, memory.max etc.  plain Delegate=yes leaves
-# subtree_control empty so the controllers cannot be enabled at all.
+# subtree so the process can manage subtree_control and child cgroups.  For
+# Type=oneshot, systemd does NOT write subtree_control automatically; oneshot
+# moves itself to a leaf sub-cgroup then writes the controllers itself so
+# container sub-cgroups get pids.max, memory.max etc.  plain Delegate=yes
+# grants no specific controllers so the write would be rejected.
 Delegate=cpu memory pids io
 # XDG_RUNTIME_DIR must be the real user session dir so Podman uses the correct
 # runtime state directory for the owner's session.

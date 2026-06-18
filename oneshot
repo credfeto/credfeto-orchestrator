@@ -610,23 +610,24 @@ handle_claude_is_error() {
 
 # In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
 # directly contains processes from having child cgroups with domain controllers
-# (memory, cpu, pids).  With Delegate=cpu memory pids io, systemd enables those
-# controllers in the service cgroup's subtree_control before the process starts.
-# For Type=oneshot services the process lands directly in the service cgroup;
-# rootless Podman's cgroupfs mode cannot then create resource-limited child
-# cgroups there.
+# (memory, cpu, pids).  For Type=oneshot services the process lands directly
+# in the service cgroup.  Delegate=cpu memory pids io grants permission to
+# write subtree_control but does NOT write it automatically (verified on
+# systemd 260); the process must do it itself — but only after moving to a
+# leaf, because writing subtree_control while tasks are present fails with EBUSY.
 #
 # This function handles both cases:
-# - If systemd already placed us in a leaf (e.g. Type=notify/simple on newer
-#   systemd), strip the leaf component to get the service cgroup as parent.
+# - If systemd already placed us in a leaf (e.g. on some Type=simple configs),
+#   strip the leaf component to get the service cgroup as parent.
 # - If we are directly in the service cgroup (Type=oneshot), move ourselves
-#   into a leaf sub-cgroup named "init" so the service cgroup has no direct
-#   tasks and can host container sub-cgroups.
+#   into a leaf sub-cgroup named "init", then write the domain controllers to
+#   the service cgroup's subtree_control so container child cgroups get
+#   pids.max, memory.max, cpu.max etc.
 #
 # Sets PODMAN_CGROUP_PARENT so invoke_claude passes --cgroup-parent to every
 # podman run call.  No-op when not running from a system service.
 setup_cgroup_leaf() {
-    local svcgroup leaf_dir
+    local svcgroup leaf_dir cgroupfs_path controller
     svcgroup=$(cut -d: -f3 /proc/self/cgroup 2>/dev/null) || return 0
 
     case "${svcgroup}" in
@@ -637,14 +638,20 @@ setup_cgroup_leaf() {
             svcgroup="${svcgroup%/*}"
             ;;
         /system.slice/*)
-            # Process is directly in the service cgroup; move to a leaf so the
-            # service cgroup has no direct tasks and can host container
-            # sub-cgroups with domain controllers enabled.
-            leaf_dir="/sys/fs/cgroup${svcgroup}/init"
+            # Process is directly in the service cgroup.
+            # Step 1: move to a leaf so the service cgroup has no direct tasks.
+            cgroupfs_path="/sys/fs/cgroup${svcgroup}"
+            leaf_dir="${cgroupfs_path}/init"
             mkdir -p "${leaf_dir}" 2>/dev/null \
                 || { warn "Cannot create leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
             printf '%s\n' "$$" > "${leaf_dir}/cgroup.procs" 2>/dev/null \
                 || { warn "Cannot move process to leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
+            # Step 2: now that the service cgroup has no direct tasks, enable
+            # domain controllers so container child cgroups have pids.max etc.
+            for controller in cpu memory pids io; do
+                printf '+%s\n' "${controller}" > "${cgroupfs_path}/cgroup.subtree_control" 2>/dev/null \
+                    || warn "Cannot enable ${controller} controller in ${svcgroup} — container resource limits may not apply"
+            done
             ;;
         *)
             return 0
