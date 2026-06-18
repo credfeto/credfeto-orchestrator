@@ -638,6 +638,16 @@ setup_cgroup_leaf() {
     printf '%s\n' "$$" > "${leaf_dir}/cgroup.procs" 2>/dev/null \
         || { warn "Cannot move process to leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
 
+    # With Delegate=yes, systemd grants write access to the service cgroup
+    # subtree but leaves cgroup.subtree_control empty.  Enable domain
+    # controllers so that child cgroups created by podman/runc (libpod-<id>)
+    # get controller files (pids.max, memory.max, etc.).  Each controller is
+    # enabled individually so an unavailable controller does not block others.
+    local ctrl
+    for ctrl in pids memory cpu io; do
+        printf '+%s\n' "${ctrl}" > "/sys/fs/cgroup${svcgroup}/cgroup.subtree_control" 2>/dev/null || true
+    done
+
     PODMAN_CGROUP_PARENT="${svcgroup}"
 }
 
