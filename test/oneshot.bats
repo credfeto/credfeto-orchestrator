@@ -2557,6 +2557,34 @@ setup_local_git_remote() {
     [[ "${output}" != *"not found in the GPG keyring"* ]]
 }
 
+make_gpg_stubs() {
+    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
+    # Create a real socket file so [ -S ] passes.
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
+    cat > "${STUB_BIN}/gpgconf" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "${extra_socket}"
+STUBEOF
+    chmod +x "${STUB_BIN}/gpgconf"
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+# Simulate export producing real bytes, import succeeding, and key listing succeeding.
+if [[ "$*" == *"--export"* ]]; then
+    printf 'FAKEPUBKEYDATA\n'
+    exit 0
+fi
+if [[ "$*" == *"--import"* ]]; then
+    exit 0
+fi
+if [[ "$*" == *"--list-secret-keys"* ]]; then
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    make_stub gpg-connect-agent 'exit 0'
+}
+
 # --- invoke_claude git identity env var passing --------------------------------
 
 @test "invoke_claude passes GIT_USER_NAME as container env var when set" {
@@ -2652,34 +2680,6 @@ STUBEOF
 }
 
 # --- add_gpg_podman_args unit tests --------------------------------------------
-
-make_gpg_stubs() {
-    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
-    # Create a real socket file so [ -S ] passes.
-    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
-    cat > "${STUB_BIN}/gpgconf" << STUBEOF
-#!/usr/bin/env bash
-printf '%s\n' "${extra_socket}"
-STUBEOF
-    chmod +x "${STUB_BIN}/gpgconf"
-    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
-#!/usr/bin/env bash
-# Simulate export producing real bytes, import succeeding, and key listing succeeding.
-if [[ "$*" == *"--export"* ]]; then
-    printf 'FAKEPUBKEYDATA\n'
-    exit 0
-fi
-if [[ "$*" == *"--import"* ]]; then
-    exit 0
-fi
-if [[ "$*" == *"--list-secret-keys"* ]]; then
-    exit 0
-fi
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/gpg"
-    make_stub gpg-connect-agent 'exit 0'
-}
 
 @test "add_gpg_podman_args uses socket forwarding when extra socket and signing key are available" {
     make_gpg_stubs
