@@ -509,6 +509,7 @@ CLAUDE_RESUMED_AS_FRESH=0
 CLAUDE_MD_TMPFILE=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
+GH_ENTERPRISE_SECRET_NAME=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile podman_exit=0
@@ -820,7 +821,8 @@ invoke_claude() {
     CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
     PODMAN_SECRET_NAME=""
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true' EXIT
+    GH_ENTERPRISE_SECRET_NAME=""
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -869,7 +871,13 @@ invoke_claude() {
             || die "Failed to create Podman secret for Claude OAuth token"
         PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
     fi
-    [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && PODMAN_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
+    if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token"
+        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
+            || die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"
+        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
+    fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
 
     PODMAN_CLAUDE_ARGS=(
