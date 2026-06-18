@@ -508,6 +508,7 @@ run_claude_fresh() {
 CLAUDE_RESUMED_AS_FRESH=0
 CLAUDE_MD_TMPFILE=""
 GPG_PUBKEY_TMPDIR=""
+PODMAN_SECRET_NAME=""
 run_claude_resumed() {
     local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
     local stderrfile podman_exit=0
@@ -723,9 +724,10 @@ verify_gpg_signing_ready() {
 }
 
 # Appends GPG volume/socket args to PODMAN_RUN_ARGS.
-# Preferred path: creates a tmpdir containing only the public key and forwards
-# the gpg-agent extra socket into it.  Falls back to the full ~/.gnupg rw mount
-# with a warning when the socket is absent or the key export fails.
+# Creates a tmpdir containing only the signing public key and forwards the
+# gpg-agent extra socket into it — no private key material is exposed to the
+# container.  Dies if GIT_SIGNING_KEY is set but the secure path is not available,
+# because there is no safe fallback (mounting ~/.gnupg exposes private keys).
 add_gpg_podman_args() {
     local extra_socket
     extra_socket=$(gpgconf --list-dirs agent-extra-socket 2>/dev/null) || extra_socket=""
@@ -740,25 +742,19 @@ add_gpg_podman_args() {
         [ -S "${runtime_extra}" ] && extra_socket="${runtime_extra}"
     fi
 
-    if [ -n "${GIT_SIGNING_KEY}" ] && [ -S "${extra_socket}" ]; then
-        GPG_PUBKEY_TMPDIR=$(mktemp -d --suffix=.gnupghome) \
-            || die "Failed to create tmpdir for GPG pubkey gnupghome"
-        chmod 0700 "${GPG_PUBKEY_TMPDIR}"
-        if gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
-                | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null; then
-            PODMAN_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
-            PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
-            return
-        fi
-        warn "GPG public key export failed for ${GIT_SIGNING_KEY} — falling back to ~/.gnupg mount"
-        rm -rf "${GPG_PUBKEY_TMPDIR}"
-        GPG_PUBKEY_TMPDIR=""
-    elif [ -n "${GIT_SIGNING_KEY}" ]; then
-        warn "GPG agent extra socket not available — falling back to ~/.gnupg mount"
-    fi
-    if [ -d "${HOME}/.gnupg" ]; then
-        PODMAN_RUN_ARGS+=( --volume "${HOME}/.gnupg:/home/developer/.gnupg:rw" )
-    fi
+    [ -n "${GIT_SIGNING_KEY}" ] || return 0
+
+    [ -S "${extra_socket}" ] \
+        || die "GPG agent extra socket not available — run 'gpgconf --launch gpg-agent' and ensure it creates an extra socket"
+
+    GPG_PUBKEY_TMPDIR=$(mktemp -d --suffix=.gnupghome) \
+        || die "Failed to create tmpdir for GPG pubkey gnupghome"
+    chmod 0700 "${GPG_PUBKEY_TMPDIR}"
+    gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
+            | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null \
+        || die "GPG public key export/import failed for ${GIT_SIGNING_KEY} — ensure the key is in the local keyring"
+    PODMAN_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
+    PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
 }
 
 # Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected
@@ -823,7 +819,8 @@ invoke_claude() {
     # every Bash tool call with EACCES.
     CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"' EXIT
+    PODMAN_SECRET_NAME=""
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -865,7 +862,13 @@ invoke_claude() {
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
     [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
 
-    [ -n "${owner_token}" ]              && PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_OAUTH_TOKEN=${owner_token}" )
+    if [ -n "${owner_token}" ]; then
+        PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
+        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
+            || die "Failed to create Podman secret for Claude OAuth token"
+        PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
+    fi
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ]    && PODMAN_RUN_ARGS+=( --env "GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN}" )
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
 

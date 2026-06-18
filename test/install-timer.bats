@@ -115,6 +115,21 @@ teardown() {
     grep -q "systemctl start credfeto-orchestrator-testuser.timer" "${TEST_TMP}/sudo.log"
 }
 
+@test "install-timer service unit includes security hardening directives" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    grep -q "NoNewPrivileges=yes" "${svc}"
+    grep -q "PrivateTmp=yes" "${svc}"
+    grep -q "ProtectSystem=full" "${svc}"
+    grep -q "CapabilityBoundingSet=" "${svc}"
+    grep -q "AmbientCapabilities=" "${svc}"
+    grep -q "LockPersonality=yes" "${svc}"
+    grep -q "MemoryDenyWriteExecute=no" "${svc}"
+}
+
 @test "install-timer --owner creates owner-scoped unit files with --owner in ExecStart" {
     run main --owner myorg
     [ "${status}" -eq 0 ]
