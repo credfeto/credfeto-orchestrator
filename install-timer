@@ -1,7 +1,12 @@
 #!/bin/bash
 
 # Installs a systemd system-level service and timer that runs the orchestrator
-# every 5 minutes as the current user, even when the user is not logged in.
+# on a fixed interval as the current user, even when the user is not logged in.
+
+# How often the timer fires.  Override with ORCHESTRATOR_TIMER_INTERVAL in the
+# environment before running install-timer; any value accepted by systemd's
+# OnUnitActiveSec is valid (e.g. "30sec", "1min", "5min").
+ORCHESTRATOR_TIMER_INTERVAL="${ORCHESTRATOR_TIMER_INTERVAL:-30sec}"
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -117,8 +122,8 @@ create_timer_unit() {
 Description=Credfeto Orchestrator Timer for ${CURRENT_USER}
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=5min
+OnBootSec=${ORCHESTRATOR_TIMER_INTERVAL}
+OnUnitActiveSec=${ORCHESTRATOR_TIMER_INTERVAL}
 Unit=${SERVICE_NAME}.service
 
 [Install]

@@ -109,6 +109,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Extract Trivy vulnerability scan and SARIF upload into a shared composite action used by all container image build workflows including development-agent
 - Pre-load SSH keys into the agent at startup so they are available before the container is launched
 - Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
+- Timer interval configurable via ORCHESTRATOR_TIMER_INTERVAL env var, defaulting to 30sec
 ### Deprecated
 ### Removed
 ### Deployment Changes

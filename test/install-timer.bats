@@ -93,7 +93,7 @@ teardown() {
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
-    grep -q "Delegate=yes" "${svc}"
+    grep -q "Delegate=cpu memory pids io" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
@@ -106,8 +106,8 @@ teardown() {
     grep -qE "ExecStart=.*/oneshot$" "${svc}"
 
     [ -f "${tmr}" ]
-    grep -q "OnUnitActiveSec=5min" "${tmr}"
-    grep -q "OnBootSec=5min" "${tmr}"
+    grep -q "OnUnitActiveSec=${ORCHESTRATOR_TIMER_INTERVAL}" "${tmr}"
+    grep -q "OnBootSec=${ORCHESTRATOR_TIMER_INTERVAL}" "${tmr}"
 
     [ -f "${TEST_TMP}/sudo.log" ]
     grep -q "systemctl daemon-reload" "${TEST_TMP}/sudo.log"
@@ -126,7 +126,7 @@ teardown() {
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser-myorg" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
-    grep -q "Delegate=yes" "${svc}"
+    grep -q "Delegate=cpu memory pids io" "${svc}"
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
