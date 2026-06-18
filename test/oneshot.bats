@@ -2323,6 +2323,76 @@ STUBEOF
     [ "${saved_unix}" -ge "$((now_unix + RATE_LIMIT_RESUME_BUFFER_SECS))" ]
 }
 
+@test "invoke_claude saves rate-limit file when Claude CLI exits non-zero with 429 JSON on new session" {
+    # Reproduces the production failure: Claude writes valid is_error JSON but exits 1.
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '%s\n' '{"type":"result","is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit · resets 3pm (UTC)"}'
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    DISCORD_WEBHOOK_URL=""
+    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    [ -f "${rate_file}" ]
+    local saved_unix
+    saved_unix=$(cat "${rate_file}")
+    [[ "${saved_unix}" =~ ^[0-9]+$ ]]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${saved_unix}" -gt "${now_unix}" ]
+}
+
+@test "invoke_claude saves rate-limit file when Claude CLI exits non-zero with 429 JSON on resumed session" {
+    # Reproduces the production failure: resumed session hits 429 and CLI exits 1.
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '%s\n' '{"type":"result","is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit · resets 3pm (UTC)"}'
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    DISCORD_WEBHOOK_URL=""
+    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    [ -f "${rate_file}" ]
+    local saved_unix
+    saved_unix=$(cat "${rate_file}")
+    [[ "${saved_unix}" =~ ^[0-9]+$ ]]
+    local now_unix
+    now_unix=$(date +%s)
+    [ "${saved_unix}" -gt "${now_unix}" ]
+}
+
+@test "invoke_claude sends Discord notification when Claude CLI exits non-zero with 429 JSON" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '%s\n' '{"type":"result","is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit · resets 3pm (UTC)"}'
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+}
+
 # --- main() rate-limit integration --------------------------------------------
 
 @test "main skips items for a rate-limited owner and continues to other owners" {
@@ -3080,53 +3150,36 @@ GHEOF
 # --- ensure_repo_current: SSH URL enforcement ---------------------------------
 
 @test "ensure_repo_current resets HTTPS origin URL to SSH before fetching" {
-    setup_local_git_remote >/dev/null
-
-    # Simulate what the agent might do inside the container
-    git -C "${REPO_WORK_DIR}" remote set-url origin "https://github.com/${OWNER}/${REPO}.git"
-
-    # Stub git: intercept fetch so no network access is needed; delegate all
-    # other calls (remote set-url, config --unset, branch, diff, rebase) to
-    # real git so the URL change is actually written to disk.
-    local real_git
-    real_git=$(command -v git)
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    local git_log="${TEST_TMP}/git_calls"
+    # PATH stub avoids shell function override (which triggers SC2218 on earlier
+    # real git calls in the file) and avoids real git operations in temp dirs
+    # that fail in CI due to GIT_CONFIG_GLOBAL safe.directory restrictions.
     cat > "${STUB_BIN}/git" << STUBEOF
 #!/usr/bin/env bash
-for arg in "\$@"; do
-    [ "\${arg}" = "fetch" ] && exit 0
-done
-exec "${real_git}" "\$@"
+printf '%s\n' "\$*" >> "${git_log}"
+for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-
-    local url
-    url=$("${real_git}" -C "${REPO_WORK_DIR}" remote get-url origin)
-    [ "${url}" = "git@github.com:${OWNER}/${REPO}.git" ]
+    grep -q "remote set-url origin git@github.com:${OWNER}/${REPO}.git" "${git_log}"
 }
 
 @test "ensure_repo_current removes explicit HTTPS pushurl before fetching" {
-    setup_local_git_remote >/dev/null
-    git -C "${REPO_WORK_DIR}" config remote.origin.pushurl \
-        "https://x-oauth-basic:@github.com/${OWNER}/${REPO}.git"
-
-    local real_git
-    real_git=$(command -v git)
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    local git_log="${TEST_TMP}/git_calls"
     cat > "${STUB_BIN}/git" << STUBEOF
 #!/usr/bin/env bash
-for arg in "\$@"; do
-    [ "\${arg}" = "fetch" ] && exit 0
-done
-exec "${real_git}" "\$@"
+printf '%s\n' "\$*" >> "${git_log}"
+for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-
-    local pushurl
-    pushurl=$("${real_git}" -C "${REPO_WORK_DIR}" config remote.origin.pushurl 2>/dev/null) || true
-    [ -z "${pushurl}" ]
+    grep -q "config --unset remote.origin.pushurl" "${git_log}"
 }

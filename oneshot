@@ -493,6 +493,13 @@ run_claude_fresh() {
         fi
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
+        # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
+        # when it has written a valid result JSON to stdout.  Return 0 so invoke_claude
+        # can inspect the JSON via handle_claude_is_error rather than losing the context.
+        if [ -s "${tmpfile}" ] \
+                && jq -e '.type == "result" and .is_error == true' "${tmpfile}" >/dev/null 2>&1; then
+            return 0
+        fi
         die_claude_failed "${tmpfile}"
     fi
     cat "${stderrfile}" >&2
@@ -559,6 +566,13 @@ run_claude_resumed() {
 
     cat "${stderrfile}" >&2
     rm -f "${stderrfile}"
+    # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
+    # when it has written a valid result JSON to stdout.  Return 0 so invoke_claude
+    # can inspect the JSON via handle_claude_is_error rather than losing the context.
+    if [ -s "${tmpfile}" ] \
+            && jq -e '.type == "result" and .is_error == true' "${tmpfile}" >/dev/null 2>&1; then
+        return 0
+    fi
     die_claude_failed "${tmpfile}"
 }
 
@@ -881,8 +895,13 @@ invoke_claude() {
 
     if [ -n "${resume_session_id}" ]; then
         CLAUDE_RESUMED_AS_FRESH=0
-        local new_tmpfile
-        new_tmpfile=$(run_claude_resumed "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}")
+        local new_tmpfile resume_status=0
+        new_tmpfile=$(run_claude_resumed "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}") \
+            || resume_status=$?
+        if [ "${resume_status}" -ne 0 ]; then
+            rm -f "${tmpfile}"
+            exit "${resume_status}"
+        fi
         # run_claude_resumed returns a new path only when it restarted as a fresh session.
         [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
         [ "${CLAUDE_RESUMED_AS_FRESH}" = "1" ] && resume_session_id=""
