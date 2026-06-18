@@ -639,13 +639,20 @@ setup_cgroup_leaf() {
             ;;
         /system.slice/*)
             # Process is directly in the service cgroup.
-            # Step 1: move to a leaf so the service cgroup has no direct tasks.
+            # Step 1: move ALL processes to a leaf so the service cgroup has no
+            # direct tasks.  Moving only $$ is insufficient: any left-over
+            # processes from an unclean previous run (e.g. ssh-agent) remain in
+            # the service cgroup and cause the subtree_control write to fail
+            # with EBUSY (cannot enable domain controllers while tasks exist).
             cgroupfs_path="/sys/fs/cgroup${svcgroup}"
             leaf_dir="${cgroupfs_path}/init"
             mkdir -p "${leaf_dir}" 2>/dev/null \
                 || { warn "Cannot create leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
-            printf '%s\n' "$$" > "${leaf_dir}/cgroup.procs" 2>/dev/null \
-                || { warn "Cannot move process to leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
+            local pids pid
+            pids=$(cat "${cgroupfs_path}/cgroup.procs" 2>/dev/null) || pids=""
+            for pid in ${pids}; do
+                printf '%s\n' "${pid}" > "${leaf_dir}/cgroup.procs" 2>/dev/null || true
+            done
             # Step 2: now that the service cgroup has no direct tasks, enable
             # domain controllers so container child cgroups have pids.max etc.
             for controller in cpu memory pids io; do
