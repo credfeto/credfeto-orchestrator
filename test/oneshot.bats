@@ -1086,23 +1086,34 @@ STUBEOF
     grep -q 'claude-oauth-credfeto' "${args_log}"
 }
 
-@test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when set" {
+@test "invoke_claude passes GH_ENTERPRISE_TOKEN via Podman secret instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
+    local secret_log="${TEST_TMP}/podman_secret"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     # shellcheck disable=SC2030
     GH_ENTERPRISE_TOKEN="my-gh-token"
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
+    # Secret was created with the enterprise token secret name
+    grep -q "create" "${secret_log}"
+    grep -q "gh-enterprise-token" "${secret_log}"
+    # Token is NOT passed via --env
+    run grep -q 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
+    [ "${status}" -ne 0 ]
+    # --secret flag IS present in the podman run args
+    grep -q 'gh-enterprise-token' "${args_log}"
 }
 
 @test "invoke_claude passes --resume flag when session id is provided" {
@@ -3202,6 +3213,10 @@ for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
+    # Flush the bash hash table so PATH is re-searched for git; without this
+    # the subshell created by `run` inherits the cached real-git path and
+    # bypasses the stub.
+    hash git
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
@@ -3218,6 +3233,10 @@ for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
+    # Flush the bash hash table so PATH is re-searched for git; without this
+    # the subshell created by `run` inherits the cached real-git path and
+    # bypasses the stub.
+    hash git
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
