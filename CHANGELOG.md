@@ -96,6 +96,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner: write containers.conf with cgroup_manager=cgroupfs; the systemd cgroup manager requires runc to create libpod scope units via D-Bus which is denied from inside a system service even with Delegate=yes
 - install-timer: add DBUS_SESSION_BUS_ADDRESS to generated service unit so Podman finds the user session D-Bus socket for other D-Bus operations
 - setup-owner: set cgroup_parent in containers.conf to user@<uid>.service so cgroupfs containers have write permission to their cgroup directory
+- rootless Podman container launch from system service: move oneshot into a cgroup leaf before running podman so resource limits work without cgroup permission errors
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
