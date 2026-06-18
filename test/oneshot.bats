@@ -3150,53 +3150,36 @@ GHEOF
 # --- ensure_repo_current: SSH URL enforcement ---------------------------------
 
 @test "ensure_repo_current resets HTTPS origin URL to SSH before fetching" {
-    setup_local_git_remote >/dev/null
-
-    # Simulate what the agent might do inside the container
-    git -C "${REPO_WORK_DIR}" remote set-url origin "https://github.com/${OWNER}/${REPO}.git"
-
-    # Stub git: intercept fetch so no network access is needed; delegate all
-    # other calls (remote set-url, config --unset, branch, diff, rebase) to
-    # real git so the URL change is actually written to disk.
-    local real_git
-    real_git=$(command -v git)
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    local git_log="${TEST_TMP}/git_calls"
+    # PATH stub avoids shell function override (which triggers SC2218 on earlier
+    # real git calls in the file) and avoids real git operations in temp dirs
+    # that fail in CI due to GIT_CONFIG_GLOBAL safe.directory restrictions.
     cat > "${STUB_BIN}/git" << STUBEOF
 #!/usr/bin/env bash
-for arg in "\$@"; do
-    [ "\${arg}" = "fetch" ] && exit 0
-done
-exec "${real_git}" "\$@"
+printf '%s\n' "\$*" >> "${git_log}"
+for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-
-    local url
-    url=$("${real_git}" -C "${REPO_WORK_DIR}" remote get-url origin)
-    [ "${url}" = "git@github.com:${OWNER}/${REPO}.git" ]
+    grep -q "remote set-url origin git@github.com:${OWNER}/${REPO}.git" "${git_log}"
 }
 
 @test "ensure_repo_current removes explicit HTTPS pushurl before fetching" {
-    setup_local_git_remote >/dev/null
-    git -C "${REPO_WORK_DIR}" config remote.origin.pushurl \
-        "https://x-oauth-basic:@github.com/${OWNER}/${REPO}.git"
-
-    local real_git
-    real_git=$(command -v git)
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    local git_log="${TEST_TMP}/git_calls"
     cat > "${STUB_BIN}/git" << STUBEOF
 #!/usr/bin/env bash
-for arg in "\$@"; do
-    [ "\${arg}" = "fetch" ] && exit 0
-done
-exec "${real_git}" "\$@"
+printf '%s\n' "\$*" >> "${git_log}"
+for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-
-    local pushurl
-    pushurl=$("${real_git}" -C "${REPO_WORK_DIR}" config remote.origin.pushurl 2>/dev/null) || true
-    [ -z "${pushurl}" ]
+    grep -q "config --unset remote.origin.pushurl" "${git_log}"
 }
