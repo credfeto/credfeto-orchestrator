@@ -26,8 +26,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Skip trufflehog in Trivy scan until upstream releases a build compiled against the patched Go stdlib (same Go CVEs as sqlcmd/actionlint/composite-action-lint)
 - Replace rooted Docker with rootless Podman for agent container execution
 - Revoke sudo access granted by setup-owner — no longer required with rootless Podman
-- Remove insecure ~/.gnupg fallback mount and pass Claude OAuth token via Podman secret instead of env var
-- Add systemd service hardening directives to prevent privilege escalation
+- Remove insecure ~/.gnupg:rw fallback mount — hard-fail when GPG agent extra socket is absent
+- Pass Claude OAuth token via Podman secret (claude-oauth-<owner>) instead of --env flag to hide it from podman inspect
+- Add NoNewPrivileges, PrivateTmp, ProtectSystem, CapabilityBoundingSet, AmbientCapabilities, LockPersonality, and MemoryDenyWriteExecute hardening to systemd service unit
 ### Added
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 - SSH agent validation on container start: verify SSH_AUTH_SOCK socket exists, agent has keys loaded, and signing with the loaded key succeeds
