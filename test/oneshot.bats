@@ -1055,43 +1055,65 @@ STUBEOF
     [ -z "${CLAUDE_MD_TMPFILE}" ]
 }
 
-@test "invoke_claude passes CLAUDE_CODE_OAUTH_TOKEN env var when owner token is configured" {
+@test "invoke_claude creates Podman secret and uses --secret for owner token instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
+    local secret_log="${TEST_TMP}/podman_secret"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
     printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'CLAUDE_CODE_OAUTH_TOKEN=my-claude-token' "${args_log}"
+    # Secret was created with the owner-scoped name
+    grep -q "create" "${secret_log}"
+    grep -q "claude-oauth-credfeto" "${secret_log}"
+    # Token is NOT passed via --env
+    run grep -q 'CLAUDE_CODE_OAUTH_TOKEN=' "${args_log}"
+    [ "${status}" -ne 0 ]
+    # --secret flag IS present in the podman run args
+    grep -q 'claude-oauth-credfeto' "${args_log}"
 }
 
-@test "invoke_claude passes GH_ENTERPRISE_TOKEN env var when set" {
+@test "invoke_claude passes GH_ENTERPRISE_TOKEN via Podman secret instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
+    local secret_log="${TEST_TMP}/podman_secret"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     # shellcheck disable=SC2030
     GH_ENTERPRISE_TOKEN="my-gh-token"
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
+    # Secret was created with the enterprise token secret name
+    grep -q "create" "${secret_log}"
+    grep -q "gh-enterprise-token" "${secret_log}"
+    # Token is NOT passed via --env
+    run grep -q 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
+    [ "${status}" -ne 0 ]
+    # --secret flag IS present in the podman run args
+    grep -q 'gh-enterprise-token' "${args_log}"
 }
 
 @test "invoke_claude passes --resume flag when session id is provided" {
@@ -2616,6 +2638,34 @@ setup_local_git_remote() {
     [[ "${output}" != *"not found in the GPG keyring"* ]]
 }
 
+make_gpg_stubs() {
+    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
+    # Create a real socket file so [ -S ] passes.
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
+    cat > "${STUB_BIN}/gpgconf" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "${extra_socket}"
+STUBEOF
+    chmod +x "${STUB_BIN}/gpgconf"
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+# Simulate export producing real bytes, import succeeding, and key listing succeeding.
+if [[ "$*" == *"--export"* ]]; then
+    printf 'FAKEPUBKEYDATA\n'
+    exit 0
+fi
+if [[ "$*" == *"--import"* ]]; then
+    exit 0
+fi
+if [[ "$*" == *"--list-secret-keys"* ]]; then
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    make_stub gpg-connect-agent 'exit 0'
+}
+
 # --- invoke_claude git identity env var passing --------------------------------
 
 @test "invoke_claude passes GIT_USER_NAME as container env var when set" {
@@ -2658,13 +2708,12 @@ STUBEOF
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     GIT_SIGNING_KEY="ABCD1234"
-    make_stub gpg-connect-agent 'exit 0'
-    make_stub gpg 'exit 0'
+    make_gpg_stubs
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
+[ "\$1" = "secret" ] && exit 0
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
 printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
@@ -2713,34 +2762,6 @@ STUBEOF
 
 # --- add_gpg_podman_args unit tests --------------------------------------------
 
-make_gpg_stubs() {
-    local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
-    # Create a real socket file so [ -S ] passes.
-    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
-    cat > "${STUB_BIN}/gpgconf" << STUBEOF
-#!/usr/bin/env bash
-printf '%s\n' "${extra_socket}"
-STUBEOF
-    chmod +x "${STUB_BIN}/gpgconf"
-    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
-#!/usr/bin/env bash
-# Simulate export producing real bytes, import succeeding, and key listing succeeding.
-if [[ "$*" == *"--export"* ]]; then
-    printf 'FAKEPUBKEYDATA\n'
-    exit 0
-fi
-if [[ "$*" == *"--import"* ]]; then
-    exit 0
-fi
-if [[ "$*" == *"--list-secret-keys"* ]]; then
-    exit 0
-fi
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/gpg"
-    make_stub gpg-connect-agent 'exit 0'
-}
-
 @test "add_gpg_podman_args uses socket forwarding when extra socket and signing key are available" {
     make_gpg_stubs
     PODMAN_RUN_ARGS=()
@@ -2776,21 +2797,24 @@ STUBEOF
     [ -d "${GPG_PUBKEY_TMPDIR}" ]
 }
 
-@test "add_gpg_podman_args falls back to ~/.gnupg mount when extra socket is absent" {
+@test "add_gpg_podman_args dies when extra socket is absent and GIT_SIGNING_KEY is set" {
     # No gpgconf stub → gpgconf fails, extra_socket is empty, [ -S "" ] is false.
     make_stub gpgconf 'exit 1'
     mkdir -p "${HOME}/.gnupg"
     PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_podman_args 2>/dev/null
+    run add_gpg_podman_args
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GPG agent extra socket not available"* ]]
+    # No ~/.gnupg mount should be added — there is no safe fallback
     local found=0
     for arg in "${PODMAN_RUN_ARGS[@]}"; do
-        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+        [[ "${arg}" == *".gnupg"* ]] && found=1
     done
-    [ "${found}" -eq 1 ]
+    [ "${found}" -eq 0 ]
 }
 
-@test "add_gpg_podman_args falls back to ~/.gnupg mount when gpg export fails" {
+@test "add_gpg_podman_args dies when gpg export fails" {
     local extra_socket="${TEST_TMP}/S.gpg-agent.extra"
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${extra_socket}')"
     cat > "${STUB_BIN}/gpgconf" << STUBEOF
@@ -2809,12 +2833,15 @@ STUBEOF
     mkdir -p "${HOME}/.gnupg"
     PODMAN_RUN_ARGS=()
     GIT_SIGNING_KEY="ABCD1234"
-    add_gpg_podman_args 2>/dev/null
+    run add_gpg_podman_args
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GPG public key export/import failed"* ]]
+    # No ~/.gnupg mount should be added — there is no safe fallback
     local found=0
     for arg in "${PODMAN_RUN_ARGS[@]}"; do
-        [[ "${arg}" == *"${HOME}/.gnupg:/home/developer/.gnupg:rw"* ]] && found=1
+        [[ "${arg}" == *".gnupg"* ]] && found=1
     done
-    [ "${found}" -eq 1 ]
+    [ "${found}" -eq 0 ]
 }
 
 @test "add_gpg_podman_args skips all mounts when GIT_SIGNING_KEY is empty and ~/.gnupg absent" {
@@ -2827,6 +2854,30 @@ STUBEOF
         [[ "${arg}" == *".gnupg"* ]] && found=1
     done
     [ "${found}" -eq 0 ]
+}
+
+@test "add_gpg_podman_args prefers XDG_RUNTIME_DIR socket over gpgconf path when available" {
+    local runtime_socket="${TEST_TMP}/runtime/gnupg/S.gpg-agent.extra"
+    mkdir -p "${TEST_TMP}/runtime/gnupg"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${runtime_socket}')"
+    # gpgconf returns a path with no actual socket; the XDG runtime path should win.
+    make_stub gpgconf 'printf "/no/such/socket\n"'
+    cat > "${STUB_BIN}/gpg" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"--export"* ]]; then printf 'FAKEPUBKEYDATA\n'; exit 0; fi
+if [[ "$*" == *"--import"* ]]; then exit 0; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gpg"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    PODMAN_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    add_gpg_podman_args
+    local found=0
+    for arg in "${PODMAN_RUN_ARGS[@]}"; do
+        [[ "${arg}" == "${runtime_socket}"* ]] && found=1
+    done
+    [ "${found}" -eq 1 ]
 }
 
 @test "add_gpg_podman_args GPG_PUBKEY_TMPDIR is cleaned up by invoke_claude on success" {
@@ -3162,6 +3213,10 @@ for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
+    # Flush the bash hash table so PATH is re-searched for git; without this
+    # the subshell created by `run` inherits the cached real-git path and
+    # bypasses the stub.
+    hash git
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
@@ -3178,6 +3233,10 @@ for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/git"
+    # Flush the bash hash table so PATH is re-searched for git; without this
+    # the subshell created by `run` inherits the cached real-git path and
+    # bypasses the stub.
+    hash git
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
