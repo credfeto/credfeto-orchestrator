@@ -1817,8 +1817,10 @@ main() {
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}" "${claude_md_content}") \
-            || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
+        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}" "${claude_md_content}")
+        invoke_claude_exit=$?
+        git -C "${REPO_WORK_DIR}" clean -fdX
+        [ "${invoke_claude_exit}" -eq 0 ] || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
         save_session "${item_type}" "${item_id}" "${new_session_id}"
         success "Session ${new_session_id} saved for ${item_type} #${item_id} in ${item_repo}"
