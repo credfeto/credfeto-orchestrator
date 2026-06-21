@@ -392,7 +392,7 @@ build_pr_claude_md() {
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
 
     if [ -n "${dirty_branch}" ] && [ "${needs_rebase}" = "1" ]; then
-        checkout_step="2. The working tree is on branch '${dirty_branch}' with uncommitted changes AND the PR is ${merge_state} — resolve both before any other work:
+        checkout_step="3. The working tree is on branch '${dirty_branch}' with uncommitted changes AND the PR is ${merge_state} — resolve both before any other work:
    a. git -C ${repo_path} status   (inspect what is there)
    b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
       Otherwise: git -C ${repo_path} checkout -- . && git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout ${branch_name}
@@ -400,18 +400,18 @@ build_pr_claude_md() {
       CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
    d. git -C ${repo_path} push --force-with-lease"
     elif [ -n "${dirty_branch}" ]; then
-        checkout_step="2. The working tree is on branch '${dirty_branch}' with uncommitted changes — clean up before checking out the PR branch:
+        checkout_step="3. The working tree is on branch '${dirty_branch}' with uncommitted changes — clean up before checking out the PR branch:
    a. git -C ${repo_path} status   (inspect what is there)
    b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
       Otherwise: git -C ${repo_path} checkout -- . && git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout ${branch_name}"
     elif [ "${needs_rebase}" = "1" ]; then
-        checkout_step="2. The PR is ${merge_state} — check out the branch and rebase immediately before any other work:
+        checkout_step="3. The PR is ${merge_state} — check out the branch and rebase immediately before any other work:
    git -C ${repo_path} checkout ${branch_name}
    git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
    CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
    git -C ${repo_path} push --force-with-lease"
     else
-        checkout_step="2. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
+        checkout_step="3. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
     fi
     cat <<EOF
 You are the Orchestrator agent.
@@ -425,13 +425,15 @@ Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, 
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
+   gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
 ${checkout_step}
-3. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-4. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
-5. Proceed to address all outstanding work
-6. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
-7. All interaction with humans including status reports must be made as a comment to the pull request.
-8. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
+4. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+5. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
+6. Proceed to address all outstanding work
+7. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
+8. All interaction with humans including status reports must be made as a comment to the pull request.
+9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
 }
 
@@ -1107,6 +1109,39 @@ pr_json_has_blocked_label() {
     printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
+# Copies labels from all closing issues linked to a PR onto the PR, adding any that are missing.
+# Never removes existing labels. Uses --add-label for each missing one.
+# Arguments: pr_id pr_json
+sync_pr_labels_from_linked_issues() {
+    local pr_id="$1" pr_json="$2"
+    local linked_issues
+    linked_issues=$(gh pr view "${pr_id}" \
+        --repo "${REPO_FULL}" \
+        --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[].number' 2>/dev/null) || return 0
+    [ -n "${linked_issues}" ] || return 0
+
+    local pr_label_list
+    pr_label_list=$(printf '%s' "${pr_json}" | jq -c '[(.labels // [])[] | .name]')
+
+    local issue_num issue_label already_present
+    while IFS= read -r issue_num; do
+        [ -n "${issue_num}" ] || continue
+        while IFS= read -r issue_label; do
+            [ -n "${issue_label}" ] || continue
+            already_present=$(printf '%s' "${pr_label_list}" | jq -r --arg l "${issue_label}" 'map(select(. == $l)) | length')
+            if [ "${already_present}" = "0" ]; then
+                info "PR #${pr_id}: adding label '${issue_label}' from linked issue #${issue_num}"
+                gh pr edit "${pr_id}" --repo "${REPO_FULL}" --add-label "${issue_label}" 2>/dev/null || true
+                pr_label_list=$(printf '%s' "${pr_label_list}" | jq -c --arg l "${issue_label}" '. + [$l]')
+            fi
+        done < <(gh issue view "${issue_num}" \
+            --repo "${REPO_FULL}" \
+            --json labels \
+            --jq '.labels[].name' 2>/dev/null)
+    done <<< "${linked_issues}"
+}
+
 # Returns the path to the fingerprint file for a given Issue ID.
 issue_fingerprint_file_path() {
     local item_id="$1"
@@ -1756,6 +1791,7 @@ main() {
         if [ "${item_type}" = "PullRequest" ]; then
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+            sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
 
         if ! ensure_repo_current; then

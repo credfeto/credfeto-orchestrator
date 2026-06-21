@@ -41,6 +41,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: validate required config at startup (.config/orchestrator/.env, gh/hosts.yml, per-owner token) with clear errors before starting work
 - document absolute path requirement and gpg socket permission rationale as comments in generated systemd service unit
 - Run git clean -fdX after each work session to remove build artefacts
+- Sync PR labels from all linked closing issues before each work session, adding any missing labels
 ### Fixed
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
