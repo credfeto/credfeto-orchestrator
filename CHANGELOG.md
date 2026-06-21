@@ -43,6 +43,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Run git clean -fdX after each work session to remove build artefacts
 - Sync PR labels from all linked closing issues before each work session, adding any missing labels
 - Suppress repeated Discord no-work notifications: same message is suppressed within 1 hour; different message sends immediately; re-sends hourly at most
+- Dependency PRs now enable auto-merge (or mark Blocked on CI failure) instead of leaving a stale comment; autoMergeRequest added to PR fingerprint to force one-time re-run of stuck PRs
 ### Fixed
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL

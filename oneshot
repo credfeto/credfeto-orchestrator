@@ -386,7 +386,7 @@ EOF
 }
 
 build_pr_claude_md() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}"
     local checkout_step
     local needs_rebase=0
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
@@ -413,7 +413,34 @@ build_pr_claude_md() {
     else
         checkout_step="3. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
     fi
-    cat <<EOF
+
+    if [ "${is_dependency_pr}" = "true" ]; then
+        cat <<EOF
+You are the Orchestrator agent.
+
+Read AI instructions from ${ai_instructions}.
+
+Work on dependency pull request #${item_id} in ${REPO_FULL}.
+
+This is a dependency update PR. Do NOT make any code changes. Your only job is to verify CI and either enable auto-merge or mark as blocked.
+
+Steps:
+1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
+   gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
+3. Check CI: gh pr checks ${item_id} --repo ${REPO_FULL}
+   - If auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true): stop — nothing more to do.
+   - If ALL required checks have passed: enable auto-merge and stop:
+     gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+     If that command fails (auto-merge not supported), mark the PR as ready instead:
+     gh pr ready ${item_id} --repo ${REPO_FULL}
+   - If any required check has FAILED: post a comment on the PR explaining which check failed and why, then add the Blocked label and stop:
+     gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+   - If checks are still PENDING: stop without taking action — the next cycle will re-evaluate.
+4. All interaction with humans must be made as a comment to the pull request. Do NOT open issues.
+EOF
+    else
+        cat <<EOF
 You are the Orchestrator agent.
 
 Read AI instructions from ${ai_instructions}.
@@ -431,10 +458,12 @@ ${checkout_step}
 4. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 6. Proceed to address all outstanding work
-7. When all work is complete and ready for review, mark the PR as ready — run this exact command: gh pr ready ${item_id} --repo ${REPO_FULL}
+7. When all work is complete and CI passes: enable auto-merge — run this exact command: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+   If that fails because auto-merge is not supported by the repo, fall back to marking the PR as ready: gh pr ready ${item_id} --repo ${REPO_FULL}
 8. All interaction with humans including status reports must be made as a comment to the pull request.
 9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
+    fi
 }
 
 build_issue_prompt() {
@@ -1039,7 +1068,7 @@ fetch_pr_json() {
     local item_id="$1"
     gh pr view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus \
+        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
         2>/dev/null || return 1
 }
 
@@ -1065,7 +1094,8 @@ fingerprint_pr_json() {
             | "\($c):\($n)"
         )] | sort | join(",")),
         (.mergeable // "UNKNOWN"),
-        (.mergeStateStatus // "UNKNOWN")
+        (.mergeStateStatus // "UNKNOWN"),
+        (.autoMergeRequest != null | tostring)
     ') || return 1
 
     printf '%s' "${canonical}" | hash_sha256
@@ -1870,8 +1900,10 @@ main() {
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
         else
+            local is_dependency_pr
+            is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"

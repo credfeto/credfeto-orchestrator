@@ -180,6 +180,38 @@ teardown() {
     [[ "${output}" == *"force-with-lease"* ]]
 }
 
+@test "build_pr_claude_md includes auto-merge step for regular PRs" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+}
+
+@test "build_pr_claude_md for dependency PR generates compact instructions without code-work steps" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependency update PR"* ]]
+    [[ "${output}" == *"Do NOT make any code changes"* ]]
+    [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
+    [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
+    [[ "${output}" != *"mandatory rules from the AI instructions"* ]]
+    [[ "${output}" != *"force-with-lease"* ]]
+}
+
+@test "build_pr_claude_md for dependency PR instructs agent to stop if CI is still pending" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PENDING"* ]]
+    [[ "${output}" == *"stop without taking action"* ]]
+}
+
+@test "build_pr_claude_md for dependency PR skips rebase steps even when merge state is BEHIND" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"force-with-lease"* ]]
+    [[ "${output}" != *"rebase"* ]]
+}
+
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -572,6 +604,17 @@ teardown() {
     [ -n "${fp1}" ]
     [ "${fp1}" = "${fp2}" ]
     [ "${fp1}" != "${fp3}" ]
+}
+
+@test "fingerprint_pr_json changes when autoMergeRequest transitions from null to set" {
+    local pr_no_automerge='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null}'
+    local pr_with_automerge='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"mergeMethod":"MERGE"}}'
+
+    local fp1 fp2
+    fp1=$(fingerprint_pr_json "${pr_no_automerge}")
+    fp2=$(fingerprint_pr_json "${pr_with_automerge}")
+    [ -n "${fp1}" ]
+    [ "${fp1}" != "${fp2}" ]
 }
 
 @test "fingerprint_issue_json is deterministic and changes when input changes" {
