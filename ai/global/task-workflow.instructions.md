@@ -61,11 +61,24 @@ github is configured to automatically create PRs from pushed branches. These PRs
 
 ## PR Title, Body, and Label Sync (MANDATORY)
 
-When creating or updating a PR linked to one or more issues:
+When creating, updating, or starting work on a PR linked to one or more issues:
 
 1. Ensure the **title** accurately reflects all changes in the PR — update it if the scope has changed.
 2. Ensure the **body** summarises all changes and includes `Closes #<n>` for each linked issue.
-3. Copy all issue labels: `gh issue view <n> --json labels --jq '.labels[].name'` → `gh pr edit <n> --add-label "<label>"`
+3. Copy all labels from every linked closing issue that are missing from the PR — use `closingIssuesReferences` to discover all linked issues, then add each missing label with `--add-label`:
+
+   ```bash
+   gh pr view <pr> --repo <owner/repo> --json closingIssuesReferences \
+     --jq '.closingIssuesReferences[].number' \
+   | while IFS= read -r n; do
+       gh issue view "$n" --repo <owner/repo> --json labels --jq '.labels[].name'
+     done \
+   | sort -u \
+   | while IFS= read -r label; do
+       gh pr edit <pr> --repo <owner/repo> --add-label "$label"
+     done
+   ```
+
 4. Never remove any label from a PR or issue — GitHub workflows add labels automatically and they must not be removed.
 
 Repeat after every push or PR update.
