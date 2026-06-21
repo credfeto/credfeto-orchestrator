@@ -1616,6 +1616,74 @@ setup_main_mocks() {
     grep -q 'id=10' "${_save_issue_log}"
 }
 
+# --- main() git clean after session -------------------------------------------
+
+@test "main runs git clean -fdX after invoke_claude succeeds for an Issue" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "clean -fdX" "${git_log}"
+}
+
+@test "main runs git clean -fdX even when invoke_claude fails for an Issue" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 1; }
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run main
+    [ "${status}" -ne 0 ]
+    grep -q "clean -fdX" "${git_log}"
+    [[ "${output}" == *"Failed to invoke Claude"* ]]
+}
+
+@test "main runs git clean -fdX after invoke_claude succeeds for a PullRequest" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "clean -fdX" "${git_log}"
+}
+
 # --- repository name validation -----------------------------------------------
 
 @test "main dies on malformed repository name from priorities API (path traversal)" {
