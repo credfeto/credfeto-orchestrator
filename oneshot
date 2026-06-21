@@ -1355,6 +1355,9 @@ notify_discord_work_item() {
 # Sends a Discord notification when no actionable work items are found.
 # Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Suppresses duplicate messages: if the same message was sent within the last hour, it is
+# silently dropped.  A changed message is always sent immediately.  At most one send per hour
+# per owner even when the message is identical.
 notify_discord_no_work() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
@@ -1375,6 +1378,23 @@ notify_discord_no_work() {
     [ "${count_active_repo}" -gt 0 ] && detail="${detail:+${detail}, }repo-active: ${count_active_repo}"
     [ "${count_not_open}" -gt 0 ]    && detail="${detail:+${detail}, }not-open: ${count_not_open}"
     [ -n "${detail}" ] && message="${message} (${detail})"
+
+    # Dedup: suppress if the same message was sent within the last hour.
+    local owner_slug state_file now last_message last_sent elapsed
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    state_file="${HOME}/.orchestrator/.no_work_${owner_slug}.state"
+    now=$(date +%s)
+    if [ -f "${state_file}" ]; then
+        last_message=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
+        last_sent=$(sed -n '2p' "${state_file}" 2>/dev/null || true)
+        if [ "${last_message}" = "${message}" ] && \
+           printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
+            elapsed=$(( now - last_sent ))
+            [ "${elapsed}" -lt 3600 ] && return 0
+        fi
+    fi
+
     payload=$(jq --null-input --arg msg "${message}" '{"content":$msg}') \
         || { warn "Discord: failed to build no-work payload"; return 0; }
     curl --silent --fail --max-time 5 \
@@ -1382,6 +1402,9 @@ notify_discord_no_work() {
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n%s\n' "${message}" "${now}" > "${state_file}"
 }
 
 # Sends a Discord embed notification when an item is found to be blocked.

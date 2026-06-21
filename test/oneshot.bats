@@ -2027,6 +2027,92 @@ STUBEOF
     grep -q "not-open: 4" "${args_log}"
 }
 
+@test "notify_discord_no_work suppresses duplicate message sent within the last hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    make_stub date "echo 1700000000"
+
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
+
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log2}" ]
+}
+
+@test "notify_discord_no_work resends same message after one hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub date "echo 1700003601"
+
+    local state_file="${HOME}/.orchestrator/.no_work__global.state"
+    mkdir -p "${HOME}/.orchestrator"
+    printf 'No actionable work items found.\n1700000000\n' > "${state_file}"
+
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "No actionable work items found" "${args_log}"
+}
+
+@test "notify_discord_no_work sends different message immediately even within the last hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub date "echo 1700000000"
+
+    local state_file="${HOME}/.orchestrator/.no_work__global.state"
+    mkdir -p "${HOME}/.orchestrator"
+    printf 'No actionable work items found. (blocked: 1)\n1700000000\n' > "${state_file}"
+
+    run notify_discord_no_work "" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "unchanged: 5" "${args_log}"
+}
+
+@test "notify_discord_no_work saves state to disk after sending" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    make_stub curl "exit 0"
+    make_stub date "echo 1700000000"
+
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+
+    local state_file="${HOME}/.orchestrator/.no_work__global.state"
+    [ -f "${state_file}" ]
+    grep -q "No actionable work items found" "${state_file}"
+    grep -q "1700000000" "${state_file}"
+}
+
+@test "notify_discord_no_work uses owner-scoped state file" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    make_stub date "echo 1700000000"
+
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "myorg" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
+
+    # Same message, same owner — should be suppressed
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "myorg" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log2}" ]
+
+    # Same message, different owner — should still send (different state file)
+    local args_log3="${TEST_TMP}/curl_third"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log3}'"
+    run notify_discord_no_work "otherorg" 0 5 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "otherorg" "${args_log3}"
+}
+
 # --- main() Discord notification integration ----------------------------------
 
 @test "main sends start notification when starting new work on an issue" {
