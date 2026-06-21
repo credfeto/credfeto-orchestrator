@@ -1403,11 +1403,13 @@ setup_main_mocks() {
     is_owner_rate_limited()       { return 1; }
     load_env_config()             { return 0; }
     validate_config()             { return 0; }
-    notify_discord_work_item()        { return 0; }
-    notify_discord_no_work()          { return 0; }
-    notify_discord_blocked_item()     { return 0; }
-    notify_discord_claude_error()     { return 0; }
-    notify_discord_rate_limited()     { return 0; }
+    notify_discord_work_item()         { return 0; }
+    notify_discord_no_work()           { return 0; }
+    notify_discord_blocked_item()      { return 0; }
+    notify_discord_claude_error()      { return 0; }
+    notify_discord_rate_limited()      { return 0; }
+    notify_discord_low_disk_space()    { return 0; }
+    check_disk_space()                 { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -3438,4 +3440,203 @@ STUBEOF
     run ensure_repo_current
     [ "${status}" -eq 0 ]
     grep -q "config --unset remote.origin.pushurl" "${git_log}"
+}
+
+# --- disk_space_available_kb --------------------------------------------------
+
+@test "disk_space_available_kb outputs a numeric value" {
+    make_stub df 'printf "Filesystem 1K-blocks Used Available Use%% Mounted on\ntmpfs 4096000 1024 4094976 1%% /\n"'
+    hash df
+    run disk_space_available_kb
+    [ "${status}" -eq 0 ]
+    [[ "${output}" =~ ^[0-9]+$ ]]
+}
+
+@test "disk_space_available_kb uses WORK path when it exists" {
+    mkdir -p "${TEST_TMP}/work"
+    WORK="${TEST_TMP}/work"
+    local df_log="${TEST_TMP}/df_calls"
+    make_stub df "printf '%s\n' \"\$*\" >> ${df_log}; printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\ntmpfs 4096000 1024 20971520 1%% /\n'"
+    hash df
+    run disk_space_available_kb
+    [ "${status}" -eq 0 ]
+    grep -q "${TEST_TMP}/work" "${df_log}"
+}
+
+@test "disk_space_available_kb falls back to HOME when WORK does not exist" {
+    WORK="${TEST_TMP}/nonexistent"
+    local df_log="${TEST_TMP}/df_calls"
+    make_stub df "printf '%s\n' \"\$*\" >> ${df_log}; printf 'Filesystem 1K-blocks Used Available Use%% Mounted on\ntmpfs 4096000 1024 20971520 1%% /\n'"
+    hash df
+    run disk_space_available_kb
+    [ "${status}" -eq 0 ]
+    grep -q "${HOME}" "${df_log}"
+}
+
+# --- check_disk_space ---------------------------------------------------------
+
+@test "check_disk_space returns 0 when space is above threshold" {
+    # 20 GB available; MIN_DISK_SPACE_KB = 10 * 1024 * 1024 = 10485760
+    disk_space_available_kb() { printf '20971520\n'; }
+    run check_disk_space
+    [ "${status}" -eq 0 ]
+}
+
+@test "check_disk_space returns 1 when space is below threshold" {
+    # 5 GB available
+    disk_space_available_kb() { printf '5242880\n'; }
+    run check_disk_space
+    [ "${status}" -ne 0 ]
+}
+
+@test "check_disk_space returns 0 when space equals threshold" {
+    # Exactly 10 GB available
+    disk_space_available_kb() { printf '10485760\n'; }
+    run check_disk_space
+    [ "${status}" -eq 0 ]
+}
+
+@test "check_disk_space warns and returns 0 when df output is unparseable" {
+    disk_space_available_kb() { printf 'not-a-number\n'; }
+    run check_disk_space
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Could not determine available disk space"* ]]
+}
+
+@test "check_disk_space warns and returns 0 when df output is empty" {
+    disk_space_available_kb() { printf ''; }
+    run check_disk_space
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Could not determine available disk space"* ]]
+}
+
+# --- notify_discord_low_disk_space --------------------------------------------
+
+@test "notify_discord_low_disk_space does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_low_disk_space sends embed when webhook is set and space is low" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+}
+
+@test "notify_discord_low_disk_space includes owner in title when owner is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_low_disk_space "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "myowner" "${curl_log}"
+}
+
+@test "notify_discord_low_disk_space suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 30 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space__global.state"
+
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_low_disk_space resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 90 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.low_disk_space__global.state"
+
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_low_disk_space uses owner-scoped state file" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file for a different owner — should not suppress this call.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space_other_owner.state"
+
+    run notify_discord_low_disk_space "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+# --- main: disk space check ---------------------------------------------------
+
+@test "main exits cleanly without launching work when disk space is low" {
+    setup_main_mocks
+    check_disk_space() { return 1; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf 'called\n' >> "${claude_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Insufficient disk space"* ]]
+    [ ! -f "${claude_log}" ]
+}
+
+@test "main notifies Discord when disk space is low" {
+    setup_main_mocks
+    check_disk_space() { return 1; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_low_disk_space() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${discord_log}" ]
+}
+
+@test "main proceeds normally when disk space is sufficient" {
+    setup_main_mocks
+    check_disk_space() { return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Insufficient disk space"* ]]
 }
