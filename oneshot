@@ -1107,6 +1107,39 @@ pr_json_has_blocked_label() {
     printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
+# Copies labels from all closing issues linked to a PR onto the PR, adding any that are missing.
+# Never removes existing labels. Uses --add-label for each missing one.
+# Arguments: pr_id pr_json
+sync_pr_labels_from_linked_issues() {
+    local pr_id="$1" pr_json="$2"
+    local linked_issues
+    linked_issues=$(gh pr view "${pr_id}" \
+        --repo "${REPO_FULL}" \
+        --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[].number' 2>/dev/null) || return 0
+    [ -n "${linked_issues}" ] || return 0
+
+    local pr_label_list
+    pr_label_list=$(printf '%s' "${pr_json}" | jq -c '[(.labels // [])[] | .name]')
+
+    local issue_num issue_label already_present
+    while IFS= read -r issue_num; do
+        [ -n "${issue_num}" ] || continue
+        while IFS= read -r issue_label; do
+            [ -n "${issue_label}" ] || continue
+            already_present=$(printf '%s' "${pr_label_list}" | jq -r --arg l "${issue_label}" 'map(select(. == $l)) | length')
+            if [ "${already_present}" = "0" ]; then
+                info "PR #${pr_id}: adding label '${issue_label}' from linked issue #${issue_num}"
+                gh pr edit "${pr_id}" --repo "${REPO_FULL}" --add-label "${issue_label}" 2>/dev/null || true
+                pr_label_list=$(printf '%s' "${pr_label_list}" | jq -c --arg l "${issue_label}" '. + [$l]')
+            fi
+        done < <(gh issue view "${issue_num}" \
+            --repo "${REPO_FULL}" \
+            --json labels \
+            --jq '.labels[].name' 2>/dev/null)
+    done <<< "${linked_issues}"
+}
+
 # Returns the path to the fingerprint file for a given Issue ID.
 issue_fingerprint_file_path() {
     local item_id="$1"
@@ -1756,6 +1789,7 @@ main() {
         if [ "${item_type}" = "PullRequest" ]; then
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+            sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
 
         if ! ensure_repo_current; then
