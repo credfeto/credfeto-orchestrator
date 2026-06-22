@@ -30,6 +30,9 @@
 	parallel = 16
 	prune = true
 
+[init]
+	defaultBranch = main
+
 [merge]
 	ff = false
 
