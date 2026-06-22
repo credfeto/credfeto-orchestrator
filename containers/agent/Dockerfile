@@ -161,12 +161,6 @@ RUN set -e; \
 
 USER developer
 
-# Bake static git settings that do not vary per deployment.
-# Identity (user.name, user.email, user.signingkey) is injected at runtime
-# via GIT_USER_NAME / GIT_USER_EMAIL / GIT_SIGNING_KEY env vars in entrypoint.sh.
-RUN git config --global init.defaultBranch main \
-    && git config --global pull.rebase true
-
 WORKDIR /workspace/repo
 
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]
