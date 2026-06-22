@@ -724,6 +724,15 @@ setup_cgroup_leaf() {
     PODMAN_CGROUP_PARENT="${svcgroup}"
 }
 
+# Kills the ssh-agent started by the service unit's ExecStartPre so the service
+# cgroup is clean when the next timer fires and systemd does not warn about
+# left-over processes.  Registered as an EXIT trap by main so it runs on any
+# exit — success, die, or signal — regardless of whether invoke_claude was called.
+stop_ssh_agent() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] || return 0
+    pkill ssh-agent 2>/dev/null || true
+}
+
 # Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
 # currently holds no keys.  Silent when keys are already loaded (avoids
 # redundant re-adds across timer firings); warns rather than dies on failure.
@@ -870,7 +879,7 @@ invoke_claude() {
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true' EXIT
+    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -1660,6 +1669,7 @@ main() {
     fi
     preload_ssh_keys
     setup_cgroup_leaf
+    trap stop_ssh_agent EXIT
 
     if ! check_disk_space; then
         notify_discord_low_disk_space "${owner_filter}"

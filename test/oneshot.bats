@@ -3168,6 +3168,32 @@ STUBEOF
     [[ "${output}" == *"no SSH keys could be loaded"* ]]
 }
 
+# --- stop_ssh_agent unit tests ------------------------------------------------
+
+@test "stop_ssh_agent is a no-op when SSH_AUTH_SOCK is unset" {
+    unset SSH_AUTH_SOCK
+    local pkill_log="${TEST_TMP}/pkill.log"
+    make_stub pkill "printf '%s\n' \"\$*\" >> \"${pkill_log}\""
+    run stop_ssh_agent
+    [ "${status}" -eq 0 ]
+    [ ! -f "${pkill_log}" ]
+}
+
+@test "stop_ssh_agent calls pkill ssh-agent when SSH_AUTH_SOCK is set" {
+    export SSH_AUTH_SOCK="${TEST_TMP}/ssh-agent.sock"
+    local pkill_log="${TEST_TMP}/pkill.log"
+    make_stub pkill "printf '%s\n' \"\$*\" >> \"${pkill_log}\"; exit 0"
+    stop_ssh_agent
+    grep -qx "ssh-agent" "${pkill_log}"
+}
+
+@test "stop_ssh_agent succeeds even when pkill finds no process" {
+    export SSH_AUTH_SOCK="${TEST_TMP}/ssh-agent.sock"
+    make_stub pkill 'exit 1'
+    run stop_ssh_agent
+    [ "${status}" -eq 0 ]
+}
+
 # --- SSH agent socket forwarding unit tests -----------------------------------
 
 @test "invoke_claude mounts SSH_AUTH_SOCK as /tmp/ssh-agent.sock and sets env var" {
