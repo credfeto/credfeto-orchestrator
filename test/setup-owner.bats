@@ -265,6 +265,168 @@ teardown() {
     grep -q 'driver = "vfs"' "${storage_conf}"
 }
 
+@test "configure_git writes user identity to .gitconfig" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME="Test User"\nGIT_USER_EMAIL="test@example.com"\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_git "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Git configured for testowner"* ]]
+
+    local gitconfig="${test_home}/.gitconfig"
+    [ -f "${gitconfig}" ]
+    grep -q 'name = Test User' "${gitconfig}"
+    grep -q 'email = test@example.com' "${gitconfig}"
+}
+
+@test "configure_git writes GPG signing config when GIT_SIGNING_KEY is set" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME="Test User"\nGIT_USER_EMAIL="test@example.com"\nGIT_SIGNING_KEY=ABCD1234\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_git "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+
+    local gitconfig="${test_home}/.gitconfig"
+    [ -f "${gitconfig}" ]
+    grep -q 'signingkey = ABCD1234' "${gitconfig}"
+    grep -q 'gpgsign = true' "${gitconfig}"
+    grep -q 'gpgSign = true' "${gitconfig}"
+}
+
+@test "configure_git writes standard git settings to .gitconfig" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME="Test User"\nGIT_USER_EMAIL="test@example.com"\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_git "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+
+    local gitconfig="${test_home}/.gitconfig"
+    [ -f "${gitconfig}" ]
+    grep -q 'autocrlf = false' "${gitconfig}"
+    grep -q 'fscache = true' "${gitconfig}"
+    grep -q 'ignorecase = false' "${gitconfig}"
+    grep -q 'preloadIndex = true' "${gitconfig}"
+    grep -q 'packedGitLimit = 512m' "${gitconfig}"
+    grep -q 'packedGitWindowSize = 512m' "${gitconfig}"
+    grep -q 'manyFiles = true' "${gitconfig}"
+    grep -q 'parallel = 16' "${gitconfig}"
+    grep -q 'prune = true' "${gitconfig}"
+    grep -q 'defaultBranch = main' "${gitconfig}"
+    grep -q 'ff = false' "${gitconfig}"
+    grep -q 'rebase = true' "${gitconfig}"
+    grep -q 'autoSetupRemote = true' "${gitconfig}"
+    grep -q 'autosquash = true' "${gitconfig}"
+}
+
+@test "configure_git writes SSH URL rewrites to .gitconfig" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_NAME="Test User"\nGIT_USER_EMAIL="test@example.com"\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            tee)   shift; tee "$1" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run configure_git "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+
+    local gitconfig="${test_home}/.gitconfig"
+    [ -f "${gitconfig}" ]
+    grep -q 'insteadOf = https://github.com/' "${gitconfig}"
+    grep -q 'pushInsteadOf = https://github.com/' "${gitconfig}"
+    grep -q 'insteadOf = https://gitlab.com/' "${gitconfig}"
+    grep -q 'pushInsteadOf = https://gitlab.com/' "${gitconfig}"
+    grep -q 'insteadOf = https://bitbucket.org/' "${gitconfig}"
+    grep -q 'pushInsteadOf = https://bitbucket.org/' "${gitconfig}"
+}
+
+@test "configure_git skips when GIT_USER_NAME is not set" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}"
+
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GIT_USER_EMAIL="test@example.com"\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    run configure_git "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"skipping git config"* ]]
+
+    local gitconfig="${test_home}/.gitconfig"
+    [ ! -f "${gitconfig}" ]
+}
+
 @test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"
