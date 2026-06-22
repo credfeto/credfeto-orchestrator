@@ -48,6 +48,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Prune dangling (untagged) container images before each pull and after each container run to reclaim disk space; preserves the current tagged image so the next pull requires only new layers
 - Plan-first approval workflow, AI review loop, and Workflow board (GitHub Projects v2) integration for issue orchestration
 - Board-based plan approval: orchestrator queries Workflow board for issues in Approved status and passes plan_approved flag to agent; comment-based approval comment fallback when no board is configured
+- Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
 ### Fixed
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL

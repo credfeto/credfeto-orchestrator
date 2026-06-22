@@ -652,6 +652,191 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
+@test "fingerprint_issue_json with trusted logins: trusted comment changes fingerprint" {
+    local issue_base='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local issue_trusted='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[{"author":{"login":"owner"},"body":"hello","updatedAt":"2024-01-01T00:00:00Z"}],"assignees":[],"milestone":null}'
+    local trusted='["owner"]'
+    local fp_base fp_trusted
+    fp_base=$(fingerprint_issue_json "${issue_base}" "${trusted}")
+    fp_trusted=$(fingerprint_issue_json "${issue_trusted}" "${trusted}")
+    [ "${fp_base}" != "${fp_trusted}" ]
+}
+
+@test "fingerprint_issue_json with trusted logins: untrusted comment does not change fingerprint" {
+    local issue_base='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local issue_untrusted='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[{"author":{"login":"randomer"},"body":"hello","updatedAt":"2024-01-01T00:00:00Z"}],"assignees":[],"milestone":null}'
+    local trusted='["owner"]'
+    local fp_base fp_untrusted
+    fp_base=$(fingerprint_issue_json "${issue_base}" "${trusted}")
+    fp_untrusted=$(fingerprint_issue_json "${issue_untrusted}" "${trusted}")
+    [ "${fp_base}" = "${fp_untrusted}" ]
+}
+
+@test "fingerprint_issue_json without trusted logins uses all comments" {
+    local issue_base='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local issue_comment='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[{"author":{"login":"anyone"},"body":"hi","updatedAt":"2024-01-01T00:00:00Z"}],"assignees":[],"milestone":null}'
+    local fp_base fp_with
+    fp_base=$(fingerprint_issue_json "${issue_base}")
+    fp_with=$(fingerprint_issue_json "${issue_comment}")
+    [ "${fp_base}" != "${fp_with}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: trusted comment changes fingerprint" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_trusted='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"owner"},"body":"lgtm","updatedAt":"2024-01-01T00:00:00Z"}],"reviews":[],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_trusted
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_trusted=$(fingerprint_pr_json "${pr_trusted}" "${trusted}")
+    [ "${fp_base}" != "${fp_trusted}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: untrusted comment does not change fingerprint" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_untrusted='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"randomer"},"body":"spam","updatedAt":"2024-01-01T00:00:00Z"}],"reviews":[],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_untrusted
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_untrusted=$(fingerprint_pr_json "${pr_untrusted}" "${trusted}")
+    [ "${fp_base}" = "${fp_untrusted}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: trusted review changes fingerprint" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_review='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[{"author":{"login":"owner"},"state":"APPROVED","submittedAt":"2024-01-01T00:00:00Z"}],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_review
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_review=$(fingerprint_pr_json "${pr_review}" "${trusted}")
+    [ "${fp_base}" != "${fp_review}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: untrusted review does not change fingerprint" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_untrusted_review='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[{"author":{"login":"spammer"},"state":"CHANGES_REQUESTED","submittedAt":"2024-01-01T00:00:00Z"}],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_untrusted
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_untrusted=$(fingerprint_pr_json "${pr_untrusted_review}" "${trusted}")
+    [ "${fp_base}" = "${fp_untrusted}" ]
+}
+
+@test "fingerprint_pr_json without trusted logins uses all comments and reviews" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_review='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[{"author":{"login":"anyone"},"state":"APPROVED","submittedAt":"2024-01-01T00:00:00Z"}],"statusCheckRollup":[]}'
+    local fp_base fp_review
+    fp_base=$(fingerprint_pr_json "${pr_base}")
+    fp_review=$(fingerprint_pr_json "${pr_review}")
+    [ "${fp_base}" != "${fp_review}" ]
+}
+
+# --- get_trusted_logins --------------------------------------------------------
+
+@test "get_trusted_logins includes OWNER" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'printf ""'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("myorg") != null' > /dev/null
+}
+
+@test "get_trusted_logins includes repo collaborators from GitHub API" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'printf "collab1\ncollab2\n"'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("collab1") != null' > /dev/null
+    printf '%s' "${result}" | jq -e 'index("collab2") != null' > /dev/null
+}
+
+@test "get_trusted_logins includes copilot-pull-request-reviewer" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'printf ""'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("copilot-pull-request-reviewer") != null' > /dev/null
+}
+
+@test "get_trusted_logins includes whitelisted users from WHITELISTED_USERS" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS="trusted1,trusted2"
+    make_stub gh 'printf ""'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("trusted1") != null' > /dev/null
+    printf '%s' "${result}" | jq -e 'index("trusted2") != null' > /dev/null
+}
+
+@test "get_trusted_logins trims spaces from WHITELISTED_USERS entries" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=" spaced1 , spaced2 "
+    make_stub gh 'printf ""'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("spaced1") != null' > /dev/null
+    printf '%s' "${result}" | jq -e 'index("spaced2") != null' > /dev/null
+}
+
+@test "get_trusted_logins falls back gracefully when GitHub API fails" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'exit 1'
+    local result
+    result=$(get_trusted_logins)
+    [ -n "${result}" ]
+    printf '%s' "${result}" | jq -e 'index("myorg") != null' > /dev/null
+}
+
+@test "get_trusted_logins deduplicates logins when OWNER appears as a collaborator" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'printf "myorg\ncollab1\n"'
+    local result
+    result=$(get_trusted_logins)
+    local count
+    count=$(printf '%s' "${result}" | jq '[.[] | select(. == "myorg")] | length')
+    [ "${count}" = "1" ]
+}
+
+@test "get_trusted_logins caches result so GitHub API is called only once per repo context" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${call_log}'; printf 'collab1\n'"
+
+    _TRUSTED_LOGINS_JSON=""
+    get_trusted_logins > /dev/null
+    local first_calls
+    first_calls=$(wc -l < "${call_log}" 2>/dev/null || printf '0')
+
+    get_trusted_logins > /dev/null
+    local second_calls
+    second_calls=$(wc -l < "${call_log}" 2>/dev/null || printf '0')
+
+    [ "${first_calls}" = "${second_calls}" ]
+}
+
+@test "compute_issue_fingerprint passes trusted logins from get_trusted_logins to fingerprint_issue_json" {
+    local captured_trusted="none"
+    fetch_issue_json() { printf '{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fingerprint_issue_json() { captured_trusted="${2:-missing}"; printf 'test-fp\n'; }
+    compute_issue_fingerprint 42
+    [ "${captured_trusted}" = '["testowner"]' ]
+}
+
+@test "compute_pr_fingerprint passes trusted logins from get_trusted_logins to fingerprint_pr_json" {
+    local captured_trusted="none"
+    fetch_pr_json() { printf '{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fingerprint_pr_json() { captured_trusted="${2:-missing}"; printf 'test-fp\n'; }
+    compute_pr_fingerprint 5
+    [ "${captured_trusted}" = '["testowner"]' ]
+}
+
 # --- model selection -----------------------------------------------------------
 
 @test "invoke_claude passes --model opusplan to podman claude command for a new session" {
@@ -1283,6 +1468,12 @@ STUBEOF
     [ "${REPO_WORK_DIR}" = "${WORK}/orgB/repoB/repo" ]
 }
 
+@test "set_repo_context resets _TRUSTED_LOGINS_JSON so get_trusted_logins refetches for each repo" {
+    _TRUSTED_LOGINS_JSON='["stale-value"]'
+    set_repo_context "neworg/newrepo"
+    [ -z "${_TRUSTED_LOGINS_JSON}" ]
+}
+
 # --- fetch_all_priorities -----------------------------------------------------
 
 @test "fetch_all_priorities returns all open and draft non-on-hold items in API order" {
@@ -1429,6 +1620,7 @@ setup_main_mocks() {
     is_owner_rate_limited()       { return 1; }
     load_env_config()             { return 0; }
     validate_config()             { return 0; }
+    get_trusted_logins()          { printf '["credfeto"]\n'; }
     notify_discord_work_item()         { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
@@ -1942,6 +2134,22 @@ STUBEOF
     # shellcheck disable=SC2031
     [ "${GH_ENTERPRISE_TOKEN}" = "ghp_abc" ]
     [ "${GH_HOST}" = "proxy.example.com" ]
+}
+
+@test "load_env_config reads WHITELISTED_USERS from env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'WHITELISTED_USERS=alice,bob\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    WHITELISTED_USERS=""
+    load_env_config
+    [ "${WHITELISTED_USERS}" = "alice,bob" ]
+}
+
+@test "load_env_config leaves WHITELISTED_USERS empty when key is absent from env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://hook.example.com/1\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    WHITELISTED_USERS=""
+    load_env_config
+    [ -z "${WHITELISTED_USERS}" ]
 }
 
 # --- notify_discord_work_item -------------------------------------------------

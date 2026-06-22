@@ -39,6 +39,11 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
 MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 
+# Comma-separated list of additional trusted GitHub users, loaded from .env.
+WHITELISTED_USERS=""
+# Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
+_TRUSTED_LOGINS_JSON=""
+
 die() {
     if [ -t 2 ]; then
         printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -148,6 +153,39 @@ set_repo_context() {
     RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
     REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
     SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
+    _TRUSTED_LOGINS_JSON=""
+}
+
+# Returns a JSON array of trusted GitHub logins for the current repo context.
+# Includes: OWNER, repo collaborators, the GitHub Copilot reviewer bot, and WHITELISTED_USERS.
+# The result is cached in _TRUSTED_LOGINS_JSON; cache is cleared by set_repo_context.
+get_trusted_logins() {
+    [ -n "${_TRUSTED_LOGINS_JSON}" ] && { printf '%s' "${_TRUSTED_LOGINS_JSON}"; return; }
+
+    local -a logins=()
+    [ -n "${OWNER}" ] && logins+=("${OWNER}")
+
+    local login
+    while IFS= read -r login; do
+        [ -n "${login}" ] && logins+=("${login}")
+    done < <(gh api "repos/${REPO_FULL}/collaborators" --jq '.[].login' 2>/dev/null || true)
+
+    logins+=("copilot-pull-request-reviewer")
+
+    if [ -n "${WHITELISTED_USERS}" ]; then
+        local user remainder="${WHITELISTED_USERS}"
+        while [ -n "${remainder}" ]; do
+            user="${remainder%%,*}"
+            remainder="${remainder#"${user}"}"
+            remainder="${remainder#,}"
+            user="${user#"${user%%[! ]*}"}"
+            user="${user%"${user##*[! ]}"}"
+            [ -n "${user}" ] && logins+=("${user}")
+        done
+    fi
+
+    _TRUSTED_LOGINS_JSON=$(printf '%s\n' "${logins[@]+"${logins[@]}"}" | jq -R -s 'split("\n") | map(select(length > 0)) | unique')
+    printf '%s' "${_TRUSTED_LOGINS_JSON}"
 }
 
 ensure_rules_current() {
@@ -1375,21 +1413,25 @@ fetch_pr_json() {
 }
 
 # Computes a deterministic fingerprint from pre-fetched PR state JSON.
+# Optional second argument: JSON array of trusted logins; when provided, only comments
+# and reviews from those users are included so untrusted activity does not trigger re-runs.
 # Outputs the hash on stdout; returns non-zero if jq fails.
 fingerprint_pr_json() {
     local pr_json="$1"
+    local trusted_logins="${2:-null}"
     local canonical
 
-    canonical=$(printf '%s' "${pr_json}" | jq -r '
+    canonical=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" '
+        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
         .title,
         (.body // ""),
         (.isDraft | tostring),
         ([((.labels // [])[] | .name)] | sort | .[]),
         .headRefOid,
-        ((.comments // []) | length | tostring),
-        (((.comments // []) | sort_by(.updatedAt) | last | .updatedAt) // "none"),
-        (((.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
-        (((.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
+        (tc(.comments // []) | length | tostring),
+        ((tc(.comments // []) | sort_by(.updatedAt) | last | .updatedAt) // "none"),
+        ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
+        ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
         ([((.statusCheckRollup // [])[]
             | (.name // "unknown") as $n
             | (.conclusion // .status // "none") as $c
@@ -1407,9 +1449,10 @@ fingerprint_pr_json() {
 # Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
 compute_pr_fingerprint() {
     local item_id="$1"
-    local pr_json
+    local pr_json trusted
     pr_json=$(fetch_pr_json "${item_id}") || return 1
-    fingerprint_pr_json "${pr_json}"
+    trusted=$(get_trusted_logins)
+    fingerprint_pr_json "${pr_json}" "${trusted}"
 }
 
 # Writes the fingerprint to the fingerprint file for a given PR ID.
@@ -1489,16 +1532,20 @@ fetch_issue_json() {
 }
 
 # Computes a deterministic fingerprint from pre-fetched Issue state JSON.
+# Optional second argument: JSON array of trusted logins; when provided, only comments
+# from those users are included in the fingerprint so untrusted commenters do not trigger re-runs.
 # Outputs the hash on stdout; returns non-zero if jq fails.
 fingerprint_issue_json() {
     local issue_json="$1"
-    printf '%s' "${issue_json}" | jq -r '
+    local trusted_logins="${2:-null}"
+    printf '%s' "${issue_json}" | jq -r --argjson trusted "${trusted_logins}" '
+        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
         .title,
         (.body // ""),
         .state,
         ([((.labels // [])[] | .name)] | sort | .[]),
-        ((.comments // []) | length | tostring),
-        ([((.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv)] | sort | join("\n")),
+        (tc(.comments // []) | length | tostring),
+        ([tc(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
         ([((.assignees // [])[] | .login)] | sort | join(",")),
         (.milestone.title // "none")
     ' | hash_sha256
@@ -1508,9 +1555,10 @@ fingerprint_issue_json() {
 # Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
 compute_issue_fingerprint() {
     local item_id="$1"
-    local issue_json
+    local issue_json trusted
     issue_json=$(fetch_issue_json "${item_id}") || return 1
-    fingerprint_issue_json "${issue_json}"
+    trusted=$(get_trusted_logins)
+    fingerprint_issue_json "${issue_json}" "${trusted}"
 }
 
 # Writes the fingerprint to the fingerprint file for a given Issue ID.
@@ -1553,12 +1601,13 @@ load_env_config() {
     GIT_USER_NAME=""
     GIT_USER_EMAIL=""
     GIT_SIGNING_KEY=""
+    WHITELISTED_USERS=""
     local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
     [ -f "${env_file}" ] || return 0
     local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*)
+            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*)
                 val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
@@ -1566,12 +1615,13 @@ load_env_config() {
                     "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
                 case "${line}" in
-                    DISCORD_WEBHOOK=*) DISCORD_WEBHOOK_URL="${val}" ;;
-                    GH_TOKEN=*)        gh_token="${val}" ;;
-                    GH_HOST=*)         gh_host="${val}" ;;
-                    GIT_USER_NAME=*)   GIT_USER_NAME="${val}" ;;
-                    GIT_USER_EMAIL=*)  GIT_USER_EMAIL="${val}" ;;
-                    GIT_SIGNING_KEY=*) GIT_SIGNING_KEY="${val}" ;;
+                    DISCORD_WEBHOOK=*)   DISCORD_WEBHOOK_URL="${val}" ;;
+                    GH_TOKEN=*)          gh_token="${val}" ;;
+                    GH_HOST=*)           gh_host="${val}" ;;
+                    GIT_USER_NAME=*)     GIT_USER_NAME="${val}" ;;
+                    GIT_USER_EMAIL=*)    GIT_USER_EMAIL="${val}" ;;
+                    GIT_SIGNING_KEY=*)   GIT_SIGNING_KEY="${val}" ;;
+                    WHITELISTED_USERS=*) WHITELISTED_USERS="${val}" ;;
                 esac
                 ;;
         esac
@@ -2111,7 +2161,7 @@ main() {
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
 
-                pr_fp=$(fingerprint_pr_json "${pr_json}") \
+                pr_fp=$(fingerprint_pr_json "${pr_json}" "$(get_trusted_logins)") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
@@ -2119,7 +2169,7 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
-                        issue_fp=$(fingerprint_issue_json "${issue_json}") \
+                        issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
@@ -2157,7 +2207,7 @@ main() {
                     continue
                 fi
 
-                issue_fp=$(fingerprint_issue_json "${issue_json}") \
+                issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
@@ -2194,7 +2244,7 @@ main() {
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
 
-            pr_fp=$(fingerprint_pr_json "${pr_json}") \
+            pr_fp=$(fingerprint_pr_json "${pr_json}" "$(get_trusted_logins)") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
