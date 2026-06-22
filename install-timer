@@ -100,6 +100,7 @@ Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
+ExecStartPre=-/usr/bin/pkill -u %u ssh-agent
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 # All paths below must be absolute. The %h specifier expands to the home of
