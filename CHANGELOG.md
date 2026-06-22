@@ -123,6 +123,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pre-load SSH keys into the agent at startup so they are available before the container is launched
 - Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
 - Timer interval configurable via ORCHESTRATOR_TIMER_INTERVAL env var, defaulting to 30sec
+- Improve git configuration: add standard settings to setup-owner and system-gitconfig
 ### Deprecated
 ### Removed
 ### Deployment Changes
