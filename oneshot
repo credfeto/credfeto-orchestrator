@@ -805,7 +805,7 @@ add_gpg_podman_args() {
     [ -S "${extra_socket}" ] \
         || die "GPG agent extra socket not available — run 'gpgconf --launch gpg-agent' and ensure it creates an extra socket"
 
-    GPG_PUBKEY_TMPDIR=$(mktemp -d --suffix=.gnupghome) \
+    GPG_PUBKEY_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.gnupghome) \
         || die "Failed to create tmpdir for GPG pubkey gnupghome"
     chmod 0700 "${GPG_PUBKEY_TMPDIR}"
     gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
@@ -875,7 +875,7 @@ invoke_claude() {
     # session-env and other runtime files inside it.  Mounting only the CLAUDE.md file
     # causes Podman to create the parent directory with wrong ownership, which breaks
     # every Bash tool call with EACCES.
-    CLAUDE_MD_TMPFILE=$(mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
+    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""

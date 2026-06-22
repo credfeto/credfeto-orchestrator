@@ -1098,6 +1098,32 @@ STUBEOF
     [ -z "${CLAUDE_MD_TMPFILE}" ]
 }
 
+@test "invoke_claude mounts CLAUDE_MD_TMPFILE from XDG_RUNTIME_DIR when set" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "${args_log}"
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    grep -q "${XDG_RUNTIME_DIR}" "${args_log}"
+}
+
 @test "invoke_claude creates Podman secret and uses --secret for owner token instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
     local secret_log="${TEST_TMP}/podman_secret"
@@ -2994,6 +3020,18 @@ STUBEOF
     add_gpg_podman_args
     [ -n "${GPG_PUBKEY_TMPDIR}" ]
     [ -d "${GPG_PUBKEY_TMPDIR}" ]
+}
+
+@test "add_gpg_podman_args creates GPG_PUBKEY_TMPDIR under XDG_RUNTIME_DIR when set" {
+    make_gpg_stubs
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    PODMAN_RUN_ARGS=()
+    GIT_SIGNING_KEY="ABCD1234"
+    GPG_PUBKEY_TMPDIR=""
+    add_gpg_podman_args
+    [ -n "${GPG_PUBKEY_TMPDIR}" ]
+    [[ "${GPG_PUBKEY_TMPDIR}" == "${XDG_RUNTIME_DIR}/"* ]]
 }
 
 @test "add_gpg_podman_args dies when extra socket is absent and GIT_SIGNING_KEY is set" {
