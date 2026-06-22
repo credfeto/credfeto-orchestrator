@@ -31,6 +31,9 @@ AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
 # Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
 PODMAN_CGROUP_PARENT=""
 
+# Minimum free disk space in kilobytes required to launch a container (10 GB).
+MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
+
 die() {
     if [ -t 2 ]; then
         printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -1437,6 +1440,74 @@ notify_discord_no_work() {
     printf '%s\n%s\n' "${message}" "${now}" > "${state_file}"
 }
 
+# Outputs available disk space in kilobytes for the filesystem containing WORK (or HOME).
+# Outputs nothing when df output cannot be parsed.
+disk_space_available_kb() {
+    local check_path="${WORK:-${HOME}}"
+    [ -d "${check_path}" ] || check_path="${HOME}"
+    df -k "${check_path}" 2>/dev/null | awk 'NR==2{print $4}'
+}
+
+# Returns 0 when sufficient disk space is available (>= MIN_DISK_SPACE_KB).
+# Returns 1 when space is below the threshold.
+# Warns and returns 0 when available space cannot be determined.
+check_disk_space() {
+    local available_kb
+    available_kb=$(disk_space_available_kb)
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]]; then
+        warn "Could not determine available disk space — proceeding"
+        return 0
+    fi
+    [ "${available_kb}" -ge "${MIN_DISK_SPACE_KB}" ]
+}
+
+# Sends a Discord embed notification when disk space is below MIN_DISK_SPACE_KB.
+# Deduplicates: at most one notification per hour per owner.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_low_disk_space() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}"
+
+    local available_kb available_gb threshold_gb
+    available_kb=$(disk_space_available_kb)
+    available_gb=$(( ${available_kb:-0} / 1024 / 1024 ))
+    threshold_gb=$(( MIN_DISK_SPACE_KB / 1024 / 1024 ))
+
+    local owner_slug state_file now last_sent elapsed
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    state_file="${HOME}/.orchestrator/.low_disk_space_${owner_slug}.state"
+    now=$(date +%s)
+    if [ -f "${state_file}" ]; then
+        last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
+        if printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
+            elapsed=$(( now - last_sent ))
+            [ "${elapsed}" -lt 3600 ] && return 0
+        fi
+    fi
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Low Disk Space${owner:+ [${owner}]}" \
+        --argjson available_gb "${available_gb}" \
+        --argjson threshold_gb "${threshold_gb}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"Available",value:("\($available_gb) GB"),inline:true},
+            {name:"Minimum Required",value:("\($threshold_gb) GB"),inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build low disk space payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n' "${now}" > "${state_file}"
+}
+
 # Sends a Discord embed notification when an item is found to be blocked.
 # Arguments: item_type (Issue|PullRequest), item_id
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
@@ -1589,6 +1660,12 @@ main() {
     fi
     preload_ssh_keys
     setup_cgroup_leaf
+
+    if ! check_disk_space; then
+        notify_discord_low_disk_space "${owner_filter}"
+        warn "Insufficient disk space — skipping all work this cycle"
+        exit 0
+    fi
 
     local head_sha
     head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
