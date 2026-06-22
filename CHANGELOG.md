@@ -114,6 +114,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Move all service cgroup processes (not just $$) to init leaf so subtree_control write succeeds even with left-over processes
 - fix rootless Podman user namespace mapping so container developer user can access host-owned GPG and SSH agent sockets
 - Correctly handle HTTP 429 rate-limit when Claude CLI exits non-zero but has written valid error JSON, so the rate-limit file is persisted and Discord is notified
+- Kill any existing ssh-agent process before starting a new one in the service unit to prevent left-over process warnings on every timer firing
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
