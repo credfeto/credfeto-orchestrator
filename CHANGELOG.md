@@ -122,6 +122,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Create bind-mounted temp directories under XDG_RUNTIME_DIR instead of /tmp so they remain visible to rootless podman when PrivateTmp=yes is set in the service unit
 - Pre-populate ~/.ssh/known_hosts with github.com host key on container startup if not already present
 - Corrected plan self-approval from boilerplate 'proceed' text; enforced temporal ordering for plan approval detection; fixed Workflow project cache poisoning on transient API failure; added plan-approval unblock path when open PR already exists; fixed CI gate text; fixed heredoc blank-line separator before Steps; fixed SC2016 shellcheck warnings in GraphQL query strings; fixed update_workflow_status test stub
+- Removed automatic plan-approval detection and Blocked-label removal from orchestrator — removing Blocked is always a human action; simplified main loop blocked handling; updated agent instructions to make clear that humans remove the Blocked label to approve a plan
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
