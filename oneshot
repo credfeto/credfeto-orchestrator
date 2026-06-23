@@ -386,8 +386,11 @@ _issue_has_plan_approval() {
     local result
     result=$(printf '%s' "${issue_json}" | jq -r '
         (.comments // []) as $c |
-        ($c | map(.body | test("##\\s*Implementation Plan"; "i")) | any) as $has_plan |
-        ($c | map(.body | test("\\b(approved|go ahead|looks good|lgtm|proceed)\\b"; "i")) | any) as $has_approval |
+        (first(range($c | length) | select($c[.].body | test("##\\s*Implementation Plan"; "i"))) // -1) as $plan_idx |
+        ($plan_idx >= 0) as $has_plan |
+        (if $has_plan then
+            $c[($plan_idx+1):] | map(.body | test("\\b(approved|go ahead|looks good|lgtm)\\b"; "i")) | any
+        else false end) as $has_approval |
         if $has_plan and $has_approval then "yes" else "no" end
     ' 2>/dev/null)
     [ "${result}" = "yes" ]
@@ -422,9 +425,8 @@ discover_or_create_workflow_project() {
     _WF_STATUS_FIELD_ID=""
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
-    _WF_CACHED_REPO="${REPO_FULL}"
 
-    local query='query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}'
+    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
     local projects_json
     if ! projects_json=$(gh api graphql \
             -f query="${query}" \
@@ -468,6 +470,7 @@ discover_or_create_workflow_project() {
     done < <(printf '%s' "${project_json}" | \
         jq -r '.fields.nodes[] | select(.name == "Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
 
+    _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
 }
 
@@ -477,24 +480,24 @@ discover_or_create_workflow_project() {
 _wf_create_project() {
     local owner_node_id
     owner_node_id=$(gh api graphql \
-        -f query='query($l:String!){organization(login:$l){id}}' \
+        -f query="query(\$l:String!){organization(login:\$l){id}}" \
         -f l="${OWNER}" \
         --jq '.data.organization.id' 2>/dev/null) \
     || owner_node_id=$(gh api graphql \
-        -f query='query($l:String!){user(login:$l){id}}' \
+        -f query="query(\$l:String!){user(login:\$l){id}}" \
         -f l="${OWNER}" \
         --jq '.data.user.id' 2>/dev/null) \
     || { warn "Workflow project: cannot resolve owner node ID for ${OWNER}"; return 1; }
 
     local project_id
     project_id=$(gh api graphql \
-        -f query='mutation($ownerId:ID!,$title:String!){createProjectV2(input:{ownerId:$ownerId,title:$title}){projectV2{id}}}' \
+        -f query="mutation(\$ownerId:ID!,\$title:String!){createProjectV2(input:{ownerId:\$ownerId,title:\$title}){projectV2{id}}}" \
         -f ownerId="${owner_node_id}" \
         -f title="Workflow" \
         --jq '.data.createProjectV2.projectV2.id' 2>/dev/null) \
     || { warn "Workflow project: createProjectV2 failed"; return 1; }
 
-    local create_field_query='mutation($p:ID!){createProjectV2Field(input:{projectId:$p,dataType:SINGLE_SELECT,name:"Status",singleSelectOptions:[{name:"Not Started",color:GRAY,description:""},{name:"Planning",color:YELLOW,description:""},{name:"Approved",color:BLUE,description:""},{name:"Development",color:PURPLE,description:""},{name:"AI Review",color:ORANGE,description:""},{name:"AI Security Review",color:RED,description:""},{name:"Human Review",color:GREEN,description:""},{name:"Complete",color:TEAL,description:""}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}'
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:TEAL,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
     local field_json
     field_json=$(gh api graphql \
         -f query="${create_field_query}" \
@@ -503,13 +506,13 @@ _wf_create_project() {
 
     local repo_node_id
     repo_node_id=$(gh api graphql \
-        -f query='query($o:String!,$r:String!){repository(owner:$o,name:$r){id}}' \
+        -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
         -f o="${OWNER}" -f r="${REPO}" \
         --jq '.data.repository.id' 2>/dev/null) \
     || { warn "Workflow project: cannot resolve repo node ID for ${REPO_FULL}"; return 1; }
 
     gh api graphql \
-        -f query='mutation($p:ID!,$r:ID!){linkProjectV2ToRepository(input:{projectId:$p,repositoryId:$r}){repository{id}}}' \
+        -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
         -f p="${project_id}" -f r="${repo_node_id}" > /dev/null 2>&1 \
     || warn "Workflow project: linkProjectV2ToRepository failed (project still usable)"
 
@@ -545,7 +548,7 @@ update_workflow_status() {
 
     local project_item_id
     project_item_id=$(gh api graphql \
-        -f query='mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}' \
+        -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
         -f p="${_WF_PROJECT_ID}" -f c="${item_node_id}" \
         --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || {
         warn "Workflow: failed to add ${item_type} #${item_number} to project — skipping"
@@ -553,7 +556,7 @@ update_workflow_status() {
     }
 
     gh api graphql \
-        -f query='mutation($p:ID!,$i:ID!,$f:ID!,$v:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$v}}){projectV2Item{id}}}' \
+        -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
         -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" \
         -f f="${_WF_STATUS_FIELD_ID}" -f v="${opt_id}" \
         > /dev/null 2>&1 \
@@ -572,6 +575,7 @@ The repository is checked out at ${repo_path}.
 
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
 $(_build_wf_section)
+
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. Check whether you have already posted a plan for this issue:
@@ -675,6 +679,7 @@ The repository is checked out at ${repo_path}.
 
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 $(_build_wf_section)
+
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
@@ -683,7 +688,7 @@ ${checkout_step}
 4. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 6. Proceed to address all outstanding work
-7. When all work is complete and CI is not failing: run the AI review loop before enabling auto-merge.
+7. When all work is complete and all required CI checks pass: run the AI review loop before enabling auto-merge.
    a. Update Workflow board status to "AI Review" (if board data is present above).
       Run: /code-review --comment
       If findings are posted as inline PR comments: fix each in its own commit, push, then run /code-review --comment again.
@@ -2038,10 +2043,16 @@ main() {
                     continue
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
-                    info "Issue #${item_id} in ${item_repo} is blocked — skipping"
-                    notify_discord_blocked_item "Issue" "${item_id}"
-                    count_blocked=$((count_blocked + 1))
-                    continue
+                    if _issue_has_plan_approval "${issue_json}"; then
+                        info "Issue #${item_id} in ${item_repo}: plan approval found — removing Blocked and proceeding with PR #${open_pr}"
+                        gh issue edit "${item_id}" --repo "${item_repo}" --remove-label "Blocked" 2>/dev/null || true
+                        update_workflow_status "Issue" "${item_id}" "Development"
+                    else
+                        info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                        notify_discord_blocked_item "Issue" "${item_id}"
+                        count_blocked=$((count_blocked + 1))
+                        continue
+                    fi
                 fi
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"

@@ -3888,8 +3888,20 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "_issue_has_plan_approval does not self-approve on plan template boilerplate containing proceed" {
+    local json='{"comments":[{"body":"## Implementation Plan\n### Open questions\nNone — ready to proceed pending approval"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -ne 0 ]
+}
+
 @test "_issue_has_plan_approval returns false when approval comment exists but no plan" {
     local json='{"comments":[{"body":"approved"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_issue_has_plan_approval returns false when approval precedes plan (temporal ordering)" {
+    local json='{"comments":[{"body":"LGTM"},{"body":"## Implementation Plan for the feature"}]}'
     run _issue_has_plan_approval "${json}"
     [ "${status}" -ne 0 ]
 }
@@ -3985,12 +3997,17 @@ STUBEOF
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
 }
 
-@test "discover_or_create_workflow_project returns immediately on second call for same repo" {
+@test "discover_or_create_workflow_project returns immediately on second call for same repo when first succeeded" {
+    local project_json='[{"id":"PVT_cache","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_c1","name":"Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
     local call_count_file="${TEST_TMP}/gh_calls"
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 printf 'called\n' >> "${call_count_file}"
-exit 1
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '%s\n' '${project_json}'
+    exit 0
+fi
+exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
     discover_or_create_workflow_project
@@ -4039,7 +4056,7 @@ STUBEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${call_log}"
 if [[ "\$*" == *"node_id"* ]]; then
-    printf '{"node_id":"NODE_abc"}\n'
+    printf 'NODE_abc\n'
     exit 0
 fi
 if [[ "\$*" == *"addProjectV2ItemById"* ]]; then
