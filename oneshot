@@ -378,24 +378,6 @@ _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
 _WF_CACHED_REPO=""
 
-# Returns 0 if the pre-fetched issue JSON contains both a plan comment (body
-# containing "## Implementation Plan") and any comment with an approval keyword
-# (approved / go ahead / looks good / lgtm / proceed).
-_issue_has_plan_approval() {
-    local issue_json="$1"
-    local result
-    result=$(printf '%s' "${issue_json}" | jq -r '
-        (.comments // []) as $c |
-        (first(range($c | length) | select($c[.].body | test("##\\s*Implementation Plan"; "i"))) // -1) as $plan_idx |
-        ($plan_idx >= 0) as $has_plan |
-        (if $has_plan then
-            $c[($plan_idx+1):] | map(.body | test("\\b(approved|go ahead|looks good|lgtm)\\b"; "i")) | any
-        else false end) as $has_approval |
-        if $has_plan and $has_approval then "yes" else "no" end
-    ' 2>/dev/null)
-    [ "${result}" = "yes" ]
-}
-
 # Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
 # Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
 _build_wf_section() {
@@ -582,7 +564,7 @@ Steps:
      gh issue view ${item_id} --repo ${REPO_FULL} --json comments \\
        --jq '[.comments[].body] | any(test("## Implementation Plan"; "i"))'
    Result "false" → no plan yet, go to step 3 (Plan mode).
-   Result "true"  → plan exists and was approved (you would not be running otherwise), skip to step 5 (Implementation mode).
+   Result "true"  → plan exists; a human approved it by removing the Blocked label (you would not be running otherwise), skip to step 5 (Implementation mode).
 3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
    Otherwise, using /plan produce a concrete implementation plan and post it as an issue comment in EXACTLY this format:
@@ -604,7 +586,7 @@ Steps:
 ### Open questions
 <list or "None — ready to proceed pending approval">
 
-4. Mark the issue as Blocked, update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue:
+4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. A human must review the plan and remove the Blocked label to approve it:
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. (Implementation mode) Update the Workflow board status to "Development" (if board data is present above), then proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
@@ -2043,16 +2025,10 @@ main() {
                     continue
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
-                    if _issue_has_plan_approval "${issue_json}"; then
-                        info "Issue #${item_id} in ${item_repo}: plan approval found — removing Blocked and proceeding with PR #${open_pr}"
-                        gh issue edit "${item_id}" --repo "${item_repo}" --remove-label "Blocked" 2>/dev/null || true
-                        update_workflow_status "Issue" "${item_id}" "Development"
-                    else
-                        info "Issue #${item_id} in ${item_repo} is blocked — skipping"
-                        notify_discord_blocked_item "Issue" "${item_id}"
-                        count_blocked=$((count_blocked + 1))
-                        continue
-                    fi
+                    info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    notify_discord_blocked_item "Issue" "${item_id}"
+                    count_blocked=$((count_blocked + 1))
+                    continue
                 fi
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
@@ -2117,17 +2093,10 @@ main() {
                 fi
 
                 if issue_json_has_blocked_label "${issue_json}"; then
-                    if _issue_has_plan_approval "${issue_json}"; then
-                        info "Issue #${item_id} in ${item_repo}: plan approval found — removing Blocked and proceeding"
-                        gh issue edit "${item_id}" --repo "${item_repo}" --remove-label "Blocked" 2>/dev/null || true
-                        update_workflow_status "Issue" "${item_id}" "Development"
-                        # fall through to fingerprint check and invoke_claude below
-                    else
-                        info "Issue #${item_id} in ${item_repo} is blocked — skipping"
-                        notify_discord_blocked_item "Issue" "${item_id}"
-                        count_blocked=$((count_blocked + 1))
-                        continue
-                    fi
+                    info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    notify_discord_blocked_item "Issue" "${item_id}"
+                    count_blocked=$((count_blocked + 1))
+                    continue
                 fi
 
                 issue_fp=$(fingerprint_issue_json "${issue_json}") \

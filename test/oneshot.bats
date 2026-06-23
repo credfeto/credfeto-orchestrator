@@ -3874,62 +3874,6 @@ STUBEOF
     [[ "${output}" == *'WF_HUMAN_REVIEW=opt_hr_id'* ]]
 }
 
-# --- _issue_has_plan_approval unit tests --------------------------------------
-
-@test "_issue_has_plan_approval returns false when comments array is empty" {
-    local json='{"comments":[]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -ne 0 ]
-}
-
-@test "_issue_has_plan_approval returns false when plan comment exists but no approval" {
-    local json='{"comments":[{"body":"## Implementation Plan for the feature"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -ne 0 ]
-}
-
-@test "_issue_has_plan_approval does not self-approve on plan template boilerplate containing proceed" {
-    local json='{"comments":[{"body":"## Implementation Plan\n### Open questions\nNone — ready to proceed pending approval"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -ne 0 ]
-}
-
-@test "_issue_has_plan_approval returns false when approval comment exists but no plan" {
-    local json='{"comments":[{"body":"approved"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -ne 0 ]
-}
-
-@test "_issue_has_plan_approval returns false when approval precedes plan (temporal ordering)" {
-    local json='{"comments":[{"body":"LGTM"},{"body":"## Implementation Plan for the feature"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -ne 0 ]
-}
-
-@test "_issue_has_plan_approval returns true when both plan and approval comments exist" {
-    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"approved"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -eq 0 ]
-}
-
-@test "_issue_has_plan_approval is case-insensitive for approval keywords" {
-    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"LGTM"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -eq 0 ]
-}
-
-@test "_issue_has_plan_approval recognises 'go ahead' as approval" {
-    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"go ahead and implement it"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -eq 0 ]
-}
-
-@test "_issue_has_plan_approval recognises 'looks good' as approval" {
-    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"looks good to me"}]}'
-    run _issue_has_plan_approval "${json}"
-    [ "${status}" -eq 0 ]
-}
-
 # --- _build_wf_section unit tests ---------------------------------------------
 
 @test "_build_wf_section outputs nothing when _WF_PROJECT_ID is empty" {
