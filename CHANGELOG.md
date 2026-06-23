@@ -58,6 +58,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
 - oneshot: prefer XDG_RUNTIME_DIR gpg-agent extra socket over the gpgconf-listed path; prevents stale socket files left in ~/.gnupg by a SIGKILL'd agent being mounted into the container where they appear live but are unresponsive
+- oneshot: fix rate-limit reset time parsing to handle minutes and colons (e.g. 7:10pm), ensuring backoff correctly persists when Claude returns a non-hour-aligned reset time
+- oneshot: fix subshell leak in invoke_claude when handle_claude_is_error fails; now correctly exits the subshell instead of continuing to subsequent jq calls on a deleted temp file
+- oneshot: suppress repeated rate-limit skip messages in the main loop, only reporting once per owner per run
 - setup-owner: write ~/.gitconfig for the owner with user identity and GPG signing config from .env so non-agentic git operations (e.g. rebase) can commit without requiring global git config on the host
 - setup-owner: remove stale gpg-agent socket files from ~/.gnupg after killing the agent so they cannot be mistaken for live sockets by subsequent oneshot runs
 - setup-owner: sync GPG keyring by export/import rather than directory copy; avoids keyboxd database lock (source PID embedded in lock file) that caused owner keyboxd to hang indefinitely
