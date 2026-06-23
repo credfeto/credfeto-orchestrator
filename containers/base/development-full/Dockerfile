@@ -185,7 +185,7 @@ ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
 # `developer` user the agent runs as has no way to modify it.
-# Build context must be repo root so this COPY path resolves correctly.
+# Build context must be containers/base/development-full so this COPY path resolves correctly.
 COPY system-gitconfig /etc/gitconfig
 RUN chown root:root /etc/gitconfig \
     && chmod 0444 /etc/gitconfig \

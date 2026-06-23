@@ -80,9 +80,53 @@ ensure_github_known_hosts() {
     chmod 600 "${known_hosts}"
 }
 
+# Fail fast if the workspace repo has any remote URL that is not SSH (git@github.com:).
+# oneshot resets the URL to SSH before every container launch, so a non-SSH URL
+# here means something has gone wrong upstream.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+verify_repo_ssh_remotes() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+
+    local non_ssh_remotes
+    non_ssh_remotes=$(git -C "${repo_dir}" remote -v 2>/dev/null \
+        | awk '{print $2}' \
+        | sort -u \
+        | grep -v '^git@github\.com:' \
+        || true)
+
+    [ -z "${non_ssh_remotes}" ] && return 0
+
+    printf '\n✗ Workspace repo has remote URL(s) not using git@github.com: SSH format:\n' >&2
+    printf '%s\n' "${non_ssh_remotes}" >&2
+    die "Reset with: git -C ${repo_dir} remote set-url origin git@github.com:<owner>/<repo>.git"
+}
+
+# Ensure that the user's git config does not contain any [url insteadOf] or
+# [url pushInsteadOf] rules. These are only allowed in the system /etc/gitconfig.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+verify_no_user_insteadof() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    [ -d "${repo_dir}/.git" ] || return 0
+
+    local violations
+    violations=$(git -C "${repo_dir}" config --list --show-origin \
+        | grep -iE '\.(insteadof|pushinsteadof)=' \
+        | grep -v '^file:/etc/gitconfig' \
+        || true)
+
+    [ -z "${violations}" ] && return 0
+
+    printf '\n✗ Forbidden [url "..." insteadOf] or [url "..." pushInsteadOf] rules found in user git config:\n' >&2
+    printf '%s\n' "${violations}" >&2
+    die "These rules are only allowed in the system /etc/gitconfig. Remove them from your local or global git config."
+}
+
 verify_gpg_signing
 verify_ssh_signing
 ensure_github_known_hosts
+verify_repo_ssh_remotes
+verify_no_user_insteadof
 
 verify_hooks_fresh
 
