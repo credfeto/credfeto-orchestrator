@@ -48,6 +48,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Prune dangling (untagged) container images before each pull and after each container run to reclaim disk space; preserves the current tagged image so the next pull requires only new layers
 - Plan-first approval workflow, AI review loop, and Workflow board (GitHub Projects v2) integration for issue orchestration
 - Board-based plan approval: orchestrator queries Workflow board for issues in Approved status and passes plan_approved flag to agent; comment-based approval comment fallback when no board is configured
+- Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
 ### Fixed
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
@@ -124,6 +125,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pre-populate ~/.ssh/known_hosts with github.com host key on container startup if not already present
 - Corrected plan self-approval from boilerplate 'proceed' text; enforced temporal ordering for plan approval detection; fixed Workflow project cache poisoning on transient API failure; added plan-approval unblock path when open PR already exists; fixed CI gate text; fixed heredoc blank-line separator before Steps; fixed SC2016 shellcheck warnings in GraphQL query strings; fixed update_workflow_status test stub
 - Removed automatic plan-approval detection and Blocked-label removal from orchestrator — removing Blocked is always a human action; simplified main loop blocked handling; updated agent instructions to make clear that humans remove the Blocked label to approve a plan
+- Include trusted commenters list in generated CLAUDE.md for both issue and PR agents, instructing the agent to ignore comments from untrusted users
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
