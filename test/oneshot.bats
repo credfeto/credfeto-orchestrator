@@ -3825,6 +3825,87 @@ STUBEOF
     [[ "${output}" == *"WF_DEVELOPMENT=opt_dev_id"* ]]
 }
 
+@test "build_issue_claude_md without board uses comment-based approval fallback" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"approved|go ahead|looks good|lgtm"* ]]
+    [[ "${output}" != *"approved on the Workflow board"* ]]
+}
+
+@test "build_issue_claude_md with board and plan not approved shows board-pending text" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Workflow board"* ]]
+    [[ "${output}" != *"approved|go ahead"* ]]
+}
+
+@test "build_issue_claude_md with plan_approved=true shows board-approved text" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"approved on the Workflow board"* ]]
+    [[ "${output}" == *"Implementation mode"* ]]
+}
+
+@test "build_issue_claude_md approval instruction mentions Workflow board when board is configured" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'set the Workflow board status to "Approved"'* ]]
+}
+
+@test "build_issue_claude_md approval instruction mentions approval comment when no board" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"approval comment"* ]]
+}
+
+# --- fetch_board_approved_items unit tests ------------------------------------
+
+@test "fetch_board_approved_items is a no-op when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    make_stub gh 'printf "called\n"; exit 0'
+    local call_count_file="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_count_file}; exit 0"
+    fetch_board_approved_items
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 0 ]
+}
+
+@test "fetch_board_approved_items populates _WF_APPROVED_ITEMS for Approved board items" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local items_json='{"data":{"node":{"items":{"nodes":[{"content":{"number":42,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}},{"content":{"number":99,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_other"}]}}]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    fetch_board_approved_items
+    [ "${_WF_APPROVED_ITEMS["owner/repo/42"]:-}" = "1" ]
+    [ "${_WF_APPROVED_ITEMS["owner/repo/99"]:-}" != "1" ]
+}
+
+@test "fetch_board_approved_items caches per repo and does not re-call gh on second call" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local call_count_file="${TEST_TMP}/gh_calls"
+    local items_json='{"data":{"node":{"items":{"nodes":[]}}}}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf 'called\n' >> "${call_count_file}"
+printf '%s\n' '${items_json}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    fetch_board_approved_items
+    fetch_board_approved_items
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 1 ]
+}
+
 # --- build_pr_claude_md review-loop steps ------------------------------------
 
 @test "build_pr_claude_md includes code-review loop instructions" {
