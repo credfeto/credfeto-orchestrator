@@ -119,6 +119,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Kill any existing ssh-agent process before starting a new one in the service unit to prevent left-over process warnings on every timer firing
 - Kill ssh-agent via EXIT trap in oneshot so the service cgroup is clean before the next timer firing, preventing systemd left-over process warnings
 - Create bind-mounted temp directories under XDG_RUNTIME_DIR instead of /tmp so they remain visible to rootless podman when PrivateTmp=yes is set in the service unit
+- Pre-populate ~/.ssh/known_hosts with github.com host key on container startup if not already present
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
