@@ -2699,6 +2699,37 @@ STUBEOF
     [ -z "${output}" ]
 }
 
+# --- handle_claude_is_error tmpfile cleanup -----------------------------------
+
+@test "handle_claude_is_error removes tmpfile before dying on rate-limit (429)" {
+    notify_discord_rate_limited() { return 0; }
+    save_rate_limit()             { return 0; }
+
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"api_error_status":"429","result":"Claude AI usage limit reached"}' > "${tmpfile}"
+
+    run handle_claude_is_error "${tmpfile}" "" "Issue" "1"
+    # die exits non-zero.
+    [ "${status}" -ne 0 ]
+    # The temp file must not be leaked on the rate-limit path.
+    [ ! -f "${tmpfile}" ]
+}
+
+@test "handle_claude_is_error removes tmpfile before dying on generic error" {
+    notify_discord_claude_error() { return 0; }
+
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"api_error_status":"500","result":"internal error"}' > "${tmpfile}"
+
+    run handle_claude_is_error "${tmpfile}" "" "PullRequest" "2"
+    # die exits non-zero.
+    [ "${status}" -ne 0 ]
+    # The temp file must not be leaked on the generic-error path.
+    [ ! -f "${tmpfile}" ]
+}
+
 # --- rate-limit file management -----------------------------------------------
 
 @test "is_owner_rate_limited returns false when no rate-limit file exists" {

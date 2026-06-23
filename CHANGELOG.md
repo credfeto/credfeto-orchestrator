@@ -134,6 +134,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Corrected plan self-approval from boilerplate 'proceed' text; enforced temporal ordering for plan approval detection; fixed Workflow project cache poisoning on transient API failure; added plan-approval unblock path when open PR already exists; fixed CI gate text; fixed heredoc blank-line separator before Steps; fixed SC2016 shellcheck warnings in GraphQL query strings; fixed update_workflow_status test stub
 - Removed automatic plan-approval detection and Blocked-label removal from orchestrator — removing Blocked is always a human action; simplified main loop blocked handling; updated agent instructions to make clear that humans remove the Blocked label to approve a plan
 - Include trusted commenters list in generated CLAUDE.md for both issue and PR agents, instructing the agent to ignore comments from untrusted users
+- oneshot: remove the per-invocation temp file on Claude rate-limit and error paths so it is no longer leaked into TMPDIR when the run aborts
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

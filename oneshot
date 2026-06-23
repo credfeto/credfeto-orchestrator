@@ -998,12 +998,12 @@ handle_claude_is_error() {
             save_rate_limit "${resume_unix}"
         fi
         notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${resume_unix}"
-        # Do not delete tmpfile here; let the caller handle it to avoid jq errors in subshell
+        rm -f "${tmpfile}"
         die "Claude rate limited: ${result_text}"
     fi
 
     notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
-    # Do not delete tmpfile here; let the caller handle it to avoid jq errors in subshell
+    rm -f "${tmpfile}"
     die "Claude invocation failed: ${result_text}"
 }
 
