@@ -31,6 +31,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add NoNewPrivileges, PrivateTmp, ProtectSystem, CapabilityBoundingSet, AmbientCapabilities, LockPersonality, and MemoryDenyWriteExecute hardening to systemd service unit
 - Pass GH_ENTERPRISE_TOKEN via Podman secret (gh-enterprise-token) instead of --env flag to hide it from podman inspect
 ### Added
+- ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
+- oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
 - Generate per-item CLAUDE.md and mount it read-only at /home/developer/.claude/CLAUDE.md in the agent container so each invocation gets structured role and work-item context without polluting the bootstrap prompt
 - SSH agent validation on container start: verify SSH_AUTH_SOCK socket exists, agent has keys loaded, and signing with the loaded key succeeds
 - GPG agent validation on container start: verify gpg-agent is responding, GIT_SIGNING_KEY is present in the keyring, and a test sign with the key succeeds
@@ -50,6 +52,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Board-based plan approval: orchestrator queries Workflow board for issues in Approved status and passes plan_approved flag to agent; comment-based approval comment fallback when no board is configured
 - Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
 ### Fixed
+- oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
+- development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
+- containers/agent/entrypoint.sh: added startup validation to verify all repository remotes use SSH and no `url.*.insteadOf` rules are present in the user's git config to prevent conflicts with system-wide SSH enforcement
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
 - oneshot: prefer XDG_RUNTIME_DIR gpg-agent extra socket over the gpgconf-listed path; prevents stale socket files left in ~/.gnupg by a SIGKILL'd agent being mounted into the container where they appear live but are unresponsive

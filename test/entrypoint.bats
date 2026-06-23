@@ -390,6 +390,109 @@ STUBEOF
     grep -q 'github.com' "${HOME}/.ssh/known_hosts"
 }
 
+# --- verify_repo_ssh_remotes -----------------------------------------------------
+
+# Helper: create a fake .git dir and a git stub that returns $1 from "remote -v".
+setup_repo_with_remotes() {
+    local remote_output="$1"
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.git"
+
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+# Record all calls for existing tests.
+printf "%s\n" "\$@" >> "${TEST_TMP}/git_args"
+# Return configured remote output only for "remote -v".
+for arg in "\$@"; do
+    if [ "\${arg}" = "-v" ]; then
+        printf '%s\n' "${remote_output}"
+        exit 0
+    fi
+done
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+    printf '%s' "${repo_dir}"
+}
+
+@test "entrypoint skips SSH remote check when workspace repo does not exist" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${TEST_TMP}/nonexistent" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint skips SSH remote check when .git directory is absent" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/no-git-dir"
+    mkdir -p "${repo_dir}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint succeeds when all remotes use git@github.com: SSH format" {
+    setup_entrypoint_stubs
+    local repo_dir
+    repo_dir=$(setup_repo_with_remotes \
+        "origin	git@github.com:credfeto/some-repo.git (fetch)
+origin	git@github.com:credfeto/some-repo.git (push)")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies when remote uses HTTPS instead of git@github.com:" {
+    setup_entrypoint_stubs
+    local repo_dir
+    repo_dir=$(setup_repo_with_remotes \
+        "origin	https://github.com/credfeto/some-repo.git (fetch)
+origin	https://github.com/credfeto/some-repo.git (push)")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not using git@github.com:"* ]]
+    [[ "${output}" == *"https://github.com"* ]]
+}
+
+@test "entrypoint dies when remote uses ssh:// URL instead of git@github.com:" {
+    setup_entrypoint_stubs
+    local repo_dir
+    repo_dir=$(setup_repo_with_remotes \
+        "origin	ssh://git@github.com/credfeto/some-repo.git (fetch)
+origin	ssh://git@github.com/credfeto/some-repo.git (push)")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not using git@github.com:"* ]]
+}
+
+@test "entrypoint dies when any remote is not git@github.com: even if others are" {
+    setup_entrypoint_stubs
+    local repo_dir
+    repo_dir=$(setup_repo_with_remotes \
+        "origin	git@github.com:credfeto/some-repo.git (fetch)
+origin	git@github.com:credfeto/some-repo.git (push)
+upstream	https://github.com/credfeto/some-repo.git (fetch)
+upstream	https://github.com/credfeto/some-repo.git (push)")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not using git@github.com:"* ]]
+}
+
 @test "entrypoint skips ssh-keyscan when github.com is already in known_hosts" {
     setup_entrypoint_stubs
     mkdir -p "${HOME}/.ssh"
@@ -406,4 +509,62 @@ STUBEOF
     [ "${status}" -eq 0 ]
     grep -qx 'github.com ssh-ed25519 EXISTINGKEY' "${HOME}/.ssh/known_hosts"
     [ "$(wc -l < "${HOME}/.ssh/known_hosts")" -eq 1 ]
+}
+
+# --- verify_no_user_insteadof -----------------------------------------------------
+
+@test "entrypoint succeeds when insteadOf rules are only in /etc/gitconfig" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.git"
+    make_stub git 'if [[ "$*" == *"config --list --show-origin"* ]]; then
+    printf "file:/etc/gitconfig\turl.git@github.com:.insteadof=https://github.com/\n"
+    exit 0
+fi
+exit 0'
+
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies when insteadOf rules are in local git config" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.git"
+    make_stub git 'if [[ "$*" == *"config --list --show-origin"* ]]; then
+    printf "file:/etc/gitconfig\turl.git@github.com:.insteadof=https://github.com/\n"
+    printf "file:.git/config\turl.https://x-access-token:ghp_token@github.com/.insteadof=git@github.com:\n"
+    exit 0
+fi
+exit 0'
+
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Forbidden [url \"...\" insteadOf] or [url \"...\" pushInsteadOf] rules found in user git config"* ]]
+    [[ "${output}" == *"file:.git/config"* ]]
+}
+
+@test "entrypoint dies when pushInsteadOf rules are in global git config" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.git"
+    make_stub git 'if [[ "$*" == *"config --list --show-origin"* ]]; then
+    printf "file:/home/node/.gitconfig\turl.git@github.com:.pushinsteadof=https://github.com/\n"
+    exit 0
+fi
+exit 0'
+
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Forbidden [url \"...\" insteadOf] or [url \"...\" pushInsteadOf] rules found in user git config"* ]]
+    [[ "${output}" == *"file:/home/node/.gitconfig"* ]]
 }

@@ -180,7 +180,7 @@ teardown() {
     [[ "${output}" == *"BEHIND"* ]]
     [[ "${output}" == *"feat/my-branch"* ]]
     [[ "${output}" == *"force-with-lease"* ]]
-    [[ "${output}" == *"rebase"* ]]
+    [[ "${output}" == *"rebase origin/main"* ]]
 }
 
 @test "build_pr_claude_md with CLEAN merge state does not include rebase notice" {
@@ -188,6 +188,7 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"force-with-lease"* ]]
     [[ "${output}" != *"BEHIND"* ]]
+    [[ "${output}" != *"rebase origin/main"* ]]
 }
 
 @test "build_pr_claude_md with DIRTY merge state includes rebase notice with branch name and force-with-lease" {
@@ -196,7 +197,7 @@ teardown() {
     [[ "${output}" == *"DIRTY"* ]]
     [[ "${output}" == *"feat/my-branch"* ]]
     [[ "${output}" == *"force-with-lease"* ]]
-    [[ "${output}" == *"rebase"* ]]
+    [[ "${output}" == *"rebase origin/main"* ]]
 }
 
 @test "build_pr_claude_md uses provided repo_path in rebase notice" {
@@ -237,7 +238,7 @@ teardown() {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch" "" "" "true"
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"force-with-lease"* ]]
-    [[ "${output}" != *"rebase"* ]]
+    [[ "${output}" != *"rebase origin/main"* ]]
 }
 
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {

@@ -269,6 +269,9 @@ try_nonagentic_rebase() {
 
     [ -n "${branch_name}" ] || return 1
 
+    git -C "${REPO_WORK_DIR}" remote set-url origin "git@github.com:${OWNER}/${REPO}.git"
+    git -C "${REPO_WORK_DIR}" config --unset remote.origin.pushurl 2>/dev/null || true
+
     if ! git -C "${REPO_WORK_DIR}" checkout "${branch_name}"; then
         git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
         return 1
@@ -647,6 +650,15 @@ _build_trusted_commenters_section() {
     printf '%s' "${logins_json}" | jq -r '.[] | "- \(.)"' 2>/dev/null
 }
 
+_build_git_ssh_section() {
+    cat <<'GITSSH'
+Git transport — SSH is always configured and always works:
+- Both this container's /etc/gitconfig and the host user's ~/.gitconfig rewrite https://github.com/ to git@github.com: via url.insteadOf, so every git operation uses SSH regardless of what URL is stored in .git/config.
+- The proxy (GH_HOST) blocks gh push and gh rebase — always use git CLI directly for commits and pushes, never gh.
+- If git push fails: run ssh-add -l to verify the SSH agent has keys loaded and check git remote get-url origin. A transient push error is NOT a reason to add a Blocked label or post a comment asking for human action — diagnose and retry.
+GITSSH
+}
+
 build_issue_claude_md() {
     local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}"
     cat <<EOF
@@ -658,6 +670,7 @@ Work on issue #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
 
 $(_build_trusted_commenters_section "${trusted_logins}")
+$(_build_git_ssh_section)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
 $(_build_wf_section)
 
@@ -737,6 +750,7 @@ Read AI instructions from ${ai_instructions}.
 Work on dependency pull request #${item_id} in ${REPO_FULL}.
 
 $(_build_trusted_commenters_section "${trusted_logins}")
+$(_build_git_ssh_section)
 This is a dependency update PR. Do NOT make any code changes. Your only job is to verify CI and either enable auto-merge or mark as blocked.
 
 Steps:
@@ -764,6 +778,7 @@ Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
 
 $(_build_trusted_commenters_section "${trusted_logins}")
+$(_build_git_ssh_section)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 $(_build_wf_section)
 

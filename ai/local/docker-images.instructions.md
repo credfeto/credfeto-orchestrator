@@ -7,17 +7,47 @@
 
 ## Image Hierarchy
 
-The four development base images form a strict chain:
+The base images form a strict chain, topped by a locked-down agent layer:
 
 ```text
 debian:trixie-slim
-  └── development-tools  (apt packages, .NET SDK, static binary linters)
-        └── development-node  (Node.js, Bun, npm globals)
-              └── development-python  (pip tools)
-                    └── development-full  (.NET global tools, pre-commit, skill repos)
+  └── development-tools   (apt packages, .NET SDK, static binary linters)
+        └── development-node   (Node.js, Bun, npm globals)
+              └── development-python   (pip tools)
+                    └── development-full   (.NET global tools, pre-commit, skill repos, system-gitconfig)
+                          └── development-agent   (removes pkg-mgmt/sudo, adds agent-entrypoint)
 ```
 
+`development-agent` (`ghcr.io/credfeto/development-agent:latest`) is the image the orchestrator actually runs.
 Each image is built and pushed to `ghcr.io/<owner>/<image>:latest`.
+
+## Build Contexts (MANDATORY)
+
+The build context for each image is the directory containing its Dockerfile — **never the repo root**:
+
+| Image | Dockerfile | CI context |
+| --- | --- | --- |
+| development-tools | `containers/base/development-tools/Dockerfile` | `containers/base/development-tools` |
+| development-node | `containers/base/development-node/Dockerfile` | `containers/base/development-node` |
+| development-python | `containers/base/development-python/Dockerfile` | `containers/base/development-python` |
+| development-full | `containers/base/development-full/Dockerfile` | `containers/base/development-full` |
+| development-agent | `containers/agent/Dockerfile` | `containers/agent` |
+
+Any `COPY` instruction in a Dockerfile uses a path relative to that image's own directory. Do not write paths that assume the repo root as context; any such path will silently fail to copy the file.
+
+## system-gitconfig and SSH Rewriting
+
+All git operations — both inside the container and on the host — are configured to rewrite `https://github.com/` URLs to `git@github.com:`. This is done at two levels:
+
+**Inside the container:** `containers/base/development-full/system-gitconfig` is baked into the image at `/etc/gitconfig` (root:root 0444). It rewrites HTTPS to SSH for github.com, gitlab.com, and bitbucket.org.
+
+**On the host:** `setup-owner`'s `configure_git()` writes the same `url.insteadOf` / `pushInsteadOf` rules into the owner user's `~/.gitconfig`. Every owner provisioned via `setup-owner --owner <name>` has SSH rewriting active on the host.
+
+Together these mean that even if the agent inside the container changes the remote URL to HTTPS (e.g. via `gh pr checkout`), any subsequent `git push` — whether in the container or on the host — will still use SSH.
+
+As belt-and-suspenders, `ensure_repo_current()` and `try_nonagentic_rebase()` in `oneshot` also explicitly reset the remote URL to `git@github.com:` before each push, fixing the stored URL in `.git/config` for all tools regardless of `url.insteadOf`.
+
+The self-check HTTPS clone in each Dockerfile uses `GIT_CONFIG_SYSTEM=/dev/null` to bypass this rewrite (no SSH key is available at build time).
 
 ## Local Build Before Any Change (MANDATORY)
 
