@@ -46,6 +46,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Dependency PRs now enable auto-merge (or mark Blocked on CI failure) instead of leaving a stale comment; autoMergeRequest added to PR fingerprint to force one-time re-run of stuck PRs
 - Disk space guard: check available space before launching a container and notify Discord when below 10 GB
 - Prune dangling (untagged) container images before each pull and after each container run to reclaim disk space; preserves the current tagged image so the next pull requires only new layers
+- Plan-first approval workflow, AI review loop, and Workflow board (GitHub Projects v2) integration for issue orchestration
 ### Fixed
 - oneshot: reset origin remote URL to SSH before every host-side fetch so that HTTPS URLs the agent may have stored in .git/config do not break the service-user fetch
 - development-full system-gitconfig: add pushInsteadOf alongside insteadOf so push operations are also rewritten to SSH when the agent stores an HTTPS push URL
@@ -128,6 +129,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Increased container pids-limit from 1024 to 4096 to prevent fork failures during parallel BenchmarkDotNet artifact compilation
 - Timer interval configurable via ORCHESTRATOR_TIMER_INTERVAL env var, defaulting to 30sec
 - Improve git configuration: add standard settings to setup-owner and system-gitconfig
+- Suppress SC2016 in shellcheck — single-quoted GraphQL query strings are intentional
 ### Deprecated
 ### Removed
 ### Deployment Changes
