@@ -3232,6 +3232,68 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+# --- cleanup_dangling_images unit tests ---------------------------------------
+
+@test "cleanup_dangling_images calls podman image prune --force" {
+    local args_log="${TEST_TMP}/podman_args"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "image" ] && printf '%s\n' "\$@" >> "${args_log}" && exit 0
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    cleanup_dangling_images
+    [ -f "${args_log}" ]
+    grep -qFx 'image' "${args_log}"
+    grep -qFx 'prune' "${args_log}"
+    grep -qFx -- '--force' "${args_log}"
+}
+
+@test "cleanup_dangling_images succeeds even when podman image prune fails" {
+    make_stub podman 'exit 1'
+    run cleanup_dangling_images
+    [ "${status}" -eq 0 ]
+}
+
+@test "invoke_claude prunes dangling images before pulling the orchestrator image" {
+    local call_log="${TEST_TMP}/podman_calls"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "image" ]   && printf 'image_prune\n'  >> "${call_log}" && exit 0
+[ "\$1" = "pull" ]    && printf 'pull\n'         >> "${call_log}" && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    [ -f "${call_log}" ]
+    local prune_line pull_line
+    prune_line=$(grep -n 'image_prune' "${call_log}" | head -1 | cut -d: -f1)
+    pull_line=$(grep -n 'pull' "${call_log}" | head -1 | cut -d: -f1)
+    [ -n "${prune_line}" ]
+    [ -n "${pull_line}" ]
+    [ "${prune_line}" -lt "${pull_line}" ]
+}
+
+@test "invoke_claude prunes dangling images twice per run (before pull and after container exits)" {
+    local call_log="${TEST_TMP}/podman_calls"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "image" ]   && printf 'image_prune\n'  >> "${call_log}" && exit 0
+[ "\$1" = "pull" ]    && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    [ -f "${call_log}" ]
+    local count
+    count=$(grep -c 'image_prune' "${call_log}")
+    [ "${count}" -eq 2 ]
+}
+
 # --- SSH agent socket forwarding unit tests -----------------------------------
 
 @test "invoke_claude mounts SSH_AUTH_SOCK as /tmp/ssh-agent.sock and sets env var" {
