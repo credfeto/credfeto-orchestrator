@@ -356,3 +356,54 @@ STUBEOF
     [ "${status}" -eq 0 ]
     grep -q '"custom":"value"' "${HOME}/.claude.json"
 }
+
+# --- ensure_github_known_hosts ---------------------------------------------------
+
+@test "entrypoint calls ssh-keyscan when known_hosts does not exist" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/ssh-keyscan" << 'STUBEOF'
+#!/usr/bin/env bash
+printf "github.com ssh-ed25519 FAKEKEY\n"
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-keyscan"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ -f "${HOME}/.ssh/known_hosts" ]
+    grep -q 'github.com' "${HOME}/.ssh/known_hosts"
+}
+
+@test "entrypoint calls ssh-keyscan when known_hosts exists but lacks github.com" {
+    setup_entrypoint_stubs
+    mkdir -p "${HOME}/.ssh"
+    printf "bitbucket.org ssh-ed25519 OTHERKEY\n" > "${HOME}/.ssh/known_hosts"
+    cat > "${STUB_BIN}/ssh-keyscan" << 'STUBEOF'
+#!/usr/bin/env bash
+printf "github.com ssh-ed25519 FAKEKEY\n"
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-keyscan"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -q 'github.com' "${HOME}/.ssh/known_hosts"
+}
+
+@test "entrypoint skips ssh-keyscan when github.com is already in known_hosts" {
+    setup_entrypoint_stubs
+    mkdir -p "${HOME}/.ssh"
+    printf "github.com ssh-ed25519 EXISTINGKEY\n" > "${HOME}/.ssh/known_hosts"
+    cat > "${STUB_BIN}/ssh-keyscan" << 'STUBEOF'
+#!/usr/bin/env bash
+printf "SHOULD_NOT_BE_CALLED\n"
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-keyscan"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'github.com ssh-ed25519 EXISTINGKEY' "${HOME}/.ssh/known_hosts"
+    [ "$(wc -l < "${HOME}/.ssh/known_hosts")" -eq 1 ]
+}

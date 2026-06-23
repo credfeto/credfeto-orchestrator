@@ -69,8 +69,20 @@ verify_ssh_signing() {
         || die "SSH signing test failed — ensure the loaded SSH key supports signing"
 }
 
+ensure_github_known_hosts() {
+    local known_hosts="${HOME}/.ssh/known_hosts"
+    if grep -qsF 'github.com' "${known_hosts}"; then
+        return 0
+    fi
+    mkdir -p "${HOME}/.ssh"
+    chmod 700 "${HOME}/.ssh"
+    ssh-keyscan github.com >> "${known_hosts}" 2>/dev/null
+    chmod 600 "${known_hosts}"
+}
+
 verify_gpg_signing
 verify_ssh_signing
+ensure_github_known_hosts
 
 verify_hooks_fresh
 
