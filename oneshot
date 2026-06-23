@@ -724,6 +724,14 @@ setup_cgroup_leaf() {
     PODMAN_CGROUP_PARENT="${svcgroup}"
 }
 
+# Removes dangling (untagged) container images to free disk space.
+# Only untagged images are pruned — the current ORCHESTRATOR_IMAGE is always
+# tagged and is never removed.  Suppresses errors so that a failure to prune
+# (e.g. no images to prune, podman storage not initialised) is never fatal.
+cleanup_dangling_images() {
+    podman image prune --force > /dev/null 2>&1 || true
+}
+
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
 # cgroup is clean when the next timer fires and systemd does not warn about
 # left-over processes.  Registered as an EXIT trap by main so it runs on any
@@ -865,6 +873,7 @@ invoke_claude() {
         die "Container ${container_name} already exists — remove it manually before running"
     fi
 
+    cleanup_dangling_images
     info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
     podman pull "${ORCHESTRATOR_IMAGE}" >&2 || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
 
@@ -986,6 +995,7 @@ invoke_claude() {
     CLAUDE_MD_TMPFILE=""
     rm -rf "${GPG_PUBKEY_TMPDIR}"
     GPG_PUBKEY_TMPDIR=""
+    cleanup_dangling_images
     printf '%s' "${new_session_id}"
 }
 
