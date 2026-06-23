@@ -378,6 +378,11 @@ _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
 _WF_CACHED_REPO=""
 
+# Board-approved items cache — populated by fetch_board_approved_items.
+# Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
+declare -gA _WF_APPROVED_ITEMS
+_WF_APPROVED_CACHED_REPO=""
+
 # Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
 # Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
 _build_wf_section() {
@@ -545,8 +550,60 @@ update_workflow_status() {
     || warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
 }
 
+# Populate _WF_APPROVED_ITEMS with issue keys ("owner/repo/number") whose
+# Workflow board status is "Approved". Results are cached per repo; a no-op
+# when the board is not configured or the Approved option ID is unknown.
+fetch_board_approved_items() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    [ "${_WF_APPROVED_CACHED_REPO}" != "${REPO_FULL}" ] || return 0
+    _WF_APPROVED_CACHED_REPO="${REPO_FULL}"
+    unset _WF_APPROVED_ITEMS
+    declare -gA _WF_APPROVED_ITEMS
+    local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
+    [ -n "${approved_opt_id}" ] || return 0
+    local entry
+    while IFS= read -r entry; do
+        [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
+    done < <(gh api graphql \
+        -f query="query(\$p:ID!){node(id:\$p){...on ProjectV2{items(first:100){nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:10){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}" \
+        -f p="${_WF_PROJECT_ID}" 2>/dev/null | \
+        jq -r --arg opt "${approved_opt_id}" \
+        '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
+        2>/dev/null)
+}
+
+# Output the step-2 approval-check line(s) for build_issue_claude_md.
+# With board + board-approved: one-liner directing agent to implementation.
+# With board + not approved:   redirect to plan/revision mode.
+# No board:                    jq command to detect human approval comment.
+_build_plan_approval_check() {
+    local item_id="$1" plan_approved="$2"
+    if [ "${plan_approved}" = "true" ]; then
+        printf '   Result "true"  → plan exists and was approved on the Workflow board by a human — skip to step 5 (Implementation mode).'
+    elif [ -n "${_WF_PROJECT_ID}" ]; then
+        printf '   Result "true"  → plan exists but has not been approved on the Workflow board yet. Revise or re-post the plan, mark Blocked, and STOP (step 3).'
+    else
+        local jq_expr="(.comments) as \$c | (first(range(\$c|length)|select(\$c[.].body|test(\"##\\\\s*Implementation Plan\";\"i\"))) // -1) as \$i | if \$i>=0 then \$c[(\$i+1):]|map(.body|test(\"\\\\b(approved|go ahead|looks good|lgtm)\\\\b\";\"i\"))|any else false end"
+        printf '   Result "true"  → plan exists. Check for a human approval comment posted AFTER the plan comment\n'
+        printf '                    (approved / go ahead / looks good / lgtm — case-insensitive, whole word):\n'
+        printf '     gh issue view %s --repo %s --json comments \\\n' "${item_id}" "${REPO_FULL}"
+        printf "       --jq '%s'\n" "${jq_expr}"
+        printf '   Result "true"  → approved — skip to step 5 (Implementation mode).\n'
+        printf '   Result "false" → not yet — revise or re-post the plan, mark Blocked, and STOP (step 3).'
+    fi
+}
+
+# Output the approval instruction for step 4 of build_issue_claude_md.
+_build_plan_approval_instruction() {
+    if [ -n "${_WF_PROJECT_ID}" ]; then
+        printf 'A human must review the plan, set the Workflow board status to "Approved", and remove the Blocked label to approve it.'
+    else
+        printf 'A human must review the plan, post an approval comment (approved / go ahead / looks good / lgtm) and remove the Blocked label.'
+    fi
+}
+
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}"
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -564,7 +621,7 @@ Steps:
      gh issue view ${item_id} --repo ${REPO_FULL} --json comments \\
        --jq '[.comments[].body] | any(test("## Implementation Plan"; "i"))'
    Result "false" → no plan yet, go to step 3 (Plan mode).
-   Result "true"  → plan exists; a human approved it by removing the Blocked label (you would not be running otherwise), skip to step 5 (Implementation mode).
+$(_build_plan_approval_check "${item_id}" "${plan_approved}")
 3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
    Otherwise, using /plan produce a concrete implementation plan and post it as an issue comment in EXACTLY this format:
@@ -586,7 +643,7 @@ Steps:
 ### Open questions
 <list or "None — ready to proceed pending approval">
 
-4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. A human must review the plan and remove the Blocked label to approve it:
+4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. (Implementation mode) Update the Workflow board status to "Development" (if board data is present above), then proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
@@ -2003,6 +2060,7 @@ main() {
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
         discover_or_create_workflow_project
+        fetch_board_approved_items
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
@@ -2218,8 +2276,10 @@ main() {
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
 
         if [ "${item_type}" = "Issue" ]; then
+            local plan_approved="false"
+            [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && plan_approved="true"
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')
