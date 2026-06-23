@@ -118,6 +118,34 @@ teardown() {
     [[ "${output}" == *"foreground"* ]]
 }
 
+@test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Trusted commenters"* ]]
+}
+
+@test "build_issue_claude_md includes trusted-commenters section listing supplied logins" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" '["alice","bob"]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Trusted commenters"* ]]
+    [[ "${output}" == *"- alice"* ]]
+    [[ "${output}" == *"- bob"* ]]
+}
+
+@test "build_pr_claude_md omits trusted-commenters section when logins list is empty" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Trusted commenters"* ]]
+}
+
+@test "build_pr_claude_md includes trusted-commenters section listing supplied logins" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" '["alice","bob"]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Trusted commenters"* ]]
+    [[ "${output}" == *"- alice"* ]]
+    [[ "${output}" == *"- bob"* ]]
+}
+
 @test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
