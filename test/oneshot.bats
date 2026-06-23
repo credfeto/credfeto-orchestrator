@@ -3766,3 +3766,301 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Insufficient disk space"* ]]
 }
+
+# --- MAX_REVIEW_ITERATIONS constant -------------------------------------------
+
+@test "MAX_REVIEW_ITERATIONS defaults to 3" {
+    [ "${MAX_REVIEW_ITERATIONS}" -eq 3 ]
+}
+
+@test "MAX_REVIEW_ITERATIONS can be overridden via environment variable" {
+    MAX_REVIEW_ITERATIONS=5
+    [ "${MAX_REVIEW_ITERATIONS}" -eq 5 ]
+}
+
+# --- build_issue_claude_md plan-first steps -----------------------------------
+
+@test "build_issue_claude_md includes plan-check command" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Implementation Plan"* ]]
+    [[ "${output}" == *'any(test("## Implementation Plan"'* ]]
+}
+
+@test "build_issue_claude_md instructs agent to post plan comment in correct format" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"### Files to change"* ]]
+    [[ "${output}" == *"### Approach"* ]]
+    [[ "${output}" == *"### Test strategy"* ]]
+    [[ "${output}" == *"### Assumptions"* ]]
+    [[ "${output}" == *"### Open questions"* ]]
+}
+
+@test "build_issue_claude_md describes plan mode and implementation mode" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Plan mode"* ]]
+    [[ "${output}" == *"Implementation mode"* ]]
+}
+
+@test "build_issue_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"WF_PROJECT_ID"* ]]
+    [[ "${output}" != *"WF_PLANNING"* ]]
+}
+
+@test "build_issue_claude_md includes WF section when _WF_PROJECT_ID is set" {
+    _WF_PROJECT_ID="PVT_test123"
+    _WF_STATUS_FIELD_ID="PVTSSF_field456"
+    _WF_OPTION_IDS[Planning]="opt_plan_id"
+    _WF_OPTION_IDS[Development]="opt_dev_id"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WF_PROJECT_ID=PVT_test123"* ]]
+    [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_field456"* ]]
+    [[ "${output}" == *"WF_PLANNING=opt_plan_id"* ]]
+    [[ "${output}" == *"WF_DEVELOPMENT=opt_dev_id"* ]]
+}
+
+# --- build_pr_claude_md review-loop steps ------------------------------------
+
+@test "build_pr_claude_md includes code-review loop instructions" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/code-review --comment"* ]]
+    [[ "${output}" == *"AI Review"* ]]
+}
+
+@test "build_pr_claude_md includes security-review loop instructions" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/security-review"* ]]
+    [[ "${output}" == *"AI Security Review"* ]]
+}
+
+@test "build_pr_claude_md embeds MAX_REVIEW_ITERATIONS value in review loop" {
+    MAX_REVIEW_ITERATIONS=3
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"3 times total"* ]]
+}
+
+@test "build_pr_claude_md embeds custom MAX_REVIEW_ITERATIONS when overridden" {
+    MAX_REVIEW_ITERATIONS=5
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"5 times total"* ]]
+}
+
+@test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"WF_PROJECT_ID"* ]]
+}
+
+@test "build_pr_claude_md includes WF section when _WF_PROJECT_ID is set" {
+    _WF_PROJECT_ID="PVT_pr_proj"
+    _WF_STATUS_FIELD_ID="PVTSSF_pr_field"
+    _WF_OPTION_IDS["AI Review"]="opt_air_id"
+    _WF_OPTION_IDS["Human Review"]="opt_hr_id"
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WF_PROJECT_ID=PVT_pr_proj"* ]]
+    [[ "${output}" == *'WF_AI_REVIEW=opt_air_id'* ]]
+    [[ "${output}" == *'WF_HUMAN_REVIEW=opt_hr_id'* ]]
+}
+
+# --- _issue_has_plan_approval unit tests --------------------------------------
+
+@test "_issue_has_plan_approval returns false when comments array is empty" {
+    local json='{"comments":[]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_issue_has_plan_approval returns false when plan comment exists but no approval" {
+    local json='{"comments":[{"body":"## Implementation Plan for the feature"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_issue_has_plan_approval returns false when approval comment exists but no plan" {
+    local json='{"comments":[{"body":"approved"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_issue_has_plan_approval returns true when both plan and approval comments exist" {
+    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"approved"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "_issue_has_plan_approval is case-insensitive for approval keywords" {
+    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"LGTM"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "_issue_has_plan_approval recognises 'go ahead' as approval" {
+    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"go ahead and implement it"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "_issue_has_plan_approval recognises 'looks good' as approval" {
+    local json='{"comments":[{"body":"## Implementation Plan for the feature"},{"body":"looks good to me"}]}'
+    run _issue_has_plan_approval "${json}"
+    [ "${status}" -eq 0 ]
+}
+
+# --- _build_wf_section unit tests ---------------------------------------------
+
+@test "_build_wf_section outputs nothing when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    run _build_wf_section
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "_build_wf_section outputs project ID and field ID when set" {
+    _WF_PROJECT_ID="PVT_abc123"
+    _WF_STATUS_FIELD_ID="PVTSSF_def456"
+    run _build_wf_section
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WF_PROJECT_ID=PVT_abc123"* ]]
+    [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_def456"* ]]
+}
+
+@test "_build_wf_section outputs all eight status option keys" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_STATUS_FIELD_ID="PVTSSF_test"
+    _WF_OPTION_IDS["Not Started"]="opt1"
+    _WF_OPTION_IDS[Planning]="opt2"
+    _WF_OPTION_IDS[Approved]="opt3"
+    _WF_OPTION_IDS[Development]="opt4"
+    _WF_OPTION_IDS["AI Review"]="opt5"
+    _WF_OPTION_IDS["AI Security Review"]="opt6"
+    _WF_OPTION_IDS["Human Review"]="opt7"
+    _WF_OPTION_IDS[Complete]="opt8"
+    run _build_wf_section
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WF_NOT_STARTED=opt1"* ]]
+    [[ "${output}" == *"WF_PLANNING=opt2"* ]]
+    [[ "${output}" == *"WF_APPROVED=opt3"* ]]
+    [[ "${output}" == *"WF_DEVELOPMENT=opt4"* ]]
+    [[ "${output}" == *"WF_AI_REVIEW=opt5"* ]]
+    [[ "${output}" == *"WF_AI_SECURITY_REVIEW=opt6"* ]]
+    [[ "${output}" == *"WF_HUMAN_REVIEW=opt7"* ]]
+    [[ "${output}" == *"WF_COMPLETE=opt8"* ]]
+}
+
+# --- discover_or_create_workflow_project unit tests ---------------------------
+
+@test "discover_or_create_workflow_project leaves _WF_PROJECT_ID empty when gh graphql fails" {
+    make_stub gh 'exit 1'
+    discover_or_create_workflow_project
+    [ -z "${_WF_PROJECT_ID}" ]
+}
+
+@test "discover_or_create_workflow_project populates _WF_PROJECT_ID from existing project" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Status","options":[{"id":"oid1","name":"Planning"},{"id":"oid2","name":"Development"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '%s\n' '${project_json}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_found" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_f1" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+}
+
+@test "discover_or_create_workflow_project returns immediately on second call for same repo" {
+    local call_count_file="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf 'called\n' >> "${call_count_file}"
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    discover_or_create_workflow_project
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 1 ]
+}
+
+@test "discover_or_create_workflow_project re-discovers when repo changes" {
+    local call_count_file="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_count_file}; exit 1"
+    _WF_CACHED_REPO="other/repo"
+    discover_or_create_workflow_project
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -ge 1 ]
+}
+
+# --- update_workflow_status unit tests ----------------------------------------
+
+@test "update_workflow_status is a no-op when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_log}; exit 0"
+    update_workflow_status "Issue" "42" "Planning"
+    [ ! -f "${call_log}" ]
+}
+
+@test "update_workflow_status warns and returns 0 when status name is unknown" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_STATUS_FIELD_ID="PVTSSF_test"
+    unset _WF_OPTION_IDS
+    declare -A _WF_OPTION_IDS
+    run update_workflow_status "Issue" "42" "NonExistentStatus"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"unknown status"* ]]
+}
+
+@test "update_workflow_status calls gh api to get node_id and update project" {
+    _WF_PROJECT_ID="PVT_proj"
+    _WF_STATUS_FIELD_ID="PVTSSF_field"
+    _WF_OPTION_IDS[Planning]="opt_planning"
+    local call_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${call_log}"
+if [[ "\$*" == *"node_id"* ]]; then
+    printf '{"node_id":"NODE_abc"}\n'
+    exit 0
+fi
+if [[ "\$*" == *"addProjectV2ItemById"* ]]; then
+    printf '{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_item1"}}}}\n'
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    update_workflow_status "Issue" "42" "Planning"
+    grep -q 'node_id' "${call_log}"
+    grep -q 'addProjectV2ItemById' "${call_log}"
+    grep -q 'updateProjectV2ItemFieldValue' "${call_log}"
+}
+
+@test "update_workflow_status warns and returns 0 when node_id lookup fails" {
+    _WF_PROJECT_ID="PVT_proj"
+    _WF_STATUS_FIELD_ID="PVTSSF_field"
+    _WF_OPTION_IDS[Planning]="opt_planning"
+    make_stub gh 'exit 1'
+    run update_workflow_status "Issue" "42" "Planning"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"failed to get node ID"* ]]
+}
