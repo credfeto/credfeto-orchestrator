@@ -34,6 +34,11 @@ PODMAN_CGROUP_PARENT=""
 # Minimum free disk space in kilobytes required to launch a container (10 GB).
 MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 
+# Maximum number of times the agent re-runs /code-review or /security-review
+# in a single PR session before giving up and marking the PR Blocked.
+# Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
+MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
+
 die() {
     if [ -t 2 ]; then
         printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -366,8 +371,239 @@ find_ai_instructions() {
     fi
 }
 
+# Workflow project cache — populated by discover_or_create_workflow_project.
+# Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode).
+_WF_PROJECT_ID=""
+_WF_STATUS_FIELD_ID=""
+declare -gA _WF_OPTION_IDS
+_WF_CACHED_REPO=""
+
+# Board-approved items cache — populated by fetch_board_approved_items.
+# Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
+declare -gA _WF_APPROVED_ITEMS
+_WF_APPROVED_CACHED_REPO=""
+
+# Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
+# Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
+_build_wf_section() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    printf 'Workflow board (see agent-roles.instructions.md for update commands):\n'
+    printf '  WF_PROJECT_ID=%s\n'            "${_WF_PROJECT_ID}"
+    printf '  WF_STATUS_FIELD_ID=%s\n'       "${_WF_STATUS_FIELD_ID}"
+    printf '  WF_NOT_STARTED=%s\n'           "${_WF_OPTION_IDS["Not Started"]:-}"
+    printf '  WF_PLANNING=%s\n'              "${_WF_OPTION_IDS[Planning]:-}"
+    printf '  WF_APPROVED=%s\n'              "${_WF_OPTION_IDS[Approved]:-}"
+    printf '  WF_DEVELOPMENT=%s\n'           "${_WF_OPTION_IDS[Development]:-}"
+    printf '  WF_AI_REVIEW=%s\n'             "${_WF_OPTION_IDS["AI Review"]:-}"
+    printf '  WF_AI_SECURITY_REVIEW=%s\n'   "${_WF_OPTION_IDS["AI Security Review"]:-}"
+    printf '  WF_HUMAN_REVIEW=%s\n'          "${_WF_OPTION_IDS["Human Review"]:-}"
+    printf '  WF_COMPLETE=%s\n'              "${_WF_OPTION_IDS[Complete]:-}"
+}
+
+# Discovers or creates a GitHub Projects (v2) board named "Workflow" linked to
+# the current repo (OWNER/REPO).  Populates _WF_PROJECT_ID, _WF_STATUS_FIELD_ID,
+# and _WF_OPTION_IDS on success.  On any failure, leaves _WF_PROJECT_ID empty so
+# all subsequent update_workflow_status calls are silent no-ops.
+# Safe to call multiple times — returns immediately when the cache is valid for REPO_FULL.
+discover_or_create_workflow_project() {
+    [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ] && return 0
+
+    _WF_PROJECT_ID=""
+    _WF_STATUS_FIELD_ID=""
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+
+    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
+    local projects_json
+    if ! projects_json=$(gh api graphql \
+            -f query="${query}" \
+            -f owner="${OWNER}" \
+            -f repo="${REPO}" \
+            --jq '.data.repository.projectsV2.nodes' 2>/dev/null); then
+        warn "Workflow project: GraphQL query failed for ${REPO_FULL} — status updates disabled"
+        return 0
+    fi
+
+    local project_json
+    project_json=$(printf '%s' "${projects_json}" | \
+        jq -c 'map(select(.title == "Workflow")) | first // empty' 2>/dev/null)
+
+    if [ -z "${project_json}" ]; then
+        info "Workflow project: no 'Workflow' project found for ${REPO_FULL} — creating one"
+        project_json=$(_wf_create_project) || {
+            warn "Workflow project: creation failed for ${REPO_FULL} — status updates disabled"
+            return 0
+        }
+    fi
+
+    _WF_PROJECT_ID=$(printf '%s' "${project_json}" | jq -r '.id // empty')
+    [ -n "${_WF_PROJECT_ID}" ] || {
+        warn "Workflow project: could not read project ID — status updates disabled"
+        return 0
+    }
+
+    _WF_STATUS_FIELD_ID=$(printf '%s' "${project_json}" | \
+        jq -r '.fields.nodes[] | select(.name == "Status") | .id // empty' 2>/dev/null | head -1)
+    [ -n "${_WF_STATUS_FIELD_ID}" ] || {
+        warn "Workflow project: Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        _WF_PROJECT_ID=""
+        return 0
+    }
+
+    local opt_name opt_id
+    while IFS='|' read -r opt_name opt_id; do
+        [ -n "${opt_name}" ] && [ -n "${opt_id}" ] || continue
+        _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
+    done < <(printf '%s' "${project_json}" | \
+        jq -r '.fields.nodes[] | select(.name == "Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
+
+    _WF_CACHED_REPO="${REPO_FULL}"
+    info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
+}
+
+# Creates a new "Workflow" GitHub Project (v2), adds the Status single-select
+# field with all eight options, and links it to the current repo.
+# Outputs project JSON (same shape as the discovery query) on stdout.
+_wf_create_project() {
+    local owner_node_id
+    owner_node_id=$(gh api graphql \
+        -f query="query(\$l:String!){organization(login:\$l){id}}" \
+        -f l="${OWNER}" \
+        --jq '.data.organization.id' 2>/dev/null) \
+    || owner_node_id=$(gh api graphql \
+        -f query="query(\$l:String!){user(login:\$l){id}}" \
+        -f l="${OWNER}" \
+        --jq '.data.user.id' 2>/dev/null) \
+    || { warn "Workflow project: cannot resolve owner node ID for ${OWNER}"; return 1; }
+
+    local project_id
+    project_id=$(gh api graphql \
+        -f query="mutation(\$ownerId:ID!,\$title:String!){createProjectV2(input:{ownerId:\$ownerId,title:\$title}){projectV2{id}}}" \
+        -f ownerId="${owner_node_id}" \
+        -f title="Workflow" \
+        --jq '.data.createProjectV2.projectV2.id' 2>/dev/null) \
+    || { warn "Workflow project: createProjectV2 failed"; return 1; }
+
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:TEAL,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local field_json
+    field_json=$(gh api graphql \
+        -f query="${create_field_query}" \
+        -f p="${project_id}" 2>/dev/null) \
+    || { warn "Workflow project: createProjectV2Field failed for project ${project_id}"; return 1; }
+
+    local repo_node_id
+    repo_node_id=$(gh api graphql \
+        -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
+        -f o="${OWNER}" -f r="${REPO}" \
+        --jq '.data.repository.id' 2>/dev/null) \
+    || { warn "Workflow project: cannot resolve repo node ID for ${REPO_FULL}"; return 1; }
+
+    gh api graphql \
+        -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
+        -f p="${project_id}" -f r="${repo_node_id}" > /dev/null 2>&1 \
+    || warn "Workflow project: linkProjectV2ToRepository failed (project still usable)"
+
+    local status_field_nodes
+    status_field_nodes=$(printf '%s' "${field_json}" | \
+        jq -c '{nodes: [.data.createProjectV2Field.projectV2Field | {id, name, options}]}' 2>/dev/null)
+    printf '{"id":"%s","title":"Workflow","fields":%s}\n' "${project_id}" "${status_field_nodes}"
+}
+
+# Updates the Workflow board status for an issue or PR.
+# Arguments: item_type ("Issue" or "PullRequest"), item_number, status_name
+# No-op when _WF_PROJECT_ID is empty (project disabled or discovery failed).
+update_workflow_status() {
+    local item_type="$1" item_number="$2" status_name="$3"
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+
+    local opt_id="${_WF_OPTION_IDS["${status_name}"]:-}"
+    if [ -z "${opt_id}" ]; then
+        warn "Workflow: unknown status '${status_name}' — skipping update for ${item_type} #${item_number}"
+        return 0
+    fi
+
+    local api_path item_node_id
+    if [ "${item_type}" = "Issue" ]; then
+        api_path="repos/${REPO_FULL}/issues/${item_number}"
+    else
+        api_path="repos/${REPO_FULL}/pulls/${item_number}"
+    fi
+    item_node_id=$(gh api "${api_path}" --jq '.node_id' 2>/dev/null) || {
+        warn "Workflow: failed to get node ID for ${item_type} #${item_number} — skipping"
+        return 0
+    }
+
+    local project_item_id
+    project_item_id=$(gh api graphql \
+        -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
+        -f p="${_WF_PROJECT_ID}" -f c="${item_node_id}" \
+        --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || {
+        warn "Workflow: failed to add ${item_type} #${item_number} to project — skipping"
+        return 0
+    }
+
+    gh api graphql \
+        -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
+        -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" \
+        -f f="${_WF_STATUS_FIELD_ID}" -f v="${opt_id}" \
+        > /dev/null 2>&1 \
+    || warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
+}
+
+# Populate _WF_APPROVED_ITEMS with issue keys ("owner/repo/number") whose
+# Workflow board status is "Approved". Results are cached per repo; a no-op
+# when the board is not configured or the Approved option ID is unknown.
+fetch_board_approved_items() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    [ "${_WF_APPROVED_CACHED_REPO}" != "${REPO_FULL}" ] || return 0
+    _WF_APPROVED_CACHED_REPO="${REPO_FULL}"
+    unset _WF_APPROVED_ITEMS
+    declare -gA _WF_APPROVED_ITEMS
+    local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
+    [ -n "${approved_opt_id}" ] || return 0
+    local entry
+    while IFS= read -r entry; do
+        [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
+    done < <(gh api graphql \
+        -f query="query(\$p:ID!){node(id:\$p){...on ProjectV2{items(first:100){nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:10){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}" \
+        -f p="${_WF_PROJECT_ID}" 2>/dev/null | \
+        jq -r --arg opt "${approved_opt_id}" \
+        '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
+        2>/dev/null)
+}
+
+# Output the step-2 approval-check line(s) for build_issue_claude_md.
+# With board + board-approved: one-liner directing agent to implementation.
+# With board + not approved:   redirect to plan/revision mode.
+# No board:                    jq command to detect human approval comment.
+_build_plan_approval_check() {
+    local item_id="$1" plan_approved="$2"
+    if [ "${plan_approved}" = "true" ]; then
+        printf '   Result "true"  → plan exists and was approved on the Workflow board by a human — skip to step 5 (Implementation mode).'
+    elif [ -n "${_WF_PROJECT_ID}" ]; then
+        printf '   Result "true"  → plan exists but has not been approved on the Workflow board yet. Revise or re-post the plan, mark Blocked, and STOP (step 3).'
+    else
+        local jq_expr="(.comments) as \$c | (first(range(\$c|length)|select(\$c[.].body|test(\"##\\\\s*Implementation Plan\";\"i\"))) // -1) as \$i | if \$i>=0 then \$c[(\$i+1):]|map(.body|test(\"\\\\b(approved|go ahead|looks good|lgtm)\\\\b\";\"i\"))|any else false end"
+        printf '   Result "true"  → plan exists. Check for a human approval comment posted AFTER the plan comment\n'
+        printf '                    (approved / go ahead / looks good / lgtm — case-insensitive, whole word):\n'
+        printf '     gh issue view %s --repo %s --json comments \\\n' "${item_id}" "${REPO_FULL}"
+        printf "       --jq '%s'\n" "${jq_expr}"
+        printf '   Result "true"  → approved — skip to step 5 (Implementation mode).\n'
+        printf '   Result "false" → not yet — revise or re-post the plan, mark Blocked, and STOP (step 3).'
+    fi
+}
+
+# Output the approval instruction for step 4 of build_issue_claude_md.
+_build_plan_approval_instruction() {
+    if [ -n "${_WF_PROJECT_ID}" ]; then
+        printf 'A human must review the plan, set the Workflow board status to "Approved", and remove the Blocked label to approve it.'
+    else
+        printf 'A human must review the plan, post an approval comment (approved / go ahead / looks good / lgtm) and remove the Blocked label.'
+    fi
+}
+
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}"
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -377,14 +613,43 @@ Work on issue #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
 
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
+$(_build_wf_section)
 
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. BEFORE writing any code: read the issue and all comments. If the issue contains questions that need answers, or if you have questions, you MUST ask them first in comments on the issue. Mark the issue as blocked and wait for answers: gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-3. Reply to every issue comment that prompted an action with "<one sentence description>"
-4. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
-5. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
-6. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
+2. Check whether you have already posted a plan for this issue:
+     gh issue view ${item_id} --repo ${REPO_FULL} --json comments \\
+       --jq '[.comments[].body] | any(test("## Implementation Plan"; "i"))'
+   Result "false" → no plan yet, go to step 3 (Plan mode).
+$(_build_plan_approval_check "${item_id}" "${plan_approved}")
+3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
+     gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+   Otherwise, using /plan produce a concrete implementation plan and post it as an issue comment in EXACTLY this format:
+
+## Implementation Plan
+
+### Files to change
+- \`path/to/file\` — reason
+
+### Approach
+<one-paragraph description>
+
+### Test strategy
+<what will be tested and how>
+
+### Assumptions
+<list or "None">
+
+### Open questions
+<list or "None — ready to proceed pending approval">
+
+4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
+     gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+5. (Implementation mode) Update the Workflow board status to "Development" (if board data is present above), then proceed with the plan from the plan comment.
+6. Reply to every issue comment that prompted an action with "<one sentence description>"
+7. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request that links issue #${item_id}
+8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
+9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
 }
 
@@ -452,6 +717,7 @@ Work on pull request #${item_id} in ${REPO_FULL}.
 The repository is checked out at ${repo_path}.
 
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
+$(_build_wf_section)
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
@@ -461,8 +727,22 @@ ${checkout_step}
 4. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
 6. Proceed to address all outstanding work
-7. When all work is complete and CI passes: enable auto-merge — run this exact command: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-   If that fails because auto-merge is not supported by the repo, fall back to marking the PR as ready: gh pr ready ${item_id} --repo ${REPO_FULL}
+7. When all work is complete and all required CI checks pass: run the AI review loop before enabling auto-merge.
+   a. Update Workflow board status to "AI Review" (if board data is present above).
+      Run: /code-review --comment
+      If findings are posted as inline PR comments: fix each in its own commit, push, then run /code-review --comment again.
+      Repeat up to ${MAX_REVIEW_ITERATIONS} times total. After ${MAX_REVIEW_ITERATIONS} rounds with unresolved findings:
+        - Post a PR comment listing the unresolved findings.
+        - Add the Blocked label and STOP: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+   b. When code review passes (no findings): update Workflow board status to "AI Security Review" (if board data present).
+      Run: /security-review
+      If findings are reported: post them as a PR comment if not already inline, fix each in its own commit, push, then run /security-review again.
+      Repeat up to ${MAX_REVIEW_ITERATIONS} times total. After ${MAX_REVIEW_ITERATIONS} rounds with unresolved findings:
+        - Post a PR comment listing the unresolved security findings.
+        - Add the Blocked label and STOP: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+   c. When both reviews pass: update Workflow board status to "Human Review" (if board data present), then enable auto-merge:
+      gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+      If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
 8. All interaction with humans including status reports must be made as a comment to the pull request.
 9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
@@ -1779,6 +2059,8 @@ main() {
 
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
+        discover_or_create_workflow_project
+        fetch_board_approved_items
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
@@ -1994,8 +2276,10 @@ main() {
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
 
         if [ "${item_type}" = "Issue" ]; then
+            local plan_approved="false"
+            [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && plan_approved="true"
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')

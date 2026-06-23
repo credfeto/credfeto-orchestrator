@@ -46,3 +46,15 @@ If something genuinely must be in the bootstrap prompt (e.g. a GitHub CLI quirk 
 - **Non-duplicative** — if `agent-roles.instructions.md` already covers it, remove it from the prompt
 
 Review `build_issue_prompt` and `build_pr_prompt` whenever adding a new rule. If an existing line is now covered by an instruction file, remove it from the prompt rather than leaving both.
+
+## Dynamic Data in build_issue_claude_md and build_pr_claude_md
+
+`build_issue_claude_md` and `build_pr_claude_md` embed **runtime data** that cannot live in instruction files because it is specific to the individual repo being processed:
+
+| Data block | Source | Purpose |
+| --- | --- | --- |
+| Workflow board section (`WF_PROJECT_ID`, `WF_STATUS_FIELD_ID`, `WF_*` option IDs) | `_build_wf_section()` — populated by `discover_or_create_workflow_project` | Agent uses these to move the issue/PR through the Workflow board mid-session |
+
+This is not policy — it is per-repo instance data that changes between runs. Do not move it to instruction files.
+
+When `_WF_PROJECT_ID` is empty (project discovery failed or not configured), `_build_wf_section` emits nothing and the agent skips all board updates silently.
