@@ -211,7 +211,7 @@ ensure_repo_current() {
         # .git/config and would cause the host-side fetch to fail because the
         # service user has no HTTPS credential helper.
         git -C "${REPO_WORK_DIR}" remote set-url origin "git@github.com:${OWNER}/${REPO}.git"
-        git -C "${REPO_WORK_DIR}" config --unset remote.origin.pushurl 2>/dev/null || true
+        git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
         info "Fetching latest changes for ${REPO_FULL}..."
         git -C "${REPO_WORK_DIR}" fetch --prune origin || die "Failed to fetch from origin for ${REPO_FULL}"
 

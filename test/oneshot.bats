@@ -3926,7 +3926,7 @@ STUBEOF
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-    grep -q "config --unset remote.origin.pushurl" "${git_log}"
+    grep -q "config --unset-all remote.origin.pushurl" "${git_log}"
 }
 
 # --- disk_space_available_kb --------------------------------------------------
