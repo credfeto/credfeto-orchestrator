@@ -1,0 +1,214 @@
+#!/bin/bash
+
+# Idempotently provisions the "Workflow" GitHub Project (v2) for a repository so the
+# orchestrator can drive its board.  Only the repository owner can create a project under a
+# personal account, so run this authenticated as that owner — not as the orchestrator bot.
+#
+# Each step is skipped when already done, so the script is safe to re-run:
+#   1. create a "Workflow" project owned by the repository owner
+#   2. add the "Workflow Status" single-select field with its eight options
+#   3. link the project to the repository
+#   4. grant the orchestrator bot WRITER access to the project
+#
+# Usage: create-project --repo <owner>/<repo>
+
+# The orchestrator bot account that needs write access to drive the board.
+BOT_LOGIN="dnyw4l3n13"
+PROJECT_TITLE="Workflow"
+STATUS_FIELD_NAME="Workflow Status"
+
+die() {
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
+    exit 1
+}
+
+success() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
+}
+
+info() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
+}
+
+check_required_tools() {
+    local tool
+    for tool in gh jq; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+# Runs a GraphQL call via gh, capturing stderr.  Dies with the API message on failure;
+# otherwise prints the (already --jq-filtered) result on stdout.
+gh_graphql() {
+    local err out
+    err=$(mktemp) || err=/dev/null
+    if ! out=$(gh api graphql "$@" 2>"${err}"); then
+        local msg
+        msg=$(head -3 "${err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${err}"
+        die "GitHub GraphQL call failed${msg:+: ${msg}}"
+    fi
+    rm -f "${err}"
+    printf '%s' "${out}"
+}
+
+# Resolves the GraphQL node ID for an owner, trying organization then user.
+resolve_owner_node_id() {
+    local owner="$1" id
+    id=$(gh api graphql -f query="query(\$l:String!){organization(login:\$l){id}}" \
+        -f l="${owner}" --jq '.data.organization.id' 2>/dev/null) || true
+    if [ -z "${id}" ] || [ "${id}" = "null" ]; then
+        id=$(gh api graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
+            -f l="${owner}" --jq '.data.user.id' 2>/dev/null) || true
+    fi
+    [ -n "${id}" ] && [ "${id}" != "null" ] || die "Could not resolve owner node ID for ${owner}"
+    printf '%s' "${id}"
+}
+
+resolve_repo_node_id() {
+    local owner="$1" repo="$2" id
+    id=$(gh_graphql -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
+        -f o="${owner}" -f r="${repo}" --jq '.data.repository.id')
+    [ -n "${id}" ] && [ "${id}" != "null" ] || die "Could not resolve repository node ID for ${owner}/${repo}"
+    printf '%s' "${id}"
+}
+
+# Finds a "Workflow" project linked to the repo, scoped exactly like the orchestrator's
+# discovery so what we treat as "already set up" is what the orchestrator will later find.
+# Project titles are not unique, so the repo-link scope is what distinguishes per-repo
+# projects.  Prints the project JSON (id + fields) on stdout, or nothing when absent.
+discover_linked_project() {
+    local owner="$1" repo="$2"
+    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
+    PT="${PROJECT_TITLE}" gh_graphql -f query="${query}" -f owner="${owner}" -f repo="${repo}" \
+        --jq '(.data.repository.projectsV2.nodes // []) | map(select(.title==env.PT)) | first // empty'
+}
+
+create_project() {
+    local owner_node_id="$1" id
+    id=$(gh_graphql \
+        -f query="mutation(\$ownerId:ID!,\$title:String!){createProjectV2(input:{ownerId:\$ownerId,title:\$title}){projectV2{id}}}" \
+        -f ownerId="${owner_node_id}" -f title="${PROJECT_TITLE}" \
+        --jq '.data.createProjectV2.projectV2.id')
+    [ -n "${id}" ] && [ "${id}" != "null" ] || die "createProjectV2 returned no project ID"
+    printf '%s' "${id}"
+}
+
+link_project() {
+    local project_id="$1" repo_node_id="$2"
+    gh_graphql \
+        -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
+        -f p="${project_id}" -f r="${repo_node_id}" >/dev/null
+}
+
+# Creates the "Workflow Status" single-select field when the project lacks it.
+# project_json is the discovery JSON ("" for a freshly created project).
+ensure_status_field() {
+    local project_id="$1" project_json="$2"
+    local field_id
+    field_id=$(printf '%s' "${project_json}" | \
+        jq -r --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n) | .id' 2>/dev/null | head -1)
+    if [ -n "${field_id}" ]; then
+        info "Status field \"${STATUS_FIELD_NAME}\" already present — skipping"
+        return 0
+    fi
+    info "Adding \"${STATUS_FIELD_NAME}\" field with its eight options..."
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name}}}}"
+    gh_graphql -f query="${create_field_query}" -f p="${project_id}" >/dev/null
+    success "Status field added"
+}
+
+# Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
+# so running it when the bot already has access is a harmless no-op.
+ensure_bot_collaborator() {
+    local project_id="$1" bot_id
+    bot_id=$(gh_graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
+        -f l="${BOT_LOGIN}" --jq '.data.user.id')
+    [ -n "${bot_id}" ] && [ "${bot_id}" != "null" ] || die "Could not resolve node ID for bot user ${BOT_LOGIN}"
+    info "Granting ${BOT_LOGIN} WRITER access to the project..."
+    # shellcheck disable=SC2016  # $p/$c are GraphQL variables resolved by jq below, not the shell
+    local mut='mutation($p:ID!,$c:[ProjectV2CollaboratorInput!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators{nodes{login}}}}'
+    jq -cn --arg p "${project_id}" --arg id "${bot_id}" --arg q "${mut}" \
+        '{query:$q,variables:{p:$p,c:[{userId:$id,role:"WRITER"}]}}' \
+        | gh api graphql --input - >/dev/null 2>&1 \
+        || die "Failed to grant ${BOT_LOGIN} access to project ${project_id}"
+    success "${BOT_LOGIN} has WRITER access"
+}
+
+provision_project() {
+    local owner="$1" repo="$2"
+    local repo_full="${owner}/${repo}"
+
+    info "Resolving ${repo_full}..."
+    local repo_node_id
+    repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}")
+
+    local project_json project_id
+    project_json=$(discover_linked_project "${owner}" "${repo}")
+
+    if [ -n "${project_json}" ]; then
+        project_id=$(printf '%s' "${project_json}" | jq -r '.id')
+        info "\"${PROJECT_TITLE}\" project already linked to ${repo_full} (${project_id}) — skipping create + link"
+    else
+        info "No \"${PROJECT_TITLE}\" project linked to ${repo_full} — creating one..."
+        local owner_node_id
+        owner_node_id=$(resolve_owner_node_id "${owner}")
+        project_id=$(create_project "${owner_node_id}")
+        success "Created project ${project_id}"
+        info "Linking project to ${repo_full}..."
+        link_project "${project_id}" "${repo_node_id}"
+        success "Project linked to ${repo_full}"
+        project_json=""
+    fi
+
+    ensure_status_field "${project_id}" "${project_json}"
+    ensure_bot_collaborator "${project_id}"
+
+    success "Workflow project ready for ${repo_full}: ${project_id}"
+}
+
+main() {
+    local repo_full=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --repo)
+                shift
+                [ -n "${1:-}" ] || die "--repo requires a value"
+                repo_full="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "${repo_full}" ] || die "Usage: $(basename "$0") --repo <owner>/<repo>"
+    [[ "${repo_full}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
+        || die "--repo value must be in <owner>/<repo> form: ${repo_full}"
+
+    check_required_tools
+
+    local owner="${repo_full%%/*}"
+    local repo="${repo_full##*/}"
+
+    info "Provisioning Workflow project for ${repo_full}"
+    provision_project "${owner}" "${repo}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

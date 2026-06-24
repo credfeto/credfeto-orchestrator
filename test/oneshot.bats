@@ -4697,3 +4697,61 @@ STUBEOF
     [[ "${output}" == *"failed to add Issue #42 to project"* ]]
     [[ "${output}" == *"project not found"* ]]
 }
+
+# --- report_missing_workflow_project --------------------------------------
+
+@test "report_missing_workflow_project files an issue when none is open" {
+    export WF_CREATE_LOG="${TEST_TMP}/wf_create.log"
+    : > "${WF_CREATE_LOG}"
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   printf "" ;;
+    "issue create") printf "%s\n" "$*" >> "${WF_CREATE_LOG}" ;;
+    *)              ;;
+esac'
+
+    run report_missing_workflow_project
+    [ "${status}" -eq 0 ]
+
+    run cat "${WF_CREATE_LOG}"
+    [[ "${output}" == *"--title ${WF_SETUP_ISSUE_TITLE}"* ]]
+    [[ "${output}" == *"--label AI-Work"* ]]
+    [[ "${output}" == *"create-project --repo ${REPO_FULL}"* ]]
+}
+
+@test "report_missing_workflow_project does not file when an open issue already exists" {
+    export WF_CREATE_LOG="${TEST_TMP}/wf_create.log"
+    : > "${WF_CREATE_LOG}"
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   printf "7\n" ;;
+    "issue create") printf "%s\n" "$*" >> "${WF_CREATE_LOG}" ;;
+    *)              ;;
+esac'
+
+    run report_missing_workflow_project
+    [ "${status}" -eq 0 ]
+
+    run cat "${WF_CREATE_LOG}"
+    [ -z "${output}" ]
+}
+
+@test "report_missing_workflow_project files at most once per repo within a run" {
+    export WF_CREATE_LOG="${TEST_TMP}/wf_create.log"
+    : > "${WF_CREATE_LOG}"
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   printf "" ;;
+    "issue create") printf "created\n" >> "${WF_CREATE_LOG}" ;;
+    *)              ;;
+esac'
+
+    report_missing_workflow_project
+    report_missing_workflow_project
+
+    run grep -c created "${WF_CREATE_LOG}"
+    [ "${output}" -eq 1 ]
+}

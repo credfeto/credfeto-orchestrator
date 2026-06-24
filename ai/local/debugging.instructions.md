@@ -146,6 +146,7 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | No Discord notifications | `DISCORD_WEBHOOK` not set in `.env` | Section 9 |
 | Priorities fetch fails | API unreachable or auth issue | Section 10 |
 | `oneshot` running old logic | Repo behind `origin/main` | Section 1 |
+| `Workflow project: ... status updates disabled` + a `Workflow project setup required` issue in the repo | No `Workflow` project for the repo; the bot cannot create one under a personal account | Run `create-project --repo <owner>/<repo>` as the repo owner |
 
 ## After Reviewing State
 
