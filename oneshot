@@ -516,6 +516,33 @@ discover_or_create_workflow_project() {
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
 }
 
+# Invites all trusted logins (excluding the copilot bot) as WRITER collaborators
+# on the given GitHub Project V2. Non-fatal: warns and returns 0 on any failure.
+_wf_invite_trusted_collaborators() {
+    local project_id="$1"
+    local collaborators='[]'
+    local login user_node_id
+    while IFS= read -r login; do
+        [ -z "${login}" ] && continue
+        [ "${login}" = "copilot-pull-request-reviewer" ] && continue
+        user_node_id=$(gh api graphql \
+            -f query="query(\$l:String!){user(login:\$l){id}}" \
+            -f l="${login}" \
+            --jq '.data.user.id' 2>/dev/null) || true
+        [ -z "${user_node_id}" ] || [ "${user_node_id}" = "null" ] || [[ "${user_node_id}" == \{* ]] && continue
+        collaborators=$(printf '%s' "${collaborators}" | \
+            jq -c --arg id "${user_node_id}" '. + [{"userId":$id,"role":"WRITER"}]')
+    done < <(get_trusted_logins | jq -r '.[]' 2>/dev/null)
+    [ "${collaborators}" = '[]' ] && return 0
+    # shellcheck disable=SC2016
+    local mut='mutation($p:ID!,$c:[ProjectV2CollaboratorInput!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators{nodes{login}}}}'
+    printf '%s' "${collaborators}" | \
+        jq -c --arg p "${project_id}" --arg q "${mut}" \
+        '{query:$q,variables:{p:$p,c:.}}' | \
+        gh api graphql --input - > /dev/null 2>&1 \
+    || warn "Workflow project: updateProjectV2Collaborators failed — add collaborators manually at github.com"
+}
+
 # Creates a new "Workflow" GitHub Project (v2), adds the Status single-select
 # field with all eight options, and links it to the current repo.
 # Outputs project JSON (same shape as the discovery query) on stdout.
@@ -526,14 +553,14 @@ _wf_create_project() {
     owner_node_id=$(gh api graphql \
         -f query="query(\$l:String!){organization(login:\$l){id}}" \
         -f l="${OWNER}" \
-        --jq '.data.organization.id' 2>"${org_err}")
-    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ]; then
+        --jq '.data.organization.id' 2>"${org_err}") || true
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ] || [[ "${owner_node_id}" == \{* ]]; then
         owner_node_id=$(gh api graphql \
             -f query="query(\$l:String!){user(login:\$l){id}}" \
             -f l="${OWNER}" \
             --jq '.data.user.id' 2>"${user_err}") || true
     fi
-    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ]; then
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ] || [[ "${owner_node_id}" == \{* ]]; then
         local owner_err_content
         owner_err_content=$(head -3 "${org_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
         local user_err_content
@@ -590,6 +617,8 @@ _wf_create_project() {
         -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
         -f p="${project_id}" -f r="${repo_node_id}" > /dev/null 2>&1 \
     || warn "Workflow project: linkProjectV2ToRepository failed (project still usable)"
+
+    _wf_invite_trusted_collaborators "${project_id}"
 
     local status_field_nodes
     status_field_nodes=$(printf '%s' "${field_json}" | \
