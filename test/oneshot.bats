@@ -2660,6 +2660,19 @@ STUBEOF
     [ "${result}" -gt "${now_unix}" ]
 }
 
+@test "parse_reset_time converts 7:10pm UTC to correct unix timestamp" {
+    result=$(parse_reset_time "You've hit your limit · resets 7:10pm (UTC)")
+    [ -n "${result}" ]
+
+    now_unix=$(date +%s)
+    # Expected: today or tomorrow at 19:10:00 UTC
+    expected_unix=$(date -u -d "today 19:10:00" +%s)
+    if [ "${expected_unix}" -le "${now_unix}" ]; then
+        expected_unix=$(date -u -d "tomorrow 19:10:00" +%s)
+    fi
+    [ "${result}" -eq "${expected_unix}" ]
+}
+
 @test "parse_reset_time converts 12am UTC to hour 0 and returns future timestamp" {
     local result
     result=$(parse_reset_time "hit your limit · resets 12am (UTC)")
@@ -2684,6 +2697,37 @@ STUBEOF
     run parse_reset_time "resets 3pm (UTC;rm -rf /)"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
+}
+
+# --- handle_claude_is_error tmpfile cleanup -----------------------------------
+
+@test "handle_claude_is_error removes tmpfile before dying on rate-limit (429)" {
+    notify_discord_rate_limited() { return 0; }
+    save_rate_limit()             { return 0; }
+
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"api_error_status":"429","result":"Claude AI usage limit reached"}' > "${tmpfile}"
+
+    run handle_claude_is_error "${tmpfile}" "" "Issue" "1"
+    # die exits non-zero.
+    [ "${status}" -ne 0 ]
+    # The temp file must not be leaked on the rate-limit path.
+    [ ! -f "${tmpfile}" ]
+}
+
+@test "handle_claude_is_error removes tmpfile before dying on generic error" {
+    notify_discord_claude_error() { return 0; }
+
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"api_error_status":"500","result":"internal error"}' > "${tmpfile}"
+
+    run handle_claude_is_error "${tmpfile}" "" "PullRequest" "2"
+    # die exits non-zero.
+    [ "${status}" -ne 0 ]
+    # The temp file must not be leaked on the generic-error path.
+    [ ! -f "${tmpfile}" ]
 }
 
 # --- rate-limit file management -----------------------------------------------

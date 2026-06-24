@@ -975,7 +975,7 @@ handle_claude_is_error() {
         rm -f "${tmpfile}"
         local new_tmpfile
         new_tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-        run_claude_fresh "${new_tmpfile}"
+        run_claude_fresh "${new_tmpfile}" "${item_type}" "${item_id}"
         local retry_is_error
         retry_is_error=$(jq -r '.is_error // false' "${new_tmpfile}" 2>/dev/null || printf 'false')
         if [ "${retry_is_error}" = "true" ]; then
@@ -1319,7 +1319,7 @@ invoke_claude() {
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
         local new_tmpfile
-        new_tmpfile=$(handle_claude_is_error "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}")
+        new_tmpfile=$(handle_claude_is_error "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}") || exit $?
         # handle_claude_is_error returns a new path only on blocking_limit retry.
         [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
     fi
@@ -1380,14 +1380,18 @@ is_owner_rate_limited() {
 # Outputs nothing and returns silently when parsing fails.
 parse_reset_time() {
     local result_text="$1"
-    local hour ampm tz hour24 reset_unix now_unix
-    local regex='resets ([0-9]+)(am|pm) \(([^)]+)\)'
+    local hour minutes ampm tz hour24 reset_unix now_unix
+    local regex='resets ([0-9]+)(:[0-9]+)?(am|pm) \(([^)]+)\)'
 
     [[ "${result_text}" =~ $regex ]] || return 0
 
     hour="${BASH_REMATCH[1]}"
-    ampm="${BASH_REMATCH[2]}"
-    tz="${BASH_REMATCH[3]}"
+    minutes="${BASH_REMATCH[2]:-}"
+    ampm="${BASH_REMATCH[3]}"
+    tz="${BASH_REMATCH[4]}"
+
+    minutes="${minutes#:}"
+    [ -z "${minutes}" ] && minutes="00"
 
     # Reject timezone strings with dangerous characters.
     case "${tz}" in
@@ -1403,10 +1407,10 @@ parse_reset_time() {
         hour24="${hour}"
     fi
 
-    reset_unix=$(TZ="${tz}" date -d "today ${hour24}:00" +%s 2>/dev/null) || return
+    reset_unix=$(TZ="${tz}" date -d "today ${hour24}:${minutes}" +%s 2>/dev/null) || return
     now_unix=$(date +%s)
     if [ "${reset_unix}" -le "${now_unix}" ]; then
-        reset_unix=$(TZ="${tz}" date -d "tomorrow ${hour24}:00" +%s 2>/dev/null) || return
+        reset_unix=$(TZ="${tz}" date -d "tomorrow ${hour24}:${minutes}" +%s 2>/dev/null) || return
     fi
     printf '%s' "${reset_unix}"
 }
@@ -2077,6 +2081,7 @@ main() {
     info "Found ${item_count} open work item(s) — scanning for actionable work..."
 
     local -a skip_repos=()
+    declare -gA reported_rate_limited=()
     local count_blocked=0
     local count_unchanged=0
     local count_active_repo=0
@@ -2317,7 +2322,10 @@ main() {
         fi
 
         if is_owner_rate_limited; then
-            info "Owner ${OWNER} is rate-limited — skipping ${item_type} #${item_id} in ${item_repo}"
+            if [ -z "${reported_rate_limited["${OWNER}"]:-}" ]; then
+                info "Owner ${OWNER} is rate-limited — skipping all actionable items"
+                reported_rate_limited["${OWNER}"]=1
+            fi
             continue
         fi
 
