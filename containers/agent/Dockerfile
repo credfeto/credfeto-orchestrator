@@ -159,6 +159,12 @@ RUN set -e; \
     rm -rf /tmp/sanity-clone; \
     echo "== all agent build-time checks passed =="
 
+# Bake the git SHA of the orchestrator commit that built this image layer into the
+# environment so entrypoint.sh can log it for debugging. Placed last so changing
+# the SHA only invalidates this cheap final layer.
+ARG BUILD_GIT_SHA=unknown
+ENV IMAGE_SHA_DEVELOPMENT_AGENT=${BUILD_GIT_SHA}
+
 USER developer
 
 WORKDIR /workspace/repo

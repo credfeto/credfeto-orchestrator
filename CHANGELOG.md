@@ -53,6 +53,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
 - Auto-report unparseable Claude 429 rate-limit reset messages to a GitHub tracking issue so the parser can be extended
 - Auto-invite trusted collaborators as Writers when a new Workflow project is created so they can set board status to Approved
+- Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH

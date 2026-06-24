@@ -7,11 +7,21 @@ set -euo pipefail
 
 die()  { printf '\n\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 warn() { printf '\n\033[33m!\033[0m %s\n' "$*" >&2; }
+info() { printf '\n\033[32m→\033[0m %s\n' "$*" >&2; }
 
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN is required but not set"
 [ -n "${GIT_USER_NAME:-}" ]           || die "GIT_USER_NAME is required but not set"
 [ -n "${GIT_USER_EMAIL:-}" ]          || die "GIT_USER_EMAIL is required but not set"
 [ -n "${GIT_SIGNING_KEY:-}" ]         || die "GIT_SIGNING_KEY is required but not set"
+
+# Log the git SHA baked into each image layer at build time. Logged early so the
+# provenance is visible even if a later startup check (GPG, SSH, hooks) fails.
+info "Image layer provenance (git SHA of orchestrator commit used for each build):"
+info "  development-tools:   ${IMAGE_SHA_DEVELOPMENT_TOOLS:-unknown}"
+info "  development-node:    ${IMAGE_SHA_DEVELOPMENT_NODE:-unknown}"
+info "  development-python:  ${IMAGE_SHA_DEVELOPMENT_PYTHON:-unknown}"
+info "  development-full:    ${IMAGE_SHA_DEVELOPMENT_FULL:-unknown}"
+info "  development-agent:   ${IMAGE_SHA_DEVELOPMENT_AGENT:-unknown}"
 
 # Check that the pre-commit rules checkout at /workspace/rules is up-to-date.
 # Compares the SHA recorded in /workspace/rules/.env against the published SHA.

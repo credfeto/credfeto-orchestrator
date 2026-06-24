@@ -272,3 +272,9 @@ RUN set -e; \
     chown -R developer:developer /tmp/pre-commit-test; \
     su developer -c /tmp/pre-commit-test/acceptance-test; \
     rm -rf /tmp/pre-commit-test
+
+# Bake the git SHA of the orchestrator commit that built this image layer into the
+# environment so entrypoint.sh can log it for debugging. Placed last so changing
+# the SHA only invalidates this cheap final layer.
+ARG BUILD_GIT_SHA=unknown
+ENV IMAGE_SHA_DEVELOPMENT_FULL=${BUILD_GIT_SHA}

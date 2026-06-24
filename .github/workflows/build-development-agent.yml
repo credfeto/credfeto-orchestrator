@@ -77,6 +77,8 @@ jobs:
           pull: true
           push: true
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          build-args: |
+            BUILD_GIT_SHA=${{ github.sha }}
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max"
 
