@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-die() { printf '\n\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+die()  { printf '\n\033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
+warn() { printf '\n\033[33m!\033[0m %s\n' "$*" >&2; }
 
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN is required but not set"
 [ -n "${GIT_USER_NAME:-}" ]           || die "GIT_USER_NAME is required but not set"
@@ -85,6 +86,36 @@ ensure_github_known_hosts() {
     chmod 600 "${known_hosts}"
 }
 
+# Ensure gh uses SSH for git operations on every host it knows about.
+# GH_HOST routes API calls through the proxy, but gh also uses it for git remote
+# URLs in commands like `gh pr checkout` — which would write git@<proxy>: into
+# .git/config. We bake `git_protocol: ssh` into the image; this function verifies
+# that setting is still in effect and re-applies it if it has been overwritten.
+enforce_gh_git_protocol_ssh() {
+    local hosts host current
+    # Collect every host gh knows about (from its config file).
+    hosts=$(gh config list 2>/dev/null | awk -F'[. ]' '/^hosts\./ {print $2}' | sort -u || true)
+    # Always include the proxy host (it may not have an explicit entry yet).
+    [ -n "${GH_HOST:-}" ] && hosts=$(printf '%s\n%s\n' "${hosts}" "${GH_HOST}" | sort -u)
+    [ -n "${hosts}" ] || return 0
+    while IFS= read -r host; do
+        [ -z "${host}" ] && continue
+        current=$(gh config get git_protocol --host "${host}" 2>/dev/null || true)
+        if [ "${current}" != "ssh" ]; then
+            warn "gh git_protocol for ${host} is '${current}' — resetting to ssh"
+            gh config set git_protocol ssh --host "${host}" 2>/dev/null \
+                || warn "Failed to reset gh git_protocol for ${host}"
+        fi
+    done <<< "${hosts}"
+    # Also ensure the global default is ssh.
+    current=$(gh config get git_protocol 2>/dev/null || true)
+    if [ "${current}" != "ssh" ]; then
+        warn "gh global git_protocol is '${current}' — resetting to ssh"
+        gh config set git_protocol ssh 2>/dev/null \
+            || warn "Failed to reset gh global git_protocol"
+    fi
+}
+
 # Fail fast if the workspace repo has any remote URL that is not SSH (git@github.com:).
 # oneshot resets the URL to SSH before every container launch, so a non-SSH URL
 # here means something has gone wrong upstream.
@@ -93,12 +124,15 @@ verify_repo_ssh_remotes() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
 
+    # Read raw stored values from .git/config only (--local), not the insteadOf/pushInsteadOf
+    # resolved URLs that `git remote -v` returns. System-level pushInsteadOf rules can rewrite
+    # a correct git@github.com: fetch URL to something else in the push-URL display even though
+    # the stored value is correct — causing a false-positive failure here.
     local non_ssh_remotes
-    non_ssh_remotes=$(git -C "${repo_dir}" remote -v 2>/dev/null \
-        | awk '{print $2}' \
-        | sort -u \
-        | grep -v '^git@github\.com:' \
-        || true)
+    non_ssh_remotes=$({
+        git -C "${repo_dir}" config --local --get-all remote.origin.url 2>/dev/null
+        git -C "${repo_dir}" config --local --get-all remote.origin.pushurl 2>/dev/null
+    } | sort -u | grep -v '^git@github\.com:' || true)
 
     [ -z "${non_ssh_remotes}" ] && return 0
 
@@ -127,6 +161,7 @@ verify_no_user_insteadof() {
     die "These rules are only allowed in the system /etc/gitconfig. Remove them from your local or global git config."
 }
 
+enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
 verify_ssh_signing

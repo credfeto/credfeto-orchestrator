@@ -150,6 +150,10 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Workflow project creation now falls through to user-account query when the org lookup exits non-zero or returns a JSON error blob instead of a node ID
 - Write prompt to a file before starting the agent container and redirect stdin from that file, eliminating the race where printf closes the pipe before the container process reads from it
 - Die immediately with a clear message when the prompt is empty rather than launching a container that wastes tokens and then fails
+- Use git config --local instead of git remote -v in verify_repo_ssh_remotes so that system-level pushInsteadOf rules do not cause false-positive SSH URL check failures
+- Bake git_protocol: ssh into the gh CLI config in the container image so that gh pr checkout always uses SSH remote URLs rather than HTTPS
+- Add insteadOf and pushInsteadOf rules for git@github-api.markridgwell.com: in system-gitconfig and setup-owner so git operations are transparently redirected to git@github.com: when the proxy hostname is stored by gh
+- Add enforce_gh_git_protocol_ssh entrypoint check that verifies gh has git_protocol=ssh set for every known host and GH_HOST, and resets it automatically if it was overwritten
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

@@ -60,6 +60,24 @@ STUBEOF
 
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
+
+    # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value).
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [ "$1" = "config" ] && [ "$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=ssh\n'
+    exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "git_protocol" ]; then
+    printf 'ssh\n'
+    exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "set" ]; then
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
 }
 
 # --- CLAUDE_CODE_OAUTH_TOKEN validation ----------------------------------------
@@ -423,22 +441,28 @@ STUBEOF
 
 # --- verify_repo_ssh_remotes -----------------------------------------------------
 
-# Helper: create a fake .git dir and a git stub that returns $1 from "remote -v".
+# Helper: create a fake .git/config with real remote URL entries.
+# verify_repo_ssh_remotes now reads raw stored values via `git config --local --get-all`
+# rather than `git remote -v`, so the git stub proxies --local reads to the real git.
+# Usage: setup_repo_with_remotes <fetch_url> [<pushurl>]
 setup_repo_with_remotes() {
-    local remote_output="$1"
+    local fetch_url="$1"
+    local push_url="${2:-}"
     local repo_dir="${TEST_TMP}/repo"
-    mkdir -p "${repo_dir}/.git"
+
+    # Init a proper git repo so `git config --local` works (it requires a valid git repo).
+    /usr/bin/git init "${repo_dir}" -q
+
+    # Append the remote config to the freshly-initialised .git/config.
+    printf '[remote "origin"]\n\turl = %s\n' "${fetch_url}" >> "${repo_dir}/.git/config"
+    [ -n "${push_url}" ] && printf '\tpushurl = %s\n' "${push_url}" >> "${repo_dir}/.git/config"
 
     cat > "${STUB_BIN}/git" << GITEOF
 #!/usr/bin/env bash
-# Record all calls for existing tests.
 printf "%s\n" "\$@" >> "${TEST_TMP}/git_args"
-# Return configured remote output only for "remote -v".
-for arg in "\$@"; do
-    if [ "\${arg}" = "-v" ]; then
-        printf '%s\n' "${remote_output}"
-        exit 0
-    fi
+# Proxy --local config reads to the real git so .git/config is read correctly.
+for i in "\$@"; do
+    [ "\${i}" = "--local" ] && exec /usr/bin/git "\$@"
 done
 exit 0
 GITEOF
@@ -466,12 +490,23 @@ GITEOF
     [ "${status}" -eq 0 ]
 }
 
-@test "entrypoint succeeds when all remotes use git@github.com: SSH format" {
+@test "entrypoint succeeds when origin fetch URL uses git@github.com: SSH format" {
+    setup_entrypoint_stubs
+    local repo_dir
+    repo_dir=$(setup_repo_with_remotes "git@github.com:credfeto/some-repo.git")
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint succeeds when origin fetch and pushurl both use git@github.com: SSH format" {
     setup_entrypoint_stubs
     local repo_dir
     repo_dir=$(setup_repo_with_remotes \
-        "origin	git@github.com:credfeto/some-repo.git (fetch)
-origin	git@github.com:credfeto/some-repo.git (push)")
+        "git@github.com:credfeto/some-repo.git" \
+        "git@github.com:credfeto/some-repo.git")
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         WORKSPACE_REPO_DIR="${repo_dir}" \
@@ -482,9 +517,7 @@ origin	git@github.com:credfeto/some-repo.git (push)")
 @test "entrypoint dies when remote uses HTTPS instead of git@github.com:" {
     setup_entrypoint_stubs
     local repo_dir
-    repo_dir=$(setup_repo_with_remotes \
-        "origin	https://github.com/credfeto/some-repo.git (fetch)
-origin	https://github.com/credfeto/some-repo.git (push)")
+    repo_dir=$(setup_repo_with_remotes "https://github.com/credfeto/some-repo.git")
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         WORKSPACE_REPO_DIR="${repo_dir}" \
@@ -497,9 +530,7 @@ origin	https://github.com/credfeto/some-repo.git (push)")
 @test "entrypoint dies when remote uses ssh:// URL instead of git@github.com:" {
     setup_entrypoint_stubs
     local repo_dir
-    repo_dir=$(setup_repo_with_remotes \
-        "origin	ssh://git@github.com/credfeto/some-repo.git (fetch)
-origin	ssh://git@github.com/credfeto/some-repo.git (push)")
+    repo_dir=$(setup_repo_with_remotes "ssh://git@github.com/credfeto/some-repo.git")
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         WORKSPACE_REPO_DIR="${repo_dir}" \
@@ -508,14 +539,12 @@ origin	ssh://git@github.com/credfeto/some-repo.git (push)")
     [[ "${output}" == *"not using git@github.com:"* ]]
 }
 
-@test "entrypoint dies when any remote is not git@github.com: even if others are" {
+@test "entrypoint dies when pushurl is not git@github.com: even if fetch URL is correct" {
     setup_entrypoint_stubs
     local repo_dir
     repo_dir=$(setup_repo_with_remotes \
-        "origin	git@github.com:credfeto/some-repo.git (fetch)
-origin	git@github.com:credfeto/some-repo.git (push)
-upstream	https://github.com/credfeto/some-repo.git (fetch)
-upstream	https://github.com/credfeto/some-repo.git (push)")
+        "git@github.com:credfeto/some-repo.git" \
+        "git@github-api.markridgwell.com:credfeto/some-repo.git")
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         WORKSPACE_REPO_DIR="${repo_dir}" \
@@ -598,4 +627,70 @@ exit 0'
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Forbidden [url \"...\" insteadOf] or [url \"...\" pushInsteadOf] rules found in user git config"* ]]
     [[ "${output}" == *"file:/home/node/.gitconfig"* ]]
+}
+
+# --- enforce_gh_git_protocol_ssh -------------------------------------------------
+
+@test "entrypoint passes without warning when gh git_protocol is already ssh" {
+    setup_entrypoint_stubs
+    # Default gh stub already returns ssh — no warn should appear.
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"resetting to ssh"* ]]
+}
+
+@test "entrypoint warns and resets gh git_protocol when it is not ssh" {
+    setup_entrypoint_stubs
+    # Override gh stub: config get returns 'https', config set records args on one line.
+    cat > "${STUB_BIN}/gh" << GHEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
+if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=https\n'
+    exit 0
+fi
+if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
+    printf 'https\n'
+    exit 0
+fi
+exit 0
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"resetting to ssh"* ]]
+    grep -q "config set git_protocol ssh" "${TEST_TMP}/gh_args"
+}
+
+@test "entrypoint checks GH_HOST when set and resets it if not ssh" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/gh" << GHEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
+if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=ssh\n'
+    exit 0
+fi
+if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
+    # Return https when queried for the proxy host, ssh otherwise.
+    for i in "\$@"; do
+        [ "\${i}" = "github-api.markridgwell.com" ] && { printf 'https\n'; exit 0; }
+    done
+    printf 'ssh\n'
+    exit 0
+fi
+exit 0
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        GH_HOST=github-api.markridgwell.com \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"github-api.markridgwell.com"*"resetting to ssh"* ]]
+    grep -q "config set git_protocol ssh --host github-api.markridgwell.com" "${TEST_TMP}/gh_args"
 }

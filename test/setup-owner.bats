@@ -401,6 +401,8 @@ teardown() {
     [ -f "${gitconfig}" ]
     grep -q 'insteadOf = https://github.com/' "${gitconfig}"
     grep -q 'pushInsteadOf = https://github.com/' "${gitconfig}"
+    grep -q 'insteadOf = git@github-api.markridgwell.com:' "${gitconfig}"
+    grep -q 'pushInsteadOf = git@github-api.markridgwell.com:' "${gitconfig}"
     grep -q 'insteadOf = https://gitlab.com/' "${gitconfig}"
     grep -q 'pushInsteadOf = https://gitlab.com/' "${gitconfig}"
     grep -q 'insteadOf = https://bitbucket.org/' "${gitconfig}"
