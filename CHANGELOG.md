@@ -144,6 +144,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Guard against jq outputting the string 'null' when the org GraphQL query returns null data, ensuring the user-account fallback always runs
 - Capture stderr from createProjectV2Field and repo-node-id lookup calls so auth errors in those paths are surfaced
 - Add ssh stub to entrypoint test helper and test for GitHub auth failure so verify_ssh_signing tests pass in CI without network access
+- Use --unset-all instead of --unset when clearing remote.origin.pushurl so multiple push-URL entries are all removed, preventing a stale git@github-api.markridgwell.com: push URL from surviving the reset
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
