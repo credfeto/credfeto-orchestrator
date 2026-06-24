@@ -171,6 +171,39 @@ STUBEOF
     grep -qx -- '--print' "${TEST_TMP}/claude_args"
 }
 
+@test "entrypoint does not consume stdin before passing it to claude" {
+    setup_entrypoint_stubs
+    # ssh stub that reads from stdin to simulate ssh without -n consuming the prompt.
+    # If entrypoint passes -n to ssh, stdin is /dev/null and claude receives the prompt.
+    # If -n is absent, ssh drains the prompt and claude sees empty stdin.
+    cat > "${STUB_BIN}/ssh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"git@github.com"* ]]; then
+    # Real ssh -n redirects its stdin from /dev/null; simulate that here so the
+    # stub only drains stdin when -n is absent (reproducing the pre-fix behaviour).
+    [[ "$*" != *"-n"* ]] && cat > /dev/null
+    printf 'Hi testuser! You'\''ve successfully authenticated, but GitHub does not provide shell access.\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh"
+
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+stdin=$(cat)
+printf '%s' "${stdin}" > "${TEST_TMP}/claude_stdin"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    printf 'PROMPT_CONTENT' | \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}" 2>/dev/null
+    grep -q 'PROMPT_CONTENT' "${TEST_TMP}/claude_stdin"
+}
+
 # --- verify_hooks_fresh -----------------------------------------------------------
 
 # Shared env vars for verify_hooks_fresh tests.
