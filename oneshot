@@ -518,24 +518,29 @@ discover_or_create_workflow_project() {
 # field with all eight options, and links it to the current repo.
 # Outputs project JSON (same shape as the discovery query) on stdout.
 _wf_create_project() {
-    local owner_node_id owner_err
-    owner_err=$(mktemp --suffix=.stderr) || owner_err=/dev/null
+    local owner_node_id org_err user_err
+    org_err=$(mktemp --suffix=.stderr) || org_err=/dev/null
+    user_err=$(mktemp --suffix=.stderr) || user_err=/dev/null
     owner_node_id=$(gh api graphql \
         -f query="query(\$l:String!){organization(login:\$l){id}}" \
         -f l="${OWNER}" \
-        --jq '.data.organization.id' 2>"${owner_err}") \
-    || owner_node_id=$(gh api graphql \
-        -f query="query(\$l:String!){user(login:\$l){id}}" \
-        -f l="${OWNER}" \
-        --jq '.data.user.id' 2>"${owner_err}") \
-    || {
+        --jq '.data.organization.id' 2>"${org_err}")
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ]; then
+        owner_node_id=$(gh api graphql \
+            -f query="query(\$l:String!){user(login:\$l){id}}" \
+            -f l="${OWNER}" \
+            --jq '.data.user.id' 2>"${user_err}") || true
+    fi
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ]; then
         local owner_err_content
-        owner_err_content=$(head -3 "${owner_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        rm -f "${owner_err}"
-        warn "Workflow project: cannot resolve owner node ID for ${OWNER}${owner_err_content:+ — ${owner_err_content}}"
+        owner_err_content=$(head -3 "${org_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        local user_err_content
+        user_err_content=$(head -3 "${user_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${org_err}" "${user_err}"
+        warn "Workflow project: cannot resolve owner node ID for ${OWNER}${owner_err_content:+ — org: ${owner_err_content}}${user_err_content:+ — user: ${user_err_content}}"
         return 1
-    }
-    rm -f "${owner_err}"
+    fi
+    rm -f "${org_err}" "${user_err}"
 
     local project_id project_err
     project_err=$(mktemp --suffix=.stderr) || project_err=/dev/null
@@ -554,18 +559,30 @@ _wf_create_project() {
     rm -f "${project_err}"
 
     local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
-    local field_json
+    local field_json field_err field_err_content
+    field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
     field_json=$(gh api graphql \
         -f query="${create_field_query}" \
-        -f p="${project_id}" 2>/dev/null) \
-    || { warn "Workflow project: createProjectV2Field failed for project ${project_id}"; return 1; }
+        -f p="${project_id}" 2>"${field_err}") || {
+        field_err_content=$(head -3 "${field_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${field_err}"
+        warn "Workflow project: createProjectV2Field failed for project ${project_id}${field_err_content:+ — ${field_err_content}}"
+        return 1
+    }
+    rm -f "${field_err}"
 
-    local repo_node_id
+    local repo_node_id repo_err repo_err_content
+    repo_err=$(mktemp --suffix=.stderr) || repo_err=/dev/null
     repo_node_id=$(gh api graphql \
         -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
         -f o="${OWNER}" -f r="${REPO}" \
-        --jq '.data.repository.id' 2>/dev/null) \
-    || { warn "Workflow project: cannot resolve repo node ID for ${REPO_FULL}"; return 1; }
+        --jq '.data.repository.id' 2>"${repo_err}") || {
+        repo_err_content=$(head -3 "${repo_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${repo_err}"
+        warn "Workflow project: cannot resolve repo node ID for ${REPO_FULL}${repo_err_content:+ — ${repo_err_content}}"
+        return 1
+    }
+    rm -f "${repo_err}"
 
     gh api graphql \
         -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
@@ -2449,7 +2466,7 @@ main() {
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        update_workflow_status "${item_type}" "${item_id}" "Not Started"
+        [ -n "${SESSION_ID}" ] || update_workflow_status "${item_type}" "${item_id}" "Not Started"
 
         new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}" "${claude_md_content}")
         invoke_claude_exit=$?

@@ -128,8 +128,8 @@ verify_no_user_insteadof() {
 }
 
 verify_gpg_signing
-verify_ssh_signing
 ensure_github_known_hosts
+verify_ssh_signing
 verify_repo_ssh_remotes
 verify_no_user_insteadof
 

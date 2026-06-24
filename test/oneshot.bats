@@ -4387,6 +4387,13 @@ STUBEOF
     [[ "${output}" == *"gh auth refresh -s project"* ]]
 }
 
+@test "discover_or_create_workflow_project warns with auth hint when gh graphql error mentions authorization" {
+    make_stub gh 'printf "Unauthorized: authorization required\n" >&2; exit 1'
+    run discover_or_create_workflow_project
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"gh auth refresh -s project"* ]]
+}
+
 @test "discover_or_create_workflow_project populates _WF_PROJECT_ID from existing project" {
     local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"},{"id":"oid2","name":"Development"}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
@@ -4441,8 +4448,9 @@ STUBEOF
     _WF_PROJECT_ID=""
     local call_log="${TEST_TMP}/gh_calls"
     make_stub gh "printf 'called\n' >> ${call_log}; exit 0"
-    update_workflow_status "Issue" "42" "Planning"
+    run update_workflow_status "Issue" "42" "Planning"
     [ ! -f "${call_log}" ]
+    [[ "${output}" != *"adding Issue #42 to board"* ]]
 }
 
 @test "update_workflow_status warns and returns 0 when status name is unknown" {
