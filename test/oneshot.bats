@@ -2702,8 +2702,9 @@ STUBEOF
 # --- handle_claude_is_error tmpfile cleanup -----------------------------------
 
 @test "handle_claude_is_error removes tmpfile before dying on rate-limit (429)" {
-    notify_discord_rate_limited() { return 0; }
-    save_rate_limit()             { return 0; }
+    notify_discord_rate_limited()      { return 0; }
+    save_rate_limit()                  { return 0; }
+    report_unparseable_rate_limit()    { return 0; }
 
     local tmpfile
     tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
@@ -2728,6 +2729,85 @@ STUBEOF
     [ "${status}" -ne 0 ]
     # The temp file must not be leaked on the generic-error path.
     [ ! -f "${tmpfile}" ]
+}
+
+# --- report_unparseable_rate_limit --------------------------------------------
+
+@test "handle_claude_is_error does not call report_unparseable_rate_limit when parse_reset_time succeeds" {
+    # A parseable 429 message (resets 3pm UTC) → save_rate_limit is called, no GH issue raised.
+    save_rate_limit()               { return 0; }
+    notify_discord_rate_limited()   { return 0; }
+
+    local gh_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf '%s\n' \"\$@\" >> '${gh_log}'"
+
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"api_error_status":"429","result":"You'"'"'ve hit your Sonnet limit · resets 3pm (UTC)"}' > "${tmpfile}"
+
+    run handle_claude_is_error "${tmpfile}" "" "Issue" "42"
+    # Still fails (rate-limited).
+    [ "${status}" -ne 0 ]
+    # gh must NOT have been called — no tracking issue created.
+    [ ! -f "${gh_log}" ] || [ ! -s "${gh_log}" ]
+}
+
+@test "report_unparseable_rate_limit creates a new issue when no open tracking issue exists" {
+    local gh_log="${TEST_TMP}/gh_args"
+    # Stub: gh issue list outputs nothing (no open tracker found after jq filtering).
+    # All other gh calls (issue create) have their args logged.
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
+    exit 0
+fi
+printf '%s\n' "\$@" >> '${gh_log}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+
+    local raw_msg="Rate limit reached — unknown format with no reset time"
+    report_unparseable_rate_limit "Issue" "7" "${raw_msg}"
+
+    [ -f "${gh_log}" ]
+    # gh issue create must have been called with the expected flags.
+    grep -q "^create$" "${gh_log}"
+    grep -q "^${RATE_LIMIT_ISSUE_TITLE}$" "${gh_log}"
+    grep -q "^AI-Work$" "${gh_log}"
+    grep -q "^${RATE_LIMIT_ISSUE_REPO}$" "${gh_log}"
+    # The verbatim raw message must appear in the body.
+    grep -q "${raw_msg}" "${gh_log}"
+    # gh issue comment must NOT have been called.
+    run grep -q "^comment$" "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "report_unparseable_rate_limit appends to existing open tracking issue" {
+    local tracker_number=99
+    local gh_log="${TEST_TMP}/gh_args"
+    # Stub: gh issue list outputs just the issue number (simulating jq-filtered output from gh).
+    # All other gh calls (issue comment) have their args logged.
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
+    printf '%s\n' '${tracker_number}'
+    exit 0
+fi
+printf '%s\n' "\$@" >> '${gh_log}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+
+    local raw_msg="Some brand-new unparseable Claude 429 message"
+    report_unparseable_rate_limit "PullRequest" "15" "${raw_msg}"
+
+    [ -f "${gh_log}" ]
+    # gh issue comment must have been called with the existing issue number.
+    grep -q "^comment$" "${gh_log}"
+    grep -q "^${tracker_number}$" "${gh_log}"
+    # The verbatim raw message must appear in the body.
+    grep -q "${raw_msg}" "${gh_log}"
+    # gh issue create must NOT have been called.
+    run grep -q "^create$" "${gh_log}"
+    [ "${status}" -ne 0 ]
 }
 
 # --- rate-limit file management -----------------------------------------------

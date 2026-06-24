@@ -22,6 +22,10 @@ MAX_PROMPT_CHARS=100000
 # Avoids hitting the limit again immediately after it lifts.
 RATE_LIMIT_RESUME_BUFFER_SECS=3600
 
+# Where unparseable 429 rate-limit messages are reported so parse_reset_time can be extended.
+RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"
+RATE_LIMIT_ISSUE_TITLE="Unparseable Claude rate-limit reset time"
+
 # Hard limit on how long a single agent container may run. Prevents a stuck
 # Monitor loop from holding resources indefinitely.
 # Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
@@ -996,6 +1000,8 @@ handle_claude_is_error() {
         if [ -n "${reset_unix}" ]; then
             resume_unix=$((reset_unix + RATE_LIMIT_RESUME_BUFFER_SECS))
             save_rate_limit "${resume_unix}"
+        else
+            report_unparseable_rate_limit "${item_type}" "${item_id}" "${result_text}"
         fi
         notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${resume_unix}"
         rm -f "${tmpfile}"
@@ -1372,6 +1378,43 @@ is_owner_rate_limited() {
         return 1
     fi
     return 0
+}
+
+# Records a raw, unparseable 429 rate-limit message to a tracking issue in the orchestrator
+# repo so parse_reset_time can be extended to handle the new format.  Appends a comment to an
+# existing OPEN tracking issue; creates a fresh one when none is open.  Closed issues are never
+# reopened — a closed tracker means prior formats were handled, so a new sample warrants a new
+# issue.  All gh failures are non-fatal (warn only) so the caller's die still fires normally.
+report_unparseable_rate_limit() {
+    local item_type="$1" item_id="$2" result_text="$3"
+    local now_iso existing body
+
+    now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Build the issue/comment body with context and the verbatim raw message.
+    # $'...' quoting lets \n expand to real newlines and keeps backticks literal.
+    # shellcheck disable=SC2016
+    body=$(printf $'parse_reset_time could not parse this Claude 429 rate-limit message. The verbatim message is included below so the parser regex can be extended.\n\n- Owner: `%s`\n- Repo: `%s`\n- Item: `%s #%s`\n- Timestamp (UTC): `%s`\n\nRaw rate-limit message:\n\n```\n%s\n```\n' \
+        "${OWNER}" "${REPO_FULL}" "${item_type}" "${item_id}" "${now_iso}" "${result_text}")
+
+    # Find an existing OPEN tracking issue by exact title.
+    # The search arg narrows the candidate set; jq then matches exactly so partial-title hits are
+    # rejected.  The title is passed via an env var to avoid quoting it inside the jq filter.
+    existing=$(RL_TITLE="${RATE_LIMIT_ISSUE_TITLE}" gh issue list \
+        --repo "${RATE_LIMIT_ISSUE_REPO}" --state open \
+        --search "${RATE_LIMIT_ISSUE_TITLE} in:title" \
+        --json number,title \
+        --jq 'map(select(.title==env.RL_TITLE)) | .[0].number // empty' 2>/dev/null \
+        || printf '')
+
+    if [ -n "${existing}" ]; then
+        gh issue comment "${existing}" --repo "${RATE_LIMIT_ISSUE_REPO}" --body "${body}" 2>/dev/null \
+            || warn "Failed to append unparseable rate-limit message to issue #${existing}"
+    else
+        gh issue create --repo "${RATE_LIMIT_ISSUE_REPO}" \
+            --title "${RATE_LIMIT_ISSUE_TITLE}" --label "AI-Work" --body "${body}" 2>/dev/null \
+            || warn "Failed to create unparseable rate-limit tracking issue"
+    fi
 }
 
 # Parses a "resets Hpm (Timezone)" string from a Claude rate-limit error and

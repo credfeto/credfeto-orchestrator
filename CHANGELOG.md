@@ -51,6 +51,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Plan-first approval workflow, AI review loop, and Workflow board (GitHub Projects v2) integration for issue orchestration
 - Board-based plan approval: orchestrator queries Workflow board for issues in Approved status and passes plan_approved flag to agent; comment-based approval comment fallback when no board is configured
 - Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
+- Auto-report unparseable Claude 429 rate-limit reset messages to a GitHub tracking issue so the parser can be extended
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
