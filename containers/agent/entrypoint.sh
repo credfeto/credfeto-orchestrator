@@ -93,12 +93,15 @@ verify_repo_ssh_remotes() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
     [ -d "${repo_dir}/.git" ] || return 0
 
+    # Read raw stored values from .git/config only (--local), not the insteadOf/pushInsteadOf
+    # resolved URLs that `git remote -v` returns. System-level pushInsteadOf rules can rewrite
+    # a correct git@github.com: fetch URL to something else in the push-URL display even though
+    # the stored value is correct — causing a false-positive failure here.
     local non_ssh_remotes
-    non_ssh_remotes=$(git -C "${repo_dir}" remote -v 2>/dev/null \
-        | awk '{print $2}' \
-        | sort -u \
-        | grep -v '^git@github\.com:' \
-        || true)
+    non_ssh_remotes=$({
+        git -C "${repo_dir}" config --local --get-all remote.origin.url 2>/dev/null
+        git -C "${repo_dir}" config --local --get-all remote.origin.pushurl 2>/dev/null
+    } | sort -u | grep -v '^git@github\.com:' || true)
 
     [ -z "${non_ssh_remotes}" ] && return 0
 
