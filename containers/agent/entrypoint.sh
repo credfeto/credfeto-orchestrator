@@ -67,6 +67,11 @@ verify_ssh_signing() {
 
     printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - >/dev/null 2>&1 \
         || die "SSH signing test failed — ensure the loaded SSH key supports signing"
+
+    local github_auth
+    github_auth=$(ssh -T git@github.com 2>&1) || true
+    printf '%s' "${github_auth}" | grep -q 'successfully authenticated' \
+        || die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
 }
 
 ensure_github_known_hosts() {
@@ -123,8 +128,8 @@ verify_no_user_insteadof() {
 }
 
 verify_gpg_signing
-verify_ssh_signing
 ensure_github_known_hosts
+verify_ssh_signing
 verify_repo_ssh_remotes
 verify_no_user_insteadof
 

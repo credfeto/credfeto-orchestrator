@@ -136,6 +136,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Removed automatic plan-approval detection and Blocked-label removal from orchestrator — removing Blocked is always a human action; simplified main loop blocked handling; updated agent instructions to make clear that humans remove the Blocked label to approve a plan
 - Include trusted commenters list in generated CLAUDE.md for both issue and PR agents, instructing the agent to ignore comments from untrusted users
 - oneshot: remove the per-invocation temp file on Claude rate-limit and error paths so it is no longer leaked into TMPDIR when the run aborts
+- Log GitHub Projects GraphQL errors with actual error content and call update_workflow_status before invoking Claude
+- Use 'Workflow Status' field name instead of 'Status' to avoid conflict with GitHub's auto-created Status field, and replace invalid TEAL color with PINK
+- Move ensure_github_known_hosts before verify_ssh_signing so the GitHub SSH auth probe does not fail with a host-key error on fresh containers
+- Skip board status reset to 'Not Started' when resuming a Claude session so previously advanced statuses are preserved
+- Use separate stderr temp files for org and user owner-node-id lookups so both errors are preserved when both fail
+- Guard against jq outputting the string 'null' when the org GraphQL query returns null data, ensuring the user-account fallback always runs
+- Capture stderr from createProjectV2Field and repo-node-id lookup calls so auth errors in those paths are surfaced
+- Add ssh stub to entrypoint test helper and test for GitHub auth failure so verify_ssh_signing tests pass in CI without network access
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

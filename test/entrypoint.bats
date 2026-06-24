@@ -42,6 +42,19 @@ STUBEOF
     # ssh-keygen stub: always succeeds (simulates successful sign operation).
     make_stub ssh-keygen 'exit 0'
 
+    # ssh stub: simulates a successful GitHub auth check for -T git@github.com.
+    # GitHub's real ssh -T exits 1 but prints the success message; || true in the
+    # entrypoint suppresses the exit code.
+    cat > "${STUB_BIN}/ssh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"git@github.com"* ]]; then
+    printf 'Hi testuser! You'\''ve successfully authenticated, but GitHub does not provide shell access.\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh"
+
     # gpg-connect-agent stub: always succeeds (simulates responsive gpg-agent).
     make_stub gpg-connect-agent 'exit 0'
 
@@ -278,6 +291,24 @@ run_entrypoint_with_hooks_env() {
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies when SSH key is not authorized to access GitHub" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/ssh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"git@github.com"* ]]; then
+    printf 'git@github.com: Permission denied (publickey).\n'
+    exit 255
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"SSH key is not authorized to access GitHub"* ]]
 }
 
 # --- verify_gpg_signing -----------------------------------------------------------
