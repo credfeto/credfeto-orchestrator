@@ -4388,7 +4388,7 @@ STUBEOF
 }
 
 @test "discover_or_create_workflow_project populates _WF_PROJECT_ID from existing project" {
-    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Status","options":[{"id":"oid1","name":"Planning"},{"id":"oid2","name":"Development"}]}]}}]'
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"},{"id":"oid2","name":"Development"}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"projectsV2"* ]]; then
@@ -4406,7 +4406,7 @@ STUBEOF
 }
 
 @test "discover_or_create_workflow_project returns immediately on second call for same repo when first succeeded" {
-    local project_json='[{"id":"PVT_cache","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_c1","name":"Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
+    local project_json='[{"id":"PVT_cache","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_c1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
     local call_count_file="${TEST_TMP}/gh_calls"
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash

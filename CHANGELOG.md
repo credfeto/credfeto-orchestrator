@@ -137,6 +137,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Include trusted commenters list in generated CLAUDE.md for both issue and PR agents, instructing the agent to ignore comments from untrusted users
 - oneshot: remove the per-invocation temp file on Claude rate-limit and error paths so it is no longer leaked into TMPDIR when the run aborts
 - Log GitHub Projects GraphQL errors with actual error content and call update_workflow_status before invoking Claude
+- Use 'Workflow Status' field name instead of 'Status' to avoid conflict with GitHub's auto-created Status field, and replace invalid TEAL color with PINK
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

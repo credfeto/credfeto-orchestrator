@@ -496,9 +496,9 @@ discover_or_create_workflow_project() {
     }
 
     _WF_STATUS_FIELD_ID=$(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Status") | .id // empty' 2>/dev/null | head -1)
+        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .id // empty' 2>/dev/null | head -1)
     [ -n "${_WF_STATUS_FIELD_ID}" ] || {
-        warn "Workflow project: Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
         _WF_PROJECT_ID=""
         return 0
     }
@@ -508,7 +508,7 @@ discover_or_create_workflow_project() {
         [ -n "${opt_name}" ] && [ -n "${opt_id}" ] || continue
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
     done < <(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
+        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
 
     _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
@@ -553,7 +553,7 @@ _wf_create_project() {
     }
     rm -f "${project_err}"
 
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:TEAL,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
     local field_json
     field_json=$(gh api graphql \
         -f query="${create_field_query}" \
