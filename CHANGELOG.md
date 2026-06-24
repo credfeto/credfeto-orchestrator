@@ -157,6 +157,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add enforce_gh_git_protocol_ssh entrypoint check that verifies gh has git_protocol=ssh set for every known host and GH_HOST, and resets it automatically if it was overwritten
 - Fix code review findings: provenance logged before required-env-var checks, agent Dockerfile ARG/ENV moved after ENTRYPOINT, workflow_run SHA uses head_sha of parent run, unknown-SHA test explicitly unsets vars and checks all five
 - Ensure agent-generated PRs always include Closes #N in the body so GitHub automatically closes the linked issue when the PR is merged
+- SSH stdin drain: pass -n to ssh -T git@github.com so the agent prompt is not consumed before claude runs
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
