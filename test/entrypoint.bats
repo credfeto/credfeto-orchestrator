@@ -694,3 +694,43 @@ GHEOF
     [[ "${output}" == *"github-api.markridgwell.com"*"resetting to ssh"* ]]
     grep -q "config set git_protocol ssh --host github-api.markridgwell.com" "${TEST_TMP}/gh_args"
 }
+
+# --- image provenance logging ----------------------------------------------------
+
+@test "entrypoint logs all five image layer SHAs at startup" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        IMAGE_SHA_DEVELOPMENT_TOOLS=abc1111 \
+        IMAGE_SHA_DEVELOPMENT_NODE=abc2222 \
+        IMAGE_SHA_DEVELOPMENT_PYTHON=abc3333 \
+        IMAGE_SHA_DEVELOPMENT_FULL=abc4444 \
+        IMAGE_SHA_DEVELOPMENT_AGENT=abc5555 \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"development-tools:   abc1111"* ]]
+    [[ "${output}" == *"development-node:    abc2222"* ]]
+    [[ "${output}" == *"development-python:  abc3333"* ]]
+    [[ "${output}" == *"development-full:    abc4444"* ]]
+    [[ "${output}" == *"development-agent:   abc5555"* ]]
+}
+
+@test "entrypoint shows unknown for image layer SHAs not set in environment" {
+    setup_entrypoint_stubs
+    # Explicitly unset all five IMAGE_SHA_* vars so the test is not affected by
+    # values baked into the process environment when run inside an agent container.
+    run env -u IMAGE_SHA_DEVELOPMENT_TOOLS \
+        -u IMAGE_SHA_DEVELOPMENT_NODE \
+        -u IMAGE_SHA_DEVELOPMENT_PYTHON \
+        -u IMAGE_SHA_DEVELOPMENT_FULL \
+        -u IMAGE_SHA_DEVELOPMENT_AGENT \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"development-tools:   unknown"* ]]
+    [[ "${output}" == *"development-node:    unknown"* ]]
+    [[ "${output}" == *"development-python:  unknown"* ]]
+    [[ "${output}" == *"development-full:    unknown"* ]]
+    [[ "${output}" == *"development-agent:   unknown"* ]]
+}

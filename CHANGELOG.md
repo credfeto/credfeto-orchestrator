@@ -53,6 +53,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Whitelist trusted commenters: only comments and reviews from the repo owner, collaborators, GitHub Copilot, or WHITELISTED_USERS are included when computing issue/PR fingerprints
 - Auto-report unparseable Claude 429 rate-limit reset messages to a GitHub tracking issue so the parser can be extended
 - Auto-invite trusted collaborators as Writers when a new Workflow project is created so they can set board status to Approved
+- Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
@@ -154,6 +155,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Bake git_protocol: ssh into the gh CLI config in the container image so that gh pr checkout always uses SSH remote URLs rather than HTTPS
 - Add insteadOf and pushInsteadOf rules for git@github-api.markridgwell.com: in system-gitconfig and setup-owner so git operations are transparently redirected to git@github.com: when the proxy hostname is stored by gh
 - Add enforce_gh_git_protocol_ssh entrypoint check that verifies gh has git_protocol=ssh set for every known host and GH_HOST, and resets it automatically if it was overwritten
+- Fix code review findings: provenance logged before required-env-var checks, agent Dockerfile ARG/ENV moved after ENTRYPOINT, workflow_run SHA uses head_sha of parent run, unknown-SHA test explicitly unsets vars and checks all five
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

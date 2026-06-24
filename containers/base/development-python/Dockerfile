@@ -99,3 +99,9 @@ RUN set -e; \
         fi; \
     done; \
     echo "== all build-time checks passed =="
+
+# Bake the git SHA of the orchestrator commit that built this image layer into the
+# environment so entrypoint.sh can log it for debugging. Placed last so changing
+# the SHA only invalidates this cheap final layer.
+ARG BUILD_GIT_SHA=unknown
+ENV IMAGE_SHA_DEVELOPMENT_PYTHON=${BUILD_GIT_SHA}

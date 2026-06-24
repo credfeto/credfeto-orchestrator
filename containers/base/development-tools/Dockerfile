@@ -381,3 +381,9 @@ RUN set -e; \
         https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone1; \
     rm -rf /tmp/sanity-clone1; \
     echo "== all build-time checks passed =="
+
+# Bake the git SHA of the orchestrator commit that built this image layer into the
+# environment so entrypoint.sh can log it for debugging. Placed last so changing
+# the SHA only invalidates this cheap final layer.
+ARG BUILD_GIT_SHA=unknown
+ENV IMAGE_SHA_DEVELOPMENT_TOOLS=${BUILD_GIT_SHA}
