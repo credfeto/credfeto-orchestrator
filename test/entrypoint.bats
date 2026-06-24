@@ -717,10 +717,20 @@ GHEOF
 
 @test "entrypoint shows unknown for image layer SHAs not set in environment" {
     setup_entrypoint_stubs
-    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+    # Explicitly unset all five IMAGE_SHA_* vars so the test is not affected by
+    # values baked into the process environment when run inside an agent container.
+    run env -u IMAGE_SHA_DEVELOPMENT_TOOLS \
+        -u IMAGE_SHA_DEVELOPMENT_NODE \
+        -u IMAGE_SHA_DEVELOPMENT_PYTHON \
+        -u IMAGE_SHA_DEVELOPMENT_FULL \
+        -u IMAGE_SHA_DEVELOPMENT_AGENT \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"development-tools:   unknown"* ]]
+    [[ "${output}" == *"development-node:    unknown"* ]]
+    [[ "${output}" == *"development-python:  unknown"* ]]
+    [[ "${output}" == *"development-full:    unknown"* ]]
     [[ "${output}" == *"development-agent:   unknown"* ]]
 }
