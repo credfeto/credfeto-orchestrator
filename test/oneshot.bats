@@ -3906,10 +3906,10 @@ STUBEOF
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
-    grep -q "remote set-url origin git@github.com:${OWNER}/${REPO}.git" "${git_log}"
+    grep -q "config remote.origin.url git@github.com:${OWNER}/${REPO}.git" "${git_log}"
 }
 
-@test "ensure_repo_current removes explicit HTTPS pushurl before fetching" {
+@test "ensure_repo_current clears all fetch and push URL entries before setting the canonical SSH URL" {
     mkdir -p "${REPO_WORK_DIR}/.git"
     local git_log="${TEST_TMP}/git_calls"
     cat > "${STUB_BIN}/git" << STUBEOF
@@ -3926,6 +3926,11 @@ STUBEOF
 
     run ensure_repo_current
     [ "${status}" -eq 0 ]
+    # All existing fetch URLs must be removed first (--unset-all handles multiple entries).
+    grep -q "config --unset-all remote.origin.url" "${git_log}"
+    # Exactly the canonical SSH URL must be written as the sole fetch URL.
+    grep -q "config remote.origin.url git@github.com:${REPO_FULL}.git" "${git_log}"
+    # All push-URL overrides must be removed (--unset-all handles multiple entries).
     grep -q "config --unset-all remote.origin.pushurl" "${git_log}"
 }
 

@@ -207,10 +207,11 @@ ensure_rules_current() {
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
         # Reset the remote URL to SSH on every iteration. The agent running inside
-        # the container may have changed it to HTTPS; that URL is stored in
-        # .git/config and would cause the host-side fetch to fail because the
-        # service user has no HTTPS credential helper.
-        git -C "${REPO_WORK_DIR}" remote set-url origin "git@github.com:${OWNER}/${REPO}.git"
+        # the container may have changed the URL or added extra fetch/push URLs.
+        # --unset-all removes every entry (--unset silently fails when multiple
+        # values exist), then we write exactly one correct URL for each slot.
+        git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
+        git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
         info "Fetching latest changes for ${REPO_FULL}..."
         git -C "${REPO_WORK_DIR}" fetch --prune origin || die "Failed to fetch from origin for ${REPO_FULL}"
@@ -273,8 +274,9 @@ try_nonagentic_rebase() {
 
     [ -n "${branch_name}" ] || return 1
 
-    git -C "${REPO_WORK_DIR}" remote set-url origin "git@github.com:${OWNER}/${REPO}.git"
-    git -C "${REPO_WORK_DIR}" config --unset remote.origin.pushurl 2>/dev/null || true
+    git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
+    git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
+    git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
 
     if ! git -C "${REPO_WORK_DIR}" checkout "${branch_name}"; then
         git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
