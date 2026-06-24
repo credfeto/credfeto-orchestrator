@@ -4447,6 +4447,126 @@ STUBEOF
     [ "${count}" -ge 1 ]
 }
 
+# --- _wf_create_project / _wf_invite_trusted_collaborators unit tests ---------
+
+@test "_wf_create_project falls through to user query when org query exits non-zero" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"organization"* ]]; then
+    printf '{"data":{"organization":null},"errors":[{"message":"NOT_FOUND"}]}\n'
+    exit 1
+fi
+if [[ "\$*" == *"user(login"* ]]; then
+    printf 'U_abc123\n'
+    exit 0
+fi
+if [[ "\$*" == *"createProjectV2"* ]]; then
+    printf '{"data":{"createProjectV2":{"projectV2":{"id":"PVT_new"}}}}\n'
+    exit 0
+fi
+printf '{}\n'; exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["testuser"]\n'; }
+    _wf_invite_trusted_collaborators() { return 0; }
+    _wf_create_project
+    grep -q 'user(login' "${gh_log}"
+    grep -q 'createProjectV2' "${gh_log}"
+}
+
+@test "_wf_create_project falls through to user query when org query outputs a JSON blob" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"organization"* ]]; then
+    printf '{"data":{"organization":null},"errors":[{"message":"NOT_FOUND"}]}\n'
+    exit 0
+fi
+if [[ "\$*" == *"user(login"* ]]; then
+    printf 'U_abc123\n'
+    exit 0
+fi
+if [[ "\$*" == *"createProjectV2"* ]]; then
+    printf '{"data":{"createProjectV2":{"projectV2":{"id":"PVT_new"}}}}\n'
+    exit 0
+fi
+printf '{}\n'; exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["testuser"]\n'; }
+    _wf_invite_trusted_collaborators() { return 0; }
+    _wf_create_project
+    grep -q 'user(login' "${gh_log}"
+    grep -q 'createProjectV2' "${gh_log}"
+}
+
+@test "_wf_create_project warns and returns 1 when both org and user queries return nothing" {
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"organization"* ]] || [[ "\$*" == *"user(login"* ]]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run _wf_create_project
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"cannot resolve owner node ID"* ]]
+}
+
+@test "_wf_invite_trusted_collaborators skips copilot bot and invites real users" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"user(login"* ]]; then
+    printf 'U_real\n'
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["someuser","copilot-pull-request-reviewer"]\n'; }
+    _wf_invite_trusted_collaborators "PVT_test"
+    run grep -c 'user(login' "${gh_log}"
+    [ "${output}" -eq 1 ]
+    run grep -q 'copilot' "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_wf_invite_trusted_collaborators is a no-op when no logins resolve to a node ID" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+printf 'null\n'; exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["ghost"]\n'; }
+    run _wf_invite_trusted_collaborators "PVT_test"
+    [ "${status}" -eq 0 ]
+    run grep -q 'updateProjectV2Collaborators' "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_wf_invite_trusted_collaborators warns and returns 0 when updateProjectV2Collaborators fails" {
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"user(login"* ]]; then
+    printf 'U_real\n'; exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["someuser"]\n'; }
+    run _wf_invite_trusted_collaborators "PVT_test"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"updateProjectV2Collaborators failed"* ]]
+}
+
 # --- update_workflow_status unit tests ----------------------------------------
 
 @test "update_workflow_status is a no-op when _WF_PROJECT_ID is empty" {
