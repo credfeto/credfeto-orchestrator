@@ -3770,6 +3770,41 @@ STUBEOF
     [[ "${output}" == *".database not found"* ]]
 }
 
+# --- invoke_claude prompt-file and empty-prompt guards ------------------------
+
+@test "invoke_claude dies before starting podman when prompt is empty" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    local podman_log="${TEST_TMP}/podman_calls"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$1" >> "${podman_log}"
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    run invoke_claude "" "" "" "" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Prompt is empty"* ]]
+    run grep -qx "run" "${podman_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "invoke_claude sets CLAUDE_PROMPT to the prompt text before starting the container" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ]    && exit 0
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "secret" ]  && exit 0
+[ "$1" = "image" ]   && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    invoke_claude "hello from prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    [ "${CLAUDE_PROMPT}" = "hello from prompt" ]
+}
+
 # --- notify_github_blocked unit tests -----------------------------------------
 
 @test "notify_github_blocked posts issue comment and adds Blocked label for Issue" {

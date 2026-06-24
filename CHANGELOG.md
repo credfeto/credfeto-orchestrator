@@ -148,6 +148,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Use --unset-all instead of --unset when clearing remote.origin.pushurl so multiple push-URL entries are all removed, preventing a stale git@github-api.markridgwell.com: push URL from surviving the reset
 - Also use --unset-all for remote.origin.url before writing the canonical fetch URL so any extra entries added with --add are fully removed
 - Workflow project creation now falls through to user-account query when the org lookup exits non-zero or returns a JSON error blob instead of a node ID
+- Write prompt to a file before starting the agent container and redirect stdin from that file, eliminating the race where printf closes the pipe before the container process reads from it
+- Die immediately with a clear message when the prompt is empty rather than launching a container that wastes tokens and then fails
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
