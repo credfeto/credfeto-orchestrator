@@ -48,9 +48,16 @@
 # Rewrite common HTTPS clone URLs to their SSH equivalents so anything the
 # agent clones from these hosts uses the mounted ~/.ssh keys rather than
 # needing an HTTPS credential helper.
+# Also rewrite the GH CLI proxy hostname (github-api.markridgwell.com) back
+# to github.com for git operations: GH_HOST is meant for API/HTTPS calls only,
+# but `gh pr checkout` also uses it when constructing the SSH remote URL,
+# which would otherwise leave git@github-api.markridgwell.com: stored in
+# .git/config. SSH connections must always go directly to github.com.
 [url "git@github.com:"]
 	insteadOf = https://github.com/
 	pushInsteadOf = https://github.com/
+	insteadOf = git@github-api.markridgwell.com:
+	pushInsteadOf = git@github-api.markridgwell.com:
 
 [url "git@gitlab.com:"]
 	insteadOf = https://gitlab.com/

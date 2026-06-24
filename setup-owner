@@ -364,6 +364,10 @@ configure_git() {
         printf '[url "git@github.com:"]\n'
         printf '\tinsteadOf = https://github.com/\n'
         printf '\tpushInsteadOf = https://github.com/\n'
+        # GH_HOST (github-api.markridgwell.com) is the API/HTTPS proxy only;
+        # gh pr checkout also uses it for SSH remote URLs which is wrong.
+        printf '\tinsteadOf = git@github-api.markridgwell.com:\n'
+        printf '\tpushInsteadOf = git@github-api.markridgwell.com:\n'
         printf '\n'
         printf '[url "git@gitlab.com:"]\n'
         printf '\tinsteadOf = https://gitlab.com/\n'

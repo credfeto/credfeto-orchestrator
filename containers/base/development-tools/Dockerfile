@@ -162,6 +162,18 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
 ENV GH_HOST=github-api.markridgwell.com
 ENV GH_ENTERPRISE_TOKEN=ghp_PLACEHOLDER_OneCLI_substitutes_this_at_egress
 
+# Force gh to use SSH for git operations on every host (including the proxy).
+# GH_HOST routes API calls through github-api.markridgwell.com, but gh also
+# uses GH_HOST when constructing git remote URLs for commands like
+# `gh pr checkout`. Without this setting gh may write
+# git@github-api.markridgwell.com: into .git/config rather than git@github.com:.
+# Setting git_protocol=ssh globally means the URL will be SSH-form (which the
+# system-gitconfig insteadOf rule then rewrites to git@github.com:) instead of
+# an HTTPS URL that bypasses the SSH key entirely.
+RUN mkdir -p /home/developer/.config/gh \
+    && printf 'git_protocol: ssh\n' > /home/developer/.config/gh/config.yml \
+    && chown -R developer:developer /home/developer/.config/gh
+
 # ---- hadolint — Dockerfile linter -------------------------------------------
 # Static binary; arch suffix differs (x86_64 / arm64). Downloaded from the
 # GitHub releases page for the pinned HADOLINT_VERSION.

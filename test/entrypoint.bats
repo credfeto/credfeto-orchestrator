@@ -60,6 +60,24 @@ STUBEOF
 
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
+
+    # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value).
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [ "$1" = "config" ] && [ "$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=ssh\n'
+    exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "git_protocol" ]; then
+    printf 'ssh\n'
+    exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "set" ]; then
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
 }
 
 # --- CLAUDE_CODE_OAUTH_TOKEN validation ----------------------------------------
@@ -609,4 +627,70 @@ exit 0'
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Forbidden [url \"...\" insteadOf] or [url \"...\" pushInsteadOf] rules found in user git config"* ]]
     [[ "${output}" == *"file:/home/node/.gitconfig"* ]]
+}
+
+# --- enforce_gh_git_protocol_ssh -------------------------------------------------
+
+@test "entrypoint passes without warning when gh git_protocol is already ssh" {
+    setup_entrypoint_stubs
+    # Default gh stub already returns ssh — no warn should appear.
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"resetting to ssh"* ]]
+}
+
+@test "entrypoint warns and resets gh git_protocol when it is not ssh" {
+    setup_entrypoint_stubs
+    # Override gh stub: config get returns 'https', config set records args on one line.
+    cat > "${STUB_BIN}/gh" << GHEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
+if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=https\n'
+    exit 0
+fi
+if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
+    printf 'https\n'
+    exit 0
+fi
+exit 0
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"resetting to ssh"* ]]
+    grep -q "config set git_protocol ssh" "${TEST_TMP}/gh_args"
+}
+
+@test "entrypoint checks GH_HOST when set and resets it if not ssh" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/gh" << GHEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/gh_args"
+if [ "\$1" = "config" ] && [ "\$2" = "list" ]; then
+    printf 'hosts.github.com.git_protocol=ssh\n'
+    exit 0
+fi
+if [ "\$1" = "config" ] && [ "\$2" = "get" ] && [ "\$3" = "git_protocol" ]; then
+    # Return https when queried for the proxy host, ssh otherwise.
+    for i in "\$@"; do
+        [ "\${i}" = "github-api.markridgwell.com" ] && { printf 'https\n'; exit 0; }
+    done
+    printf 'ssh\n'
+    exit 0
+fi
+exit 0
+GHEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        GH_HOST=github-api.markridgwell.com \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"github-api.markridgwell.com"*"resetting to ssh"* ]]
+    grep -q "config set git_protocol ssh --host github-api.markridgwell.com" "${TEST_TMP}/gh_args"
 }
