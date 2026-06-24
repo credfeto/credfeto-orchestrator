@@ -11,20 +11,25 @@ load test_helper
 install_gh_stub() {
     export CREATE_PROJECT_GH_LOG="${TEST_TMP}/gh.log"
     : > "${CREATE_PROJECT_GH_LOG}"
+    export FIELD_CREATE_RESULT='{"data":{"createProjectV2Field":{"projectV2Field":{"id":"F_NEW","name":"Workflow Status","options":[{"id":"OPT_NS","name":"Not Started"}]}}}}'
     # shellcheck disable=SC2016  # stub body: $* / ${...} must stay literal and expand at stub runtime
     make_stub gh '
 op="$*"
 log="${CREATE_PROJECT_GH_LOG}"
 case "${op}" in
-    *--input*)                      echo "updateProjectV2Collaborators" >> "${log}"; cat >/dev/null 2>&1; printf "{}" ;;
-    *projectsV2*)                   printf "%s" "${DISCOVERY_RESULT}" ;;
-    *createProjectV2Field*)         echo "createProjectV2Field" >> "${log}"; printf "{}" ;;
-    *createProjectV2*)              echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
-    *linkProjectV2ToRepository*)    echo "linkProjectV2ToRepository" >> "${log}"; printf "{}" ;;
-    *organization*)                 printf "" ;;
-    *user*)                         printf "U_NODE" ;;
-    *repository*)                   printf "R_NODE" ;;
-    *)                              printf "" ;;
+    *--input*)                          echo "updateProjectV2Collaborators" >> "${log}"; cat >/dev/null 2>&1; printf "{}" ;;
+    *"issue list"*)                     printf "%b\n" "${BOOT_ISSUE_IDS:-}" ;;
+    *"pr list"*)                        printf "%b\n" "${BOOT_PR_IDS:-}" ;;
+    *addProjectV2ItemById*)             echo "addProjectV2ItemById" >> "${log}"; printf "ITEM_NODE" ;;
+    *updateProjectV2ItemFieldValue*)    echo "updateProjectV2ItemFieldValue" >> "${log}"; printf "{}" ;;
+    *projectsV2*)                       printf "%s" "${DISCOVERY_RESULT}" ;;
+    *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "%s" "${FIELD_CREATE_RESULT}" ;;
+    *createProjectV2*)                  echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
+    *linkProjectV2ToRepository*)        echo "linkProjectV2ToRepository" >> "${log}"; printf "{}" ;;
+    *organization*)                     printf "" ;;
+    *user*)                             printf "U_NODE" ;;
+    *repository*)                       printf "R_NODE" ;;
+    *)                                  printf "" ;;
 esac
 '
 }
@@ -121,4 +126,33 @@ teardown() {
     [[ "${output}" != *"createProjectV2 "* ]]
     [[ "${output}" == *"createProjectV2Field"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
+}
+
+@test "provision_project seeds open issues and PRs as Not Started on creation" {
+    install_gh_stub
+    export DISCOVERY_RESULT=""
+    export BOOT_ISSUE_IDS='I_1\nI_2'
+    export BOOT_PR_IDS='PR_9'
+
+    run provision_project credfeto scripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Added 3 open item(s)"* ]]
+
+    run grep -c addProjectV2ItemById "${CREATE_PROJECT_GH_LOG}"
+    [ "${output}" -eq 3 ]
+    run grep -c updateProjectV2ItemFieldValue "${CREATE_PROJECT_GH_LOG}"
+    [ "${output}" -eq 3 ]
+}
+
+@test "provision_project does not seed the board when the project already exists" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    export BOOT_ISSUE_IDS='I_1\nI_2'
+    export BOOT_PR_IDS='PR_9'
+
+    run provision_project credfeto scripts
+    [ "${status}" -eq 0 ]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" != *"addProjectV2ItemById"* ]]
 }

@@ -113,21 +113,32 @@ link_project() {
         -f p="${project_id}" -f r="${repo_node_id}" >/dev/null
 }
 
-# Creates the "Workflow Status" single-select field when the project lacks it.
-# project_json is the discovery JSON ("" for a freshly created project).
+# Ensures the project has the "Workflow Status" single-select field, creating it when absent.
+# project_json is the discovery JSON ("" for a freshly created project).  Populates the globals
+# WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board bootstrap can set
+# item statuses without an extra round-trip.
 ensure_status_field() {
     local project_id="$1" project_json="$2"
-    local field_id
-    field_id=$(printf '%s' "${project_json}" | \
-        jq -r --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n) | .id' 2>/dev/null | head -1)
-    if [ -n "${field_id}" ]; then
+    WF_FIELD_ID=""
+    WF_NOT_STARTED_OPT=""
+
+    local field_node
+    field_node=$(printf '%s' "${project_json}" | \
+        jq -c --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n)' 2>/dev/null | head -1)
+    if [ -n "${field_node}" ]; then
         info "Status field \"${STATUS_FIELD_NAME}\" already present — skipping"
-        return 0
+    else
+        info "Adding \"${STATUS_FIELD_NAME}\" field with its eight options..."
+        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+        local resp
+        resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}")
+        field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)
+        success "Status field added"
     fi
-    info "Adding \"${STATUS_FIELD_NAME}\" field with its eight options..."
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name}}}}"
-    gh_graphql -f query="${create_field_query}" -f p="${project_id}" >/dev/null
-    success "Status field added"
+
+    WF_FIELD_ID=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
+    WF_NOT_STARTED_OPT=$(printf '%s' "${field_node}" | \
+        jq -r '(.options // [])[] | select(.name=="Not Started") | .id' 2>/dev/null | head -1)
 }
 
 # Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
@@ -147,6 +158,51 @@ ensure_bot_collaborator() {
     success "${BOT_LOGIN} has WRITER access"
 }
 
+# Seeds a freshly created board with every open issue and open PR in the repo, each set to
+# "Not Started".  Only called for a newly created project so re-runs never re-add items a human
+# may have curated off the board.  Per-item failures are non-fatal so one bad item cannot abort
+# the whole bootstrap.  field_id / opt_id are the "Workflow Status" field and "Not Started" option.
+bootstrap_board_items() {
+    local owner="$1" repo="$2" project_id="$3" field_id="$4" opt_id="$5"
+    local repo_full="${owner}/${repo}"
+
+    [ -n "${field_id}" ] && [ -n "${opt_id}" ] \
+        || die "Cannot bootstrap board for ${repo_full}: unresolved \"${STATUS_FIELD_NAME}\" field or \"Not Started\" option"
+
+    local content_ids
+    content_ids=$( {
+        gh issue list --repo "${repo_full}" --state open --limit 1000 --json id --jq '.[].id' 2>/dev/null
+        gh pr list --repo "${repo_full}" --state open --limit 1000 --json id --jq '.[].id' 2>/dev/null
+    } | awk 'NF')
+
+    if [ -z "${content_ids}" ]; then
+        info "No open issues or PRs to add to the board"
+        return 0
+    fi
+
+    info "Adding open issues and PRs to the board as \"Not Started\"..."
+    local cid item_id count=0
+    while IFS= read -r cid; do
+        [ -n "${cid}" ] || continue
+        item_id=$(gh api graphql \
+            -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
+            -f p="${project_id}" -f c="${cid}" \
+            --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || true
+        if [ -z "${item_id}" ] || [ "${item_id}" = "null" ]; then
+            info "Could not add ${cid} to the board — skipping"
+            continue
+        fi
+        gh api graphql \
+            -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
+            -f p="${project_id}" -f i="${item_id}" -f f="${field_id}" -f v="${opt_id}" \
+            >/dev/null 2>&1 \
+            || info "Added ${cid} but could not set its status to \"Not Started\""
+        count=$((count + 1))
+    done <<< "${content_ids}"
+
+    success "Added ${count} open item(s) to the board"
+}
+
 provision_project() {
     local owner="$1" repo="$2"
     local repo_full="${owner}/${repo}"
@@ -155,7 +211,7 @@ provision_project() {
     local repo_node_id
     repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}")
 
-    local project_json project_id
+    local project_json project_id created=false
     project_json=$(discover_linked_project "${owner}" "${repo}")
 
     if [ -n "${project_json}" ]; then
@@ -171,10 +227,16 @@ provision_project() {
         link_project "${project_id}" "${repo_node_id}"
         success "Project linked to ${repo_full}"
         project_json=""
+        created=true
     fi
 
     ensure_status_field "${project_id}" "${project_json}"
     ensure_bot_collaborator "${project_id}"
+
+    # Seed the backlog only at creation, so re-runs leave a human-curated board untouched.
+    if [ "${created}" = true ]; then
+        bootstrap_board_items "${owner}" "${repo}" "${project_id}" "${WF_FIELD_ID}" "${WF_NOT_STARTED_OPT}"
+    fi
 
     success "Workflow project ready for ${repo_full}: ${project_id}"
 }

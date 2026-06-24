@@ -55,6 +55,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Auto-invite trusted collaborators as Writers when a new Workflow project is created so they can set board status to Approved
 - Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
 - create-project script to idempotently provision a repo's Workflow GitHub Project, and an auto-filed issue prompting the owner to run it when the orchestrator cannot obtain one
+- create-project seeds a newly created Workflow board with all open issues and PRs set to Not Started
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH

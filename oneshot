@@ -548,7 +548,7 @@ report_missing_workflow_project() {
 
     local body
     # shellcheck disable=SC2016
-    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, and grants the orchestrator bot (`dnyw4l3n13`) write access. Re-running performs only whatever is still missing.\n' \
+    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
         "${REPO_FULL}")
 
     gh issue create --repo "${REPO_FULL}" \
