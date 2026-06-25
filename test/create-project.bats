@@ -74,6 +74,13 @@ teardown() {
     [[ "${output}" == *"Unknown argument"* ]]
 }
 
+@test "main accepts --force-bootstrap without dying" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    run main --repo credfeto/scripts --force-bootstrap
+    [ "${status}" -eq 0 ]
+}
+
 @test "check_required_tools dies when gh is missing" {
     # shellcheck disable=SC2329
     command() {
@@ -155,4 +162,25 @@ teardown() {
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"addProjectV2ItemById"* ]]
+}
+
+@test "provision_project with --force-bootstrap reseeds board on existing project" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    export BOOT_ISSUE_IDS='I_1\nI_2'
+    export BOOT_PR_IDS='PR_9'
+
+    run provision_project credfeto scripts true
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Added 3 open item(s)"* ]]
+
+    run grep -c addProjectV2ItemById "${CREATE_PROJECT_GH_LOG}"
+    [ "${output}" -eq 3 ]
+}
+
+@test "ensure_bot_collaborator warns and continues when bot user cannot be resolved" {
+    make_stub gh 'exit 1'
+    run ensure_bot_collaborator "P_TEST"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Could not resolve node ID for bot user"* ]]
 }

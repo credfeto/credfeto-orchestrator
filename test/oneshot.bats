@@ -4755,3 +4755,80 @@ esac'
     run grep -c created "${WF_CREATE_LOG}"
     [ "${output}" -eq 1 ]
 }
+
+@test "report_missing_workflow_project skips filing when gh issue list fails" {
+    export WF_CREATE_LOG="${TEST_TMP}/wf_create.log"
+    : > "${WF_CREATE_LOG}"
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   exit 1 ;;
+    "issue create") printf "%s\n" "$*" >> "${WF_CREATE_LOG}" ;;
+    *)              ;;
+esac'
+
+    run report_missing_workflow_project
+    [ "${status}" -eq 0 ]
+
+    run cat "${WF_CREATE_LOG}"
+    [ -z "${output}" ]
+}
+
+@test "report_missing_workflow_project retries filing when previous issue creation failed" {
+    export WF_CREATE_LOG="${TEST_TMP}/wf_create.log"
+    : > "${WF_CREATE_LOG}"
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   printf "" ;;
+    "issue create") printf "attempted\n" >> "${WF_CREATE_LOG}"; exit 1 ;;
+    *)              ;;
+esac'
+
+    report_missing_workflow_project
+    report_missing_workflow_project
+
+    run grep -c attempted "${WF_CREATE_LOG}"
+    [ "${output}" -eq 2 ]
+}
+
+@test "report_missing_workflow_project marks repo as reported when existing issue is found" {
+    # shellcheck disable=SC2016  # stub body: $1/$2/$* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$1 $2" in
+    "issue list")   printf "7\n" ;;
+    "issue create") exit 1 ;;
+    *)              ;;
+esac'
+
+    _WF_REPORTED_REPOS=""
+    report_missing_workflow_project
+    [[ " ${_WF_REPORTED_REPOS} " == *" ${REPO_FULL} "* ]]
+}
+
+@test "discover_or_create_workflow_project sets _WF_CREATION_FAILED when project creation fails" {
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"projectsV2"* ]]; then
+    printf '[]\n'
+    exit 0
+fi
+if [[ "$*" == *"organization"* ]]; then
+    exit 1
+fi
+if [[ "$*" == *"user(login"* ]]; then
+    printf 'U_abc\n'
+    exit 0
+fi
+if [[ "$*" == *"createProjectV2"* ]]; then
+    printf 'Only users can create projects\n' >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    _WF_CREATION_FAILED=""
+    discover_or_create_workflow_project
+    [ -z "${_WF_PROJECT_ID}" ]
+    [ -n "${_WF_CREATION_FAILED}" ]
+}

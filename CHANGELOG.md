@@ -56,6 +56,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
 - create-project script to idempotently provision a repo's Workflow GitHub Project, and an auto-filed issue prompting the owner to run it when the orchestrator cannot obtain one
 - create-project seeds a newly created Workflow board with all open issues and PRs set to Not Started
+- create-project: --force-bootstrap flag to re-seed the board on an already-provisioned project, recovering from an interrupted first run without affecting human-curated items
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
@@ -160,6 +161,12 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Fix code review findings: provenance logged before required-env-var checks, agent Dockerfile ARG/ENV moved after ENTRYPOINT, workflow_run SHA uses head_sha of parent run, unknown-SHA test explicitly unsets vars and checks all five
 - Ensure agent-generated PRs always include Closes #N in the body so GitHub automatically closes the linked issue when the PR is merged
 - SSH stdin drain: pass -n to ssh -T git@github.com so the agent prompt is not consumed before claude runs
+- create-project: die instead of silently falling back to /dev/null when mktemp fails in gh_graphql, preventing device-node deletion when running as root
+- create-project: ensure_bot_collaborator now warns instead of dying when the bot user ID cannot be resolved or the collaborator grant fails, so re-runs complete successfully
+- create-project: bootstrap_board_items warns and caps at 1000 items per type when a repo has more than 1000 open issues or PRs
+- oneshot: report_missing_workflow_project now only updates _WF_REPORTED_REPOS after successfully filing or finding an existing issue, so a failed creation attempt is retried for subsequent items in the same run
+- oneshot: report_missing_workflow_project returns early instead of filing when the gh issue list check fails, preventing duplicate issues on transient API errors
+- oneshot: report_missing_workflow_project is no longer called when _WF_PROJECT_ID is empty due to a missing status field or auth error — only when project creation itself failed
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

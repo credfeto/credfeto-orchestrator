@@ -10,7 +10,12 @@
 #   3. link the project to the repository
 #   4. grant the orchestrator bot WRITER access to the project
 #
-# Usage: create-project --repo <owner>/<repo>
+# Board seeding (step 5: add all open issues and PRs as "Not Started") only runs on first
+# creation.  If the first run was interrupted before seeding completed, pass --force-bootstrap
+# to re-run seeding on an already-provisioned project without affecting human-curated items
+# that may have been added since.
+#
+# Usage: create-project --repo <owner>/<repo> [--force-bootstrap]
 
 # The orchestrator bot account that needs write access to drive the board.
 BOT_LOGIN="dnyw4l3n13"
@@ -42,6 +47,14 @@ info() {
     fi
 }
 
+warn() {
+    if [ -t 2 ]; then
+        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+    else
+        printf '\n! %s\n' "$*" >&2
+    fi
+}
+
 check_required_tools() {
     local tool
     for tool in gh jq; do
@@ -53,7 +66,7 @@ check_required_tools() {
 # otherwise prints the (already --jq-filtered) result on stdout.
 gh_graphql() {
     local err out
-    err=$(mktemp) || err=/dev/null
+    err=$(mktemp) || die "mktemp failed: cannot capture stderr for GraphQL error reporting"
     if ! out=$(gh api graphql "$@" 2>"${err}"); then
         local msg
         msg=$(head -3 "${err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
@@ -142,20 +155,27 @@ ensure_status_field() {
 }
 
 # Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
-# so running it when the bot already has access is a harmless no-op.
+# so running it when the bot already has access is a harmless no-op.  Both failure paths use
+# warn rather than die so that a re-run succeeds even when the bot account is temporarily
+# unreachable or has already been granted access by another means.
 ensure_bot_collaborator() {
     local project_id="$1" bot_id
-    bot_id=$(gh_graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
-        -f l="${BOT_LOGIN}" --jq '.data.user.id')
-    [ -n "${bot_id}" ] && [ "${bot_id}" != "null" ] || die "Could not resolve node ID for bot user ${BOT_LOGIN}"
+    bot_id=$(gh api graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
+        -f l="${BOT_LOGIN}" --jq '.data.user.id' 2>/dev/null) || true
+    if [ -z "${bot_id}" ] || [ "${bot_id}" = "null" ]; then
+        warn "Could not resolve node ID for bot user ${BOT_LOGIN} — add ${BOT_LOGIN} as a collaborator manually at github.com"
+        return 0
+    fi
     info "Granting ${BOT_LOGIN} WRITER access to the project..."
     # shellcheck disable=SC2016  # $p/$c are GraphQL variables resolved by jq below, not the shell
     local mut='mutation($p:ID!,$c:[ProjectV2CollaboratorInput!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators{nodes{login}}}}'
-    jq -cn --arg p "${project_id}" --arg id "${bot_id}" --arg q "${mut}" \
+    if jq -cn --arg p "${project_id}" --arg id "${bot_id}" --arg q "${mut}" \
         '{query:$q,variables:{p:$p,c:[{userId:$id,role:"WRITER"}]}}' \
-        | gh api graphql --input - >/dev/null 2>&1 \
-        || die "Failed to grant ${BOT_LOGIN} access to project ${project_id}"
-    success "${BOT_LOGIN} has WRITER access"
+        | gh api graphql --input - >/dev/null 2>&1; then
+        success "${BOT_LOGIN} has WRITER access"
+    else
+        warn "Failed to grant ${BOT_LOGIN} access to project ${project_id} — add access manually at github.com"
+    fi
 }
 
 # Seeds a freshly created board with every open issue and open PR in the repo, each set to
@@ -169,11 +189,16 @@ bootstrap_board_items() {
     [ -n "${field_id}" ] && [ -n "${opt_id}" ] \
         || die "Cannot bootstrap board for ${repo_full}: unresolved \"${STATUS_FIELD_NAME}\" field or \"Not Started\" option"
 
+    local issue_ids pr_ids n_issues n_prs
+    issue_ids=$(gh issue list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
+    pr_ids=$(gh pr list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
+    n_issues=$(printf '%s\n' "${issue_ids}" | awk 'NF' | wc -l | tr -d ' ')
+    n_prs=$(printf '%s\n' "${pr_ids}" | awk 'NF' | wc -l | tr -d ' ')
+    [ "${n_issues}" -gt 1000 ] && { warn "More than 1000 open issues — board seed limited to first 1000"; issue_ids=$(printf '%s\n' "${issue_ids}" | head -1000); }
+    [ "${n_prs}" -gt 1000 ] && { warn "More than 1000 open PRs — board seed limited to first 1000"; pr_ids=$(printf '%s\n' "${pr_ids}" | head -1000); }
+
     local content_ids
-    content_ids=$( {
-        gh issue list --repo "${repo_full}" --state open --limit 1000 --json id --jq '.[].id' 2>/dev/null
-        gh pr list --repo "${repo_full}" --state open --limit 1000 --json id --jq '.[].id' 2>/dev/null
-    } | awk 'NF')
+    content_ids=$(printf '%s\n%s\n' "${issue_ids}" "${pr_ids}" | awk 'NF')
 
     if [ -z "${content_ids}" ]; then
         info "No open issues or PRs to add to the board"
@@ -204,7 +229,7 @@ bootstrap_board_items() {
 }
 
 provision_project() {
-    local owner="$1" repo="$2"
+    local owner="$1" repo="$2" force_bootstrap="${3:-false}"
     local repo_full="${owner}/${repo}"
 
     info "Resolving ${repo_full}..."
@@ -233,8 +258,9 @@ provision_project() {
     ensure_status_field "${project_id}" "${project_json}"
     ensure_bot_collaborator "${project_id}"
 
-    # Seed the backlog only at creation, so re-runs leave a human-curated board untouched.
-    if [ "${created}" = true ]; then
+    # Seed the backlog at creation, or when --force-bootstrap is passed to recover from an
+    # interrupted first run.  Skip on normal re-runs to leave human-curated boards untouched.
+    if [ "${created}" = true ] || [ "${force_bootstrap}" = true ]; then
         bootstrap_board_items "${owner}" "${repo}" "${project_id}" "${WF_FIELD_ID}" "${WF_NOT_STARTED_OPT}"
     fi
 
@@ -242,7 +268,7 @@ provision_project() {
 }
 
 main() {
-    local repo_full=""
+    local repo_full="" force_bootstrap=false
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -252,13 +278,17 @@ main() {
                 repo_full="$1"
                 shift
                 ;;
+            --force-bootstrap)
+                force_bootstrap=true
+                shift
+                ;;
             *)
                 die "Unknown argument: $1"
                 ;;
         esac
     done
 
-    [ -n "${repo_full}" ] || die "Usage: $(basename "$0") --repo <owner>/<repo>"
+    [ -n "${repo_full}" ] || die "Usage: $(basename "$0") --repo <owner>/<repo> [--force-bootstrap]"
     [[ "${repo_full}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
         || die "--repo value must be in <owner>/<repo> form: ${repo_full}"
 
@@ -268,7 +298,7 @@ main() {
     local repo="${repo_full##*/}"
 
     info "Provisioning Workflow project for ${repo_full}"
-    provision_project "${owner}" "${repo}"
+    provision_project "${owner}" "${repo}" "${force_bootstrap}"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
