@@ -10,6 +10,7 @@
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
 - Run the whole suite with `bats test/` from the repository root.
 - Every behaviour added to a shell script must have a corresponding bats test before committing.
+- The suite covers `oneshot`, `loop`, and `create-project`; the same conventions apply to all three.
 
 ## Source-Guard Convention
 

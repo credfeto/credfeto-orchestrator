@@ -57,6 +57,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project script to idempotently provision a repo's Workflow GitHub Project, and an auto-filed issue prompting the owner to run it when the orchestrator cannot obtain one
 - create-project seeds a newly created Workflow board with all open issues and PRs set to Not Started
 - create-project: --force-bootstrap flag to re-seed the board on an already-provisioned project, recovering from an interrupted first run without affecting human-curated items
+- document GitHub Projects v2 provisioning rules, API correctness, and hasProjectsEnabled prerequisite in ai/local
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH

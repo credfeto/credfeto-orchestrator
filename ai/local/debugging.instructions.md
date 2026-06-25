@@ -147,6 +147,7 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | Priorities fetch fails | API unreachable or auth issue | Section 10 |
 | `oneshot` running old logic | Repo behind `origin/main` | Section 1 |
 | `Workflow project: ... status updates disabled` + a `Workflow project setup required` issue in the repo | No `Workflow` project for the repo; the bot cannot create one under a personal account | Run `create-project --repo <owner>/<repo>` as the repo owner |
+| `Workflow` project exists (visible by node ID) but `oneshot` always treats the repo as having no project | Repo has `hasProjectsEnabled: false`; `repository.projectsV2` returns empty even when the project is linked | `gh repo edit <owner>/<repo> --enable-projects`, then re-run `create-project` |
 
 ## After Reviewing State
 
