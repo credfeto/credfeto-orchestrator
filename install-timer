@@ -114,7 +114,11 @@ ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'
 ExecStart=${exec_start}
 # Security hardening — limit the blast radius if the service is compromised.
-# PrivateTmp gives the service its own /tmp so container temp files are isolated.
+# PrivateTmp is deliberately NOT set: rootless Podman keeps a long-lived pause
+# process that holds the namespace it is first created in, and under PrivateTmp the
+# private (empty) /var/tmp leaks into that persistent process, breaking every later
+# image pull with \"mkdir /var/tmp/...: no such file or directory\". The agent runs
+# in a container with its own filesystem, so PrivateTmp adds little isolation here.
 # ProtectSystem=full makes /usr, /boot, and /etc read-only; the home directory
 # and /dev remain writable (rootless Podman needs /dev/fuse for fuse-overlayfs).
 # CapabilityBoundingSet is restricted to CAP_SETUID/CAP_SETGID — the only caps
@@ -133,7 +137,6 @@ ExecStart=${exec_start}
 # MemoryDenyWriteExecute=no is explicit: containers and JIT compilers need pages
 # that are both writable and executable, so this restriction must remain off.
 NoNewPrivileges=no
-PrivateTmp=yes
 ProtectSystem=full
 CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 AmbientCapabilities=
