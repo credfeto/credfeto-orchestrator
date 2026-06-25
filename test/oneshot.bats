@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+# shellcheck disable=SC2034  # variables set in test bodies are used inside run() subshells where shellcheck cannot trace them
 
 load test_helper
 
@@ -4894,4 +4895,174 @@ STUBEOF
     discover_or_create_workflow_project
     [ -z "${_WF_PROJECT_ID}" ]
     [ -n "${_WF_CREATION_FAILED}" ]
+}
+
+# --- CI pending gate ---------------------------------------------------------
+
+@test "pr_json_has_pending_ci_checks returns true when a check has status IN_PROGRESS" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true when a check has status QUEUED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"QUEUED","conclusion":null}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true when one of many checks is not COMPLETED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"lint","status":"IN_PROGRESS","conclusion":null}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when all checks are COMPLETED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when statusCheckRollup is empty" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when statusCheckRollup is absent" {
+    run pr_json_has_pending_ci_checks '{}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "load_pr_head_oid returns empty string when no state file exists" {
+    run load_pr_head_oid 42
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "save_pr_head_oid and load_pr_head_oid round-trip the OID and timestamp" {
+    save_pr_head_oid 42 "deadbeef" "1700000000"
+    run load_pr_head_oid 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "deadbeef 1700000000" ]
+}
+
+@test "ci_checks_timed_out returns false and writes state on first call for a new OID" {
+    local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -ne 0 ]
+    local state_file
+    state_file=$(pr_head_oid_file_path 42)
+    [ -f "${state_file}" ]
+    [[ "$(cat "${state_file}")" == "abc123 "* ]]
+}
+
+@test "ci_checks_timed_out returns false when elapsed time is below CI_CHECK_TIMEOUT_MINUTES" {
+    local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    local now
+    now=$(date +%s)
+    save_pr_head_oid 42 "abc123" "${now}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "ci_checks_timed_out returns true when elapsed time exceeds CI_CHECK_TIMEOUT_MINUTES" {
+    local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 42 "abc123" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "ci_checks_timed_out resets the clock and returns false when the OID changes" {
+    local pr_json='{"headRefOid":"new-oid","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 42 "old-oid" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -ne 0 ]
+    local state_file
+    state_file=$(pr_head_oid_file_path 42)
+    [[ "$(cat "${state_file}")" == "new-oid "* ]]
+}
+
+@test "main defers agent invocation when PR has pending CI checks within timeout" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"CI checks pending"* ]]
+}
+
+@test "main blocks PR and posts complaint when CI checks exceed timeout" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 5 "abc" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"timeout"* ]]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main invokes agent when PR CI checks are all COMPLETED" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main blocks unchanged PR when CI has been pending past timeout in direct-PR path" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 5 "abc" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"timeout"* ]]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
