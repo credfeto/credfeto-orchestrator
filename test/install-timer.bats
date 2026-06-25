@@ -126,7 +126,10 @@ teardown() {
     # bounding set, or rootless Podman's newuidmap/newgidmap helpers cannot map the
     # owner's subuid/subgid ranges ("newuidmap: Could not set caps").
     grep -q "NoNewPrivileges=no" "${svc}"
-    grep -q "PrivateTmp=yes" "${svc}"
+    # PrivateTmp must NOT be set: under it rootless Podman's persistent pause process
+    # captures an empty private /var/tmp, breaking later image pulls.
+    run grep -qE "^PrivateTmp=" "${svc}"
+    [ "${status}" -ne 0 ]
     grep -q "ProtectSystem=full" "${svc}"
     grep -q "CapabilityBoundingSet=CAP_SETUID CAP_SETGID" "${svc}"
     # AmbientCapabilities stays empty so the service process holds no standing caps.
