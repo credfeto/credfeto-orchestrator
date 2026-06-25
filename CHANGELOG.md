@@ -167,6 +167,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: report_missing_workflow_project now only updates _WF_REPORTED_REPOS after successfully filing or finding an existing issue, so a failed creation attempt is retried for subsequent items in the same run
 - oneshot: report_missing_workflow_project returns early instead of filing when the gh issue list check fails, preventing duplicate issues on transient API errors
 - oneshot: report_missing_workflow_project is no longer called when _WF_PROJECT_ID is empty due to a missing status field or auth error — only when project creation itself failed
+- create-project: resolve_owner_node_id now rejects JSON error blobs returned by gh when an organisation does not exist, so a personal-account owner correctly falls through to the user query instead of passing garbage as the project owner ID
+- create-project: provision_project now propagates failures from command substitutions, so a die inside resolve_owner_node_id or create_project exits the script rather than continuing with an empty project ID
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

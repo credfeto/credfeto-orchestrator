@@ -78,15 +78,19 @@ gh_graphql() {
 }
 
 # Resolves the GraphQL node ID for an owner, trying organization then user.
+# gh api graphql may output the raw JSON error response body to stdout when an error occurs
+# (rather than applying --jq), so we guard against receiving a JSON object instead of an ID.
 resolve_owner_node_id() {
     local owner="$1" id
     id=$(gh api graphql -f query="query(\$l:String!){organization(login:\$l){id}}" \
         -f l="${owner}" --jq '.data.organization.id' 2>/dev/null) || true
-    if [ -z "${id}" ] || [ "${id}" = "null" ]; then
+    if [ -z "${id}" ] || [ "${id}" = "null" ] || [[ "${id}" == \{* ]]; then
         id=$(gh api graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
             -f l="${owner}" --jq '.data.user.id' 2>/dev/null) || true
     fi
-    [ -n "${id}" ] && [ "${id}" != "null" ] || die "Could not resolve owner node ID for ${owner}"
+    if [ -z "${id}" ] || [ "${id}" = "null" ] || [[ "${id}" == \{* ]]; then
+        die "Could not resolve owner node ID for ${owner}"
+    fi
     printf '%s' "${id}"
 }
 
@@ -234,10 +238,10 @@ provision_project() {
 
     info "Resolving ${repo_full}..."
     local repo_node_id
-    repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}")
+    repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}") || exit 1
 
     local project_json project_id created=false
-    project_json=$(discover_linked_project "${owner}" "${repo}")
+    project_json=$(discover_linked_project "${owner}" "${repo}") || exit 1
 
     if [ -n "${project_json}" ]; then
         project_id=$(printf '%s' "${project_json}" | jq -r '.id')
@@ -245,8 +249,8 @@ provision_project() {
     else
         info "No \"${PROJECT_TITLE}\" project linked to ${repo_full} — creating one..."
         local owner_node_id
-        owner_node_id=$(resolve_owner_node_id "${owner}")
-        project_id=$(create_project "${owner_node_id}")
+        owner_node_id=$(resolve_owner_node_id "${owner}") || exit 1
+        project_id=$(create_project "${owner_node_id}") || exit 1
         success "Created project ${project_id}"
         info "Linking project to ${repo_full}..."
         link_project "${project_id}" "${repo_node_id}"

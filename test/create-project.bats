@@ -184,3 +184,34 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Could not resolve node ID for bot user"* ]]
 }
+
+@test "resolve_owner_node_id falls back to user query when org query returns JSON error blob" {
+    # gh api graphql outputs the raw JSON response body when there is an error (before --jq runs),
+    # so the org query returns a JSON object rather than null.  Verify the user query is tried.
+    # shellcheck disable=SC2016  # stub body: $* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$*" in
+    *organization*)  printf '"'"'{"data":{"organization":null},"errors":[{"message":"NOT_FOUND"}]}'"'"' ;;
+    *user*)          printf "U_REAL\n" ;;
+    *)               exit 1 ;;
+esac
+'
+    run resolve_owner_node_id testowner
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "U_REAL" ]
+}
+
+@test "provision_project exits non-zero when owner node ID cannot be resolved" {
+    # shellcheck disable=SC2016  # stub body: $* must stay literal and expand at stub runtime
+    make_stub gh '
+case "$*" in
+    *projectsV2*)    printf "" ;;
+    *repository*)    printf "R_NODE" ;;
+    *organization*)  printf "" ;;
+    *user*)          printf "" ;;
+    *)               printf "" ;;
+esac
+'
+    run provision_project noexist scripts
+    [ "${status}" -ne 0 ]
+}
