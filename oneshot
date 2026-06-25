@@ -26,6 +26,11 @@ RATE_LIMIT_RESUME_BUFFER_SECS=3600
 RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"
 RATE_LIMIT_ISSUE_TITLE="Unparseable Claude rate-limit reset time"
 
+# Title of the issue filed in an affected repo when the orchestrator cannot obtain a
+# usable "Workflow" project for it (see report_missing_workflow_project).  A bot account
+# cannot create a project under a personal account, so the owner must run create-project.
+WF_SETUP_ISSUE_TITLE="Workflow project setup required"
+
 # Hard limit on how long a single agent container may run. Prevents a stuck
 # Monitor loop from holding resources indefinitely.
 # Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
@@ -425,6 +430,16 @@ _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
 _WF_CACHED_REPO=""
 
+# Space-delimited list of repos already issued a Workflow-project setup request this run.
+# Prevents report_missing_workflow_project re-filing/re-querying once per item in the same
+# failing repo; cross-run de-duplication relies on the open issue itself.
+_WF_REPORTED_REPOS=""
+
+# Set to "1" by discover_or_create_workflow_project when _wf_create_project returns non-zero,
+# so the call site can distinguish a genuine "cannot create project" failure from other reasons
+# _WF_PROJECT_ID might be empty (missing status field, GraphQL auth error, etc.).
+_WF_CREATION_FAILED=""
+
 # Board-approved items cache — populated by fetch_board_approved_items.
 # Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
 declare -gA _WF_APPROVED_ITEMS
@@ -457,6 +472,7 @@ discover_or_create_workflow_project() {
 
     _WF_PROJECT_ID=""
     _WF_STATUS_FIELD_ID=""
+    _WF_CREATION_FAILED=""
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
 
@@ -487,6 +503,7 @@ discover_or_create_workflow_project() {
         info "Workflow project: no 'Workflow' project found for ${REPO_FULL} — creating one"
         project_json=$(_wf_create_project) || {
             warn "Workflow project: creation failed for ${REPO_FULL} — status updates disabled"
+            _WF_CREATION_FAILED="1"
             return 0
         }
     fi
@@ -514,6 +531,44 @@ discover_or_create_workflow_project() {
 
     _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
+}
+
+# Files an issue in the affected repo asking the owner to run create-project, used when
+# discover_or_create_workflow_project could not obtain a usable "Workflow" project (the bot
+# cannot create projects under a personal account).  De-duplicates two ways: an in-process
+# guard (_WF_REPORTED_REPOS) avoids re-filing per item within one run, and an existing OPEN
+# issue with the same title is left untouched.  All gh failures are non-fatal (warn only).
+report_missing_workflow_project() {
+    case " ${_WF_REPORTED_REPOS} " in
+        *" ${REPO_FULL} "*) return 0 ;;
+    esac
+
+    local existing
+    # Skip filing if the issue list check itself fails (transient error) — conservative to
+    # avoid duplicates on the next successful run.
+    if ! existing=$(WF_TITLE="${WF_SETUP_ISSUE_TITLE}" gh issue list \
+        --repo "${REPO_FULL}" --state open \
+        --search "${WF_SETUP_ISSUE_TITLE} in:title" \
+        --json number,title \
+        --jq 'map(select(.title==env.WF_TITLE)) | .[0].number // empty' 2>/dev/null); then
+        return 0
+    fi
+    if [ -n "${existing}" ]; then
+        _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"
+        return 0
+    fi
+
+    local body
+    # shellcheck disable=SC2016
+    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
+        "${REPO_FULL}")
+
+    if gh issue create --repo "${REPO_FULL}" \
+        --title "${WF_SETUP_ISSUE_TITLE}" --label "AI-Work" --body "${body}" 2>/dev/null; then
+        _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"
+    else
+        warn "Failed to create Workflow-project setup issue for ${REPO_FULL}"
+    fi
 }
 
 # Invites all trusted logins (excluding the copilot bot) as WRITER collaborators
@@ -2274,6 +2329,7 @@ main() {
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
         discover_or_create_workflow_project
+        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
         fetch_board_approved_items
 
         if [ "${item_type}" = "Issue" ]; then

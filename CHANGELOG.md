@@ -54,6 +54,11 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Auto-report unparseable Claude 429 rate-limit reset messages to a GitHub tracking issue so the parser can be extended
 - Auto-invite trusted collaborators as Writers when a new Workflow project is created so they can set board status to Approved
 - Log git SHA provenance of each Docker image layer at agent startup so the exact orchestrator commit baked into each layer is visible in logs for debugging
+- create-project script to idempotently provision a repo's Workflow GitHub Project, and an auto-filed issue prompting the owner to run it when the orchestrator cannot obtain one
+- create-project seeds a newly created Workflow board with all open issues and PRs set to Not Started
+- create-project: --force-bootstrap flag to re-seed the board on an already-provisioned project, recovering from an interrupted first run without affecting human-curated items
+- document GitHub Projects v2 provisioning rules, API correctness, and hasProjectsEnabled prerequisite in ai/local
+- create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
@@ -158,6 +163,17 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Fix code review findings: provenance logged before required-env-var checks, agent Dockerfile ARG/ENV moved after ENTRYPOINT, workflow_run SHA uses head_sha of parent run, unknown-SHA test explicitly unsets vars and checks all five
 - Ensure agent-generated PRs always include Closes #N in the body so GitHub automatically closes the linked issue when the PR is merged
 - SSH stdin drain: pass -n to ssh -T git@github.com so the agent prompt is not consumed before claude runs
+- create-project: die instead of silently falling back to /dev/null when mktemp fails in gh_graphql, preventing device-node deletion when running as root
+- create-project: ensure_bot_collaborator now warns instead of dying when the bot user ID cannot be resolved or the collaborator grant fails, so re-runs complete successfully
+- create-project: bootstrap_board_items warns and caps at 1000 items per type when a repo has more than 1000 open issues or PRs
+- oneshot: report_missing_workflow_project now only updates _WF_REPORTED_REPOS after successfully filing or finding an existing issue, so a failed creation attempt is retried for subsequent items in the same run
+- oneshot: report_missing_workflow_project returns early instead of filing when the gh issue list check fails, preventing duplicate issues on transient API errors
+- oneshot: report_missing_workflow_project is no longer called when _WF_PROJECT_ID is empty due to a missing status field or auth error — only when project creation itself failed
+- create-project: resolve_owner_node_id now rejects JSON error blobs returned by gh when an organisation does not exist, so a personal-account owner correctly falls through to the user query instead of passing garbage as the project owner ID
+- create-project: provision_project now propagates failures from command substitutions, so a die inside resolve_owner_node_id or create_project exits the script rather than continuing with an empty project ID
+- create-project: pass repositoryId to createProjectV2 so the project is repo-scoped and has a default repository set from creation, removing the need for a separate linkProjectV2ToRepository call
+- create-project: ensure_project_description sets the project short description to 'Workflow for <owner>/<repo>' on every run (idempotent), fixing projects that were created without a description
+- create-project: correct GraphQL type in ensure_bot_collaborator from ProjectV2CollaboratorInput to ProjectV2Collaborator and add required pagination on collaborators return — the mutation was silently failing on every project due to the wrong type name
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

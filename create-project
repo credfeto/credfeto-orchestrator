@@ -1,0 +1,338 @@
+#!/bin/bash
+
+# Idempotently provisions the "Workflow" GitHub Project (v2) for a repository so the
+# orchestrator can drive its board.  Only the repository owner can create a project under a
+# personal account, so run this authenticated as that owner — not as the orchestrator bot.
+#
+# Each step is skipped when already done, so the script is safe to re-run:
+#   1. create a "Workflow" project owned by the repository owner
+#   2. add the "Workflow Status" single-select field with its eight options
+#   3. link the project to the repository
+#   4. grant the orchestrator bot WRITER access to the project
+#
+# Board seeding (step 5: add all open issues and PRs as "Not Started") only runs on first
+# creation.  If the first run was interrupted before seeding completed, pass --force-bootstrap
+# to re-run seeding on an already-provisioned project without affecting human-curated items
+# that may have been added since.
+#
+# Usage: create-project --repo <owner>/<repo> [--force-bootstrap]
+
+# The orchestrator bot account that needs write access to drive the board.
+BOT_LOGIN="dnyw4l3n13"
+PROJECT_TITLE="Workflow"
+STATUS_FIELD_NAME="Workflow Status"
+
+die() {
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
+    exit 1
+}
+
+success() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
+}
+
+info() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
+}
+
+warn() {
+    if [ -t 2 ]; then
+        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+    else
+        printf '\n! %s\n' "$*" >&2
+    fi
+}
+
+check_required_tools() {
+    local tool
+    for tool in gh jq; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+# Runs a GraphQL call via gh, capturing stderr.  Dies with the API message on failure;
+# otherwise prints the (already --jq-filtered) result on stdout.
+gh_graphql() {
+    local err out
+    err=$(mktemp) || die "mktemp failed: cannot capture stderr for GraphQL error reporting"
+    if ! out=$(gh api graphql "$@" 2>"${err}"); then
+        local msg
+        msg=$(head -3 "${err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${err}"
+        die "GitHub GraphQL call failed${msg:+: ${msg}}"
+    fi
+    rm -f "${err}"
+    printf '%s' "${out}"
+}
+
+# Resolves the GraphQL node ID for an owner, trying organization then user.
+# gh api graphql may output the raw JSON error response body to stdout when an error occurs
+# (rather than applying --jq), so we guard against receiving a JSON object instead of an ID.
+resolve_owner_node_id() {
+    local owner="$1" id
+    id=$(gh api graphql -f query="query(\$l:String!){organization(login:\$l){id}}" \
+        -f l="${owner}" --jq '.data.organization.id' 2>/dev/null) || true
+    if [ -z "${id}" ] || [ "${id}" = "null" ] || [[ "${id}" == \{* ]]; then
+        id=$(gh api graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
+            -f l="${owner}" --jq '.data.user.id' 2>/dev/null) || true
+    fi
+    if [ -z "${id}" ] || [ "${id}" = "null" ] || [[ "${id}" == \{* ]]; then
+        die "Could not resolve owner node ID for ${owner}"
+    fi
+    printf '%s' "${id}"
+}
+
+resolve_repo_node_id() {
+    local owner="$1" repo="$2" id
+    id=$(gh_graphql -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
+        -f o="${owner}" -f r="${repo}" --jq '.data.repository.id')
+    [ -n "${id}" ] && [ "${id}" != "null" ] || die "Could not resolve repository node ID for ${owner}/${repo}"
+    printf '%s' "${id}"
+}
+
+# Ensures the repository has Projects enabled.  When hasProjectsEnabled is false,
+# repository.projectsV2 returns empty even for a correctly linked project, so oneshot
+# will never discover it.  Enables Projects via gh repo edit if needed.
+ensure_projects_enabled() {
+    local owner="$1" repo="$2"
+    local repo_full="${owner}/${repo}" enabled
+    enabled=$(gh repo view "${repo_full}" --json hasProjectsEnabled --jq '.hasProjectsEnabled' 2>/dev/null) || true
+    if [ "${enabled}" = "true" ]; then
+        return 0
+    fi
+    info "Projects disabled on ${repo_full} — enabling..."
+    gh repo edit "${repo_full}" --enable-projects \
+        || die "Could not enable Projects on ${repo_full}"
+    success "Projects enabled on ${repo_full}"
+}
+
+# Finds a "Workflow" project linked to the repo, scoped exactly like the orchestrator's
+# discovery so what we treat as "already set up" is what the orchestrator will later find.
+# Project titles are not unique, so the repo-link scope is what distinguishes per-repo
+# projects.  Prints the project JSON (id + fields) on stdout, or nothing when absent.
+discover_linked_project() {
+    local owner="$1" repo="$2"
+    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
+    PT="${PROJECT_TITLE}" gh_graphql -f query="${query}" -f owner="${owner}" -f repo="${repo}" \
+        --jq '(.data.repository.projectsV2.nodes // []) | map(select(.title==env.PT)) | first // empty'
+}
+
+# Passing repositoryId to createProjectV2 both links the project to the repo and sets the project's
+# "default repository" (used for new items created from the board), without a separate link call.
+create_project() {
+    local owner_node_id="$1" repo_node_id="$2" id
+    id=$(gh_graphql \
+        -f query="mutation(\$ownerId:ID!,\$title:String!,\$repoId:ID!){createProjectV2(input:{ownerId:\$ownerId,title:\$title,repositoryId:\$repoId}){projectV2{id}}}" \
+        -f ownerId="${owner_node_id}" -f title="${PROJECT_TITLE}" -f repoId="${repo_node_id}" \
+        --jq '.data.createProjectV2.projectV2.id')
+    [ -n "${id}" ] && [ "${id}" != "null" ] || die "createProjectV2 returned no project ID"
+    printf '%s' "${id}"
+}
+
+# Sets the project's short description to "Workflow for <owner>/<repo>" if not already correct.
+ensure_project_description() {
+    local project_id="$1" repo_full="$2"
+    local desc="Workflow for ${repo_full}" current
+    current=$(gh_graphql \
+        -f query="query(\$p:ID!){node(id:\$p){...on ProjectV2{shortDescription}}}" \
+        -f p="${project_id}" --jq '.data.node.shortDescription // ""') || true
+    if [ "${current}" = "${desc}" ]; then
+        info "Project description already correct — skipping"
+        return 0
+    fi
+    info "Setting project description to \"${desc}\"..."
+    gh_graphql \
+        -f query="mutation(\$p:ID!,\$d:String!){updateProjectV2(input:{projectId:\$p,shortDescription:\$d}){projectV2{id}}}" \
+        -f p="${project_id}" -f d="${desc}" >/dev/null
+    success "Description set"
+}
+
+# Ensures the project has the "Workflow Status" single-select field, creating it when absent.
+# project_json is the discovery JSON ("" for a freshly created project).  Populates the globals
+# WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board bootstrap can set
+# item statuses without an extra round-trip.
+ensure_status_field() {
+    local project_id="$1" project_json="$2"
+    WF_FIELD_ID=""
+    WF_NOT_STARTED_OPT=""
+
+    local field_node
+    field_node=$(printf '%s' "${project_json}" | \
+        jq -c --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n)' 2>/dev/null | head -1)
+    if [ -n "${field_node}" ]; then
+        info "Status field \"${STATUS_FIELD_NAME}\" already present — skipping"
+    else
+        info "Adding \"${STATUS_FIELD_NAME}\" field with its eight options..."
+        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+        local resp
+        resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}")
+        field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)
+        success "Status field added"
+    fi
+
+    WF_FIELD_ID=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
+    WF_NOT_STARTED_OPT=$(printf '%s' "${field_node}" | \
+        jq -r '(.options // [])[] | select(.name=="Not Started") | .id' 2>/dev/null | head -1)
+}
+
+# Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
+# so running it when the bot already has access is a harmless no-op.  Both failure paths use
+# warn rather than die so that a re-run succeeds even when the bot account is temporarily
+# unreachable or has already been granted access by another means.
+ensure_bot_collaborator() {
+    local project_id="$1" bot_id
+    bot_id=$(gh api graphql -f query="query(\$l:String!){user(login:\$l){id}}" \
+        -f l="${BOT_LOGIN}" --jq '.data.user.id' 2>/dev/null) || true
+    if [ -z "${bot_id}" ] || [ "${bot_id}" = "null" ]; then
+        warn "Could not resolve node ID for bot user ${BOT_LOGIN} — add ${BOT_LOGIN} as a collaborator manually at github.com"
+        return 0
+    fi
+    info "Granting ${BOT_LOGIN} WRITER access to the project..."
+    # shellcheck disable=SC2016  # $p/$c are GraphQL variables resolved by jq below, not the shell
+    local mut='mutation($p:ID!,$c:[ProjectV2Collaborator!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators(first:5){nodes{...on User{login}}}}}'
+    if jq -cn --arg p "${project_id}" --arg id "${bot_id}" --arg q "${mut}" \
+        '{query:$q,variables:{p:$p,c:[{userId:$id,role:"WRITER"}]}}' \
+        | gh api graphql --input - >/dev/null 2>&1; then
+        success "${BOT_LOGIN} has WRITER access"
+    else
+        warn "Failed to grant ${BOT_LOGIN} access to project ${project_id} — add access manually at github.com"
+    fi
+}
+
+# Seeds a freshly created board with every open issue and open PR in the repo, each set to
+# "Not Started".  Only called for a newly created project so re-runs never re-add items a human
+# may have curated off the board.  Per-item failures are non-fatal so one bad item cannot abort
+# the whole bootstrap.  field_id / opt_id are the "Workflow Status" field and "Not Started" option.
+bootstrap_board_items() {
+    local owner="$1" repo="$2" project_id="$3" field_id="$4" opt_id="$5"
+    local repo_full="${owner}/${repo}"
+
+    [ -n "${field_id}" ] && [ -n "${opt_id}" ] \
+        || die "Cannot bootstrap board for ${repo_full}: unresolved \"${STATUS_FIELD_NAME}\" field or \"Not Started\" option"
+
+    local issue_ids pr_ids n_issues n_prs
+    issue_ids=$(gh issue list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
+    pr_ids=$(gh pr list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
+    n_issues=$(printf '%s\n' "${issue_ids}" | awk 'NF' | wc -l | tr -d ' ')
+    n_prs=$(printf '%s\n' "${pr_ids}" | awk 'NF' | wc -l | tr -d ' ')
+    [ "${n_issues}" -gt 1000 ] && { warn "More than 1000 open issues — board seed limited to first 1000"; issue_ids=$(printf '%s\n' "${issue_ids}" | head -1000); }
+    [ "${n_prs}" -gt 1000 ] && { warn "More than 1000 open PRs — board seed limited to first 1000"; pr_ids=$(printf '%s\n' "${pr_ids}" | head -1000); }
+
+    local content_ids
+    content_ids=$(printf '%s\n%s\n' "${issue_ids}" "${pr_ids}" | awk 'NF')
+
+    if [ -z "${content_ids}" ]; then
+        info "No open issues or PRs to add to the board"
+        return 0
+    fi
+
+    info "Adding open issues and PRs to the board as \"Not Started\"..."
+    local cid item_id count=0
+    while IFS= read -r cid; do
+        [ -n "${cid}" ] || continue
+        item_id=$(gh api graphql \
+            -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
+            -f p="${project_id}" -f c="${cid}" \
+            --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || true
+        if [ -z "${item_id}" ] || [ "${item_id}" = "null" ]; then
+            info "Could not add ${cid} to the board — skipping"
+            continue
+        fi
+        gh api graphql \
+            -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
+            -f p="${project_id}" -f i="${item_id}" -f f="${field_id}" -f v="${opt_id}" \
+            >/dev/null 2>&1 \
+            || info "Added ${cid} but could not set its status to \"Not Started\""
+        count=$((count + 1))
+    done <<< "${content_ids}"
+
+    success "Added ${count} open item(s) to the board"
+}
+
+provision_project() {
+    local owner="$1" repo="$2" force_bootstrap="${3:-false}"
+    local repo_full="${owner}/${repo}"
+
+    info "Resolving ${repo_full}..."
+    local repo_node_id
+    repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}") || exit 1
+    ensure_projects_enabled "${owner}" "${repo}"
+
+    local project_json project_id created=false
+    project_json=$(discover_linked_project "${owner}" "${repo}") || exit 1
+
+    if [ -n "${project_json}" ]; then
+        project_id=$(printf '%s' "${project_json}" | jq -r '.id')
+        info "\"${PROJECT_TITLE}\" project already linked to ${repo_full} (${project_id}) — skipping create + link"
+    else
+        info "No \"${PROJECT_TITLE}\" project linked to ${repo_full} — creating one..."
+        local owner_node_id
+        owner_node_id=$(resolve_owner_node_id "${owner}") || exit 1
+        project_id=$(create_project "${owner_node_id}" "${repo_node_id}") || exit 1
+        success "Created and linked project ${project_id}"
+        project_json=""
+        created=true
+    fi
+
+    ensure_status_field "${project_id}" "${project_json}"
+    ensure_project_description "${project_id}" "${repo_full}"
+    ensure_bot_collaborator "${project_id}"
+
+    # Seed the backlog at creation, or when --force-bootstrap is passed to recover from an
+    # interrupted first run.  Skip on normal re-runs to leave human-curated boards untouched.
+    if [ "${created}" = true ] || [ "${force_bootstrap}" = true ]; then
+        bootstrap_board_items "${owner}" "${repo}" "${project_id}" "${WF_FIELD_ID}" "${WF_NOT_STARTED_OPT}"
+    fi
+
+    success "Workflow project ready for ${repo_full}: ${project_id}"
+}
+
+main() {
+    local repo_full="" force_bootstrap=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --repo)
+                shift
+                [ -n "${1:-}" ] || die "--repo requires a value"
+                repo_full="$1"
+                shift
+                ;;
+            --force-bootstrap)
+                force_bootstrap=true
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "${repo_full}" ] || die "Usage: $(basename "$0") --repo <owner>/<repo> [--force-bootstrap]"
+    [[ "${repo_full}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
+        || die "--repo value must be in <owner>/<repo> form: ${repo_full}"
+
+    check_required_tools
+
+    local owner="${repo_full%%/*}"
+    local repo="${repo_full##*/}"
+
+    info "Provisioning Workflow project for ${repo_full}"
+    provision_project "${owner}" "${repo}" "${force_bootstrap}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
