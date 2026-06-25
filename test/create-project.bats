@@ -22,10 +22,11 @@ case "${op}" in
     *"pr list"*)                        printf "%b\n" "${BOOT_PR_IDS:-}" ;;
     *addProjectV2ItemById*)             echo "addProjectV2ItemById" >> "${log}"; printf "ITEM_NODE" ;;
     *updateProjectV2ItemFieldValue*)    echo "updateProjectV2ItemFieldValue" >> "${log}"; printf "{}" ;;
+    *updateProjectV2*)                  echo "updateProjectV2Description" >> "${log}"; printf "{}" ;;
+    *shortDescription*)                 printf "%s" "${PROJECT_SHORT_DESC:-}" ;;
     *projectsV2*)                       printf "%s" "${DISCOVERY_RESULT}" ;;
     *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "%s" "${FIELD_CREATE_RESULT}" ;;
     *createProjectV2*)                  echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
-    *linkProjectV2ToRepository*)        echo "linkProjectV2ToRepository" >> "${log}"; printf "{}" ;;
     *organization*)                     printf "" ;;
     *user*)                             printf "U_NODE" ;;
     *repository*)                       printf "R_NODE" ;;
@@ -94,7 +95,7 @@ teardown() {
     [[ "${output}" == *"gh"* ]]
 }
 
-@test "provision_project skips create and link when a linked project already exists" {
+@test "provision_project skips create when a linked project already exists and updates description" {
     install_gh_stub
     export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[]}]}}'
 
@@ -105,10 +106,11 @@ teardown() {
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"createProjectV2"* ]]
     [[ "${output}" != *"linkProjectV2ToRepository"* ]]
+    [[ "${output}" == *"updateProjectV2Description"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
 }
 
-@test "provision_project creates, links, adds field and grants access when no project exists" {
+@test "provision_project creates, sets description, adds field and grants access when no project exists" {
     install_gh_stub
     export DISCOVERY_RESULT=""
 
@@ -117,9 +119,11 @@ teardown() {
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" == *"createProjectV2"* ]]
-    [[ "${output}" == *"linkProjectV2ToRepository"* ]]
+    [[ "${output}" == *"updateProjectV2Description"* ]]
     [[ "${output}" == *"createProjectV2Field"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
+    # repositoryId is passed to createProjectV2 so no separate link call is needed
+    [[ "${output}" != *"linkProjectV2ToRepository"* ]]
 }
 
 @test "provision_project adds a missing status field on an existing project" {
@@ -183,6 +187,31 @@ teardown() {
     run ensure_bot_collaborator "P_TEST"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Could not resolve node ID for bot user"* ]]
+}
+
+@test "ensure_project_description sets description when not yet set" {
+    make_stub gh '
+case "$*" in
+    *shortDescription*)  printf "" ;;
+    *updateProjectV2*)   printf "{}" ;;
+    *)                   exit 1 ;;
+esac
+'
+    run ensure_project_description "P_TEST" "credfeto/scripts"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Description set"* ]]
+}
+
+@test "ensure_project_description skips update when description is already correct" {
+    make_stub gh '
+case "$*" in
+    *shortDescription*)  printf "Workflow for credfeto/scripts" ;;
+    *)                   exit 1 ;;
+esac
+'
+    run ensure_project_description "P_TEST" "credfeto/scripts"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already correct"* ]]
 }
 
 @test "resolve_owner_node_id falls back to user query when org query returns JSON error blob" {

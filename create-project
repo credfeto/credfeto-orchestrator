@@ -113,21 +113,34 @@ discover_linked_project() {
         --jq '(.data.repository.projectsV2.nodes // []) | map(select(.title==env.PT)) | first // empty'
 }
 
+# Passing repositoryId to createProjectV2 both links the project to the repo and sets the project's
+# "default repository" (used for new items created from the board), without a separate link call.
 create_project() {
-    local owner_node_id="$1" id
+    local owner_node_id="$1" repo_node_id="$2" id
     id=$(gh_graphql \
-        -f query="mutation(\$ownerId:ID!,\$title:String!){createProjectV2(input:{ownerId:\$ownerId,title:\$title}){projectV2{id}}}" \
-        -f ownerId="${owner_node_id}" -f title="${PROJECT_TITLE}" \
+        -f query="mutation(\$ownerId:ID!,\$title:String!,\$repoId:ID!){createProjectV2(input:{ownerId:\$ownerId,title:\$title,repositoryId:\$repoId}){projectV2{id}}}" \
+        -f ownerId="${owner_node_id}" -f title="${PROJECT_TITLE}" -f repoId="${repo_node_id}" \
         --jq '.data.createProjectV2.projectV2.id')
     [ -n "${id}" ] && [ "${id}" != "null" ] || die "createProjectV2 returned no project ID"
     printf '%s' "${id}"
 }
 
-link_project() {
-    local project_id="$1" repo_node_id="$2"
+# Sets the project's short description to "Workflow for <owner>/<repo>" if not already correct.
+ensure_project_description() {
+    local project_id="$1" repo_full="$2"
+    local desc="Workflow for ${repo_full}" current
+    current=$(gh_graphql \
+        -f query="query(\$p:ID!){node(id:\$p){...on ProjectV2{shortDescription}}}" \
+        -f p="${project_id}" --jq '.data.node.shortDescription // ""') || true
+    if [ "${current}" = "${desc}" ]; then
+        info "Project description already correct — skipping"
+        return 0
+    fi
+    info "Setting project description to \"${desc}\"..."
     gh_graphql \
-        -f query="mutation(\$p:ID!,\$r:ID!){linkProjectV2ToRepository(input:{projectId:\$p,repositoryId:\$r}){repository{id}}}" \
-        -f p="${project_id}" -f r="${repo_node_id}" >/dev/null
+        -f query="mutation(\$p:ID!,\$d:String!){updateProjectV2(input:{projectId:\$p,shortDescription:\$d}){projectV2{id}}}" \
+        -f p="${project_id}" -f d="${desc}" >/dev/null
+    success "Description set"
 }
 
 # Ensures the project has the "Workflow Status" single-select field, creating it when absent.
@@ -250,16 +263,14 @@ provision_project() {
         info "No \"${PROJECT_TITLE}\" project linked to ${repo_full} — creating one..."
         local owner_node_id
         owner_node_id=$(resolve_owner_node_id "${owner}") || exit 1
-        project_id=$(create_project "${owner_node_id}") || exit 1
-        success "Created project ${project_id}"
-        info "Linking project to ${repo_full}..."
-        link_project "${project_id}" "${repo_node_id}"
-        success "Project linked to ${repo_full}"
+        project_id=$(create_project "${owner_node_id}" "${repo_node_id}") || exit 1
+        success "Created and linked project ${project_id}"
         project_json=""
         created=true
     fi
 
     ensure_status_field "${project_id}" "${project_json}"
+    ensure_project_description "${project_id}" "${repo_full}"
     ensure_bot_collaborator "${project_id}"
 
     # Seed the backlog at creation, or when --force-bootstrap is passed to recover from an
