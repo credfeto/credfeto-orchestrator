@@ -122,11 +122,15 @@ teardown() {
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
     [ -f "${svc}" ]
-    grep -q "NoNewPrivileges=yes" "${svc}"
+    # NoNewPrivileges must stay off and CAP_SETUID/CAP_SETGID must remain in the
+    # bounding set, or rootless Podman's newuidmap/newgidmap helpers cannot map the
+    # owner's subuid/subgid ranges ("newuidmap: Could not set caps").
+    grep -q "NoNewPrivileges=no" "${svc}"
     grep -q "PrivateTmp=yes" "${svc}"
     grep -q "ProtectSystem=full" "${svc}"
-    grep -q "CapabilityBoundingSet=" "${svc}"
-    grep -q "AmbientCapabilities=" "${svc}"
+    grep -q "CapabilityBoundingSet=CAP_SETUID CAP_SETGID" "${svc}"
+    # AmbientCapabilities stays empty so the service process holds no standing caps.
+    grep -qE "^AmbientCapabilities=$" "${svc}"
     grep -q "LockPersonality=yes" "${svc}"
     grep -q "MemoryDenyWriteExecute=no" "${svc}"
 }

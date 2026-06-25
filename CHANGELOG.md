@@ -176,6 +176,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project: correct GraphQL type in ensure_bot_collaborator from ProjectV2CollaboratorInput to ProjectV2Collaborator and add required pagination on collaborators return — the mutation was silently failing on every project due to the wrong type name
 - oneshot: _wf_create_project now passes repositoryId to createProjectV2 so projects are repo-scoped and appear in repository.projectsV2 on the next discovery run, removing the separate linkProjectV2ToRepository call
 - oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
+- Restore CAP_SETUID/CAP_SETGID to the orchestrator systemd unit and disable NoNewPrivileges so rootless Podman's newuidmap/newgidmap can map subuid/subgid ranges (fixes 'newuidmap: Could not set caps' container start failure)
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

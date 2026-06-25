@@ -113,21 +113,29 @@ ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # the socket lives under XDG_RUNTIME_DIR, not ~/.gnupg.
 ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'
 ExecStart=${exec_start}
-# Security hardening — prevent privilege escalation and limit the blast radius
-# if the service is compromised.
-# NoNewPrivileges prevents setuid/setgid binaries from gaining extra privileges.
+# Security hardening — limit the blast radius if the service is compromised.
 # PrivateTmp gives the service its own /tmp so container temp files are isolated.
 # ProtectSystem=full makes /usr, /boot, and /etc read-only; the home directory
 # and /dev remain writable (rootless Podman needs /dev/fuse for fuse-overlayfs).
-# CapabilityBoundingSet= and AmbientCapabilities= remove all Linux capabilities;
-# rootless Podman does not require capabilities when running as an unprivileged user.
+# CapabilityBoundingSet is restricted to CAP_SETUID/CAP_SETGID — the only caps
+# rootless Podman needs: its setuid helpers newuidmap/newgidmap require them to
+# map the owner subuid/subgid ranges. An empty set (or dropping these) masks the
+# file capabilities on those helper binaries, breaking container start with
+# \"newuidmap: Could not set caps\". AmbientCapabilities stays empty so the
+# long-running service process itself holds no capabilities — newuidmap gains
+# CAP_SETUID transiently from its own file caps for the moment it runs.
+# NoNewPrivileges must stay off: with it on, the kernel ignores the newuidmap
+# file capabilities on exec, which also breaks the userns setup. Granting the
+# caps ambiently instead would let the host-namespace process setuid(0) to root,
+# a far worse posture than re-enabling setuid binaries for this unprivileged,
+# no-sudo user.
 # LockPersonality prevents changing the execution domain (e.g. via personality(2)).
 # MemoryDenyWriteExecute=no is explicit: containers and JIT compilers need pages
 # that are both writable and executable, so this restriction must remain off.
-NoNewPrivileges=yes
+NoNewPrivileges=no
 PrivateTmp=yes
 ProtectSystem=full
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 AmbientCapabilities=
 LockPersonality=yes
 MemoryDenyWriteExecute=no"
