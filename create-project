@@ -102,6 +102,22 @@ resolve_repo_node_id() {
     printf '%s' "${id}"
 }
 
+# Ensures the repository has Projects enabled.  When hasProjectsEnabled is false,
+# repository.projectsV2 returns empty even for a correctly linked project, so oneshot
+# will never discover it.  Enables Projects via gh repo edit if needed.
+ensure_projects_enabled() {
+    local owner="$1" repo="$2"
+    local repo_full="${owner}/${repo}" enabled
+    enabled=$(gh repo view "${repo_full}" --json hasProjectsEnabled --jq '.hasProjectsEnabled' 2>/dev/null) || true
+    if [ "${enabled}" = "true" ]; then
+        return 0
+    fi
+    info "Projects disabled on ${repo_full} — enabling..."
+    gh repo edit "${repo_full}" --enable-projects \
+        || die "Could not enable Projects on ${repo_full}"
+    success "Projects enabled on ${repo_full}"
+}
+
 # Finds a "Workflow" project linked to the repo, scoped exactly like the orchestrator's
 # discovery so what we treat as "already set up" is what the orchestrator will later find.
 # Project titles are not unique, so the repo-link scope is what distinguishes per-repo
@@ -252,6 +268,7 @@ provision_project() {
     info "Resolving ${repo_full}..."
     local repo_node_id
     repo_node_id=$(resolve_repo_node_id "${owner}" "${repo}") || exit 1
+    ensure_projects_enabled "${owner}" "${repo}"
 
     local project_json project_id created=false
     project_json=$(discover_linked_project "${owner}" "${repo}") || exit 1

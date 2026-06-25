@@ -27,6 +27,8 @@ case "${op}" in
     *projectsV2*)                       printf "%s" "${DISCOVERY_RESULT}" ;;
     *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "%s" "${FIELD_CREATE_RESULT}" ;;
     *createProjectV2*)                  echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
+    *hasProjectsEnabled*)               printf "%s" "${PROJECTS_ENABLED:-true}" ;;
+    *"repo edit"*"--enable-projects"*)  echo "enableProjects" >> "${log}" ;;
     *organization*)                     printf "" ;;
     *user*)                             printf "U_NODE" ;;
     *repository*)                       printf "R_NODE" ;;
@@ -243,4 +245,41 @@ esac
 '
     run provision_project noexist scripts
     [ "${status}" -ne 0 ]
+}
+
+@test "ensure_projects_enabled enables Projects when hasProjectsEnabled is false" {
+    install_gh_stub
+    export PROJECTS_ENABLED="false"
+
+    run ensure_projects_enabled credfeto scripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Projects enabled"* ]]
+
+    run grep enableProjects "${CREATE_PROJECT_GH_LOG}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "ensure_projects_enabled skips when hasProjectsEnabled is already true" {
+    install_gh_stub
+    export PROJECTS_ENABLED="true"
+
+    run ensure_projects_enabled credfeto scripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"enabling"* ]]
+
+    run grep -c enableProjects "${CREATE_PROJECT_GH_LOG}"
+    [ "${output}" -eq 0 ]
+}
+
+@test "provision_project enables Projects when disabled before discovering or creating project" {
+    install_gh_stub
+    export DISCOVERY_RESULT=""
+    export PROJECTS_ENABLED="false"
+
+    run provision_project credfeto scripts
+    [ "${status}" -eq 0 ]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" == *"enableProjects"* ]]
+    [[ "${output}" == *"createProjectV2"* ]]
 }
