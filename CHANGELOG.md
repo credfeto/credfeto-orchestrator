@@ -174,6 +174,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project: pass repositoryId to createProjectV2 so the project is repo-scoped and has a default repository set from creation, removing the need for a separate linkProjectV2ToRepository call
 - create-project: ensure_project_description sets the project short description to 'Workflow for <owner>/<repo>' on every run (idempotent), fixing projects that were created without a description
 - create-project: correct GraphQL type in ensure_bot_collaborator from ProjectV2CollaboratorInput to ProjectV2Collaborator and add required pagination on collaborators return — the mutation was silently failing on every project due to the wrong type name
+- oneshot: _wf_create_project now passes repositoryId to createProjectV2 so projects are repo-scoped and appear in repository.projectsV2 on the next discovery run, removing the separate linkProjectV2ToRepository call
+- oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
