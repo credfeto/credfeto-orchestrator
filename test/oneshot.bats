@@ -4466,10 +4466,13 @@ exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
     discover_or_create_workflow_project
+    local count_after_first
+    count_after_first=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
     discover_or_create_workflow_project
-    local count
-    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
-    [ "${count}" -eq 1 ]
+    local count_after_second
+    count_after_second=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    # Second call must not invoke gh at all (cache hit)
+    [ "${count_after_second}" -eq "${count_after_first}" ]
 }
 
 @test "discover_or_create_workflow_project re-discovers when repo changes" {
@@ -4480,6 +4483,23 @@ STUBEOF
     local count
     count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
     [ "${count}" -ge 1 ]
+}
+
+@test "discover_or_create_workflow_project enables Projects when hasProjectsEnabled is false" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Not Started"}]}]}}]'
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"hasProjectsEnabled"* ]]; then printf 'false\n'; exit 0; fi
+if [[ "\$*" == *"repo edit"* ]]; then exit 0; fi
+if [[ "\$*" == *"projectsV2"* ]]; then printf '%s\n' '${project_json}'; exit 0; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    grep -q 'enable-projects' "${gh_log}"
+    [ "${_WF_PROJECT_ID}" = "PVT_found" ]
 }
 
 # --- _wf_create_project / _wf_invite_trusted_collaborators unit tests ---------
@@ -4495,6 +4515,10 @@ if [[ "\$*" == *"organization"* ]]; then
 fi
 if [[ "\$*" == *"user(login"* ]]; then
     printf 'U_abc123\n'
+    exit 0
+fi
+if [[ "\$*" == *"repository(owner"* ]]; then
+    printf 'R_repo123\n'
     exit 0
 fi
 if [[ "\$*" == *"createProjectV2"* ]]; then
@@ -4524,6 +4548,10 @@ if [[ "\$*" == *"user(login"* ]]; then
     printf 'U_abc123\n'
     exit 0
 fi
+if [[ "\$*" == *"repository(owner"* ]]; then
+    printf 'R_repo123\n'
+    exit 0
+fi
 if [[ "\$*" == *"createProjectV2"* ]]; then
     printf '{"data":{"createProjectV2":{"projectV2":{"id":"PVT_new"}}}}\n'
     exit 0
@@ -4550,6 +4578,41 @@ STUBEOF
     run _wf_create_project
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"cannot resolve owner node ID"* ]]
+}
+
+@test "_wf_create_project passes repositoryId to createProjectV2 for repo-scoped project" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"organization"* ]]; then printf 'O_owner\n'; exit 0; fi
+if [[ "\$*" == *"user(login"* ]]; then printf 'U_user\n'; exit 0; fi
+if [[ "\$*" == *"repository(owner"* ]]; then printf 'R_repo\n'; exit 0; fi
+if [[ "\$*" == *"createProjectV2"* ]]; then
+    printf '{"data":{"createProjectV2":{"projectV2":{"id":"PVT_scoped"}}}}\n'; exit 0
+fi
+printf '{}\n'; exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    _wf_invite_trusted_collaborators() { return 0; }
+    _wf_create_project
+    grep -q 'repositoryId' "${gh_log}"
+    run grep -q 'linkProjectV2ToRepository' "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "_wf_create_project warns and returns 1 when repo node ID cannot be resolved" {
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"organization"* ]]; then printf 'O_owner\n'; exit 0; fi
+if [[ "\$*" == *"user(login"* ]]; then printf 'U_user\n'; exit 0; fi
+if [[ "\$*" == *"repository(owner"* ]]; then exit 1; fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run _wf_create_project
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"cannot resolve repo node ID"* ]]
 }
 
 @test "_wf_invite_trusted_collaborators skips copilot bot and invites real users" {
