@@ -185,7 +185,7 @@ ensure_bot_collaborator() {
     fi
     info "Granting ${BOT_LOGIN} WRITER access to the project..."
     # shellcheck disable=SC2016  # $p/$c are GraphQL variables resolved by jq below, not the shell
-    local mut='mutation($p:ID!,$c:[ProjectV2CollaboratorInput!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators{nodes{login}}}}'
+    local mut='mutation($p:ID!,$c:[ProjectV2Collaborator!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators(first:5){nodes{...on User{login}}}}}'
     if jq -cn --arg p "${project_id}" --arg id "${bot_id}" --arg q "${mut}" \
         '{query:$q,variables:{p:$p,c:[{userId:$id,role:"WRITER"}]}}' \
         | gh api graphql --input - >/dev/null 2>&1; then
