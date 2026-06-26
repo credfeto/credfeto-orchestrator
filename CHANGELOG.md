@@ -182,6 +182,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 in .env (regex now requires a positive integer) to prevent immediate timeout-blocking of all pending-CI PRs
 - oneshot: clear CI pending state after checks complete so a manually re-triggered CI run on the same commit does not inherit a stale first-observation timestamp
 - oneshot tests: add missing load_env_config coverage for CI_CHECK_TIMEOUT_MINUTES (valid, invalid, and zero values)
+- oneshot: filter pr_json_has_pending_ci_checks to required checks only so optional or informational checks cannot gate agent invocation
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
