@@ -2439,9 +2439,6 @@ main() {
 
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
-        discover_or_create_workflow_project
-        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-        fetch_board_approved_items
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
@@ -2707,6 +2704,10 @@ COMMENT
         fi
 
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
+
+        discover_or_create_workflow_project
+        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+        fetch_board_approved_items
 
         local trusted_logins
         trusted_logins=$(get_trusted_logins)
