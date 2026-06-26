@@ -192,6 +192,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: guard `ci_checks_timed_out` against a null or absent `headRefOid` field in the PR JSON, which would have started the timeout clock with an empty OID and caused a false-positive Blocked label after `CI_CHECK_TIMEOUT_MINUTES`
 - oneshot: defer BEHIND/DIRTY and draft PRs in the unchanged-fingerprint path while CI checks are pending, preventing an infinite deferral loop where the work-block CI gate kept saving the fingerprint and the unchanged-fingerprint path kept falling through to re-run
 - test: stub `sync_pr_labels_from_linked_issues` in `setup_main_mocks` so integration tests that reach the work block do not fork a real `gh` subprocess
+- oneshot: guard ci_checks_timed_out against a corrupted state file where the timestamp field is absent, preventing bash arithmetic from coercing a hex OID to zero and causing an immediate false-positive CI timeout that blocks the PR
+- oneshot: move sync_pr_labels_from_linked_issues to after the CI pending gate in the work block so that the fingerprint saved during deferral is not stale from pre-sync labels, avoiding one unnecessary work-block re-entry on the next iteration
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
