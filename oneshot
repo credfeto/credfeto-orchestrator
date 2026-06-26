@@ -2707,11 +2707,11 @@ COMMENT
 
         discover_or_create_workflow_project
         [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-        fetch_board_approved_items
 
         local trusted_logins
         trusted_logins=$(get_trusted_logins)
         if [ "${item_type}" = "Issue" ]; then
+            fetch_board_approved_items
             local plan_approved="false"
             [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && plan_approved="true"
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
