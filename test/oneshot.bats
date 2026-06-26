@@ -4927,23 +4927,28 @@ STUBEOF
 
 # --- CI pending gate ---------------------------------------------------------
 
-@test "pr_json_has_pending_ci_checks returns true when a check has status IN_PROGRESS" {
-    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+@test "pr_json_has_pending_ci_checks returns true when a required check has status IN_PROGRESS" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
     [ "${status}" -eq 0 ]
 }
 
-@test "pr_json_has_pending_ci_checks returns true when a check has status QUEUED" {
-    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"QUEUED","conclusion":null}]}'
+@test "pr_json_has_pending_ci_checks returns true when a required check has status QUEUED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"QUEUED","conclusion":null,"isRequired":true}]}'
     [ "${status}" -eq 0 ]
 }
 
-@test "pr_json_has_pending_ci_checks returns true when one of many checks is not COMPLETED" {
-    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"lint","status":"IN_PROGRESS","conclusion":null}]}'
+@test "pr_json_has_pending_ci_checks returns true when one of many required checks is not COMPLETED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"name":"lint","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
     [ "${status}" -eq 0 ]
 }
 
 @test "pr_json_has_pending_ci_checks returns false when all checks are COMPLETED" {
-    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when a non-required check is pending" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"badge","status":"IN_PROGRESS","conclusion":null,"isRequired":false}]}'
     [ "${status}" -ne 0 ]
 }
 
@@ -5032,7 +5037,7 @@ STUBEOF
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     fingerprint_pr_json() { printf 'fp-new\n'; }
     load_pr_fingerprint()  { printf 'fp-old\n'; }
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
@@ -5049,7 +5054,7 @@ STUBEOF
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     fingerprint_pr_json() { printf 'fp-new\n'; }
     load_pr_fingerprint()  { printf 'fp-old\n'; }
     local old_time
@@ -5089,7 +5094,7 @@ STUBEOF
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     local old_time
@@ -5117,7 +5122,7 @@ STUBEOF
     find_open_nonblocked_pr_for_repo() { printf '7\n'; }
     fetch_issue_json()         { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json()            { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_json()            { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()      { printf 'fp-same\n'; }
     load_pr_fingerprint()      { printf 'fp-same\n'; }
