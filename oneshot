@@ -1770,6 +1770,11 @@ ci_checks_timed_out() {
         return 1
     fi
 
+    if ! [[ "${saved_timestamp}" =~ ^[0-9]+$ ]]; then
+        save_pr_head_oid "${item_id}" "${current_oid}" "${current_time}"
+        return 1
+    fi
+
     local elapsed_minutes
     elapsed_minutes=$(( (current_time - saved_timestamp) / 60 ))
     [ "${elapsed_minutes}" -ge "${CI_CHECK_TIMEOUT_MINUTES}" ]
@@ -2614,7 +2619,6 @@ COMMENT
         if [ "${item_type}" = "PullRequest" ]; then
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
-            sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
 
             if pr_json_has_pending_ci_checks "${pr_json}"; then
                 if ci_checks_timed_out "${item_id}" "${pr_json}"; then
@@ -2632,6 +2636,7 @@ COMMENT
                 continue
             fi
             clear_pr_ci_pending_state "${item_id}"
+            sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
 
         if ! ensure_repo_current; then

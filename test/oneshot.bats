@@ -5047,6 +5047,18 @@ STUBEOF
     [ ! -f "${state_file}" ]
 }
 
+@test "ci_checks_timed_out returns false and resets state when state file has no space (corrupted)" {
+    local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    local state_file
+    state_file=$(pr_head_oid_file_path 42)
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'abc123' > "${state_file}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -ne 0 ]
+    [[ "$(cat "${state_file}")" == "abc123 "* ]]
+}
+
 @test "main defers agent invocation when PR has pending CI checks within timeout" {
     setup_main_mocks
     fetch_all_priorities() {
