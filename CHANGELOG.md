@@ -205,6 +205,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Timer interval configurable via ORCHESTRATOR_TIMER_INTERVAL env var, defaulting to 30sec
 - Improve git configuration: add standard settings to setup-owner and system-gitconfig
 - Suppress SC2016 in shellcheck — single-quoted GraphQL query strings are intentional
+- Defer Workflow-project GraphQL discovery and board-approved-items fetch until after per-item skip checks to avoid redundant API calls for blocked/unchanged items
+- Skip fetch_board_approved_items for PullRequest items — _WF_APPROVED_ITEMS is only consumed for Issues
 ### Deprecated
 ### Removed
 ### Deployment Changes
