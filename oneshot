@@ -51,6 +51,7 @@ MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-60}"
+[[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=60
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
@@ -2481,6 +2482,7 @@ CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocki
 COMMENT
                         )" 2>/dev/null || true
                         gh pr edit "${open_pr}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                        clear_pr_ci_pending_state "${open_pr}"
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
@@ -2491,6 +2493,7 @@ COMMENT
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
                             info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                            clear_pr_ci_pending_state "${open_pr}"
                             count_unchanged=$((count_unchanged + 1))
                             continue
                         fi
@@ -2574,6 +2577,7 @@ CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocki
 COMMENT
                     )" 2>/dev/null || true
                     gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                    clear_pr_ci_pending_state "${item_id}"
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
@@ -2584,6 +2588,7 @@ COMMENT
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
                 else
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                    clear_pr_ci_pending_state "${item_id}"
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
