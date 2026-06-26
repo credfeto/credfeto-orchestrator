@@ -188,6 +188,10 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 supplied via environment variable at script initialisation to prevent every pending-CI PR from being immediately blocked
 - oneshot: guard clear_pr_ci_pending_state in "unchanged, skip" paths so the CI timeout clock is not reset on every iteration when CI is still pending (would have prevented the timeout from ever firing)
 - oneshot: call clear_pr_ci_pending_state after blocking in the work-block timeout path so that a human who removes the Blocked label is not immediately re-blocked due to a stale state file
+- oneshot: treat pending checks without an explicit `isRequired` field as required in the CI gate so the gate cannot be silently disabled by older `gh` CLI versions that omit the field
+- oneshot: guard `ci_checks_timed_out` against a null or absent `headRefOid` field in the PR JSON, which would have started the timeout clock with an empty OID and caused a false-positive Blocked label after `CI_CHECK_TIMEOUT_MINUTES`
+- oneshot: defer BEHIND/DIRTY and draft PRs in the unchanged-fingerprint path while CI checks are pending, preventing an infinite deferral loop where the work-block CI gate kept saving the fingerprint and the unchanged-fingerprint path kept falling through to re-run
+- test: stub `sync_pr_labels_from_linked_issues` in `setup_main_mocks` so integration tests that reach the work block do not fork a real `gh` subprocess
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
