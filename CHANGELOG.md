@@ -179,6 +179,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
 - Restore CAP_SETUID/CAP_SETGID to the orchestrator systemd unit and disable NoNewPrivileges so rootless Podman's newuidmap/newgidmap can map subuid/subgid ranges (fixes 'newuidmap: Could not set caps' container start failure)
 - Drop PrivateTmp from the orchestrator systemd unit; under it rootless Podman's persistent pause process captured an empty private /var/tmp, breaking image pulls with 'mkdir /var/tmp/...: no such file or directory'
+- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 in .env (regex now requires a positive integer) to prevent immediate timeout-blocking of all pending-CI PRs
+- oneshot: clear CI pending state after checks complete so a manually re-triggered CI run on the same commit does not inherit a stale first-observation timestamp
+- oneshot tests: add missing load_env_config coverage for CI_CHECK_TIMEOUT_MINUTES (valid, invalid, and zero values)
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
