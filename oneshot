@@ -2493,7 +2493,9 @@ COMMENT
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
                             info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                            clear_pr_ci_pending_state "${open_pr}"
+                            if ! pr_json_has_pending_ci_checks "${pr_json}"; then
+                                clear_pr_ci_pending_state "${open_pr}"
+                            fi
                             count_unchanged=$((count_unchanged + 1))
                             continue
                         fi
@@ -2588,7 +2590,9 @@ COMMENT
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
                 else
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                    clear_pr_ci_pending_state "${item_id}"
+                    if ! pr_json_has_pending_ci_checks "${pr_json}"; then
+                        clear_pr_ci_pending_state "${item_id}"
+                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
@@ -2615,6 +2619,7 @@ CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocki
 COMMENT
                     )" 2>/dev/null || true
                     gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                    clear_pr_ci_pending_state "${item_id}"
                 else
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring agent invocation"
                     save_pr_fingerprint "${item_id}" "${pr_fp}"
