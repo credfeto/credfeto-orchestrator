@@ -183,6 +183,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: clear CI pending state after checks complete so a manually re-triggered CI run on the same commit does not inherit a stale first-observation timestamp
 - oneshot tests: add missing load_env_config coverage for CI_CHECK_TIMEOUT_MINUTES (valid, invalid, and zero values)
 - oneshot: filter pr_json_has_pending_ci_checks to required checks only so optional or informational checks cannot gate agent invocation
+- oneshot: clear CI pending state file after blocking a PR on timeout so a human who removes the Blocked label can retry without being immediately re-blocked
+- oneshot: clear CI pending state file in unchanged-fingerprint skip paths so a manually re-triggered CI run on the same commit is not spuriously timed out
+- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 supplied via environment variable at script initialisation to prevent every pending-CI PR from being immediately blocked
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
