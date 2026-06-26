@@ -2182,6 +2182,34 @@ STUBEOF
     [ -z "${WHITELISTED_USERS}" ]
 }
 
+@test "load_env_config reads CI_CHECK_TIMEOUT_MINUTES from env file" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'CI_CHECK_TIMEOUT_MINUTES=30\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    load_env_config
+    [ "${CI_CHECK_TIMEOUT_MINUTES}" = "30" ]
+}
+
+@test "load_env_config ignores non-integer CI_CHECK_TIMEOUT_MINUTES and warns" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'CI_CHECK_TIMEOUT_MINUTES=abc\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run load_env_config
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"CI_CHECK_TIMEOUT_MINUTES must be a positive integer"* ]]
+    [ "${CI_CHECK_TIMEOUT_MINUTES}" = "60" ]
+}
+
+@test "load_env_config ignores zero CI_CHECK_TIMEOUT_MINUTES and warns" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'CI_CHECK_TIMEOUT_MINUTES=0\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    run load_env_config
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"CI_CHECK_TIMEOUT_MINUTES must be a positive integer"* ]]
+    [ "${CI_CHECK_TIMEOUT_MINUTES}" = "60" ]
+}
+
 # --- notify_discord_work_item -------------------------------------------------
 
 @test "notify_discord_work_item warns and returns for unknown msg_type without calling curl" {
@@ -4927,6 +4955,20 @@ STUBEOF
 @test "pr_json_has_pending_ci_checks returns false when statusCheckRollup is absent" {
     run pr_json_has_pending_ci_checks '{}'
     [ "${status}" -ne 0 ]
+}
+
+@test "clear_pr_ci_pending_state removes the state file when it exists" {
+    save_pr_head_oid 42 "deadbeef" "1700000000"
+    local state_file
+    state_file=$(pr_head_oid_file_path 42)
+    [ -f "${state_file}" ]
+    clear_pr_ci_pending_state 42
+    [ ! -f "${state_file}" ]
+}
+
+@test "clear_pr_ci_pending_state succeeds silently when no state file exists" {
+    run clear_pr_ci_pending_state 99
+    [ "${status}" -eq 0 ]
 }
 
 @test "load_pr_head_oid returns empty string when no state file exists" {

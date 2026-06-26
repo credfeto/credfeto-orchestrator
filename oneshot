@@ -1772,6 +1772,15 @@ ci_checks_timed_out() {
     [ "${elapsed_minutes}" -ge "${CI_CHECK_TIMEOUT_MINUTES}" ]
 }
 
+# Removes the CI pending state file for a PR, resetting the timeout clock.
+# Call after confirming CI checks are all complete so that any future re-trigger starts fresh.
+clear_pr_ci_pending_state() {
+    local item_id="$1"
+    local state_file
+    state_file=$(pr_head_oid_file_path "${item_id}")
+    rm -f "${state_file}" 2>/dev/null || true
+}
+
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
 pr_json_has_blocked_label() {
     local pr_json="$1"
@@ -1916,7 +1925,7 @@ load_env_config() {
                     GIT_USER_EMAIL=*)           GIT_USER_EMAIL="${val}" ;;
                     GIT_SIGNING_KEY=*)          GIT_SIGNING_KEY="${val}" ;;
                     WHITELISTED_USERS=*)        WHITELISTED_USERS="${val}" ;;
-                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[0-9]+$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
+                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                 esac
                 ;;
         esac
@@ -2606,6 +2615,7 @@ COMMENT
                 fi
                 continue
             fi
+            clear_pr_ci_pending_state "${item_id}"
         fi
 
         if ! ensure_repo_current; then
