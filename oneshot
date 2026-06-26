@@ -1711,12 +1711,13 @@ load_pr_fingerprint() {
     fi
 }
 
-# Returns 0 (true) if the pre-fetched PR JSON has at least one check that is not yet COMPLETED.
-# Returns 1 (false) when statusCheckRollup is absent, null, or every entry has status "COMPLETED".
+# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that is not yet COMPLETED.
+# Returns 1 (false) when statusCheckRollup is absent, null, or every required entry has status "COMPLETED".
+# Non-required (optional) checks are ignored so they cannot gate agent invocation.
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '
-        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED")
+        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED" and (.isRequired // false))
     ' > /dev/null
 }
 
