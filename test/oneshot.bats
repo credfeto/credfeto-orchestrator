@@ -5066,3 +5066,32 @@ STUBEOF
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
+
+@test "main blocks PR and posts complaint when CI checks exceed timeout in Issue-to-PR pivot path" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '7\n'; }
+    fetch_issue_json()         { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()            { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()      { printf 'fp-same\n'; }
+    load_pr_fingerprint()      { printf 'fp-same\n'; }
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 7 "abc" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"timeout"* ]]
+    grep -q 'pr comment 7' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}

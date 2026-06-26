@@ -49,8 +49,8 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
-# Override with CI_CHECK_TIMEOUT_MINUTES in .env.
-CI_CHECK_TIMEOUT_MINUTES=60
+# Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
+CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-60}"
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
@@ -1916,7 +1916,7 @@ load_env_config() {
                     GIT_USER_EMAIL=*)           GIT_USER_EMAIL="${val}" ;;
                     GIT_SIGNING_KEY=*)          GIT_SIGNING_KEY="${val}" ;;
                     WHITELISTED_USERS=*)        WHITELISTED_USERS="${val}" ;;
-                    CI_CHECK_TIMEOUT_MINUTES=*) CI_CHECK_TIMEOUT_MINUTES="${val}" ;;
+                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[0-9]+$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                 esac
                 ;;
         esac
