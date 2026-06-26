@@ -3969,6 +3969,29 @@ STUBEOF
     grep -q "config --unset-all remote.origin.pushurl" "${git_log}"
 }
 
+@test "ensure_repo_current unsets url pushInsteadOf rules left in local git config by a previous agent session" {
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+for arg in "\$@"; do [ "\${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+case "\$*" in
+    *"--local --name-only --list"*)
+        printf 'url.https://x-oauth-basic:@github.com/.pushinsteadof\n'
+        exit 0
+        ;;
+esac
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run ensure_repo_current
+    [ "${status}" -eq 0 ]
+    grep -q -- "--local --unset-all url.https://x-oauth-basic:@github.com/.pushinsteadof" "${git_log}"
+}
+
 # --- disk_space_available_kb --------------------------------------------------
 
 @test "disk_space_available_kb outputs a numeric value" {

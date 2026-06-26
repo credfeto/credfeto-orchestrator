@@ -178,6 +178,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
 - Restore CAP_SETUID/CAP_SETGID to the orchestrator systemd unit and disable NoNewPrivileges so rootless Podman's newuidmap/newgidmap can map subuid/subgid ranges (fixes 'newuidmap: Could not set caps' container start failure)
 - Drop PrivateTmp from the orchestrator systemd unit; under it rootless Podman's persistent pause process captured an empty private /var/tmp, breaking image pulls with 'mkdir /var/tmp/...: no such file or directory'
+- Clean up url pushInsteadOf rules written to local .git/config by agent sessions before launching container
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
