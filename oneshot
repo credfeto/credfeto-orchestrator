@@ -48,6 +48,11 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
 MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 
+# How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
+# Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
+CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-60}"
+[[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=60
+
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
 # Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
@@ -535,7 +540,7 @@ discover_or_create_workflow_project() {
 
     local opt_name opt_id
     while IFS='|' read -r opt_name opt_id; do
-        [ -n "${opt_name}" ] && [ -n "${opt_id}" ] || continue
+        if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
     done < <(printf '%s' "${project_json}" | \
         jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
@@ -1707,6 +1712,83 @@ load_pr_fingerprint() {
     fi
 }
 
+# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that is not yet COMPLETED.
+# Returns 1 (false) when statusCheckRollup is absent, null, or every required entry has status "COMPLETED".
+# Non-required (optional) checks are ignored so they cannot gate agent invocation.
+pr_json_has_pending_ci_checks() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '
+        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED" and .isRequired != false)
+    ' > /dev/null
+}
+
+# Returns the path to the per-PR CI pending state file.
+pr_head_oid_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.pending_ci' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Writes the current head OID and observation timestamp to the CI pending state file.
+save_pr_head_oid() {
+    local item_id="$1" oid="$2" timestamp="$3"
+    local state_file
+    state_file=$(pr_head_oid_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s %s\n' "${oid}" "${timestamp}" \
+        > "${state_file}" \
+        || die "Failed to write CI state file: ${state_file}"
+}
+
+# Reads and outputs the saved "<oid> <timestamp>" for a given PR, or empty string if absent.
+load_pr_head_oid() {
+    local item_id="$1"
+    local state_file
+    state_file=$(pr_head_oid_file_path "${item_id}")
+    if [ -f "${state_file}" ]; then
+        cat "${state_file}"
+    fi
+}
+
+# Returns 0 (true) if CI checks for the current head OID have been pending longer than
+# CI_CHECK_TIMEOUT_MINUTES.  Resets the clock (returns 1) whenever a new OID is observed.
+ci_checks_timed_out() {
+    local item_id="$1" pr_json="$2"
+    local current_oid current_time
+    current_oid=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty')
+    [ -z "${current_oid}" ] && return 1
+    current_time=$(date +%s)
+
+    local saved_state saved_oid saved_timestamp
+    saved_state=$(load_pr_head_oid "${item_id}")
+    if [ -n "${saved_state}" ]; then
+        saved_oid="${saved_state%% *}"
+        saved_timestamp="${saved_state##* }"
+    fi
+
+    if [ -z "${saved_state}" ] || [ "${current_oid}" != "${saved_oid}" ]; then
+        save_pr_head_oid "${item_id}" "${current_oid}" "${current_time}"
+        return 1
+    fi
+
+    if ! [[ "${saved_timestamp}" =~ ^[0-9]+$ ]]; then
+        save_pr_head_oid "${item_id}" "${current_oid}" "${current_time}"
+        return 1
+    fi
+
+    local elapsed_minutes
+    elapsed_minutes=$(( (current_time - saved_timestamp) / 60 ))
+    [ "${elapsed_minutes}" -ge "${CI_CHECK_TIMEOUT_MINUTES}" ]
+}
+
+# Removes the CI pending state file for a PR, resetting the timeout clock.
+# Call after confirming CI checks are all complete so that any future re-trigger starts fresh.
+clear_pr_ci_pending_state() {
+    local item_id="$1"
+    local state_file
+    state_file=$(pr_head_oid_file_path "${item_id}")
+    rm -f "${state_file}" 2>/dev/null || true
+}
+
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
 pr_json_has_blocked_label() {
     local pr_json="$1"
@@ -1836,7 +1918,7 @@ load_env_config() {
     local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*)
+            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*)
                 val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
@@ -1844,13 +1926,14 @@ load_env_config() {
                     "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
                 case "${line}" in
-                    DISCORD_WEBHOOK=*)   DISCORD_WEBHOOK_URL="${val}" ;;
-                    GH_TOKEN=*)          gh_token="${val}" ;;
-                    GH_HOST=*)           gh_host="${val}" ;;
-                    GIT_USER_NAME=*)     GIT_USER_NAME="${val}" ;;
-                    GIT_USER_EMAIL=*)    GIT_USER_EMAIL="${val}" ;;
-                    GIT_SIGNING_KEY=*)   GIT_SIGNING_KEY="${val}" ;;
-                    WHITELISTED_USERS=*) WHITELISTED_USERS="${val}" ;;
+                    DISCORD_WEBHOOK=*)          DISCORD_WEBHOOK_URL="${val}" ;;
+                    GH_TOKEN=*)                 gh_token="${val}" ;;
+                    GH_HOST=*)                  gh_host="${val}" ;;
+                    GIT_USER_NAME=*)            GIT_USER_NAME="${val}" ;;
+                    GIT_USER_EMAIL=*)           GIT_USER_EMAIL="${val}" ;;
+                    GIT_SIGNING_KEY=*)          GIT_SIGNING_KEY="${val}" ;;
+                    WHITELISTED_USERS=*)        WHITELISTED_USERS="${val}" ;;
+                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                 esac
                 ;;
         esac
@@ -2398,6 +2481,22 @@ main() {
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                    if pr_json_has_pending_ci_checks "${pr_json}"; then
+                        if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
+                            info "PR #${open_pr} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+                            gh pr comment "${open_pr}" --repo "${item_repo}" --body "$(cat <<COMMENT
+CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
+COMMENT
+                            )" 2>/dev/null || true
+                            gh pr edit "${open_pr}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                            clear_pr_ci_pending_state "${open_pr}"
+                        else
+                            info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
+                        fi
+                        count_unchanged=$((count_unchanged + 1))
+                        continue
+                    fi
+                    clear_pr_ci_pending_state "${open_pr}"
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
                         issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
@@ -2481,6 +2580,22 @@ main() {
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                if pr_json_has_pending_ci_checks "${pr_json}"; then
+                    if ci_checks_timed_out "${item_id}" "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+                        gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
+COMMENT
+                        )" 2>/dev/null || true
+                        gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                        clear_pr_ci_pending_state "${item_id}"
+                    else
+                        info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
+                    fi
+                    count_unchanged=$((count_unchanged + 1))
+                    continue
+                fi
+                clear_pr_ci_pending_state "${item_id}"
                 pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
                 if [ "${pr_is_draft}" = "true" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
@@ -2504,6 +2619,23 @@ main() {
         if [ "${item_type}" = "PullRequest" ]; then
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
+
+            if pr_json_has_pending_ci_checks "${pr_json}"; then
+                if ci_checks_timed_out "${item_id}" "${pr_json}"; then
+                    info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+                    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
+COMMENT
+                    )" 2>/dev/null || true
+                    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                    clear_pr_ci_pending_state "${item_id}"
+                else
+                    info "PR #${item_id} in ${item_repo}: CI checks pending — deferring agent invocation"
+                    save_pr_fingerprint "${item_id}" "${pr_fp}"
+                fi
+                continue
+            fi
+            clear_pr_ci_pending_state "${item_id}"
             sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
 

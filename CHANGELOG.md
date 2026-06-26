@@ -59,6 +59,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project: --force-bootstrap flag to re-seed the board on an already-provisioned project, recovering from an interrupted first run without affecting human-curated items
 - document GitHub Projects v2 provisioning rules, API correctness, and hasProjectsEnabled prerequisite in ai/local
 - create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
+- Pre-agentic CI gate: oneshot now waits for CI checks to complete before invoking the agent, and flags PRs as Blocked when checks remain pending past a configurable timeout (CI_CHECK_TIMEOUT_MINUTES, default 60)
 ### Fixed
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
@@ -178,6 +179,21 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: discover_or_create_workflow_project now enables Projects on the repo when hasProjectsEnabled is false so the discovery query never returns empty for a linked project
 - Restore CAP_SETUID/CAP_SETGID to the orchestrator systemd unit and disable NoNewPrivileges so rootless Podman's newuidmap/newgidmap can map subuid/subgid ranges (fixes 'newuidmap: Could not set caps' container start failure)
 - Drop PrivateTmp from the orchestrator systemd unit; under it rootless Podman's persistent pause process captured an empty private /var/tmp, breaking image pulls with 'mkdir /var/tmp/...: no such file or directory'
+- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 in .env (regex now requires a positive integer) to prevent immediate timeout-blocking of all pending-CI PRs
+- oneshot: clear CI pending state after checks complete so a manually re-triggered CI run on the same commit does not inherit a stale first-observation timestamp
+- oneshot tests: add missing load_env_config coverage for CI_CHECK_TIMEOUT_MINUTES (valid, invalid, and zero values)
+- oneshot: filter pr_json_has_pending_ci_checks to required checks only so optional or informational checks cannot gate agent invocation
+- oneshot: clear CI pending state file after blocking a PR on timeout so a human who removes the Blocked label can retry without being immediately re-blocked
+- oneshot: clear CI pending state file in unchanged-fingerprint skip paths so a manually re-triggered CI run on the same commit is not spuriously timed out
+- oneshot: reject CI_CHECK_TIMEOUT_MINUTES=0 supplied via environment variable at script initialisation to prevent every pending-CI PR from being immediately blocked
+- oneshot: guard clear_pr_ci_pending_state in "unchanged, skip" paths so the CI timeout clock is not reset on every iteration when CI is still pending (would have prevented the timeout from ever firing)
+- oneshot: call clear_pr_ci_pending_state after blocking in the work-block timeout path so that a human who removes the Blocked label is not immediately re-blocked due to a stale state file
+- oneshot: treat pending checks without an explicit `isRequired` field as required in the CI gate so the gate cannot be silently disabled by older `gh` CLI versions that omit the field
+- oneshot: guard `ci_checks_timed_out` against a null or absent `headRefOid` field in the PR JSON, which would have started the timeout clock with an empty OID and caused a false-positive Blocked label after `CI_CHECK_TIMEOUT_MINUTES`
+- oneshot: defer BEHIND/DIRTY and draft PRs in the unchanged-fingerprint path while CI checks are pending, preventing an infinite deferral loop where the work-block CI gate kept saving the fingerprint and the unchanged-fingerprint path kept falling through to re-run
+- test: stub `sync_pr_labels_from_linked_issues` in `setup_main_mocks` so integration tests that reach the work block do not fork a real `gh` subprocess
+- oneshot: guard ci_checks_timed_out against a corrupted state file where the timestamp field is absent, preventing bash arithmetic from coercing a hex OID to zero and causing an immediate false-positive CI timeout that blocks the PR
+- oneshot: move sync_pr_labels_from_linked_issues to after the CI pending gate in the work block so that the fingerprint saved during deferral is not stale from pre-sync labels, avoiding one unnecessary work-block re-entry on the next iteration
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
