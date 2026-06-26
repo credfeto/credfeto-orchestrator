@@ -1658,6 +1658,7 @@ setup_main_mocks() {
     notify_discord_rate_limited()      { return 0; }
     notify_discord_low_disk_space()    { return 0; }
     check_disk_space()                 { return 0; }
+    sync_pr_labels_from_linked_issues() { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -4952,6 +4953,11 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_pending_ci_checks returns true when a pending check has no isRequired field" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_has_pending_ci_checks returns false when statusCheckRollup is empty" {
     run pr_json_has_pending_ci_checks '{"statusCheckRollup":[]}'
     [ "${status}" -ne 0 ]
@@ -5030,6 +5036,15 @@ STUBEOF
     local state_file
     state_file=$(pr_head_oid_file_path 42)
     [[ "$(cat "${state_file}")" == "new-oid "* ]]
+}
+
+@test "ci_checks_timed_out returns false and writes no state when headRefOid is absent" {
+    local pr_json='{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
+    run ci_checks_timed_out 42 "${pr_json}"
+    [ "${status}" -ne 0 ]
+    local state_file
+    state_file=$(pr_head_oid_file_path 42)
+    [ ! -f "${state_file}" ]
 }
 
 @test "main defers agent invocation when PR has pending CI checks within timeout" {
@@ -5285,4 +5300,42 @@ STUBEOF
     local state_file
     state_file=$(pr_head_oid_file_path 5)
     [ ! -f "${state_file}" ]
+}
+
+@test "main defers unchanged BEHIND PR without invoking agent while CI is pending (direct-PR path)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"CI checks pending"* ]]
+}
+
+@test "main defers unchanged draft PR in Issue-to-PR path without invoking agent while CI is pending" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '7\n'; }
+    fetch_issue_json()         { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()            { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()      { printf 'fp-same\n'; }
+    load_pr_fingerprint()      { printf 'fp-same\n'; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"CI checks pending"* ]]
 }
