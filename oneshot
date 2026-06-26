@@ -214,12 +214,28 @@ ensure_rules_current() {
     fi
 }
 
+# Remove any url.*.insteadOf / url.*.pushInsteadOf rules from the local .git/config.
+# The agent running inside the container may write these (e.g. via `gh auth setup-git`)
+# and they persist across sessions through the bind mount.  The container entrypoint
+# rejects them on startup because they are only allowed in the system /etc/gitconfig.
+clean_local_git_url_rewrites() {
+    local repo_dir="${1:-${REPO_WORK_DIR}}"
+    [ -d "${repo_dir}/.git" ] || return 0
+    local key
+    while IFS= read -r key; do
+        [ -z "${key}" ] && continue
+        git -C "${repo_dir}" config --local --unset-all "${key}" 2>/dev/null || true
+    done < <(git -C "${repo_dir}" config --local --name-only --list 2>/dev/null \
+        | grep -iE '\.(insteadof|pushinsteadof)$' || true)
+}
+
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
         # Reset the remote URL to SSH on every iteration. The agent running inside
         # the container may have changed the URL or added extra fetch/push URLs.
         # --unset-all removes every entry (--unset silently fails when multiple
         # values exist), then we write exactly one correct URL for each slot.
+        clean_local_git_url_rewrites
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
         git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
@@ -284,6 +300,7 @@ try_nonagentic_rebase() {
 
     [ -n "${branch_name}" ] || return 1
 
+    clean_local_git_url_rewrites
     git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
     git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
     git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
