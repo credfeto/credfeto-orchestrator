@@ -1718,7 +1718,7 @@ load_pr_fingerprint() {
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '
-        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED" and (.isRequired // false))
+        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED" and .isRequired != false)
     ' > /dev/null
 }
 
@@ -1755,6 +1755,7 @@ ci_checks_timed_out() {
     local item_id="$1" pr_json="$2"
     local current_oid current_time
     current_oid=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty')
+    [ -z "${current_oid}" ] && return 1
     current_time=$(date +%s)
 
     local saved_state saved_oid saved_timestamp
@@ -2475,17 +2476,22 @@ main() {
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                    if pr_json_has_pending_ci_checks "${pr_json}" && ci_checks_timed_out "${open_pr}" "${pr_json}"; then
-                        info "PR #${open_pr} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-                        gh pr comment "${open_pr}" --repo "${item_repo}" --body "$(cat <<COMMENT
+                    if pr_json_has_pending_ci_checks "${pr_json}"; then
+                        if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
+                            info "PR #${open_pr} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+                            gh pr comment "${open_pr}" --repo "${item_repo}" --body "$(cat <<COMMENT
 CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
 COMMENT
-                        )" 2>/dev/null || true
-                        gh pr edit "${open_pr}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-                        clear_pr_ci_pending_state "${open_pr}"
+                            )" 2>/dev/null || true
+                            gh pr edit "${open_pr}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                            clear_pr_ci_pending_state "${open_pr}"
+                        else
+                            info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
+                        fi
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
+                    clear_pr_ci_pending_state "${open_pr}"
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
                         issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
@@ -2493,9 +2499,6 @@ COMMENT
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
                             info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                            if ! pr_json_has_pending_ci_checks "${pr_json}"; then
-                                clear_pr_ci_pending_state "${open_pr}"
-                            fi
                             count_unchanged=$((count_unchanged + 1))
                             continue
                         fi
@@ -2572,17 +2575,22 @@ COMMENT
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                if pr_json_has_pending_ci_checks "${pr_json}" && ci_checks_timed_out "${item_id}" "${pr_json}"; then
-                    info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-                    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+                if pr_json_has_pending_ci_checks "${pr_json}"; then
+                    if ci_checks_timed_out "${item_id}" "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+                        gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
 COMMENT
-                    )" 2>/dev/null || true
-                    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-                    clear_pr_ci_pending_state "${item_id}"
+                        )" 2>/dev/null || true
+                        gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                        clear_pr_ci_pending_state "${item_id}"
+                    else
+                        info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
+                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
+                clear_pr_ci_pending_state "${item_id}"
                 pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
                 if [ "${pr_is_draft}" = "true" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
@@ -2590,9 +2598,6 @@ COMMENT
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
                 else
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                    if ! pr_json_has_pending_ci_checks "${pr_json}"; then
-                        clear_pr_ci_pending_state "${item_id}"
-                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
