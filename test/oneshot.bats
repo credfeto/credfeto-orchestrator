@@ -2603,6 +2603,42 @@ STUBEOF
     grep -q "Blocked" "${args_log}"
 }
 
+@test "notify_discord_blocked_item is silent on a repeat call while the item stays blocked" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    notify_discord_blocked_item "Issue" "42"
+    notify_discord_blocked_item "Issue" "42"
+
+    # The webhook URL appears once per curl invocation; only the first call notifies.
+    [ "$(grep -c 'https://discord.example.com/hook' "${args_log}")" -eq 1 ]
+    [ -f "$(blocked_marker_file_path Issue 42)" ]
+}
+
+@test "notify_discord_blocked_item notifies again after clear_blocked_marker re-arms it" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    notify_discord_blocked_item "Issue" "42"
+    clear_blocked_marker "Issue" "42"
+    [ ! -f "$(blocked_marker_file_path Issue 42)" ]
+    notify_discord_blocked_item "Issue" "42"
+
+    # Two distinct blocked spells — two notifications.
+    [ "$(grep -c 'https://discord.example.com/hook' "${args_log}")" -eq 2 ]
+}
+
+@test "clear_blocked_marker on a missing marker is a silent no-op" {
+    set_repo_context "org/repo"
+    run clear_blocked_marker "PullRequest" "7"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 # --- main() blocked Discord notification integration --------------------------
 
 @test "main sends blocked notification when a PR in priorities is blocked" {

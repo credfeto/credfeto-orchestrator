@@ -2186,13 +2186,36 @@ notify_discord_low_disk_space() {
     printf '%s\n' "${now}" > "${state_file}"
 }
 
+# Returns the path to the per-item blocked-notification marker file.
+# The marker records that a blocked notification has already been sent for this
+# item so subsequent runs stay silent until the item is observed un-blocked.
+blocked_marker_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Clears the blocked-notification marker for an item, re-arming the notifier so a
+# future transition back into the blocked state notifies again. Call on any path
+# where the item is observed open and not carrying the Blocked label.
+clear_blocked_marker() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+}
+
 # Sends a Discord embed notification when an item is found to be blocked.
 # Arguments: item_type (Issue|PullRequest), item_id
+# Notifies only on the transition into the blocked state: a per-item marker file
+# suppresses repeat notifications while the item stays blocked. clear_blocked_marker
+# re-arms it once the item is observed un-blocked.
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 notify_discord_blocked_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local item_type="$1" item_id="$2"
-    local url payload
+    local url payload marker_file
+
+    marker_file=$(blocked_marker_file_path "${item_type}" "${item_id}")
+    # Already notified for this blocked spell — stay silent until re-armed.
+    [ -f "${marker_file}" ] && return 0
 
     case "${item_type}" in
         Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
@@ -2217,6 +2240,10 @@ notify_discord_blocked_item() {
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
+
+    # Record that this blocked spell has been notified, so the next run is silent.
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || true
+    printf '%s\n' "blocked" > "${marker_file}" 2>/dev/null || true
 }
 
 # Sends a Discord embed notification when Claude returns an application-level error.
@@ -2466,6 +2493,8 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
+                # Issue observed open and un-blocked — re-arm its blocked notifier.
+                clear_blocked_marker "Issue" "${item_id}"
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
@@ -2485,6 +2514,8 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
+                # PR observed open and un-blocked — re-arm its blocked notifier.
+                clear_blocked_marker "PullRequest" "${open_pr}"
 
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
@@ -2550,6 +2581,8 @@ COMMENT
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
+                # Issue observed open and un-blocked — re-arm its blocked notifier.
+                clear_blocked_marker "Issue" "${item_id}"
 
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
@@ -2584,6 +2617,8 @@ COMMENT
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
+            # PR observed open and un-blocked — re-arm its blocked notifier.
+            clear_blocked_marker "PullRequest" "${item_id}"
 
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
