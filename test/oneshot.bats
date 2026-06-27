@@ -4396,6 +4396,15 @@ STUBEOF
     [ "${count}" -eq 1 ]
 }
 
+@test "fetch_board_approved_items handles gh failure gracefully and leaves items empty" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    make_stub gh 'exit 1'
+    fetch_board_approved_items
+    [ -z "${_WF_APPROVED_ITEMS[*]:-}" ]
+}
+
 @test "fetch_board_approved_items paginates and finds item on second page" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"

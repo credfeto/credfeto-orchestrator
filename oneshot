@@ -775,12 +775,14 @@ fetch_board_approved_items() {
     local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
     [ -n "${approved_opt_id}" ] || return 0
     local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}"
-    local cursor="" has_next_page="true" entry page_json
+    local cursor="" has_next_page="true" entry page_json pagination
+    local -a cursor_args
     while true; do
-        if [ -n "${cursor}" ]; then
-            page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" -f cursor="${cursor}" 2>/dev/null)
-        else
-            page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" 2>/dev/null)
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        if ! page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" "${cursor_args[@]}" 2>/dev/null); then
+            warn "fetch_board_approved_items: GraphQL request failed for ${REPO_FULL}"
+            break
         fi
         while IFS= read -r entry; do
             [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
@@ -788,9 +790,11 @@ fetch_board_approved_items() {
             jq -r --arg opt "${approved_opt_id}" \
             '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
             2>/dev/null)
-        has_next_page=$(printf '%s' "${page_json}" | jq -r '.data.node.items.pageInfo.hasNextPage // "false"' 2>/dev/null)
+        pagination=$(printf '%s' "${page_json}" | \
+            jq -r '(.data.node.items.pageInfo.hasNextPage // "false"), (.data.node.items.pageInfo.endCursor // "")' 2>/dev/null)
+        has_next_page=$(printf '%s' "${pagination}" | head -1)
+        cursor=$(printf '%s' "${pagination}" | tail -1)
         [ "${has_next_page}" = "true" ] || break
-        cursor=$(printf '%s' "${page_json}" | jq -r '.data.node.items.pageInfo.endCursor // ""' 2>/dev/null)
         [ -n "${cursor}" ] || break
     done
 }
