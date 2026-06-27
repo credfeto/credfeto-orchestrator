@@ -235,7 +235,7 @@ ensure_repo_current() {
         # the container may have changed the URL or added extra fetch/push URLs.
         # --unset-all removes every entry (--unset silently fails when multiple
         # values exist), then we write exactly one correct URL for each slot.
-        clean_local_git_url_rewrites
+        clean_local_git_url_rewrites "${REPO_WORK_DIR}"
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
         git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
@@ -300,7 +300,7 @@ try_nonagentic_rebase() {
 
     [ -n "${branch_name}" ] || return 1
 
-    clean_local_git_url_rewrites
+    clean_local_git_url_rewrites "${REPO_WORK_DIR}"
     git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
     git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
     git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
@@ -774,15 +774,25 @@ fetch_board_approved_items() {
     declare -gA _WF_APPROVED_ITEMS
     local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
     [ -n "${approved_opt_id}" ] || return 0
-    local entry
-    while IFS= read -r entry; do
-        [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
-    done < <(gh api graphql \
-        -f query="query(\$p:ID!){node(id:\$p){...on ProjectV2{items(first:100){nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:10){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}" \
-        -f p="${_WF_PROJECT_ID}" 2>/dev/null | \
-        jq -r --arg opt "${approved_opt_id}" \
-        '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
-        2>/dev/null)
+    local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}"
+    local cursor="" has_next_page="true" entry page_json
+    while true; do
+        if [ -n "${cursor}" ]; then
+            page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" -f cursor="${cursor}" 2>/dev/null)
+        else
+            page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" 2>/dev/null)
+        fi
+        while IFS= read -r entry; do
+            [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
+        done < <(printf '%s' "${page_json}" | \
+            jq -r --arg opt "${approved_opt_id}" \
+            '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
+            2>/dev/null)
+        has_next_page=$(printf '%s' "${page_json}" | jq -r '.data.node.items.pageInfo.hasNextPage // "false"' 2>/dev/null)
+        [ "${has_next_page}" = "true" ] || break
+        cursor=$(printf '%s' "${page_json}" | jq -r '.data.node.items.pageInfo.endCursor // ""' 2>/dev/null)
+        [ -n "${cursor}" ] || break
+    done
 }
 
 # Output the step-2 approval-check line(s) for build_issue_claude_md.
