@@ -216,6 +216,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Skip fetch_board_approved_items for PullRequest items — _WF_APPROVED_ITEMS is only consumed for Issues
 - Batch user-node lookups in _wf_invite_trusted_collaborators into a single GraphQL query (N+1 → 2 calls)
 - Mount only individual .claude subfolders (sessions, session-env, plans, cache, backups) so agent state persists across oneshot invocations, instead of mounting and wiping the whole ephemeral .claude directory each run
+- discover_or_create_workflow_project and fetch_board_approved_items now use per-repo associative array caches instead of single-string sentinels, so repos that appear more than once in a run avoid redundant GraphQL calls
 ### Deprecated
 ### Removed
 ### Deployment Changes
