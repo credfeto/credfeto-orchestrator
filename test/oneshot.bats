@@ -4396,6 +4396,91 @@ STUBEOF
     [ "${count}" -eq 1 ]
 }
 
+@test "fetch_board_approved_items handles gh failure gracefully and leaves items empty" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    make_stub gh 'exit 1'
+    fetch_board_approved_items
+    [ -z "${_WF_APPROVED_ITEMS[*]:-}" ]
+}
+
+@test "fetch_board_approved_items paginates and finds item on second page" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local call_count_file="${TEST_TMP}/gh_calls"
+    local page1='{"data":{"node":{"items":{"pageInfo":{"endCursor":"cursor_page2","hasNextPage":true},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
+    local page2='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[{"content":{"number":2,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+count=\$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+printf 'call\n' >> "${call_count_file}"
+if [ "\${count}" -eq 0 ]; then
+    printf '%s\n' '${page1}'
+else
+    printf '%s\n' '${page2}'
+fi
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    fetch_board_approved_items
+    [ "${_WF_APPROVED_ITEMS["owner/repo/1"]:-}" = "1" ]
+    [ "${_WF_APPROVED_ITEMS["owner/repo/2"]:-}" = "1" ]
+}
+
+@test "fetch_board_approved_items forwards cursor to second-page request" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local call_count_file="${TEST_TMP}/gh_calls"
+    local args_file="${TEST_TMP}/gh_args"
+    local page1='{"data":{"node":{"items":{"pageInfo":{"endCursor":"cursor_page2","hasNextPage":true},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
+    local page2='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[]}}}}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+count=\$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+printf 'call\n' >> "${call_count_file}"
+printf '%s\n' "\$*" >> "${args_file}"
+if [ "\${count}" -eq 0 ]; then
+    printf '%s\n' '${page1}'
+else
+    printf '%s\n' '${page2}'
+fi
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    fetch_board_approved_items
+    grep -q 'cursor=cursor_page2' "${args_file}"
+}
+
+@test "fetch_board_approved_items uses fieldValues(first:50) in the GraphQL query" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local args_file="${TEST_TMP}/gh_args"
+    local items_json='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[]}}}}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${args_file}"
+printf '%s\n' '${items_json}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    fetch_board_approved_items
+    grep -q 'fieldValues(first:50)' "${args_file}"
+}
+
+@test "fetch_board_approved_items matches approved item when optionId is beyond tenth fieldValue" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    _WF_APPROVED_CACHED_REPO=""
+    local fv
+    fv='[{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"opt_approved"}]'
+    local items_json
+    items_json='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[{"content":{"number":5,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":'"${fv}"'}}]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    fetch_board_approved_items
+    [ "${_WF_APPROVED_ITEMS["owner/repo/5"]:-}" = "1" ]
+}
+
 # --- build_pr_claude_md review-loop steps ------------------------------------
 
 @test "build_pr_claude_md includes code-review loop instructions" {

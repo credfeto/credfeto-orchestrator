@@ -196,6 +196,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: move sync_pr_labels_from_linked_issues to after the CI pending gate in the work block so that the fingerprint saved during deferral is not stale from pre-sync labels, avoiding one unnecessary work-block re-entry on the next iteration
 - Clean up url pushInsteadOf rules written to local .git/config by agent sessions before launching container
 - oneshot only sends a blocked-item Discord notification on the transition into the blocked state (and re-arms when un-blocked), instead of re-notifying on every run
+- fetch_board_approved_items now paginates through all board items using cursor-based pagination so issues beyond position 100 are no longer silently missed; fieldValues limit raised from 10 to 50 to avoid truncating items with many custom fields
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
