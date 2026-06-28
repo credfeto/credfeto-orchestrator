@@ -456,6 +456,9 @@ _WF_PROJECT_ID=""
 _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
 _WF_CACHED_REPO=""
+# Per-repo discovery cache: keys are "REPO_FULL:discovered", "REPO_FULL:project_id",
+# "REPO_FULL:field_id", "REPO_FULL:opts" (newline-delimited "name|id" pairs).
+declare -gA _WF_CACHE
 
 # Space-delimited list of repos already issued a Workflow-project setup request this run.
 # Prevents report_missing_workflow_project re-filing/re-querying once per item in the same
@@ -470,7 +473,8 @@ _WF_CREATION_FAILED=""
 # Board-approved items cache — populated by fetch_board_approved_items.
 # Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
 declare -gA _WF_APPROVED_ITEMS
-_WF_APPROVED_CACHED_REPO=""
+# Per-repo fetch guard: value "1" means fetch_board_approved_items has already run for that repo.
+declare -gA _WF_APPROVED_FETCHED
 
 # Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
 # Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
@@ -496,6 +500,19 @@ _build_wf_section() {
 # Safe to call multiple times — returns immediately when the cache is valid for REPO_FULL.
 discover_or_create_workflow_project() {
     [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ] && return 0
+
+    if [ "${_WF_CACHE["${REPO_FULL}:discovered"]:-}" = "1" ]; then
+        _WF_PROJECT_ID="${_WF_CACHE["${REPO_FULL}:project_id"]}"
+        _WF_STATUS_FIELD_ID="${_WF_CACHE["${REPO_FULL}:field_id"]}"
+        unset _WF_OPTION_IDS
+        declare -gA _WF_OPTION_IDS
+        while IFS='|' read -r opt_name opt_id; do
+            if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
+            _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
+        done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opts"]}")
+        _WF_CACHED_REPO="${REPO_FULL}"
+        return 0
+    fi
 
     _WF_PROJECT_ID=""
     _WF_STATUS_FIELD_ID=""
@@ -566,6 +583,15 @@ discover_or_create_workflow_project() {
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
     done < <(printf '%s' "${project_json}" | \
         jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
+
+    local cached_opts="" k
+    for k in "${!_WF_OPTION_IDS[@]}"; do
+        cached_opts+="${k}|${_WF_OPTION_IDS[${k}]}"$'\n'
+    done
+    _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
+    _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
+    _WF_CACHE["${REPO_FULL}:opts"]="${cached_opts}"
+    _WF_CACHE["${REPO_FULL}:discovered"]="1"
 
     _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
@@ -808,10 +834,8 @@ update_workflow_status() {
 # when the board is not configured or the Approved option ID is unknown.
 fetch_board_approved_items() {
     [ -n "${_WF_PROJECT_ID}" ] || return 0
-    [ "${_WF_APPROVED_CACHED_REPO}" != "${REPO_FULL}" ] || return 0
-    _WF_APPROVED_CACHED_REPO="${REPO_FULL}"
-    unset _WF_APPROVED_ITEMS
-    declare -gA _WF_APPROVED_ITEMS
+    [ "${_WF_APPROVED_FETCHED["${REPO_FULL}"]:-}" = "1" ] && return 0
+    _WF_APPROVED_FETCHED["${REPO_FULL}"]="1"
     local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
     [ -n "${approved_opt_id}" ] || return 0
     local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}"

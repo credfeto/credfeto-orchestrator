@@ -4415,7 +4415,6 @@ STUBEOF
 @test "fetch_board_approved_items populates _WF_APPROVED_ITEMS for Approved board items" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local items_json='{"data":{"node":{"items":{"nodes":[{"content":{"number":42,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}},{"content":{"number":99,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_other"}]}}]}}}}'
     make_stub gh "printf '%s\n' '${items_json}'"
     fetch_board_approved_items
@@ -4426,7 +4425,6 @@ STUBEOF
 @test "fetch_board_approved_items caches per repo and does not re-call gh on second call" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local call_count_file="${TEST_TMP}/gh_calls"
     local items_json='{"data":{"node":{"items":{"nodes":[]}}}}'
     cat > "${STUB_BIN}/gh" << STUBEOF
@@ -4445,7 +4443,6 @@ STUBEOF
 @test "fetch_board_approved_items handles gh failure gracefully and leaves items empty" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     make_stub gh 'exit 1'
     fetch_board_approved_items
     [ -z "${_WF_APPROVED_ITEMS[*]:-}" ]
@@ -4454,7 +4451,6 @@ STUBEOF
 @test "fetch_board_approved_items paginates and finds item on second page" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local call_count_file="${TEST_TMP}/gh_calls"
     local page1='{"data":{"node":{"items":{"pageInfo":{"endCursor":"cursor_page2","hasNextPage":true},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
     local page2='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[{"content":{"number":2,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
@@ -4477,7 +4473,6 @@ STUBEOF
 @test "fetch_board_approved_items forwards cursor to second-page request" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local call_count_file="${TEST_TMP}/gh_calls"
     local args_file="${TEST_TMP}/gh_args"
     local page1='{"data":{"node":{"items":{"pageInfo":{"endCursor":"cursor_page2","hasNextPage":true},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
@@ -4501,7 +4496,6 @@ STUBEOF
 @test "fetch_board_approved_items uses fieldValues(first:50) in the GraphQL query" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local args_file="${TEST_TMP}/gh_args"
     local items_json='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[]}}}}'
     cat > "${STUB_BIN}/gh" << STUBEOF
@@ -4517,7 +4511,6 @@ STUBEOF
 @test "fetch_board_approved_items matches approved item when optionId is beyond tenth fieldValue" {
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Approved]="opt_approved"
-    _WF_APPROVED_CACHED_REPO=""
     local fv
     fv='[{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"x"},{"optionId":"opt_approved"}]'
     local items_json
@@ -4525,6 +4518,35 @@ STUBEOF
     make_stub gh "printf '%s\n' '${items_json}'"
     fetch_board_approved_items
     [ "${_WF_APPROVED_ITEMS["owner/repo/5"]:-}" = "1" ]
+}
+
+@test "fetch_board_approved_items skips re-fetch for already-fetched repo while still fetching a new repo" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Approved]="opt_approved"
+    local call_count_file="${TEST_TMP}/gh_calls"
+    local items_a='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"owner/repo-a"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
+    local items_b='{"data":{"node":{"items":{"pageInfo":{"endCursor":null,"hasNextPage":false},"nodes":[{"content":{"number":2,"repository":{"nameWithOwner":"owner/repo-b"}},"fieldValues":{"nodes":[{"optionId":"opt_approved"}]}}]}}}}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+count=\$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+printf 'call\n' >> "${call_count_file}"
+if [ "\${count}" -eq 0 ]; then
+    printf '%s\n' '${items_a}'
+else
+    printf '%s\n' '${items_b}'
+fi
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo-a"
+    fetch_board_approved_items
+    fetch_board_approved_items
+    REPO_FULL="owner/repo-b"
+    fetch_board_approved_items
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 2 ]
+    [ "${_WF_APPROVED_ITEMS["owner/repo-a/1"]:-}" = "1" ]
+    [ "${_WF_APPROVED_ITEMS["owner/repo-b/2"]:-}" = "1" ]
 }
 
 # --- build_pr_claude_md review-loop steps ------------------------------------
@@ -4703,6 +4725,42 @@ STUBEOF
     local count
     count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
     [ "${count}" -ge 1 ]
+}
+
+@test "discover_or_create_workflow_project restores cached globals without re-calling gh when switching back to a previously discovered repo" {
+    local project_json='[{"id":"PVT_repo_a","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_a1","name":"Workflow Status","options":[{"id":"oid_planning","name":"Planning"},{"id":"oid_dev","name":"Development"}]}]}}]'
+    local call_count_file="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf 'called\n' >> "${call_count_file}"
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '%s\n' '${project_json}'
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    REPO_FULL="owner/repo-a"
+    OWNER="owner"
+    REPO="repo-a"
+    discover_or_create_workflow_project
+    REPO_FULL="owner/repo-b"
+    OWNER="owner"
+    REPO="repo-b"
+    discover_or_create_workflow_project
+    local count_after_b
+    count_after_b=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    REPO_FULL="owner/repo-a"
+    OWNER="owner"
+    REPO="repo-a"
+    discover_or_create_workflow_project
+    local count_after_return
+    count_after_return=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count_after_return}" -eq "${count_after_b}" ]
+    [ "${_WF_PROJECT_ID}" = "PVT_repo_a" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_a1" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid_planning" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid_dev" ]
 }
 
 @test "discover_or_create_workflow_project enables Projects when hasProjectsEnabled is false" {
