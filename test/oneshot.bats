@@ -4795,7 +4795,7 @@ STUBEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${gh_log}"
 if [[ "\$*" == *"user(login"* ]]; then
-    printf 'U_real\n'
+    printf '{"data":{"u0":{"id":"U_real"}}}\n'
     exit 0
 fi
 exit 0
@@ -4814,7 +4814,7 @@ STUBEOF
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${gh_log}"
-printf 'null\n'; exit 0
+printf '{"data":{"u0":{"id":null}}}\n'; exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
     get_trusted_logins() { printf '["ghost"]\n'; }
@@ -4828,7 +4828,7 @@ STUBEOF
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"user(login"* ]]; then
-    printf 'U_real\n'; exit 0
+    printf '{"data":{"u0":{"id":"U_real"}}}\n'; exit 0
 fi
 exit 1
 STUBEOF
@@ -4837,6 +4837,28 @@ STUBEOF
     run _wf_invite_trusted_collaborators "PVT_test"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"updateProjectV2Collaborators failed"* ]]
+}
+
+@test "_wf_invite_trusted_collaborators batches multiple user lookups into a single gh call" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+if [[ "\$*" == *"u0:user"* ]]; then
+    printf '{"data":{"u0":{"id":"U_alice"},"u1":{"id":"U_bob"}}}\n'
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    get_trusted_logins() { printf '["alice","bob"]\n'; }
+    _wf_invite_trusted_collaborators "PVT_test"
+    run grep -c 'u0:user' "${gh_log}"
+    [ "${output}" -eq 1 ]
+    run grep -q 'u1:user' "${gh_log}"
+    [ "${status}" -eq 0 ]
+    run grep -q -- '--input' "${gh_log}"
+    [ "${status}" -eq 0 ]
 }
 
 # --- update_workflow_status unit tests ----------------------------------------
