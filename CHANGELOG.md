@@ -61,6 +61,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
 - Pre-agentic CI gate: oneshot now waits for CI checks to complete before invoking the agent, and flags PRs as Blocked when checks remain pending past a configurable timeout (CI_CHECK_TIMEOUT_MINUTES, default 60)
 ### Fixed
+- oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
+- oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments
+- oneshot: extend rate-limit reset time parser to handle Claude CLI's new date format (e.g. `Jul 3, 10pm (UTC)`)
 - oneshot: force origin URL to SSH and unset `pushurl` before push attempts to ensure agent pushes use SSH even if the host environment has HTTPS configured
 - development-full: baked SSH rewriting rules for GitHub, GitLab, and Bitbucket into the image at `/etc/gitconfig` to ensure all agent git operations use SSH
 - containers/agent/entrypoint.sh: added startup validation to verify all repository remotes use SSH and no `url.*.insteadOf` rules are present in the user's git config to prevent conflicts with system-wide SSH enforcement
