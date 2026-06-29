@@ -606,29 +606,61 @@ report_missing_workflow_project() {
 
 # Invites all trusted logins (excluding the copilot bot) as WRITER collaborators
 # on the given GitHub Project V2. Non-fatal: warns and returns 0 on any failure.
+# Collapses N+1 sequential GraphQL calls into 2 calls via batched alias lookup.
 _wf_invite_trusted_collaborators() {
     local project_id="$1"
-    local collaborators='[]'
-    local login user_node_id
+    local -a logins=()
+    local login
+
+    # Phase 1 — collect logins, skipping the copilot bot (no gh calls yet)
     while IFS= read -r login; do
         [ -z "${login}" ] && continue
         [ "${login}" = "copilot-pull-request-reviewer" ] && continue
-        user_node_id=$(gh api graphql \
-            -f query="query(\$l:String!){user(login:\$l){id}}" \
-            -f l="${login}" \
-            --jq '.data.user.id' 2>/dev/null) || true
-        [ -z "${user_node_id}" ] || [ "${user_node_id}" = "null" ] || [[ "${user_node_id}" == \{* ]] && continue
-        collaborators=$(printf '%s' "${collaborators}" | \
-            jq -c --arg id "${user_node_id}" '. + [{"userId":$id,"role":"WRITER"}]')
+        logins+=("${login}")
     done < <(get_trusted_logins | jq -r '.[]' 2>/dev/null)
+    [ "${#logins[@]}" -eq 0 ] && return 0
+
+    # Phase 2 — single batched GraphQL user-node lookup using field aliases
+    local query="query{" i
+    for (( i=0; i<${#logins[@]}; i++ )); do
+        query="${query}u${i}:user(login:\"${logins[i]}\"){id}"
+    done
+    query="${query}}"
+
+    local lookup_result lookup_err
+    lookup_err=$(mktemp --suffix=.stderr) || lookup_err=/dev/null
+    lookup_result=$(gh api graphql -f query="${query}" 2>"${lookup_err}") || {
+        local err_content
+        err_content=$(head -3 "${lookup_err}" 2>/dev/null | tr '\n' ' ')
+        rm -f "${lookup_err}"
+        warn "Workflow project: user-node lookup failed${err_content:+ — ${err_content}}"
+        return 0
+    }
+    rm -f "${lookup_err}"
+
+    # Build collaborators array from resolved IDs
+    local collaborators='[]' user_id
+    for (( i=0; i<${#logins[@]}; i++ )); do
+        user_id=$(printf '%s' "${lookup_result}" | jq -r ".data.u${i}.id" 2>/dev/null) || true
+        [ -z "${user_id}" ] || [ "${user_id}" = "null" ] || [[ "${user_id}" == \{* ]] && continue
+        collaborators=$(printf '%s' "${collaborators}" | \
+            jq -c --arg id "${user_id}" '. + [{"userId":$id,"role":"WRITER"}]')
+    done
     [ "${collaborators}" = '[]' ] && return 0
+
     # shellcheck disable=SC2016
-    local mut='mutation($p:ID!,$c:[ProjectV2CollaboratorInput!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators{nodes{login}}}}'
-    printf '%s' "${collaborators}" | \
-        jq -c --arg p "${project_id}" --arg q "${mut}" \
-        '{query:$q,variables:{p:$p,c:.}}' | \
-        gh api graphql --input - > /dev/null 2>&1 \
-    || warn "Workflow project: updateProjectV2Collaborators failed — add collaborators manually at github.com"
+    local mut='mutation($p:ID!,$c:[ProjectV2Collaborator!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators(first:5){nodes{...on User{login}}}}}'
+    local mut_err
+    mut_err=$(mktemp --suffix=.stderr) || mut_err=/dev/null
+    if ! printf '%s' "${collaborators}" | \
+            jq -c --arg p "${project_id}" --arg q "${mut}" \
+            '{query:$q,variables:{p:$p,c:.}}' | \
+            gh api graphql --input - >/dev/null 2>"${mut_err}"; then
+        local err_content
+        err_content=$(head -3 "${mut_err}" 2>/dev/null | tr '\n' ' ')
+        warn "Workflow project: updateProjectV2Collaborators failed${err_content:+ — ${err_content}} — add collaborators manually at github.com"
+    fi
+    rm -f "${mut_err}"
 }
 
 # Creates a new "Workflow" GitHub Project (v2), adds the Status single-select

@@ -209,6 +209,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Suppress SC2016 in shellcheck — single-quoted GraphQL query strings are intentional
 - Defer Workflow-project GraphQL discovery and board-approved-items fetch until after per-item skip checks to avoid redundant API calls for blocked/unchanged items
 - Skip fetch_board_approved_items for PullRequest items — _WF_APPROVED_ITEMS is only consumed for Issues
+- Batch user-node lookups in _wf_invite_trusted_collaborators into a single GraphQL query (N+1 → 2 calls)
 ### Deprecated
 ### Removed
 ### Deployment Changes
