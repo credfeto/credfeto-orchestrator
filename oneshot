@@ -579,9 +579,12 @@ report_missing_workflow_project() {
     local existing
     # Skip filing if the issue list check itself fails (transient error) — conservative to
     # avoid duplicates on the next successful run.
+    # We use repo: in the search query because --repo + --search is known to fail with
+    # "malformed version" in some environments.
     if ! existing=$(WF_TITLE="${WF_SETUP_ISSUE_TITLE}" gh issue list \
-        --repo "${REPO_FULL}" --state open \
-        --search "${WF_SETUP_ISSUE_TITLE} in:title" \
+        --state open \
+        --search "repo:${REPO_FULL} ${WF_SETUP_ISSUE_TITLE} in:title" \
+        --limit 100 \
         --json number,title \
         --jq 'map(select(.title==env.WF_TITLE)) | .[0].number // empty' 2>/dev/null); then
         return 0
@@ -1625,14 +1628,23 @@ report_unparseable_rate_limit() {
     # Find an existing OPEN tracking issue by exact title.
     # The search arg narrows the candidate set; jq then matches exactly so partial-title hits are
     # rejected.  The title is passed via an env var to avoid quoting it inside the jq filter.
+    # We use repo: in the search query because --repo + --search is known to fail with
+    # "malformed version" in some environments.
     existing=$(RL_TITLE="${RATE_LIMIT_ISSUE_TITLE}" gh issue list \
-        --repo "${RATE_LIMIT_ISSUE_REPO}" --state open \
-        --search "${RATE_LIMIT_ISSUE_TITLE} in:title" \
+        --state open \
+        --search "repo:${RATE_LIMIT_ISSUE_REPO} ${RATE_LIMIT_ISSUE_TITLE} in:title" \
+        --limit 100 \
         --json number,title \
         --jq 'map(select(.title==env.RL_TITLE)) | .[0].number // empty' 2>/dev/null \
         || printf '')
 
     if [ -n "${existing}" ]; then
+        # Check if this exact rate-limit message has already been reported in this issue to avoid spam.
+        if { gh issue view "${existing}" --repo "${RATE_LIMIT_ISSUE_REPO}" --json body,comments --jq '.body, .comments[].body' 2>/dev/null || true; } | grep -Fq "${result_text}"; then
+            info "Rate-limit message already reported in issue #${existing}"
+            return 0
+        fi
+
         gh issue comment "${existing}" --repo "${RATE_LIMIT_ISSUE_REPO}" --body "${body}" 2>/dev/null \
             || warn "Failed to append unparseable rate-limit message to issue #${existing}"
     else
@@ -1648,15 +1660,16 @@ report_unparseable_rate_limit() {
 # Outputs nothing and returns silently when parsing fails.
 parse_reset_time() {
     local result_text="$1"
-    local hour minutes ampm tz hour24 reset_unix now_unix
-    local regex='resets ([0-9]+)(:[0-9]+)?(am|pm) \(([^)]+)\)'
+    local day_month hour minutes ampm tz hour24 reset_unix now_unix
+    local regex='resets (([A-Z][a-z]{2} [0-9]+), )?([0-9]+)(:[0-9]+)?(am|pm) \(([^)]+)\)'
 
     [[ "${result_text}" =~ $regex ]] || return 0
 
-    hour="${BASH_REMATCH[1]}"
-    minutes="${BASH_REMATCH[2]:-}"
-    ampm="${BASH_REMATCH[3]}"
-    tz="${BASH_REMATCH[4]}"
+    day_month="${BASH_REMATCH[2]:-today}"
+    hour="${BASH_REMATCH[3]}"
+    minutes="${BASH_REMATCH[4]:-}"
+    ampm="${BASH_REMATCH[5]}"
+    tz="${BASH_REMATCH[6]}"
 
     minutes="${minutes#:}"
     [ -z "${minutes}" ] && minutes="00"
@@ -1675,9 +1688,9 @@ parse_reset_time() {
         hour24="${hour}"
     fi
 
-    reset_unix=$(TZ="${tz}" date -d "today ${hour24}:${minutes}" +%s 2>/dev/null) || return
+    reset_unix=$(TZ="${tz}" date -d "${day_month} ${hour24}:${minutes}" +%s 2>/dev/null) || return
     now_unix=$(date +%s)
-    if [ "${reset_unix}" -le "${now_unix}" ]; then
+    if [ "${day_month}" = "today" ] && [ "${reset_unix}" -le "${now_unix}" ]; then
         reset_unix=$(TZ="${tz}" date -d "tomorrow ${hour24}:${minutes}" +%s 2>/dev/null) || return
     fi
     printf '%s' "${reset_unix}"
