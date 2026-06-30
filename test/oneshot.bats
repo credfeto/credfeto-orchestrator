@@ -2759,6 +2759,20 @@ STUBEOF
     [ "${result}" -gt "${now_unix}" ]
 }
 
+@test "parse_reset_time converts 'Jul 3, 10pm (UTC)' to correct unix timestamp" {
+    result=$(parse_reset_time "You've hit your limit · resets Jul 3, 10pm (UTC)")
+    [ -n "${result}" ]
+    expected_unix=$(date -u -d "Jul 3 22:00:00" +%s)
+    [ "${result}" -eq "${expected_unix}" ]
+}
+
+@test "parse_reset_time converts 'Jul 3, 10:30am (UTC)' to correct unix timestamp" {
+    result=$(parse_reset_time "You've hit your limit · resets Jul 3, 10:30am (UTC)")
+    [ -n "${result}" ]
+    expected_unix=$(date -u -d "Jul 3 10:30:00" +%s)
+    [ "${result}" -eq "${expected_unix}" ]
+}
+
 @test "parse_reset_time rejects timezone strings with dangerous characters" {
     run parse_reset_time "resets 3pm (UTC;rm -rf /)"
     [ "${status}" -eq 0 ]
