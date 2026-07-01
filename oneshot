@@ -167,6 +167,11 @@ set_repo_context() {
     RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
     REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
     SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
+    # Host-side persistent store for the parts of the container's ~/.claude that
+    # must survive across invocations (sessions, session-env, plans, cache,
+    # backups). Nested under SESSION_BASE_DIR so state stays scoped per-repo,
+    # matching how fingerprint/resume-session bookkeeping already works above.
+    CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
     _TRUSTED_LOGINS_JSON=""
 }
 
@@ -1450,21 +1455,33 @@ invoke_claude() {
     # CLAUDE.md content is mandatory — every invocation must supply it.
     [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
 
-    # Mount .claude/ as a host-owned temp directory so the developer user can write
-    # session-env and other runtime files inside it.  Mounting only the CLAUDE.md file
-    # causes Podman to create the parent directory with wrong ownership, which breaks
-    # every Bash tool call with EACCES.
-    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claudedir) || die "Failed to create temp dir for .claude"
-    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}/CLAUDE.md"
-    # Write the prompt to a file so run_claude_fresh/resumed can redirect stdin from it.
-    # Using a file avoids any pipe-timing races where printf closes the write end before
-    # the container process reads from it.
+    # Bake settings.json/policy-limits.json/hooks/skills into the image (see
+    # containers/base/development-full/Dockerfile) and mount only the pieces of
+    # ~/.claude that must vary per invocation or persist across invocations:
+    #   - CLAUDE.md: single read-only file mount. Safe now that the image already
+    #     creates /home/developer/.claude with correct ownership — the old
+    #     whole-directory mount trick existed only to work around Podman creating
+    #     an unmounted parent directory with wrong ownership when bind-mounting a
+    #     single file into a path whose parent didn't exist yet in the image.
+    #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
+    #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
+    #     they persist across invocations instead of being wiped every run.
+    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
+    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+    # Write the prompt to its own file (unrelated to the .claude mounts above) so
+    # run_claude_fresh/resumed can redirect stdin from it. Using a file avoids any
+    # pipe-timing races where printf closes the write end before the container
+    # process reads from it. Only ever read by podman on the host side, so it does
+    # not need to be mounted into the container at all.
     CLAUDE_PROMPT="${prompt}"
-    CLAUDE_PROMPT_FILE="${CLAUDE_MD_TMPFILE}/prompt.txt"
+    CLAUDE_PROMPT_FILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.prompt) || die "Failed to create temp file for prompt"
     printf '%s' "${prompt}" > "${CLAUDE_PROMPT_FILE}"
+    for d in sessions session-env plans cache backups; do
+        mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
+    done
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
-    trap 'rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
+    trap 'rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -1500,7 +1517,10 @@ invoke_claude() {
     else
         warn "\$HOME/.database not found — database credentials will not be available in the agent container"
     fi
-    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude:rw" )
+    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
+    for d in sessions session-env plans cache backups; do
+        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
+    done
 
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
@@ -1560,14 +1580,14 @@ invoke_claude() {
     jq -r '.result // ""' "${tmpfile}" >&2
 
     new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}"; rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Failed to parse session_id from Claude output"; }
+        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Failed to parse session_id from Claude output"; }
     rm -f "${tmpfile}"
 
-    [ -n "${new_session_id}" ] || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "No session_id returned by Claude"; }
+    [ -n "${new_session_id}" ] || { rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "No session_id returned by Claude"; }
     is_valid_session_id "${new_session_id}" \
-        || { rm -rf "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
+        || { rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
-    rm -rf "${CLAUDE_MD_TMPFILE}"
+    rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"
     CLAUDE_MD_TMPFILE=""
     CLAUDE_PROMPT_FILE=""
     rm -rf "${GPG_PUBKEY_TMPDIR}"

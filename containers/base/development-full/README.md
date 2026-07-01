@@ -48,6 +48,40 @@ All twelve tools are installed into the `developer` user's global tool path (`/h
 | `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; developer:developer ownership |
 | `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
 
+### Linking skills into `~/.claude/skills`
+
+Claude Code discovers "personal" skills as immediate subdirectories of `~/.claude/skills/`, each
+containing a `SKILL.md`. The four repos above nest their skills at different depths, so after cloning,
+every individual skill directory is symlinked into `/home/developer/.claude/skills/<name>` (not the repo
+roots themselves):
+
+| Repo | Skills subpath | Skill count |
+| --- | --- | --- |
+| `/opt/dotnet-claude-kit` | `skills/<name>/` | 45 |
+| `/opt/wshobson-agents` | `plugins/{javascript-typescript,python-development,shell-scripting}/skills/<name>/` | 23 |
+| `/opt/cc-devops-skills` | `devops-skills-plugin/skills/<name>/` | 31 |
+| `/opt/markdown-linter-fixer` | `skills/<name>/` | 1 |
+
+The symlinking step is driven by a `find -mindepth 1 -maxdepth 1 -type d` loop over each repo's `skills/`
+subtree (not a hardcoded name list), so newly added upstream skills are picked up automatically on the
+next build as long as they still land under a `skills/` folder. The build fails if two repos ever produce
+a skill with the same name. `/home/developer/.claude/skills/` and every symlink in it are root:root —
+`developer` can read/execute through them (to resolve and use the skill) but cannot add, remove, or
+retarget entries.
+
+### Baked-in Claude Code settings, policy-limits, and hooks
+
+`containers/base/development-full/claude-settings.json`, `claude-policy-limits.json`, and
+`claude-hooks/enforce-git-dash-c` are version-controlled copies of the operator's
+`~/.claude/{settings.json,policy-limits.json,hooks/enforce-git-dash-c}`, copied into the image at
+`/home/developer/.claude/{settings.json,policy-limits.json,hooks/enforce-git-dash-c}` as root:root
+0444 (files) / 0755 (hook script and hooks directory) — read-only for `developer`. The hook path
+referenced from `settings.json`'s `PreToolUse` block is rewritten to the in-container path
+(`/home/developer/.claude/hooks/enforce-git-dash-c`). `oneshot` does not bind-mount over any of these
+paths at runtime (see `containers/agent/Dockerfile` for the full mount contract) — only `CLAUDE.md` and
+the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) are
+mounted per invocation.
+
 ### credfeto-global-pre-commit clone
 
 The upstream hook orchestrator is cloned from `$PRECOMMIT_UPSTREAM` (default: `https://github.com/credfeto/credfeto-global-pre-commit.git`) into `/opt/pre-commit`. After cloning:
@@ -93,6 +127,11 @@ The `developer` user is inherited from upstream images in the `development-tools
 | `/opt/wshobson-agents/` | root:root | 0755 | Sparse-checkout of javascript-typescript, python-development, shell-scripting plugins; agent can read/execute but not modify |
 | `/opt/cc-devops-skills/` | root:root | 0755 | GitHub Actions devops skills plugin; agent can read/execute but not modify |
 | `/opt/markdown-linter-fixer/` | root:root | 0755 | Markdown linter/fixer skill (pinned to `MARKDOWN_LINTER_FIXER_REF`); agent can read/execute but not modify |
+| `/home/developer/.claude/skills/` | root:root | 0755 | 100 symlinks into the `/opt/*` skill repos above, one per skill; agent can read/execute but not add, remove, or retarget |
+| `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code settings (from `claude-settings.json`); read-only for all users |
+| `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
+| `/home/developer/.claude/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
+| `/home/developer/.claude/hooks/enforce-git-dash-c` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-dash-c`); read/execute only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 
 ---
@@ -126,6 +165,15 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 - `/opt/pre-commit/.env` must exist.
 - `/opt/pre-commit/src/.pre-commit-config.yaml` must exist.
 - `/opt/git-global-hooks/pre-commit` must be executable.
+
+**Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
+`.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c` must be root:root 0755
+and executable.
+
+**Claude Code skills wiring** — exactly 100 symlinks must exist directly under
+`/home/developer/.claude/skills/`; a spot-check of representative skill names (one per source repo,
+e.g. `markdown-linter-fixer`, `tdd`, `k8s-debug`, `python-type-safety`, `bash-defensive-patterns`,
+`terraform-validator`) must each resolve to a directory containing `SKILL.md`.
 
 ### Stage 2 — acceptance test suite
 

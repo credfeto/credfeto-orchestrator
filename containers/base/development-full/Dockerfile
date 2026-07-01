@@ -153,6 +153,50 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
     && test "$(git -C /opt/markdown-linter-fixer rev-parse HEAD)" = "${MARKDOWN_LINTER_FIXER_COMMIT}" \
     && chown -R root:root /opt/markdown-linter-fixer
 
+# ---- Link cloned skill repos into ~/.claude/skills --------------------------
+# Claude Code discovers "personal" skills as immediate subdirectories of
+# ~/.claude/skills/, each containing a SKILL.md. The repos above are cloned to
+# /opt/* but their skills/ subtrees are nested at different depths per repo, so
+# symlink each individual skill dir in rather than the repo root. Symlink
+# targets are root:root 0755 (read/execute only), so the links stay
+# non-writable by developer even though the symlink itself is created under
+# ~/.claude. Driven by `find -maxdepth 1` over each repo's skills/ subtree
+# (rather than a hardcoded name list) so newly added upstream skills are
+# picked up automatically as long as they still land under a skills/ folder.
+# hadolint ignore=DL3059
+RUN mkdir -p /home/developer/.claude/skills \
+    && chown root:root /home/developer/.claude \
+    && chmod 0755 /home/developer/.claude \
+    && for skills_root in \
+        /opt/dotnet-claude-kit/skills \
+        /opt/wshobson-agents/plugins/javascript-typescript/skills \
+        /opt/wshobson-agents/plugins/python-development/skills \
+        /opt/wshobson-agents/plugins/shell-scripting/skills \
+        /opt/cc-devops-skills/devops-skills-plugin/skills \
+        /opt/markdown-linter-fixer/skills; do \
+        test -d "${skills_root}" || { echo "FATAL: skills root ${skills_root} is missing" >&2; exit 1; }; \
+        find "${skills_root}" -mindepth 1 -maxdepth 1 -type d -print0 \
+            | while IFS= read -r -d '' skill_dir; do \
+                skill_name="$(basename "${skill_dir}")"; \
+                target="/home/developer/.claude/skills/${skill_name}"; \
+                test ! -e "${target}" \
+                    || { echo "FATAL: duplicate skill name '${skill_name}' (from ${skill_dir})" >&2; exit 1; }; \
+                ln -s "${skill_dir}" "${target}"; \
+              done; \
+    done \
+    && chown -R root:root /home/developer/.claude/skills
+
+# ---- Bake in Claude Code settings, policy-limits, and hooks -----------------
+# Copied from the operator's ~/.claude/{settings.json,policy-limits.json,hooks/}
+# into source control here so they are version-controlled and reproducible.
+# root:root so the developer user cannot tamper with them at runtime; oneshot
+# does not (and must not) bind-mount over these paths — see containers/agent/Dockerfile.
+COPY --chown=root:root --chmod=0444 claude-settings.json /home/developer/.claude/settings.json
+COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /home/developer/.claude/hooks/enforce-git-dash-c
+RUN chown root:root /home/developer/.claude/hooks \
+    && chmod 0755 /home/developer/.claude/hooks
+
 # ---- /opt/pre-commit (global pre-commit config) + hook shims ----------------
 # Clone the upstream config repo, verify the HEAD SHA matches the expected
 # commit, record provenance in .env, strip git metadata, then wire up shims
@@ -257,6 +301,23 @@ RUN set -e; \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-push is not executable" >&2; exit 1; }; \
     command -v run-bats >/dev/null 2>&1 \
         || { echo "FATAL sanity: run-bats not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
+    echo "== Claude Code settings/policy-limits/hooks wiring =="; \
+    for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json; do \
+        [ "$(stat -c '%U:%G %a' "$f")" = "root:root 444" ] \
+            || { echo "FATAL sanity: $f has wrong owner/perms" >&2; exit 1; }; \
+    done; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-git-dash-c)" = "root:root 755" ] \
+        || { echo "FATAL sanity: enforce-git-dash-c hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/enforce-git-dash-c ] \
+        || { echo "FATAL sanity: enforce-git-dash-c hook is not executable" >&2; exit 1; }; \
+    echo "== Claude Code skills wiring =="; \
+    skill_count=$(find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l); \
+    [ "$skill_count" -eq 100 ] \
+        || { echo "FATAL sanity: expected 100 skill symlinks in ~/.claude/skills, found $skill_count" >&2; exit 1; }; \
+    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator; do \
+        test -f "/home/developer/.claude/skills/${skill}/SKILL.md" \
+            || { echo "FATAL sanity: skill '$skill' missing or has no SKILL.md" >&2; exit 1; }; \
+    done; \
     echo "== all build-time checks passed =="
 
 # ---- /opt/pre-commit acceptance suite (end-to-end hook orchestrator test) ---

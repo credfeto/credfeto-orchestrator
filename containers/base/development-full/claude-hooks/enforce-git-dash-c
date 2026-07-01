@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Blocks git commands that don't use `git -C <dir>` format.
+# Exit 2 = blocked, 0 = allowed.
+
+input=$(cat)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+if printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)\s*git\b' \
+   && ! printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)\s*git\s+-C\b'; then
+  printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
+  exit 2
+fi
+
+exit 0
