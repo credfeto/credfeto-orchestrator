@@ -100,12 +100,12 @@ Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
 ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
-ExecStartPre=-/usr/bin/pkill -u %u ssh-agent
+ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} ssh-agent
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 # All paths below must be absolute. The %h specifier expands to the home of
 # the user that launched systemd (root), not the service User= home directory.
-ExecStartPre=-/usr/bin/pkill -u %u gpg-agent
+ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} gpg-agent
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # 0660 = owner + group only. The container gains the owner's primary GID via
 # --group-add in oneshot so the developer user can connect without world access.
