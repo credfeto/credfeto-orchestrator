@@ -220,6 +220,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Batch user-node lookups in _wf_invite_trusted_collaborators into a single GraphQL query (N+1 → 2 calls)
 - Mount only individual .claude subfolders (sessions, session-env, plans, cache, backups) so agent state persists across oneshot invocations, instead of mounting and wiping the whole ephemeral .claude directory each run
 - discover_or_create_workflow_project and fetch_board_approved_items now use per-repo associative array caches instead of single-string sentinels, so repos that appear more than once in a run avoid redundant GraphQL calls
+- oneshot: run one workflow phase per fresh Claude session and remove session resume, so a single run cannot accumulate enough context to hit the model window (Prompt is too long); state carries between phases via GitHub, with per-PR total/idle invocation guards bounding re-invocation (#1051)
 ### Deprecated
 ### Removed
 ### Deployment Changes
