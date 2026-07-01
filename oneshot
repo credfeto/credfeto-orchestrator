@@ -438,12 +438,13 @@ load_pr_invocation_counts() {
     PR_INVOCATION_TOTAL=0
     PR_INVOCATION_IDLE=0
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
-    [ -f "${guard_file}" ] || return
+    [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
     total="${line%% *}"
     idle="${line##* }"
     [[ "${total}" =~ ^[0-9]+$ ]] && PR_INVOCATION_TOTAL="${total}"
     [[ "${idle}" =~ ^[0-9]+$ ]] && PR_INVOCATION_IDLE="${idle}"
+    return 0
 }
 
 # Persists the "<total> <idle>" counters for a PR.
@@ -1705,8 +1706,10 @@ invoke_claude() {
 
     jq -r '.result // ""' "${tmpfile}" >&2
 
-    # Sanity check that Claude actually produced a result object rather than empty/garbage.
-    jq -e '.type == "result"' "${tmpfile}" >/dev/null 2>&1 \
+    # Sanity check that Claude actually produced a JSON result object rather than empty output
+    # or a stream fragment — a fresh run that dies before the final result would otherwise be
+    # treated as a silent success.
+    jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
         || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 

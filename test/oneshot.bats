@@ -187,8 +187,9 @@ teardown() {
 @test "build_pr_claude_md with CLEAN merge state does not include rebase notice" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" ""
     [ "${status}" -eq 0 ]
+    # A CLEAN PR must not be given rebase instructions (the word "BEHIND" still appears in the
+    # generic phase-selection guidance, so assert on the rebase commands, not that token).
     [[ "${output}" != *"force-with-lease"* ]]
-    [[ "${output}" != *"BEHIND"* ]]
     [[ "${output}" != *"rebase origin/main"* ]]
 }
 
@@ -481,20 +482,6 @@ teardown() {
     [ "${output}" = "${CONTAINER_REPO_PATH}/subdir" ]
 }
 
-@test "session_id UUID validation accepts a well-formed UUID" {
-    run is_valid_session_id "12345678-1234-1234-1234-123456789abc"
-    [ "${status}" -eq 0 ]
-}
-
-@test "session_id UUID validation rejects non-UUID values" {
-    local bad
-    for bad in "" "not-a-uuid" "12345678-1234-1234-1234-123456789abc; rm -rf /" \
-               "1234567-1234-1234-1234-123456789abc" "gggggggg-1234-1234-1234-123456789abc"; do
-        run is_valid_session_id "${bad}"
-        [ "${status}" -ne 0 ]
-    done
-}
-
 # --- tool checks -----------------------------------------------------------
 
 @test "check_required_tools dies when a required tool is missing" {
@@ -548,71 +535,52 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-# --- session handling ------------------------------------------------------
+# --- per-PR invocation guard -----------------------------------------------
 
-@test "session_file_path produces the expected path format" {
-    run session_file_path Issue 99
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "${SESSION_BASE_DIR}/Issue_99.env" ]
-
-    run session_file_path PullRequest 12
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "${SESSION_BASE_DIR}/PullRequest_12.env" ]
+@test "load_pr_invocation_counts defaults to 0/0 when no guard file exists" {
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
-@test "save_session and load_session round-trip via SESSION_BASE_DIR" {
-    local uuid="abcdabcd-1234-5678-9abc-def012345678"
-    save_session Issue 5 "${uuid}"
-    [ -f "${SESSION_BASE_DIR}/Issue_5.env" ]
-
-    SESSION_ID="sentinel"
-    load_session Issue 5
-    [ "${SESSION_ID}" = "${uuid}" ]
+@test "save_pr_invocation_counts and load_pr_invocation_counts round-trip" {
+    save_pr_invocation_counts 42 7 3
+    [ -f "${SESSION_BASE_DIR}/PullRequest_42.invocations" ]
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
 }
 
-@test "load_session for a PR with no session falls back to linked issue session" {
-    # Linked issue 5 already has a saved session.
-    local issue_uuid="11112222-3333-4444-5555-666677778888"
-    save_session Issue 5 "${issue_uuid}"
-
-    # gh pr view returns issue 5 as the linked closing issue.
-    make_stub gh 'printf "5\n"'
-
-    SESSION_ID="sentinel"
-    load_session PullRequest 77
-    [ "${SESSION_ID}" = "${issue_uuid}" ]
-}
-
-@test "load_session for a PR with no session and no linked issue leaves SESSION_ID empty" {
-    make_stub gh 'printf "\n"'
-    SESSION_ID="sentinel"
-    load_session PullRequest 77
-    [ -z "${SESSION_ID}" ]
-}
-
-@test "load_session discards a corrupted session file and resets SESSION_ID to empty" {
-    local session_file="${SESSION_BASE_DIR}/Issue_9.env"
+@test "load_pr_invocation_counts treats a corrupt guard file as 0/0" {
     mkdir -p "${SESSION_BASE_DIR}"
-    # Write a file whose content is NOT a valid UUID (simulates podman pull output contamination)
-    printf 'latest: Pulling from some/image\nlayer1: Pull complete\ndeadbeef-0000-0000-0000-000000000000\n' \
-        > "${session_file}"
-
-    SESSION_ID="sentinel"
-    load_session Issue 9
-    [ -z "${SESSION_ID}" ]
-    [ ! -f "${session_file}" ]
+    printf 'garbage not numbers\n' > "${SESSION_BASE_DIR}/PullRequest_42.invocations"
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
-@test "load_session discards a corrupted linked-issue session file and leaves SESSION_ID empty" {
-    local linked_file="${SESSION_BASE_DIR}/Issue_5.env"
-    mkdir -p "${SESSION_BASE_DIR}"
-    printf 'not-a-uuid\n' > "${linked_file}"
+@test "pr_json_is_terminal is true when auto-merge is enabled and false otherwise" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}'
+    [ "${status}" -eq 0 ]
+    run pr_json_is_terminal '{"autoMergeRequest":null}'
+    [ "${status}" -ne 0 ]
+}
 
-    make_stub gh 'printf "5\n"'
-    SESSION_ID="sentinel"
-    load_session PullRequest 77
-    [ -z "${SESSION_ID}" ]
-    [ ! -f "${linked_file}" ]
+@test "pr_should_advance_unchanged parks a terminal (auto-merge enabled) PR" {
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_should_advance_unchanged advances a non-terminal PR within the idle budget" {
+    save_pr_invocation_counts 42 4 2
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":null}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_advance_unchanged parks a non-terminal PR once the idle budget is exhausted" {
+    save_pr_invocation_counts 42 10 "${MAX_PR_IDLE_INVOCATIONS}"
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":null}'
+    [ "${status}" -ne 0 ]
 }
 
 # --- fingerprinting --------------------------------------------------------
@@ -882,25 +850,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx -- '--model' "${args_log}"
-    grep -qx 'opusplan' "${args_log}"
-}
-
-@test "invoke_claude passes --model opusplan to podman claude command when resuming a session" {
-    local args_log="${TEST_TMP}/podman_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "pull" ] && exit 0
-[ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -931,7 +881,7 @@ esac
 JQSTUB
     chmod +x "${STUB_BIN}/jq"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${args_log}" ]
     grep -qFx -- '--cpus=4' "${args_log}"
     grep -qFx -- '--memory=12g' "${args_log}"
@@ -958,7 +908,7 @@ STUBEOF
     DISCORD_WEBHOOK_URL=""
     local long_prompt
     long_prompt=$(printf '%*s' $((MAX_PROMPT_CHARS + 1)) '' | tr ' ' 'x')
-    run invoke_claude "${long_prompt}" "" "Issue" "1"
+    run invoke_claude "${long_prompt}" "Issue" "1"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"too long"* ]]
     [ ! -f "${args_log}" ]
@@ -981,7 +931,7 @@ STUBEOF
 
     local long_prompt
     long_prompt=$(printf '%*s' $((MAX_PROMPT_CHARS + 1)) '' | tr ' ' 'x')
-    run invoke_claude "${long_prompt}" "" "Issue" "42"
+    run invoke_claude "${long_prompt}" "Issue" "42"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
@@ -1001,51 +951,9 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"API Error"* ]]
-    grep -q "https://discord.example.com/hook" "${args_log}"
-}
-
-@test "invoke_claude retries as new session when Claude returns blocking_limit on a resumed session" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-[ "$1" = "pull" ] && exit 0
-for arg; do
-    [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
-done
-printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL=""
-    local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
-    [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
-}
-
-@test "invoke_claude sends Discord notification when retrying after blocking_limit" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-[ "$1" = "pull" ] && exit 0
-for arg; do
-    [ "$arg" = "--resume" ] && { printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"old-id","result":"Prompt is too long"}\n'; exit 0; }
-done
-printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
 
@@ -1064,69 +972,9 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
-}
-
-@test "invoke_claude dies if retry after blocking_limit also fails" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-[ "$1" = "pull" ] && exit 0
-printf '{"is_error":true,"terminal_reason":"blocking_limit","session_id":"12345678-1234-1234-1234-123456789abc","result":"Prompt is too long"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"failed after retry"* ]]
-}
-
-@test "invoke_claude retries as new session when Claude reports session no longer exists" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-[ "$1" = "pull" ] && exit 0
-for arg; do
-    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
-done
-printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL=""
-    local result
-    result=$(invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null)
-    [ "${result}" = "aabbccdd-1122-3344-5566-778899aabbcc" ]
-}
-
-@test "invoke_claude does not send Discord notification when retrying after invalid session" {
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-[ "$1" = "pull" ] && exit 0
-for arg; do
-    [ "$arg" = "--resume" ] && { printf 'No conversation found with session ID: 11111111-1111-1111-1111-111111111111\n' >&2; exit 1; }
-done
-printf '{"session_id":"aabbccdd-1122-3344-5566-778899aabbcc","result":"done","is_error":false}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-
-    invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
-    run grep -q "https://discord.example.com/hook" "${args_log}"
-    [ "${status}" -ne 0 ]
 }
 
 @test "invoke_claude dies with a timeout message when the container exceeds AGENT_TIMEOUT_MINUTES" {
@@ -1142,7 +990,7 @@ STUBEOF
     make_stub timeout 'exit 124'
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"timed out"* ]]
 }
@@ -1163,7 +1011,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
@@ -1226,7 +1074,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
 }
 
@@ -1243,7 +1091,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
@@ -1270,7 +1118,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${args_log}"
 }
 
@@ -1296,7 +1144,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     for d in sessions session-env plans cache backups; do
         grep -qx "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" "${args_log}"
         [ -d "${CLAUDE_STATE_DIR}/${d}" ]
@@ -1312,7 +1160,7 @@ STUBEOF
 [ "$1" = "pull" ] && exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    run invoke_claude "test prompt" "" "" "" ""
+    run invoke_claude "test prompt" "" "" ""
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
@@ -1339,7 +1187,7 @@ STUBEOF
 
     CLAUDE_MD_TMPFILE="sentinel"
     CLAUDE_PROMPT_FILE="sentinel"
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${CLAUDE_MD_TMPFILE}" ]
     [ -z "${CLAUDE_PROMPT_FILE}" ]
 }
@@ -1366,7 +1214,7 @@ printf '%s\n' "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     grep -q "${XDG_RUNTIME_DIR}" "${args_log}"
 }
 
@@ -1390,7 +1238,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     # Secret was created with the owner-scoped name
     grep -q "create" "${secret_log}"
     grep -q "claude-oauth-credfeto" "${secret_log}"
@@ -1420,7 +1268,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     # Secret was created with the enterprise token secret name
     grep -q "create" "${secret_log}"
     grep -q "gh-enterprise-token" "${secret_log}"
@@ -1431,7 +1279,7 @@ STUBEOF
     grep -q 'gh-enterprise-token' "${args_log}"
 }
 
-@test "invoke_claude passes --resume flag when session id is provided" {
+@test "invoke_claude never passes --resume (every run is a fresh session)" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << STUBEOF
@@ -1444,9 +1292,9 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "12345678-1234-1234-1234-123456789abc" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx -- '--resume' "${args_log}"
-    grep -qx '12345678-1234-1234-1234-123456789abc' "${args_log}"
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    run grep -qx -- '--resume' "${args_log}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "invoke_claude dies if container already exists" {
@@ -1459,7 +1307,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already exists"* ]]
 }
@@ -1476,7 +1324,7 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already in use"* ]]
 }
@@ -1494,7 +1342,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -q ".claude:/home/developer/.claude" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -1665,13 +1513,11 @@ setup_main_mocks() {
     try_nonagentic_rebase()     { return 1; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
     host_to_container_path()    { printf '%s\n' "$1"; }
-    load_session()              { SESSION_ID=""; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
     build_pr_prompt()           { printf 'mock-pr-prompt\n'; }
     build_issue_claude_md()     { printf 'mock-issue-claude-md\n'; }
     build_pr_claude_md()        { printf 'mock-pr-claude-md\n'; }
-    invoke_claude()             { printf '12345678-1234-1234-1234-123456789abc\n'; }
-    save_session()              { return 0; }
+    invoke_claude()             { return 0; }
     compute_pr_fingerprint()    { printf 'new-fp\n'; }
     compute_issue_fingerprint() { printf 'new-fp\n'; }
     save_pr_fingerprint()       { return 0; }
@@ -1703,7 +1549,9 @@ setup_main_mocks() {
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"other/repo","priority":3,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    # Auto-merge enabled makes the unchanged PR terminal, so it skips (rather than being
+    # re-invoked to advance a phase) — this test exercises the skip_repos/is_skipped logic.
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"}}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -1731,7 +1579,9 @@ setup_main_mocks() {
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    # Auto-merge enabled makes the unchanged PR terminal, so it skips (rather than being
+    # re-invoked to advance a phase) — this test exercises the skip_repos guard.
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"}}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -1751,7 +1601,15 @@ setup_main_mocks() {
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":17,"itemType":"PullRequest","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"branch-17"}\n'; }
+    # PR #5 is unchanged; make it terminal (auto-merge enabled) so it skips instead of being
+    # re-invoked to advance a phase. PR #17 is non-terminal and (below) fingerprint-changed.
+    fetch_pr_json()             {
+        if [ "$1" = "5" ]; then
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"branch-5","autoMergeRequest":{"enabledAt":"now"}}\n'
+        else
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefName":"branch-17"}\n'
+        fi
+    }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       {
         # First call (PR #5): return saved fingerprint so it is unchanged.
@@ -1857,7 +1715,9 @@ setup_main_mocks() {
     }
     find_open_nonblocked_pr_for_repo() { printf '99\n'; }
     fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    # Auto-merge enabled makes the unchanged pivot PR terminal, so it skips the repo rather than
+    # being re-invoked to advance a phase — this test exercises the skip_repos pivot logic.
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"}}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -2501,20 +2361,21 @@ STUBEOF
     grep -q 'type=start item=Issue id=10' "${_notif_log}"
 }
 
-@test "main sends resume notification when resuming existing work on an issue" {
+@test "main always sends a start notification (no resume) even when prior work exists" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"Do the thing","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    load_session() { SESSION_ID="aaaabbbb-cccc-dddd-eeee-ffffffffffff"; }
     local _notif_log="${TEST_TMP}/notif_log"
     notify_discord_work_item() { printf 'type=%s item=%s id=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
 
     run main
     [ "${status}" -eq 0 ]
-    grep -q 'type=resume item=Issue id=10' "${_notif_log}"
+    grep -q 'type=start item=Issue id=10' "${_notif_log}"
+    run grep -q 'type=resume' "${_notif_log}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "main sends no-work notification when no actionable items found" {
@@ -2587,7 +2448,8 @@ STUBEOF
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    # Auto-merge enabled makes the unchanged PR terminal so it is counted as unchanged/skipped.
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"}}\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -3010,7 +2872,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"rate limited"* ]]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -3028,7 +2890,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
@@ -3056,32 +2918,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "" "Issue" "42" "# mock CLAUDE.md"
-    [ "${status}" -ne 0 ]
-    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
-    [ -f "${rate_file}" ]
-    local saved_unix
-    saved_unix=$(cat "${rate_file}")
-    [[ "${saved_unix}" =~ ^[0-9]+$ ]]
-    local now_unix
-    now_unix=$(date +%s)
-    [ "${saved_unix}" -gt "${now_unix}" ]
-}
-
-@test "invoke_claude saves rate-limit file when Claude CLI exits non-zero with 429 JSON on resumed session" {
-    # Reproduces the production failure: resumed session hits 429 and CLI exits 1.
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << 'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = "pull" ] && exit 0
-[ "$1" = "inspect" ] && exit 1
-printf '%s\n' '{"type":"result","is_error":true,"api_error_status":429,"terminal_reason":"completed","session_id":"12345678-1234-1234-1234-123456789abc","result":"You'\''ve hit your Sonnet limit · resets 3pm (UTC)"}'
-exit 1
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    DISCORD_WEBHOOK_URL=""
-    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
     [ -f "${rate_file}" ]
@@ -3108,7 +2945,7 @@ STUBEOF
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
 
-    run invoke_claude "test prompt" "11111111-1111-1111-1111-111111111111" "Issue" "42" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
 }
@@ -3380,7 +3217,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
 }
 
@@ -3398,7 +3235,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_EMAIL=alice@example.com' "${args_log}"
 }
 
@@ -3417,7 +3254,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_SIGNING_KEY=ABCD1234' "${args_log}"
 }
 
@@ -3435,7 +3272,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qx 'GIT_USER_NAME=' "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -3453,7 +3290,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qF ".gitconfig" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -3612,7 +3449,7 @@ STUBEOF
 
     GIT_SIGNING_KEY="ABCD1234"
     GPG_PUBKEY_TMPDIR=""
-    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${GPG_PUBKEY_TMPDIR}" ]
 }
 
@@ -3739,7 +3576,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${call_log}" ]
     local prune_line pull_line
     prune_line=$(grep -n 'image_prune' "${call_log}" | head -1 | cut -d: -f1)
@@ -3760,7 +3597,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${call_log}" ]
     local count
     count=$(grep -c 'image_prune' "${call_log}")
@@ -3785,7 +3622,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${ssh_sock}:/tmp/ssh-agent.sock:ro" "${args_log}"
     grep -qx "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "${args_log}"
 }
@@ -3802,7 +3639,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"SSH_AUTH_SOCK is not set"* ]]
 }
@@ -3819,7 +3656,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"SSH_AUTH_SOCK is not set or socket is absent"* ]]
 }
@@ -3838,7 +3675,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -q "\.ssh:/home/developer/.ssh" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -3860,7 +3697,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${HOME}/.database:/home/developer/.database:ro" "${args_log}"
 }
 
@@ -3877,7 +3714,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *".database not found"* ]]
 }
@@ -3895,7 +3732,7 @@ printf '%s\n' "\$1" >> "${podman_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    run invoke_claude "" "" "" "" "# mock CLAUDE.md"
+    run invoke_claude "" "" "" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Prompt is empty"* ]]
     run grep -qx "run" "${podman_log}"
@@ -3913,7 +3750,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "hello from prompt" "" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "hello from prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     [ "${CLAUDE_PROMPT}" = "hello from prompt" ]
 }
 
@@ -4565,18 +4402,18 @@ STUBEOF
     [[ "${output}" == *"AI Security Review"* ]]
 }
 
-@test "build_pr_claude_md embeds MAX_REVIEW_ITERATIONS value in review loop" {
+@test "build_pr_claude_md embeds MAX_REVIEW_ITERATIONS value in review guidance" {
     MAX_REVIEW_ITERATIONS=3
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"3 times total"* ]]
+    [[ "${output}" == *"already run 3 code-review rounds"* ]]
 }
 
 @test "build_pr_claude_md embeds custom MAX_REVIEW_ITERATIONS when overridden" {
     MAX_REVIEW_ITERATIONS=5
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"5 times total"* ]]
+    [[ "${output}" == *"already run 5 code-review rounds"* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
@@ -5642,7 +5479,9 @@ STUBEOF
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    # Auto-merge enabled makes the unchanged, CI-green PR terminal so it is skipped (CI pending
+    # state is still cleared) rather than being re-invoked to advance a phase.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"}}\n'; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     local old_time
