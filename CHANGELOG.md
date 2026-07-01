@@ -61,6 +61,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
 - Pre-agentic CI gate: oneshot now waits for CI checks to complete before invoking the agent, and flags PRs as Blocked when checks remain pending past a configurable timeout (CI_CHECK_TIMEOUT_MINUTES, default 60)
 - Link Claude Code skill repos cloned in development-full into ~/.claude/skills so they are actually discoverable, and bake in settings.json, policy-limits.json, and hooks read-only for the developer user
+- Persist Workflow-project discovery (project/status-field/option IDs) to a disk cache with a configurable TTL (PROJECT_CACHE_TTL, default 3600s) to eliminate redundant per-run GraphQL calls (#298)
 ### Fixed
 - oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
 - oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments

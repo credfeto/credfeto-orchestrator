@@ -478,6 +478,124 @@ declare -gA _WF_APPROVED_ITEMS
 # Per-repo fetch guard: value "1" means fetch_board_approved_items has already run for that repo.
 declare -gA _WF_APPROVED_FETCHED
 
+# How long (seconds) a disk-persisted project cache entry stays valid before
+# discover_or_create_workflow_project falls back to a live re-discovery. Override in the
+# environment; the project/field/option IDs are effectively permanent once set up, so the
+# default of 1 hour is conservative rather than tightly load-bearing.
+PROJECT_CACHE_TTL="${PROJECT_CACHE_TTL:-3600}"
+
+# Returns the path to the disk-persisted Workflow-project discovery cache for the current
+# repo. Unlike _WF_CACHE (in-memory, lost at process exit), this file survives across
+# oneshot invocations so an already-discovered project/field/option IDs are not re-fetched
+# via GraphQL on every run. SESSION_BASE_DIR is already scoped per-repo by set_repo_context.
+project_cache_file_path() {
+    printf '%s/project-cache.json' "${SESSION_BASE_DIR}"
+}
+
+# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS, and
+# _WF_CACHED_REPO from the on-disk project cache for the current repo, without making any
+# network call. Returns 0 (hit) when a fresh (within PROJECT_CACHE_TTL seconds) cache entry
+# was found and loaded; returns 1 (miss) when the file is absent, unparseable, incomplete,
+# or stale, leaving the caller to perform a live discovery.
+load_project_cache() {
+    local cache_file cached_json cached_at now_unix
+    cache_file=$(project_cache_file_path)
+    [ -f "${cache_file}" ] || return 1
+
+    cached_json=$(cat "${cache_file}" 2>/dev/null) || return 1
+    [ -n "${cached_json}" ] || return 1
+
+    cached_at=$(printf '%s' "${cached_json}" | jq -r '.cached_at // empty' 2>/dev/null)
+    [[ "${cached_at}" =~ ^[0-9]+$ ]] || return 1
+
+    # Defensive check: SESSION_BASE_DIR is expected to already be repo-scoped (set by
+    # set_repo_context), so this should always match, but validating the stored repo
+    # guards against ever serving one repo's cached IDs for another if that assumption
+    # is ever violated (e.g. a future change to SESSION_BASE_DIR's derivation).
+    local cached_repo
+    cached_repo=$(printf '%s' "${cached_json}" | jq -r '.repo // empty' 2>/dev/null)
+    [ "${cached_repo}" = "${REPO_FULL}" ] || return 1
+
+    now_unix=$(date +%s)
+    (( now_unix - cached_at <= PROJECT_CACHE_TTL )) || return 1
+
+    local project_id status_field_id
+    project_id=$(printf '%s' "${cached_json}" | jq -r '.project_id // empty' 2>/dev/null)
+    [ -n "${project_id}" ] || return 1
+    status_field_id=$(printf '%s' "${cached_json}" | jq -r '.status_field_id // empty' 2>/dev/null)
+    [ -n "${status_field_id}" ] || return 1
+
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+    local opt_name opt_id
+    while IFS=$'\t' read -r opt_name opt_id; do
+        [ -z "${opt_name}" ] && continue
+        _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
+    done < <(printf '%s' "${cached_json}" | jq -r '.option_ids // {} | to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
+
+    _WF_PROJECT_ID="${project_id}"
+    _WF_STATUS_FIELD_ID="${status_field_id}"
+    _WF_CACHED_REPO="${REPO_FULL}"
+    _WF_CREATION_FAILED=""
+    return 0
+}
+
+# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS for the current
+# repo to disk so subsequent oneshot invocations can skip live discovery until
+# PROJECT_CACHE_TTL elapses. Best-effort: a failure to write just means every run
+# re-discovers, which is the pre-existing behaviour, so it only warns rather than dying.
+save_project_cache() {
+    local cache_file option_ids_json k
+    cache_file=$(project_cache_file_path)
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || {
+        warn "Workflow project: failed to create ${SESSION_BASE_DIR} for disk cache"
+        return 0
+    }
+
+    option_ids_json='{}'
+    if [ "${#_WF_OPTION_IDS[@]}" -gt 0 ]; then
+        option_ids_json=$(
+            for k in "${!_WF_OPTION_IDS[@]}"; do
+                jq -n --arg k "${k}" --arg v "${_WF_OPTION_IDS[${k}]}" '{($k): $v}'
+            done | jq -s 'add // {}'
+        ) || option_ids_json='{}'
+    fi
+
+    jq -n \
+        --arg repo "${REPO_FULL}" \
+        --arg project_id "${_WF_PROJECT_ID}" \
+        --arg status_field_id "${_WF_STATUS_FIELD_ID}" \
+        --argjson option_ids "${option_ids_json}" \
+        --argjson cached_at "$(date +%s)" \
+        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, cached_at: $cached_at}' \
+        > "${cache_file}" 2>/dev/null \
+        || warn "Workflow project: failed to write disk cache ${cache_file}"
+}
+
+# Deletes the on-disk project cache for the current repo and clears the in-memory caches
+# (_WF_CACHE entry, and the live globals if they belong to this repo) so both this run and
+# the next fully re-discover from the API. Called when a board mutation is rejected in a
+# way that suggests the cached project/field IDs are stale (e.g. a deleted/recreated
+# project) — leaving stale IDs in memory would otherwise keep failing for the rest of this run.
+invalidate_project_cache() {
+    rm -f "$(project_cache_file_path)" 2>/dev/null || true
+
+    unset "_WF_CACHE[${REPO_FULL}:discovered]" "_WF_CACHE[${REPO_FULL}:project_id]" \
+        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]"
+    local k
+    for k in "${!_WF_OPTION_IDS[@]}"; do
+        unset "_WF_CACHE[${REPO_FULL}:opt:${k}]"
+    done
+
+    if [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]; then
+        _WF_CACHED_REPO=""
+        _WF_PROJECT_ID=""
+        _WF_STATUS_FIELD_ID=""
+        unset _WF_OPTION_IDS
+        declare -gA _WF_OPTION_IDS
+    fi
+}
+
 # Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
 # Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
 _build_wf_section() {
@@ -515,6 +633,21 @@ discover_or_create_workflow_project() {
         done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opt_names"]}")
         _WF_CACHED_REPO="${REPO_FULL}"
         _WF_CREATION_FAILED=""
+        return 0
+    fi
+
+    # Disk cache hit: promote it into the in-memory per-run cache too, so a later call
+    # this run takes the cheaper in-memory fast path above instead of re-parsing the
+    # cache file, then return without making any network calls.
+    if load_project_cache; then
+        local k
+        for k in "${!_WF_OPTION_IDS[@]}"; do
+            _WF_CACHE["${REPO_FULL}:opt:${k}"]="${_WF_OPTION_IDS[${k}]}"
+        done
+        _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
+        _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
+        _WF_CACHE["${REPO_FULL}:opt_names"]=$(printf '%s\n' "${!_WF_OPTION_IDS[@]}")
+        _WF_CACHE["${REPO_FULL}:discovered"]="1"
         return 0
     fi
 
@@ -598,6 +731,7 @@ discover_or_create_workflow_project() {
     _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
     _WF_CACHE["${REPO_FULL}:opt_names"]="${cached_opts}"
     _WF_CACHE["${REPO_FULL}:discovered"]="1"
+    save_project_cache
 
     _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
@@ -821,6 +955,10 @@ update_workflow_status() {
         add_err_content=$(head -3 "${add_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
         rm -f "${add_err}"
         warn "Workflow: failed to add ${item_type} #${item_number} to project${add_err_content:+ — ${add_err_content}} — skipping board update"
+        # The mutation may be failing because the cached project ID refers to a
+        # deleted/recreated project — invalidate so the next run (and any later item this
+        # run) re-discovers from the API instead of repeating the same failure silently.
+        invalidate_project_cache
         return 0
     }
     rm -f "${add_err}"
