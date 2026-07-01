@@ -2,8 +2,12 @@
 
 # Orchestrator oneshot script.
 # Fetches all open work items from the priorities API and drives a Claude Code session
-# to work on the first actionable item across any repository.  Persists one Claude
-# session ID per Issue/PR so subsequent runs resume the correct session.
+# to work on the first actionable item across any repository.  Every invocation runs a
+# FRESH Claude session (no --resume): all durable state lives in GitHub (branch, commits,
+# PR comments, labels, Workflow board), so each run re-derives its context and does exactly
+# ONE workflow phase before stopping.  This bounds a single session's context growth and
+# is what keeps runs from hitting the model context window ("Prompt is too long").
+# The orchestrator re-invokes the item on the next tick to advance to the next phase.
 
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
@@ -12,10 +16,11 @@ CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
 
 # Conservative pre-send guard against grossly oversized prompts.
-# The common failure mode is session history overflow in resumed sessions
-# (reported as terminal_reason=blocking_limit), which is handled separately in
-# invoke_claude by retrying without --resume.  This constant caps only the
-# initial prompt text itself.
+# The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
+# substance lives in the generated CLAUDE.md — so this cap is only a sanity backstop and
+# is NOT the mechanism that prevents "Prompt is too long".  That failure comes from
+# accumulated conversation over many turns exceeding the model context window; the
+# phase-per-invocation design (fresh session, one phase, then stop) is what bounds it.
 MAX_PROMPT_CHARS=100000
 
 # Extra buffer added to the token-reset time before resuming agentic work.
@@ -43,10 +48,27 @@ PODMAN_CGROUP_PARENT=""
 # Minimum free disk space in kilobytes required to launch a container (10 GB).
 MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 
-# Maximum number of times the agent re-runs /code-review or /security-review
-# in a single PR session before giving up and marking the PR Blocked.
+# Maximum number of review rounds the agent runs per PR.  Each round is now its own
+# fresh invocation (one /code-review or /security-review round, then stop), so this cap is
+# advisory guidance passed into the prompt rather than an in-session loop counter.
 # Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
 MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
+
+# Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
+# a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
+# (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
+# means the agent is churning without converging.  Override with MAX_PR_TOTAL_INVOCATIONS.
+MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-30}"
+[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=30
+
+# How many consecutive "in-progress" re-invocations to allow on an unchanged PR fingerprint
+# before parking it.  Phases that advance the board without pushing (a clean code/security
+# review, or the finalize step on a repo where auto-merge cannot be enabled) do not change the
+# fingerprint, so the orchestrator re-invokes an unchanged non-terminal PR to let the next phase
+# run — but only up to this many times, so a PR that is genuinely done just goes quiet.
+# Override with MAX_PR_IDLE_INVOCATIONS in the environment before calling oneshot.
+MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
+[[ "${MAX_PR_IDLE_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_IDLE_INVOCATIONS=5
 
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
@@ -350,12 +372,6 @@ hash_sha256() {
     fi
 }
 
-# Returns the path to the session file for a given item type and ID.
-session_file_path() {
-    local item_type="$1" item_id="$2"
-    printf '%s/%s_%s.env' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
-}
-
 # Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
 fetch_all_priorities() {
     local priorities_json
@@ -397,44 +413,67 @@ find_open_nonblocked_pr_for_repo() {
     '
 }
 
-# Sets SESSION_ID for the given item.  For a PullRequest with no session file, falls back
-# to the session of a linked closing issue so work already done on the issue is continued.
-load_session() {
-    local item_type="$1" item_id="$2"
-    local session_file linked_issue_id linked_session_file
+# Per-PR invocation guard.  Because every run is a fresh session that advances the workflow by
+# one phase, a PR is re-invoked repeatedly across ticks until it reaches a terminal state.  The
+# guard file holds two space-separated counters, "<total> <idle>":
+#   total — every agent invocation ever spent on this PR.  Runaway backstop: at
+#           MAX_PR_TOTAL_INVOCATIONS the PR is marked Blocked for a human (catches find-fix
+#           churn that keeps pushing new commits but never converges).
+#   idle  — consecutive "in-progress" re-invocations where the PR fingerprint had not changed
+#           (a phase that advanced the board without pushing, e.g. a clean review).  At
+#           MAX_PR_IDLE_INVOCATIONS the PR is parked (skipped) until its state changes again,
+#           so a PR that is done but cannot enable auto-merge does not loop forever.
+# Absence of the file also signals the first-ever touch of the PR.
+pr_invocation_guard_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.invocations' "${SESSION_BASE_DIR}" "${item_id}"
+}
 
-    SESSION_ID=""
+# Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
+# Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE.
+PR_INVOCATION_TOTAL=0
+PR_INVOCATION_IDLE=0
+load_pr_invocation_counts() {
+    local item_id="$1" guard_file line total idle
+    PR_INVOCATION_TOTAL=0
+    PR_INVOCATION_IDLE=0
+    guard_file=$(pr_invocation_guard_file_path "${item_id}")
+    [ -f "${guard_file}" ] || return 0
+    line=$(cat "${guard_file}" 2>/dev/null)
+    total="${line%% *}"
+    idle="${line##* }"
+    [[ "${total}" =~ ^[0-9]+$ ]] && PR_INVOCATION_TOTAL="${total}"
+    [[ "${idle}" =~ ^[0-9]+$ ]] && PR_INVOCATION_IDLE="${idle}"
+    return 0
+}
 
-    session_file=$(session_file_path "${item_type}" "${item_id}")
-    if [ -f "${session_file}" ]; then
-        SESSION_ID=$(cat "${session_file}")
-        if ! is_valid_session_id "${SESSION_ID}"; then
-            warn "Session file for ${item_type} #${item_id} contains invalid session ID — discarding"
-            rm -f "${session_file}"
-            SESSION_ID=""
-        fi
-        return
-    fi
+# Persists the "<total> <idle>" counters for a PR.
+save_pr_invocation_counts() {
+    local item_id="$1" total="$2" idle="$3" guard_file
+    guard_file=$(pr_invocation_guard_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
+        || die "Failed to write invocation guard file: ${guard_file}"
+}
 
-    if [ "${item_type}" = "PullRequest" ]; then
-        linked_issue_id=$(gh pr view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json closingIssuesReferences \
-            --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null)
+# Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
+# auto-merge is enabled (it will merge once checks/approvals land).  Merged/closed PRs never
+# reach here (filtered earlier as non-OPEN); Blocked PRs are filtered by their label.
+pr_json_is_terminal() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.autoMergeRequest != null' > /dev/null 2>&1
+}
 
-        if [ -n "${linked_issue_id}" ]; then
-            linked_session_file=$(session_file_path "Issue" "${linked_issue_id}")
-            if [ -f "${linked_session_file}" ]; then
-                info "No session for PR #${item_id} — inheriting session from linked issue #${linked_issue_id}"
-                SESSION_ID=$(cat "${linked_session_file}")
-                if ! is_valid_session_id "${SESSION_ID}"; then
-                    warn "Linked session file for Issue #${linked_issue_id} contains invalid session ID — discarding"
-                    rm -f "${linked_session_file}"
-                    SESSION_ID=""
-                fi
-            fi
-        fi
-    fi
+# Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
+# can run (phases that only advance the board — e.g. a clean review — leave the fingerprint
+# unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the
+# PR is non-terminal and still within the idle budget; 1 (park) otherwise.  Read-only: the idle
+# counter is persisted at invocation time via save_pr_invocation_counts.
+pr_should_advance_unchanged() {
+    local item_id="$1" pr_json="$2"
+    pr_json_is_terminal "${pr_json}" && return 1
+    load_pr_invocation_counts "${item_id}"
+    [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
 }
 
 # Outputs the path to the .ai-instructions file for the current repo context.
@@ -1068,6 +1107,11 @@ $(_build_git_ssh_section)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
 $(_build_wf_section)
 
+PHASE DISCIPLINE (MANDATORY — read first):
+- This is a FRESH session with no memory of previous runs. All state lives in GitHub (the issue, its comments, labels, and the Workflow board status above).
+- Do EXACTLY ONE phase and then STOP: either PLAN mode (steps 3–4) or IMPLEMENTATION mode (steps 5–7), never both in one session. The orchestrator re-invokes you on the next cycle.
+- Once a draft pull request exists, this issue's work continues under the pull-request workflow on later cycles — do not try to drive reviews or merging from the issue session.
+
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
 2. Check whether you have already posted a plan for this issue:
@@ -1100,7 +1144,7 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}")
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. (Implementation mode) Update the Workflow board status to "Development" (if board data is present above), then proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
-7. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #${item_id}" so GitHub automatically closes the issue when the PR is merged. Example: gh pr create --draft --title "..." --body $'...\n\nCloses #${item_id}'
+7. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #${item_id}" so GitHub automatically closes the issue when the PR is merged. Example: gh pr create --draft --title "..." --body $'...\n\nCloses #${item_id}'. Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it.
 8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
 9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
@@ -1176,32 +1220,52 @@ $(_build_git_ssh_section)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 $(_build_wf_section)
 
-Steps:
-1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
-   gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
-${checkout_step}
-4. Check CI once (gh pr checks ${item_id} --repo ${REPO_FULL}); if not all required checks have passed, follow the AI instructions CI policy and stop. Check PR comments and any code reviews. If questions need answers, ask them first and mark the PR as blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-5. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>"
-6. Proceed to address all outstanding work
-7. When all work is complete and all required CI checks pass: run the AI review loop before enabling auto-merge.
-   a. Update Workflow board status to "AI Review" (if board data is present above).
-      Run: /code-review --comment
-      If findings are posted as inline PR comments: fix each in its own commit, push, then run /code-review --comment again.
-      Repeat up to ${MAX_REVIEW_ITERATIONS} times total. After ${MAX_REVIEW_ITERATIONS} rounds with unresolved findings:
-        - Post a PR comment listing the unresolved findings.
-        - Add the Blocked label and STOP: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-   b. When code review passes (no findings): update Workflow board status to "AI Security Review" (if board data present).
-      Run: /security-review
-      If findings are reported: post them as a PR comment if not already inline, fix each in its own commit, push, then run /security-review again.
-      Repeat up to ${MAX_REVIEW_ITERATIONS} times total. After ${MAX_REVIEW_ITERATIONS} rounds with unresolved findings:
-        - Post a PR comment listing the unresolved security findings.
-        - Add the Blocked label and STOP: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-   c. When both reviews pass: update Workflow board status to "Human Review" (if board data present), then enable auto-merge:
-      gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-      If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
-8. All interaction with humans including status reports must be made as a comment to the pull request.
-9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
+PHASE DISCIPLINE (MANDATORY — read first):
+- This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
+- You must do EXACTLY ONE phase from the list below — the FIRST one that applies — and then STOP. Do NOT continue to later phases in this session. The orchestrator will re-invoke you on the next cycle to do the next phase.
+- NEVER run more than one /code-review round or one /security-review round per session. Running a review loop in a single session is what overflows the context window — that is the bug this design fixes.
+- The Workflow board status above is your phase marker. Read the current status for this PR to know where you are; advance it as instructed when a phase completes.
+- Every phase must leave a durable trace in GitHub so the next cycle sees progress: either a pushed commit, or a short status comment on the PR. If a phase makes no commit (e.g. a clean review), you MUST post a one-line status comment saying what you did and what phase is next — otherwise the workflow stalls.
+- Always assign yourself first if you are not already the assignee: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
+
+Determine the current phase and do ONLY that one, then STOP:
+
+PHASE A — Setup / rebase (do this if the PR is not yet checked out, is BEHIND/DIRTY, or labels are unsynced):
+  1. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
+     gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
+  ${checkout_step}
+  Then STOP. (If you pushed a rebase, CI will run; the next cycle continues once CI settles.)
+
+PHASE B — CI pending: if any required check is still running (gh pr checks ${item_id} --repo ${REPO_FULL}), STOP immediately and take no action — the orchestrator waits for CI and re-invokes you.
+
+PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddressed comments/reviews, or linked-issue work remains):
+  - If a required check FAILED: diagnose and fix it in a commit. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+  - Set the board status to "Development".
+  - Commit and push your fix in the foreground, then STOP. (CI will run; the next cycle continues.)
+
+PHASE D — Code review (do this ONLY when CI is fully green and there is no outstanding work, and the board is not yet past "AI Review"):
+  - Set the board status to "AI Review".
+  - Run ONE round: /code-review --comment
+  - If findings were posted: fix EACH in its own commit, push in the foreground, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
+  - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
+  - If you have already run ${MAX_REVIEW_ITERATIONS} code-review rounds on this PR (judge from the PR's history of code-review comments) and findings remain: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
+
+PHASE E — Security review (do this ONLY when the board is at "AI Security Review"):
+  - Run ONE round: /security-review
+  - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit, push in the foreground, post a one-line status comment, then STOP.
+  - If NO findings: advance the board to "Human Review", post a one-line status comment ("Security review clean — advancing to finalize"), then STOP.
+  - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
+
+PHASE F — Finalize (do this ONLY when both reviews have passed / board is at "Human Review" and auto-merge is not yet enabled):
+  - Enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+    If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
+  - Post a one-line status comment confirming the PR is ready, then STOP.
+
+If auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true) and nothing above applies: there is nothing to do — do NOT post a comment or make any change; just STOP.
+
+General rules:
+- All interaction with humans including status reports must be made as a comment to the pull request.
+- MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available. If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 EOF
     fi
 }
@@ -1216,12 +1280,6 @@ build_pr_prompt() {
     local item_id="$1" repo_path="${5:-${REPO_WORK_DIR}}"
     printf 'Work on pull request #%s in %s.\nThe repository is checked out at %s.\n' \
         "${item_id}" "${REPO_FULL}" "${repo_path}"
-}
-
-# Returns 0 if the value is a plain UUID (the format Claude returns for a session id).
-# Rejecting anything else prevents injecting shell statements into the session file.
-is_valid_session_id() {
-    [[ "$1" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
 }
 
 # Prints Claude's error result (if any), removes tmpfile, and dies.
@@ -1278,87 +1336,21 @@ run_claude_fresh() {
     rm -f "${stderrfile}"
 }
 
-# Runs podman-based claude with --resume, capturing stderr separately to detect the
-# "No conversation found" message that Claude writes to stderr on exit 1.
-# On timeout (exit 124): kills container, notifies Discord, dies.
-# On invalid-session error: logs to console, retries fresh, returns 0.
-# On other failure: dies.
-# Sets CLAUDE_RESUMED_AS_FRESH=1 if the session was restarted.
-CLAUDE_RESUMED_AS_FRESH=0
+# Invocation-scoped globals shared with the podman helpers below and cleaned up on EXIT.
 CLAUDE_MD_TMPFILE=""
 CLAUDE_PROMPT=""
 CLAUDE_PROMPT_FILE=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
 GH_ENTERPRISE_SECRET_NAME=""
-run_claude_resumed() {
-    local tmpfile="$1" resume_id="$2" item_type="$3" item_id="$4"
-    local stderrfile podman_exit=0
-    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for Claude stderr"
-    [ -n "${CLAUDE_PROMPT}" ] || die "Prompt is empty — refusing to start container"
-    [ -s "${CLAUDE_PROMPT_FILE}" ] || die "Prompt file is missing or empty — refusing to start container"
-    validate_bind_mounts
-    info "Resuming Claude session ${resume_id} in container ${PODMAN_CONTAINER_NAME}..." >&2
-    # tmpfile is created by current user via mktemp, so the redirect is intentionally unprivileged.
-    # shellcheck disable=SC2024
-    timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
-        podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" \
-        --resume "${resume_id}" < "${CLAUDE_PROMPT_FILE}" > "${tmpfile}" 2>"${stderrfile}" \
-    || podman_exit=$?
-
-    if [ "${podman_exit}" -eq 0 ]; then
-        cat "${stderrfile}" >&2
-        rm -f "${stderrfile}"
-        return 0
-    fi
-
-    # Timed out — clean up and notify.
-    if [ "${podman_exit}" -eq 124 ]; then
-        cat "${stderrfile}" >&2
-        rm -f "${stderrfile}"
-        podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
-        notify_discord_claude_error "${item_type}" "${item_id}" \
-            "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
-        die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
-    fi
-
-    # Non-zero exit — check stderr for the known invalid-session message.
-    if grep -q "No conversation found with session ID" "${stderrfile}" "${tmpfile}" 2>/dev/null; then
-        cat "${stderrfile}" >&2
-        rm -f "${stderrfile}" "${tmpfile}"
-        warn "Session ${resume_id} no longer exists — retrying as a new session" >&2
-        tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-        run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
-        CLAUDE_RESUMED_AS_FRESH=1
-        # Propagate the new tmpfile path back to the caller via stdout.
-        printf '%s' "${tmpfile}"
-        return 0
-    fi
-
-    if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
-        cat "${stderrfile}" >&2
-        rm -f "${stderrfile}"
-        die "Container ${PODMAN_CONTAINER_NAME} is already in use — another invocation may be running"
-    fi
-
-    cat "${stderrfile}" >&2
-    rm -f "${stderrfile}"
-    # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
-    # when it has written a valid result JSON to stdout.  Return 0 so invoke_claude
-    # can inspect the JSON via handle_claude_is_error rather than losing the context.
-    if [ -s "${tmpfile}" ] \
-            && jq -e '.type == "result" and .is_error == true' "${tmpfile}" >/dev/null 2>&1; then
-        return 0
-    fi
-    die_claude_failed "${tmpfile}"
-}
 
 # Handles is_error=true in the Claude JSON response.
-# On blocking_limit (resumed session): retries fresh, updates tmpfile path via stdout.
+# On blocking_limit: every run is already a fresh single-phase session, so there is nothing
+#   to retry by dropping history — surface it as a hard error for a human to look at.
 # On 429: persists rate limit, notifies Discord, dies.
 # On anything else: notifies Discord, dies.
 handle_claude_is_error() {
-    local tmpfile="$1" resume_session_id="$2" item_type="$3" item_id="$4"
+    local tmpfile="$1" item_type="$2" item_id="$3"
     local terminal_reason api_error_status result_text
 
     terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
@@ -1366,25 +1358,8 @@ handle_claude_is_error() {
     result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
     info "Claude error: ${result_text}" >&2
 
-    if [ "${terminal_reason}" = "blocking_limit" ] && [ -n "${resume_session_id}" ]; then
-        warn "Session ${resume_session_id} exceeded context limit — retrying as a new session" >&2
-        notify_discord_claude_error "${item_type}" "${item_id}" \
-            "Session context too long — restarting session for ${REPO_FULL}"
-        rm -f "${tmpfile}"
-        local new_tmpfile
-        new_tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude retry"
-        run_claude_fresh "${new_tmpfile}" "${item_type}" "${item_id}"
-        local retry_is_error
-        retry_is_error=$(jq -r '.is_error // false' "${new_tmpfile}" 2>/dev/null || printf 'false')
-        if [ "${retry_is_error}" = "true" ]; then
-            local retry_result
-            retry_result=$(jq -r '.result // "Unknown error"' "${new_tmpfile}" 2>/dev/null || printf 'Unknown error')
-            notify_discord_claude_error "${item_type}" "${item_id}" "${retry_result}"
-            rm -f "${new_tmpfile}"
-            die "Claude invocation failed after retry: ${retry_result}"
-        fi
-        printf '%s' "${new_tmpfile}"
-        return 0
+    if [ "${terminal_reason}" = "blocking_limit" ]; then
+        warn "Fresh single-phase session still exceeded the context window for ${REPO_FULL} — a single phase is too large to fit; a human should split the work" >&2
     fi
 
     if [ "${api_error_status}" = "429" ]; then
@@ -1595,12 +1570,13 @@ validate_bind_mounts() {
     done
 }
 
-# Outputs the Claude session ID on stdout; all user-visible messages go to stderr.
-# Claude's text response is written to stderr so the caller can review what was done.
+# Runs a single FRESH claude session for one workflow phase and returns 0 on success.
+# All user-visible messages and Claude's text response go to stderr so the caller can
+# review what was done.  No session is persisted — every invocation starts clean.
 # Runs claude inside a rootless Podman container named orchestrator-<OWNER>.
 invoke_claude() {
-    local prompt="$1" resume_session_id="$2" item_type="${3:-}" item_id="${4:-}" claude_md_content="${5:-}"
-    local tmpfile new_session_id owner_token container_name
+    local prompt="$1" item_type="${2:-}" item_id="${3:-}" claude_md_content="${4:-}"
+    local tmpfile owner_token container_name
 
     local prompt_len=${#prompt}
     if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
@@ -1720,40 +1696,22 @@ invoke_claude() {
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
-    if [ -n "${resume_session_id}" ]; then
-        CLAUDE_RESUMED_AS_FRESH=0
-        local new_tmpfile resume_status=0
-        new_tmpfile=$(run_claude_resumed "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}") \
-            || resume_status=$?
-        if [ "${resume_status}" -ne 0 ]; then
-            rm -f "${tmpfile}"
-            exit "${resume_status}"
-        fi
-        # run_claude_resumed returns a new path only when it restarted as a fresh session.
-        [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
-        [ "${CLAUDE_RESUMED_AS_FRESH}" = "1" ] && resume_session_id=""
-    else
-        run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
-    fi
+    run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
 
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
-        local new_tmpfile
-        new_tmpfile=$(handle_claude_is_error "${tmpfile}" "${resume_session_id}" "${item_type}" "${item_id}") || exit $?
-        # handle_claude_is_error returns a new path only on blocking_limit retry.
-        [ -n "${new_tmpfile}" ] && tmpfile="${new_tmpfile}"
+        handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
     jq -r '.result // ""' "${tmpfile}" >&2
 
-    new_session_id=$(jq -r '.session_id // empty' "${tmpfile}") \
-        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Failed to parse session_id from Claude output"; }
+    # Sanity check that Claude actually produced a JSON result object rather than empty output
+    # or a stream fragment — a fresh run that dies before the final result would otherwise be
+    # treated as a silent success.
+    jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
+        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
-
-    [ -n "${new_session_id}" ] || { rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "No session_id returned by Claude"; }
-    is_valid_session_id "${new_session_id}" \
-        || { rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Unexpected session_id format returned by Claude: ${new_session_id}"; }
 
     rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"
     CLAUDE_MD_TMPFILE=""
@@ -1761,7 +1719,6 @@ invoke_claude() {
     rm -rf "${GPG_PUBKEY_TMPDIR}"
     GPG_PUBKEY_TMPDIR=""
     cleanup_dangling_images
-    printf '%s' "${new_session_id}"
 }
 
 # Returns the path to the rate-limit file for the current owner.
@@ -1882,17 +1839,6 @@ parse_reset_time() {
         reset_unix=$(TZ="${tz}" date -d "tomorrow ${hour24}:${minutes}" +%s 2>/dev/null) || return
     fi
     printf '%s' "${reset_unix}"
-}
-
-save_session() {
-    local item_type="$1" item_id="$2" new_session_id="$3"
-    local session_file
-
-    session_file=$(session_file_path "${item_type}" "${item_id}")
-    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s\n' "${new_session_id}" \
-        > "${session_file}" \
-        || die "Failed to write session file: ${session_file}"
 }
 
 # Returns the path to the fingerprint file for a given PR ID.
@@ -2666,10 +2612,10 @@ main() {
     # so initialising them here (and resetting where needed at the top of each
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
-    local skip_repo is_skipped original_issue_id
+    local skip_repo is_skipped original_issue_id pr_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp saved_issue_fp
-    local ai_instructions container_ai_instructions prompt claude_md_content new_session_id post_fp
+    local ai_instructions container_ai_instructions prompt claude_md_content post_fp
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -2695,6 +2641,9 @@ main() {
         # Explicit reset — the 'local' initialiser above only fires once.
         is_skipped=false
         original_issue_id=""
+        # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
+        # (no external change); consumed when persisting the PR idle counter before invocation.
+        pr_idle_advance=0
         if [ "${item_type}" = "Issue" ]; then
             for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
                 if [ "${skip_repo}" = "${item_repo}" ]; then
@@ -2795,11 +2744,17 @@ COMMENT
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
-                            info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                            count_unchanged=$((count_unchanged + 1))
-                            continue
+                            if pr_should_advance_unchanged "${open_pr}" "${pr_json}"; then
+                                info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
+                                pr_idle_advance=1
+                            else
+                                info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                                count_unchanged=$((count_unchanged + 1))
+                                continue
+                            fi
+                        else
+                            info "Issue #${item_id} in ${item_repo} changed — re-running against PR #${open_pr}"
                         fi
-                        info "Issue #${item_id} in ${item_repo} changed — re-running against PR #${open_pr}"
                     else
                         info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
                     fi
@@ -2897,6 +2852,9 @@ COMMENT
                     info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
                 elif [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
+                elif pr_should_advance_unchanged "${item_id}" "${pr_json}"; then
+                    info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
+                    pr_idle_advance=1
                 else
                     info "PR #${item_id} in ${item_repo} unchanged — skipping"
                     count_unchanged=$((count_unchanged + 1))
@@ -2976,13 +2934,30 @@ COMMENT
             item_title=$(printf '%s' "${pr_json}" | jq -r '.title // empty')
         fi
 
-        load_session "${item_type}" "${item_id}"
-        if [ -n "${SESSION_ID}" ]; then
-            info "Resuming existing session for ${item_type} #${item_id} in ${item_repo}"
-            notify_discord_work_item "resume" "${item_type}" "${item_id}" "${item_title}"
-        else
-            info "No existing session — starting fresh for ${item_type} #${item_id} in ${item_repo}"
-            notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}"
+        # Every run is a fresh single-phase session (no resume): the agent re-derives its
+        # context from GitHub, does one workflow phase, and stops.  The orchestrator re-invokes
+        # on later ticks to advance through the remaining phases.
+        info "Starting fresh single-phase session for ${item_type} #${item_id} in ${item_repo}"
+        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}"
+
+        # Runaway backstop (PRs): cap the total number of agent invocations spent on one PR so a
+        # non-converging PR cannot loop forever.  Absence of the guard file also tells us this is
+        # the first time we have ever worked this PR (used to initialise the board below).
+        local pr_first_touch="false"
+        if [ "${item_type}" = "PullRequest" ]; then
+            [ -f "$(pr_invocation_guard_file_path "${item_id}")" ] || pr_first_touch="true"
+            load_pr_invocation_counts "${item_id}"
+            if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
+                warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
+                gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate.
+COMMENT
+                )" 2>/dev/null || true
+                gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                notify_discord_blocked_item "PullRequest" "${item_id}"
+                count_blocked=$((count_blocked + 1))
+                continue
+            fi
         fi
 
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
@@ -3007,15 +2982,26 @@ COMMENT
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        [ -n "${SESSION_ID}" ] || update_workflow_status "${item_type}" "${item_id}" "Not Started"
+        # Initialise the board to "Not Started" only on the first-ever touch of the item, so
+        # re-invocations never clobber a phase the agent has already advanced the board to.
+        # Also record this invocation against the PR budgets: always bump the total; bump the
+        # idle counter only when this run is a no-external-change phase advance, and reset it to
+        # 0 otherwise (a push, a new comment, or CI change is real progress).
+        if [ "${item_type}" = "PullRequest" ]; then
+            [ "${pr_first_touch}" = "true" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
+            local pr_new_idle=0
+            [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+            save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
+        elif [ "${item_type}" = "Issue" ] && [ -z "$(load_issue_fingerprint "${item_id}")" ]; then
+            update_workflow_status "${item_type}" "${item_id}" "Not Started"
+        fi
 
-        new_session_id=$(invoke_claude "${prompt}" "${SESSION_ID}" "${item_type}" "${item_id}" "${claude_md_content}")
+        invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"
         invoke_claude_exit=$?
         git -C "${REPO_WORK_DIR}" clean -fdX
         [ "${invoke_claude_exit}" -eq 0 ] || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
 
-        save_session "${item_type}" "${item_id}" "${new_session_id}"
-        success "Session ${new_session_id} saved for ${item_type} #${item_id} in ${item_repo}"
+        success "Completed one workflow phase for ${item_type} #${item_id} in ${item_repo}"
 
         if [ "${item_type}" = "PullRequest" ]; then
             post_fp=$(compute_pr_fingerprint "${item_id}") \

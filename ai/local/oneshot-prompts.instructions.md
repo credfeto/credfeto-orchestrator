@@ -5,15 +5,32 @@
 
 > Load when: working on the `oneshot` script, or when considering whether to add new guidance for the orchestrator agent.
 
-## Prompt Size Limits
+## Prompt Size Limits and Context Overflow
 
-Claude Code enforces a hard context limit (`terminal_reason=blocking_limit`). The `oneshot` script defends against this in two ways:
+Claude Code enforces a hard context limit (`terminal_reason=blocking_limit`, surfaced as
+"Prompt is too long"). This is NOT about the launch prompt — that is tiny — it is the whole
+conversation (system prompt + generated CLAUDE.md + every tool result over many turns)
+exceeding the model context window. The `oneshot` script is structured to prevent it:
 
-1. **`MAX_PROMPT_CHARS=100000`** — a pre-send guard in `invoke_claude` that rejects the initial prompt if it exceeds 100 000 characters. In practice the generated prompts are well under 2 KB; this catches pathological cases only.
+1. **One phase per invocation (the real fix)** — every run is a FRESH session (there is no
+   `--resume`). The generated CLAUDE.md instructs the agent to do exactly ONE workflow phase
+   (setup / fix / a single `/code-review` round / a single `/security-review` round / finalize)
+   and then STOP. Because a fresh session only ever holds one phase's worth of tool output, it
+   cannot accumulate the 100+ turns that used to overflow the window. The orchestrator re-invokes
+   the item on later ticks to advance through the remaining phases; all state that carries
+   between phases lives in GitHub (branch, commits, PR comments, labels, Workflow board).
 
-2. **Automatic session reset** — when a resumed session hits `blocking_limit` (the common failure mode, caused by accumulated conversation history), `invoke_claude` retries without `--resume`. The new session ID overwrites the stored one, breaking any stuck loop.
+2. **`MAX_PROMPT_CHARS=100000`** — a pre-send sanity guard in `invoke_claude` that rejects the
+   launch prompt if it somehow exceeds 100 000 characters. Generated prompts are well under 2 KB;
+   this catches pathological cases only and is not the overflow defence.
 
-The `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` environment variable can raise the limit at runtime if needed.
+3. **Runaway/idle guards** — a per-PR `<total> <idle>` invocation-guard file bounds re-invocation:
+   `MAX_PR_TOTAL_INVOCATIONS` (default 30) marks a non-converging PR Blocked; `MAX_PR_IDLE_INVOCATIONS`
+   (default 5) parks a PR whose fingerprint stops changing. See `debugging.instructions.md` §5.
+
+If a fresh single-phase session still hits `blocking_limit`, one phase is genuinely too large to
+fit — a human must split the work (the `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE` environment variable
+can raise the limit at runtime as a stopgap).
 
 ## Where New Agent Rules Belong
 
