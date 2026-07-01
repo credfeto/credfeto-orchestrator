@@ -202,6 +202,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot only sends a blocked-item Discord notification on the transition into the blocked state (and re-arms when un-blocked), instead of re-notifying on every run
 - fetch_board_approved_items now paginates through all board items using cursor-based pagination so issues beyond position 100 are no longer silently missed; fieldValues limit raised from 10 to 50 to avoid truncating items with many custom fields
 - fix: Update the issue for raising unparsable rte limits so that it does not create one each run
+- Clear stale _WF_CREATION_FAILED flag when the Workflow-project cache-hit path restores a previously discovered repo, preventing a spurious missing-project issue from being filed
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

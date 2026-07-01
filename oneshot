@@ -506,11 +506,13 @@ discover_or_create_workflow_project() {
         _WF_STATUS_FIELD_ID="${_WF_CACHE["${REPO_FULL}:field_id"]}"
         unset _WF_OPTION_IDS
         declare -gA _WF_OPTION_IDS
-        while IFS='|' read -r opt_name opt_id; do
-            if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
-            _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
-        done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opts"]}")
+        local opt_name
+        while IFS= read -r opt_name; do
+            [ -z "${opt_name}" ] && continue
+            _WF_OPTION_IDS["${opt_name}"]="${_WF_CACHE["${REPO_FULL}:opt:${opt_name}"]}"
+        done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opt_names"]}")
         _WF_CACHED_REPO="${REPO_FULL}"
+        _WF_CREATION_FAILED=""
         return 0
     fi
 
@@ -586,11 +588,12 @@ discover_or_create_workflow_project() {
 
     local cached_opts="" k
     for k in "${!_WF_OPTION_IDS[@]}"; do
-        cached_opts+="${k}|${_WF_OPTION_IDS[${k}]}"$'\n'
+        _WF_CACHE["${REPO_FULL}:opt:${k}"]="${_WF_OPTION_IDS[${k}]}"
+        cached_opts+="${k}"$'\n'
     done
     _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
     _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
-    _WF_CACHE["${REPO_FULL}:opts"]="${cached_opts}"
+    _WF_CACHE["${REPO_FULL}:opt_names"]="${cached_opts}"
     _WF_CACHE["${REPO_FULL}:discovered"]="1"
 
     _WF_CACHED_REPO="${REPO_FULL}"
