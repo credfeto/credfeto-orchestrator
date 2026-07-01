@@ -4639,6 +4639,98 @@ STUBEOF
     [[ "${output}" == *"WF_COMPLETE=opt8"* ]]
 }
 
+# --- project_cache_file_path / load_project_cache / save_project_cache / --------------
+# --- invalidate_project_cache unit tests ------------------------------------------------
+
+@test "project_cache_file_path returns a path under SESSION_BASE_DIR" {
+    [ "$(project_cache_file_path)" = "${SESSION_BASE_DIR}/project-cache.json" ]
+}
+
+@test "load_project_cache returns 1 when no cache file exists" {
+    run load_project_cache
+    [ "${status}" -eq 1 ]
+}
+
+@test "load_project_cache returns 1 and does not populate globals for a stale (TTL-expired) entry" {
+    local stale_at=$(( $(date +%s) - 7200 ))
+    jq -n --arg repo "${REPO_FULL}" --argjson cached_at "${stale_at}" \
+        '{repo: $repo, project_id: "PVT_stale", status_field_id: "PVTSSF_stale", option_ids: {"Planning":"oid1"}, cached_at: $cached_at}' \
+        > "$(project_cache_file_path)"
+    PROJECT_CACHE_TTL=3600
+    run load_project_cache
+    [ "${status}" -eq 1 ]
+}
+
+@test "load_project_cache returns 1 for a cache file belonging to a different repo" {
+    jq -n --argjson cached_at "$(date +%s)" \
+        '{repo: "other/repo", project_id: "PVT_other", status_field_id: "PVTSSF_other", option_ids: {}, cached_at: $cached_at}' \
+        > "$(project_cache_file_path)"
+    run load_project_cache
+    [ "${status}" -eq 1 ]
+}
+
+@test "load_project_cache populates _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS/_WF_CACHED_REPO on a fresh hit" {
+    jq -n --arg repo "${REPO_FULL}" --argjson cached_at "$(date +%s)" \
+        '{repo: $repo, project_id: "PVT_hit", status_field_id: "PVTSSF_hit", option_ids: {"Planning":"oid1","Development":"oid2"}, cached_at: $cached_at}' \
+        > "$(project_cache_file_path)"
+    run load_project_cache
+    [ "${status}" -eq 0 ]
+    load_project_cache
+    [ "${_WF_PROJECT_ID}" = "PVT_hit" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_hit" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+    [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]
+}
+
+@test "save_project_cache writes a JSON file readable by load_project_cache" {
+    _WF_PROJECT_ID="PVT_saved"
+    _WF_STATUS_FIELD_ID="PVTSSF_saved"
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+    _WF_OPTION_IDS["Planning"]="oid1"
+    _WF_OPTION_IDS["Development"]="oid2"
+    save_project_cache
+    [ -f "$(project_cache_file_path)" ]
+    run jq -r '.repo' "$(project_cache_file_path)"
+    [ "${output}" = "${REPO_FULL}" ]
+    run jq -r '.project_id' "$(project_cache_file_path)"
+    [ "${output}" = "PVT_saved" ]
+
+    _WF_PROJECT_ID=""
+    _WF_STATUS_FIELD_ID=""
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+    load_project_cache
+    [ "${_WF_PROJECT_ID}" = "PVT_saved" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_saved" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+}
+
+@test "invalidate_project_cache removes the disk cache file and clears in-memory globals" {
+    _WF_PROJECT_ID="PVT_saved"
+    _WF_STATUS_FIELD_ID="PVTSSF_saved"
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+    _WF_OPTION_IDS["Planning"]="oid1"
+    save_project_cache
+    _WF_CACHE["${REPO_FULL}:discovered"]="1"
+    _WF_CACHE["${REPO_FULL}:project_id"]="PVT_saved"
+    _WF_CACHE["${REPO_FULL}:field_id"]="PVTSSF_saved"
+    _WF_CACHE["${REPO_FULL}:opt_names"]="Planning"$'\n'
+    _WF_CACHE["${REPO_FULL}:opt:Planning"]="oid1"
+    _WF_CACHED_REPO="${REPO_FULL}"
+
+    invalidate_project_cache
+
+    [ ! -f "$(project_cache_file_path)" ]
+    [ -z "${_WF_CACHE["${REPO_FULL}:discovered"]:-}" ]
+    [ -z "${_WF_CACHE["${REPO_FULL}:project_id"]:-}" ]
+    [ -z "${_WF_CACHED_REPO}" ]
+    [ -z "${_WF_PROJECT_ID}" ]
+}
+
 # --- discover_or_create_workflow_project unit tests ---------------------------
 
 @test "discover_or_create_workflow_project leaves _WF_PROJECT_ID empty when gh graphql fails" {
@@ -4692,6 +4784,37 @@ STUBEOF
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_f1" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+}
+
+@test "discover_or_create_workflow_project persists a disk cache file after live discovery" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '%s\n' '${project_json}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ -f "$(project_cache_file_path)" ]
+    run jq -r '.project_id' "$(project_cache_file_path)"
+    [ "${output}" = "PVT_found" ]
+    run jq -r '.repo' "$(project_cache_file_path)"
+    [ "${output}" = "${REPO_FULL}" ]
+}
+
+@test "discover_or_create_workflow_project reads from disk cache without invoking gh when in-memory cache is empty" {
+    jq -n --arg repo "${REPO_FULL}" --argjson cached_at "$(date +%s)" \
+        '{repo: $repo, project_id: "PVT_disk", status_field_id: "PVTSSF_disk", option_ids: {"Planning":"oid1"}, cached_at: $cached_at}' \
+        > "$(project_cache_file_path)"
+    make_stub gh 'exit 1'
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_disk" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_disk" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]
 }
 
 @test "discover_or_create_workflow_project returns immediately on second call for same repo when first succeeded" {
@@ -5059,6 +5182,28 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"failed to add Issue #42 to project"* ]]
     [[ "${output}" == *"project not found"* ]]
+}
+
+@test "update_workflow_status invalidates the disk project cache when addProjectV2ItemById fails" {
+    _WF_PROJECT_ID="PVT_proj"
+    _WF_STATUS_FIELD_ID="PVTSSF_field"
+    _WF_OPTION_IDS[Planning]="opt_planning"
+    save_project_cache
+    [ -f "$(project_cache_file_path)" ]
+
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"addProjectV2ItemById"* ]]; then
+    printf 'GraphQL error: project not found\n' >&2
+    exit 1
+fi
+printf 'NODE_abc\n'
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run update_workflow_status "Issue" "42" "Planning"
+    [ "${status}" -eq 0 ]
+    [ ! -f "$(project_cache_file_path)" ]
 }
 
 # --- report_missing_workflow_project --------------------------------------
