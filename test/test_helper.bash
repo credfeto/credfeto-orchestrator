@@ -60,6 +60,7 @@ source_oneshot() {
     source "${REPO_ROOT}/oneshot"
     set_repo_context "credfeto/credfeto-orchestrator"
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
+    export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
 }
 
 # Sources the loop script so its functions are defined without running main.

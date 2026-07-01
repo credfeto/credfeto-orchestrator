@@ -1248,7 +1248,7 @@ STUBEOF
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
 
-@test "invoke_claude mounts .claude directory read-write when claude_md_content is provided" {
+@test "invoke_claude mounts CLAUDE.md read-only as a single file when claude_md_content is provided" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/jq" << 'JQEOF'
@@ -1271,7 +1271,36 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
-    grep -q ':/home/developer/.claude:rw' "${args_log}"
+    grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${args_log}"
+}
+
+@test "invoke_claude mounts the five persistent Claude state subdirectories read-write" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
+    for d in sessions session-env plans cache backups; do
+        grep -qx "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" "${args_log}"
+        [ -d "${CLAUDE_STATE_DIR}/${d}" ]
+    done
 }
 
 @test "invoke_claude dies when claude_md_content is empty" {
@@ -1288,7 +1317,7 @@ STUBEOF
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
-@test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
+@test "invoke_claude cleans up CLAUDE_MD_TMPFILE and CLAUDE_PROMPT_FILE after successful invocation" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/jq" << 'JQEOF'
 #!/usr/bin/env bash
@@ -1309,11 +1338,13 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     CLAUDE_MD_TMPFILE="sentinel"
+    CLAUDE_PROMPT_FILE="sentinel"
     invoke_claude "test prompt" "" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${CLAUDE_MD_TMPFILE}" ]
+    [ -z "${CLAUDE_PROMPT_FILE}" ]
 }
 
-@test "invoke_claude mounts CLAUDE_MD_TMPFILE from XDG_RUNTIME_DIR when set" {
+@test "invoke_claude creates CLAUDE_MD_TMPFILE as a regular file (not a directory) from XDG_RUNTIME_DIR when set" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
@@ -1478,6 +1509,7 @@ STUBEOF
     [ "${RULES_DIR}"     = "${WORK}/myorg/myrepo/rules" ]
     [ "${REPO_WORK_DIR}" = "${WORK}/myorg/myrepo/repo" ]
     [ "${SESSION_BASE_DIR}" = "${HOME}/.orchestrator/myorg/myrepo" ]
+    [ "${CLAUDE_STATE_DIR}" = "${SESSION_BASE_DIR}/claude" ]
 }
 
 @test "set_repo_context is idempotent when called twice with the same repo" {

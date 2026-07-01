@@ -1,0 +1,94 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git -C *)",
+      "Bash(python3 *)",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(ls)",
+      "Bash(git config user.name *)",
+      "Bash(git config user.email *)",
+      "Bash(dotnet tool *)",
+      "Bash(dotnet restore *)",
+      "Bash(dotnet build *)",
+      "Bash(dotnet clean *)",
+      "Bash(dotnet pack *)",
+      "Bash(dotnet publish *)",
+      "Bash(dotnet run *)",
+      "Bash(dotnet test *)",
+      "Bash(dotnet nuget *)",
+      "Bash(dotnet buildcheck *)",
+      "Bash(dotnet buildversion *)",
+      "Bash(dotnet changelog *)",
+      "Bash(dotnet tsqllint *)",
+      "Bash(dotnet cscleanup *)",
+      "Bash(dotnet dotnet-script *)",
+      "Bash(dotnet code-analysis *)",
+      "Bash(dotnet --*)",
+      "Bash(gh api repos/*/releases*)",
+      "Bash(gh auth status*)",
+      "Bash(gh issue *)",
+      "Bash(gh label *)",
+      "Bash(gh pr *)",
+      "Bash(gh run *)",
+      "Bash(npm install *)",
+      "Bash(npm ci *)",
+      "Bash(npm run *)",
+      "Bash(npm test *)",
+      "Bash(npm audit *)",
+      "Bash(npm list *)",
+      "Bash(npx *)",
+      "Bash(bun install *)",
+      "Bash(bun run *)",
+      "Bash(bun test *)",
+      "Bash(bun add *)",
+      "Bash(bun x *)"
+    ],
+    "deny": [
+      "Bash(git config --local *)",
+      "Bash(git config --global *)",
+      "Bash(sudo *)"
+    ]
+  },
+  "advisorModel": "opus",
+  "model": "opusplan",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "block-no-verify"
+          },
+          {
+            "type": "command",
+            "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__github__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "block-no-verify"
+          }
+        ]
+      }
+    ]
+  },
+  "tui": "default",
+  "autoMemoryEnabled": false,
+  "theme": "dark",
+  "agentPushNotifEnabled": false
+}
