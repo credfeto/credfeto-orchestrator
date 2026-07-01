@@ -60,6 +60,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - document GitHub Projects v2 provisioning rules, API correctness, and hasProjectsEnabled prerequisite in ai/local
 - create-project: automatically enable Projects on the repo when hasProjectsEnabled is false so oneshot can discover the board via repository.projectsV2
 - Pre-agentic CI gate: oneshot now waits for CI checks to complete before invoking the agent, and flags PRs as Blocked when checks remain pending past a configurable timeout (CI_CHECK_TIMEOUT_MINUTES, default 60)
+- Link Claude Code skill repos cloned in development-full into ~/.claude/skills so they are actually discoverable, and bake in settings.json, policy-limits.json, and hooks read-only for the developer user
 ### Fixed
 - oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
 - oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments
@@ -214,6 +215,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Defer Workflow-project GraphQL discovery and board-approved-items fetch until after per-item skip checks to avoid redundant API calls for blocked/unchanged items
 - Skip fetch_board_approved_items for PullRequest items — _WF_APPROVED_ITEMS is only consumed for Issues
 - Batch user-node lookups in _wf_invite_trusted_collaborators into a single GraphQL query (N+1 → 2 calls)
+- Mount only individual .claude subfolders (sessions, session-env, plans, cache, backups) so agent state persists across oneshot invocations, instead of mounting and wiping the whole ephemeral .claude directory each run
 ### Deprecated
 ### Removed
 ### Deployment Changes
