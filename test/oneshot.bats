@@ -119,6 +119,21 @@ teardown() {
     [[ "${output}" == *"foreground"* ]]
 }
 
+@test "build_issue_claude_md instructs waiting for slow pre-commit hooks instead of ending the turn" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WAIT for the foreground command to return no matter how long it takes"* ]]
+    [[ "${output}" == *"genuinely hung"* ]]
+}
+
+@test "build_issue_claude_md states the container-vs-GitHub survival rule" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Container-vs-GitHub rule"* ]]
+    [[ "${output}" == *"killed the instant your turn ends"* ]]
+    [[ "${output}" == *"survives independently of this container"* ]]
+}
+
 @test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" ""
     [ "${status}" -eq 0 ]
@@ -173,6 +188,21 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"branch names contain slashes"* ]]
     [[ "${output}" == *"foreground"* ]]
+}
+
+@test "build_pr_claude_md instructs waiting for slow pre-commit hooks instead of ending the turn" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WAIT for the foreground command to return no matter how long it takes"* ]]
+    [[ "${output}" == *"genuinely hung"* ]]
+}
+
+@test "build_pr_claude_md states the container-vs-GitHub survival rule" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Container-vs-GitHub rule"* ]]
+    [[ "${output}" == *"killed the instant your turn ends"* ]]
+    [[ "${output}" == *"survives independently of this container"* ]]
 }
 
 @test "build_pr_claude_md with BEHIND merge state includes rebase notice with branch name and force-with-lease" {

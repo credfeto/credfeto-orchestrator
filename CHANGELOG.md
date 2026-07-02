@@ -205,6 +205,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - fix: Update the issue for raising unparsable rte limits so that it does not create one each run
 - Clear stale _WF_CREATION_FAILED flag when the Workflow-project cache-hit path restores a previously discovered repo, preventing a spurious missing-project issue from being filed
 - Use the real service username instead of systemd's %u specifier in install-timer's pkill ExecStartPre lines — %u resolves to root (the system manager's user) in system services, not the service's User=, so the pre-start ssh-agent/gpg-agent cleanup was always a silent no-op
+- Instruct agent sessions to wait synchronously for slow pre-commit hooks (build+test) instead of ending the turn and expecting to be notified later — under the fresh-session-per-phase design, stopping mid-commit tears down the container, killing the hook before it finishes and leaving the branch stuck in an endless dirty-retry loop.
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
