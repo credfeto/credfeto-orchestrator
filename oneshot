@@ -72,7 +72,7 @@ MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
-CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-240}"
+CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
 [[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=120
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
