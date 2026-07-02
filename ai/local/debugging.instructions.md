@@ -58,16 +58,24 @@ find ~/.orchestrator -name 'rate-limit' -exec echo {} \; -exec cat {} \;
 
 A rate-limit file contains a unix timestamp. Compare against `date +%s` — if the stored value is in the future, the orchestrator will skip all items for that owner until it expires.
 
-### 5 — Session files
+### 5 — PR invocation-guard files
+
+The orchestrator no longer persists Claude session IDs — every run is a fresh single-phase
+session (see `oneshot-prompts.instructions.md`). Instead each PR has an invocation-guard file
+holding two space-separated counters, `<total> <idle>`:
 
 ```bash
-find ~/.orchestrator -name '*.env' | sort
+find ~/.orchestrator -name 'PullRequest_*.invocations' | sort
+find ~/.orchestrator -name 'PullRequest_*.invocations' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
-Each file holds a Claude session ID for one Issue or PullRequest. An invalid, expired, or missing session ID causes `invoke_claude` to fall back to a fresh session (expected) or die (unexpected). Read the file to confirm the format is a valid UUID:
+- `total` — every agent invocation ever spent on the PR. At `MAX_PR_TOTAL_INVOCATIONS` (default 30) the PR is marked Blocked. A PR stuck at a high total that never merges is churning without converging.
+- `idle` — consecutive re-invocations where the PR fingerprint did not change (a phase that advanced the board without pushing). At `MAX_PR_IDLE_INVOCATIONS` (default 5) the PR is parked (skipped) until its state changes. A PR parked here is either done and waiting on a human, or a phase failed to leave a durable trace.
+
+Delete the file to reset both counters (also makes the next run treat the PR as first-touch and re-initialise its board status to "Not Started"):
 
 ```bash
-cat ~/.orchestrator/<owner>/<repo>/Issue_<n>.env
+rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
 ```
 
 ### 6 — Fingerprint files
@@ -142,7 +150,8 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | Item skipped every run despite changes | Fingerprint not updating | Section 6 |
 | All items skipped for an owner | Rate-limit file active | Section 4 |
 | `invoke_claude` dies "container exists" | Previous container not removed | Section 7 |
-| Agent starts from scratch every run | Session file missing or UUID invalid | Section 5 |
+| Agent starts from scratch every run | Expected — every run is a fresh single-phase session (no resume) | Section 5 |
+| PR worked repeatedly then Blocked, or parked mid-workflow | `total`/`idle` invocation-guard caps reached | Section 5 |
 | No Discord notifications | `DISCORD_WEBHOOK` not set in `.env` | Section 9 |
 | Priorities fetch fails | API unreachable or auth issue | Section 10 |
 | `oneshot` running old logic | Repo behind `origin/main` | Section 1 |
