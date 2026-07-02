@@ -299,8 +299,10 @@ RUN set -e; \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-commit is not executable" >&2; exit 1; }; \
     test -x /opt/git-global-hooks/pre-push \
         || { echo "FATAL sanity: /opt/git-global-hooks/pre-push is not executable" >&2; exit 1; }; \
-    command -v run-bats >/dev/null 2>&1 \
-        || { echo "FATAL sanity: run-bats not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
+    for wrapper in run-eslint run-stylelint run-psscriptanalyzer run-bats; do \
+        command -v "$wrapper" >/dev/null 2>&1 \
+            || { echo "FATAL sanity: $wrapper not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
+    done; \
     echo "== Claude Code settings/policy-limits/hooks wiring =="; \
     for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json; do \
         [ "$(stat -c '%U:%G %a' "$f")" = "root:root 444" ] \

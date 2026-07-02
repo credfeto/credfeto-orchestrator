@@ -166,7 +166,24 @@ RUN set -e; \
     rm -rf /tmp/sanity-clone; \
     echo "== all agent build-time checks passed =="
 
+# ---- Developer-user pre-commit wrapper check ---------------------------------
+# The global pre-commit config dispatches these wrappers as `language: system`
+# entries that pre-commit resolves purely via PATH. Verify — as the unprivileged
+# developer user the agent actually runs as — that every wrapper is resolvable,
+# so a mis-wired PATH (e.g. /opt/pre-commit/src/scripts dropped from PATH) fails
+# the build here instead of surfacing as "Executable run-eslint not found" when a
+# commit touches a matching file at runtime. `su` is removed in this stage, so the
+# check runs in a RUN after `USER developer` rather than via `su developer -c`.
+# Keep this wrapper list in sync with the development-full sanity check.
 USER developer
+
+# hadolint ignore=DL3059
+RUN set -e; \
+    for wrapper in run-eslint run-stylelint run-psscriptanalyzer run-bats; do \
+        command -v "$wrapper" >/dev/null 2>&1 \
+            || { echo "FATAL sanity: $wrapper not on PATH for the developer user — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
+    done; \
+    echo "== developer user can resolve pre-commit wrapper scripts =="
 
 WORKDIR /workspace/repo
 
