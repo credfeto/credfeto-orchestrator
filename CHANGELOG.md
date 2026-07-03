@@ -209,6 +209,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container images now fail to build if any pre-commit linter wrapper (run-eslint, run-stylelint, run-psscriptanalyzer, run-bats) is not resolvable on the developer user's PATH, preventing images that break commits with an "Executable run-eslint not found" hook error
 - development-full now runs the pre-commit check-setup health-check at build time (as the developer user) and fails the build if the pre-commit config is invalid or any required linter tool is missing
 - Bumped drifted pinned commit references (dotnet-claude-kit, wshobson/agents, credfeto-global-pre-commit) in the development-full base image so the scheduled build no longer fails when those upstream default branches advance (#1047)
+- development-full's pinned upstream repo clones no longer break the build merely because an upstream default branch advances: pin to a maintainer's tagged release where one is current and compatible (cc-devops-skills), fetch the exact commit directly rather than the moving branch tip where no usable tag exists (dotnet-claude-kit, wshobson/agents), and let credfeto-owned repos track live main HEAD with no pinned-commit assertion (credfeto-global-pre-commit) (#1066)
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
