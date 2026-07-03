@@ -224,6 +224,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - A transient GitHub identity lookup failure while checking a repo for existing PRs no longer aborts the whole orchestrator run — the lookup is retried and, if it still fails, only that one work item is skipped so the rest of the cycle still runs
 - All five build-development-*.yml workflows now set ignore-error=true on their GHA cache-to exporter, so a transient GitHub Actions cache-write contention/quota failure (error writing layer blob: failed to reserve cache) no longer fails the whole build after the image has already been successfully pushed to ghcr.io (#1087)
 - A priorities-API outage or malformed response was previously silently reported as a healthy 'no work items found' run; the fetch is now retried and any ultimate failure now fails the run loudly instead of masquerading as success
+- Blocked-label escalations now verify the label actually landed before posting the explanatory comment, retrying and self-healing by creating the label if missing, and notifying Discord directly on failure — previously a silent label failure caused the same escalation comment to repeat every tick indefinitely, and for CI timeouts silently re-armed a fresh 24-hour wait instead of ever blocking the PR
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
