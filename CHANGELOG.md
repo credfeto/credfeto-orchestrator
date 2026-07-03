@@ -63,6 +63,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Link Claude Code skill repos cloned in development-full into ~/.claude/skills so they are actually discoverable, and bake in settings.json, policy-limits.json, and hooks read-only for the developer user
 - Persist Workflow-project discovery (project/status-field/option IDs) to a disk cache with a configurable TTL (PROJECT_CACHE_TTL, default 3600s) to eliminate redundant per-run GraphQL calls (#298)
 - development-full now clones credfeto/credfeto-ai-skills and links every skill under its ai/skills/ folder into the developer user's read-only ~/.claude/skills, tracking live main HEAD since it is credfeto-owned and its skill set is expected to grow and shrink over time (#1054)
+- Agent container now logs the URL of the Issue or PR it is working on at startup, right after the image-layer provenance dump; oneshot passes it via WORK_ITEM_URL, which entrypoint.sh treats as optional so old-image/new-oneshot and new-image/old-oneshot combinations during the ~30 minute agent image build lag both degrade gracefully (#1056)
 ### Fixed
 - oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
 - oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments

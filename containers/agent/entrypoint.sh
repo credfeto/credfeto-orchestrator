@@ -18,6 +18,12 @@ info "  development-python:  ${IMAGE_SHA_DEVELOPMENT_PYTHON:-unknown}"
 info "  development-full:    ${IMAGE_SHA_DEVELOPMENT_FULL:-unknown}"
 info "  development-agent:   ${IMAGE_SHA_DEVELOPMENT_AGENT:-unknown}"
 
+# WORK_ITEM_URL is set by oneshot when it knows which Issue/PR this invocation
+# is working on. It's optional so this entrypoint stays compatible with older
+# oneshot invocations and with manual/local runs that don't set it — omit the
+# line entirely rather than printing a confusing "unknown".
+[ -n "${WORK_ITEM_URL:-}" ] && info "Working on: ${WORK_ITEM_URL}"
+
 [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || die "CLAUDE_CODE_OAUTH_TOKEN is required but not set"
 [ -n "${GIT_USER_NAME:-}" ]           || die "GIT_USER_NAME is required but not set"
 [ -n "${GIT_USER_EMAIL:-}" ]          || die "GIT_USER_EMAIL is required but not set"
