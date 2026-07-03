@@ -968,6 +968,25 @@ STUBEOF
     grep -qx 'opusplan' "${args_log}"
 }
 
+@test "invoke_claude passes the prompt as a trailing positional argument to claude, not via stdin (#1062)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    # The prompt text must appear as its own argv element (the CLAUDE_PROMPT
+    # trailing entry in PODMAN_CLAUDE_ARGS), not be piped in via stdin.
+    grep -qx -- 'unique-prompt-marker-xyz' "${args_log}"
+}
+
 @test "invoke_claude passes resource limit flags to podman run" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
@@ -1278,7 +1297,7 @@ STUBEOF
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
-@test "invoke_claude cleans up CLAUDE_MD_TMPFILE and CLAUDE_PROMPT_FILE after successful invocation" {
+@test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/jq" << 'JQEOF'
 #!/usr/bin/env bash
@@ -1299,10 +1318,8 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     CLAUDE_MD_TMPFILE="sentinel"
-    CLAUDE_PROMPT_FILE="sentinel"
     invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${CLAUDE_MD_TMPFILE}" ]
-    [ -z "${CLAUDE_PROMPT_FILE}" ]
 }
 
 @test "invoke_claude creates CLAUDE_MD_TMPFILE as a regular file (not a directory) from XDG_RUNTIME_DIR when set" {

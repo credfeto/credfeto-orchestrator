@@ -1357,15 +1357,18 @@ run_claude_fresh() {
     local stderrfile podman_exit=0
     stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for podman stderr"
     [ -n "${CLAUDE_PROMPT}" ] || die "Prompt is empty — refusing to start container"
-    [ -s "${CLAUDE_PROMPT_FILE}" ] || die "Prompt file is missing or empty — refusing to start container"
     validate_bind_mounts
     info "Starting new Claude session in container ${PODMAN_CONTAINER_NAME}..." >&2
+    # The prompt is passed as a positional argument in PODMAN_CLAUDE_ARGS, not via
+    # stdin, so stdin is redirected from /dev/null explicitly rather than left to
+    # inherit whatever this process happens to have — closing off the host<->
+    # container stdin-attach race that caused #281, #288, and #1062.
     # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
     # intentionally unprivileged.
     # shellcheck disable=SC2024
     timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
         podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" \
-        < "${CLAUDE_PROMPT_FILE}" > "${tmpfile}" 2>"${stderrfile}" \
+        < /dev/null > "${tmpfile}" 2>"${stderrfile}" \
     || podman_exit=$?
     if [ "${podman_exit}" -ne 0 ]; then
         if [ "${podman_exit}" -eq 124 ]; then
@@ -1399,7 +1402,6 @@ run_claude_fresh() {
 # Invocation-scoped globals shared with the podman helpers below and cleaned up on EXIT.
 CLAUDE_MD_TMPFILE=""
 CLAUDE_PROMPT=""
-CLAUDE_PROMPT_FILE=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
 GH_ENTERPRISE_SECRET_NAME=""
@@ -1672,20 +1674,18 @@ invoke_claude() {
     #     they persist across invocations instead of being wiped every run.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
-    # Write the prompt to its own file (unrelated to the .claude mounts above) so
-    # run_claude_fresh/resumed can redirect stdin from it. Using a file avoids any
-    # pipe-timing races where printf closes the write end before the container
-    # process reads from it. Only ever read by podman on the host side, so it does
-    # not need to be mounted into the container at all.
+    # The prompt travels as a trailing positional argument to claude (see
+    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
+    # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
+    # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
+    # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
-    CLAUDE_PROMPT_FILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.prompt) || die "Failed to create temp file for prompt"
-    printf '%s' "${prompt}" > "${CLAUDE_PROMPT_FILE}"
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
-    trap 'rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
+    trap 'rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -1752,6 +1752,7 @@ invoke_claude() {
         --output-format json
         --dangerously-skip-permissions
         --add-dir "${CONTAINER_REPO_PATH}"
+        "${CLAUDE_PROMPT}"
     )
 
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
@@ -1770,12 +1771,11 @@ invoke_claude() {
     # or a stream fragment — a fresh run that dies before the final result would otherwise be
     # treated as a silent success.
     jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"; CLAUDE_MD_TMPFILE=""; CLAUDE_PROMPT_FILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Claude did not return a result object"; }
+        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 
-    rm -f "${CLAUDE_MD_TMPFILE}" "${CLAUDE_PROMPT_FILE}"
+    rm -f "${CLAUDE_MD_TMPFILE}"
     CLAUDE_MD_TMPFILE=""
-    CLAUDE_PROMPT_FILE=""
     rm -rf "${GPG_PUBKEY_TMPDIR}"
     GPG_PUBKEY_TMPDIR=""
     cleanup_dangling_images
