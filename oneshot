@@ -1215,14 +1215,17 @@ Steps:
 2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
    gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
 3. Check CI: gh pr checks ${item_id} --repo ${REPO_FULL}
-   - If auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true): stop — nothing more to do.
-   - If ALL required checks have passed: enable auto-merge and stop:
+   Evaluate in this order — auto-merge being enabled does NOT mean there is nothing to do; it
+   only means GitHub will merge automatically once every required check has actually passed, so
+   a FAILED required check always takes priority over "auto-merge is enabled" below:
+   - If any required check has FAILED: post a comment on the PR explaining which check failed and why, then add the Blocked label and stop:
+     gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
+   - Else if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true): stop — nothing more to do.
+   - Else if ALL required checks have passed: enable auto-merge and stop:
      gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
      If that command fails (auto-merge not supported), mark the PR as ready instead:
      gh pr ready ${item_id} --repo ${REPO_FULL}
-   - If any required check has FAILED: post a comment on the PR explaining which check failed and why, then add the Blocked label and stop:
-     gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-   - If checks are still PENDING: stop without taking action — the next cycle will re-evaluate.
+   - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
 4. All interaction with humans must be made as a comment to the pull request. Do NOT open issues.
 EOF
     else
