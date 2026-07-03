@@ -9,6 +9,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ---- Build-time arguments ----------------------------------------------------
 ARG DOTNET_TOOLS_CACHE_BUST
 ARG CREDFETO_PRECOMMIT_CACHE_BUST
+ARG CREDFETO_AI_SKILLS_CACHE_BUST
 ARG PRECOMMIT_UPSTREAM=https://github.com/credfeto/credfeto-global-pre-commit.git
 ARG MARKDOWN_LINTER_FIXER_REF=v1.5.4
 ARG CC_DEVOPS_SKILLS_REF=v1.0.0
@@ -174,6 +175,17 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
     && test "$(git -C /opt/markdown-linter-fixer rev-parse HEAD)" = "${MARKDOWN_LINTER_FIXER_COMMIT}" \
     && chown -R root:root /opt/markdown-linter-fixer
 
+# ---- credfeto/credfeto-ai-skills (Claude Code skill definitions) ------------
+# credfeto-owned, so — like credfeto-global-pre-commit — this always tracks
+# live main HEAD with no pinned-commit assertion. Unlike the pinned
+# third-party sources above, the skill set here is explicitly expected to
+# grow and shrink over time, so it is not counted against a fixed number.
+# hadolint ignore=DL3059
+RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
+    git clone --depth 1 https://github.com/credfeto/credfeto-ai-skills.git /opt/credfeto-ai-skills \
+    && test -d /opt/credfeto-ai-skills/ai/skills \
+    && chown -R root:root /opt/credfeto-ai-skills
+
 # ---- Link cloned skill repos into ~/.claude/skills --------------------------
 # Claude Code discovers "personal" skills as immediate subdirectories of
 # ~/.claude/skills/, each containing a SKILL.md. The repos above are cloned to
@@ -183,7 +195,11 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
 # non-writable by developer even though the symlink itself is created under
 # ~/.claude. Driven by `find -maxdepth 1` over each repo's skills/ subtree
 # (rather than a hardcoded name list) so newly added upstream skills are
-# picked up automatically as long as they still land under a skills/ folder.
+# picked up automatically as long as they still land under a skills/ folder —
+# credfeto-ai-skills in particular is expected to gain/lose skills over time.
+# The resulting count is recorded to /opt/.claude-skill-count (rather than
+# hardcoded in the sanity check below) so the check stays correct as any
+# source's skill set changes, while still catching a broken symlink pass.
 # hadolint ignore=DL3059
 RUN mkdir -p /home/developer/.claude/skills \
     && chown root:root /home/developer/.claude \
@@ -194,7 +210,8 @@ RUN mkdir -p /home/developer/.claude/skills \
         /opt/wshobson-agents/plugins/python-development/skills \
         /opt/wshobson-agents/plugins/shell-scripting/skills \
         /opt/cc-devops-skills/devops-skills-plugin/skills \
-        /opt/markdown-linter-fixer/skills; do \
+        /opt/markdown-linter-fixer/skills \
+        /opt/credfeto-ai-skills/ai/skills; do \
         test -d "${skills_root}" || { echo "FATAL: skills root ${skills_root} is missing" >&2; exit 1; }; \
         find "${skills_root}" -mindepth 1 -maxdepth 1 -type d -print0 \
             | while IFS= read -r -d '' skill_dir; do \
@@ -205,7 +222,9 @@ RUN mkdir -p /home/developer/.claude/skills \
                 ln -s "${skill_dir}" "${target}"; \
               done; \
     done \
-    && chown -R root:root /home/developer/.claude/skills
+    && find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-skill-count \
+    && chown -R root:root /home/developer/.claude/skills /opt/.claude-skill-count \
+    && chmod 0444 /opt/.claude-skill-count
 
 # ---- Bake in Claude Code settings, policy-limits, and hooks -----------------
 # Copied from the operator's ~/.claude/{settings.json,policy-limits.json,hooks/}
@@ -336,9 +355,10 @@ RUN set -e; \
         || { echo "FATAL sanity: enforce-git-dash-c hook is not executable" >&2; exit 1; }; \
     echo "== Claude Code skills wiring =="; \
     skill_count=$(find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l); \
-    [ "$skill_count" -eq 100 ] \
-        || { echo "FATAL sanity: expected 100 skill symlinks in ~/.claude/skills, found $skill_count" >&2; exit 1; }; \
-    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator; do \
+    expected_skill_count=$(cat /opt/.claude-skill-count); \
+    [ "$skill_count" -eq "$expected_skill_count" ] && [ "$skill_count" -gt 0 ] \
+        || { echo "FATAL sanity: expected $expected_skill_count skill symlinks in ~/.claude/skills (recorded at build time), found $skill_count" >&2; exit 1; }; \
+    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator git-commit; do \
         test -f "/home/developer/.claude/skills/${skill}/SKILL.md" \
             || { echo "FATAL sanity: skill '$skill' missing or has no SKILL.md" >&2; exit 1; }; \
     done; \

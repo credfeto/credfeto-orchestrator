@@ -125,7 +125,23 @@ Never clone an external repo with a plain `git clone --depth 1 <url>` and then a
 
   This only fails the build if that commit becomes unreachable upstream (a force-push/history rewrite) — verified: `git fetch <url> <bogus-sha>` fails hard (`fatal: remote error: upload-pack: not our ref ...`, exit 128), so the tamper-detection property is preserved. For a sparse-checkout repo, run `git sparse-checkout init --cone` before the `fetch` and `sparse-checkout set <paths>` before the `checkout`.
 
-- **credfeto-owned repo**: implicitly trusted — always track live main HEAD with no pinned-commit assertion at all (plain `git clone --depth 1 <url>`, no `test`). Still cache-bust on a live-resolved value (e.g. `git ls-remote <url> HEAD` in the workflow) so the layer refreshes when upstream changes — see `credfeto-global-pre-commit` in `containers/base/development-full/Dockerfile`.
+- **credfeto-owned repo**: implicitly trusted — always track live main HEAD with no pinned-commit assertion at all (plain `git clone --depth 1 <url>`, no `test`). Still cache-bust on a live-resolved value (e.g. `git ls-remote <url> HEAD` in the workflow) so the layer refreshes when upstream changes — see `credfeto-global-pre-commit` and `credfeto-ai-skills` in `containers/base/development-full/Dockerfile`.
+
+### Sanity-checking a dynamic set (e.g. skills)
+
+Do not hardcode an exact expected count (`[ "$n" -eq 100 ]`) for anything sourced even partly from a live-tracked or otherwise-growing repo — it silently goes stale and starts failing (or worse, stops meaning anything) the next time that source changes. Instead, record the count computed at the point the set is built, and compare against that recorded value later, with a `-gt 0` guard so a degenerate build that produces zero of everything doesn't trivially "match":
+
+```dockerfile
+RUN ...build the set... \
+    && find /some/dir -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.some-count \
+    && chown -R root:root /some/dir /opt/.some-count && chmod 0444 /opt/.some-count
+# ...later, in the sanity check...
+RUN actual=$(find /some/dir -mindepth 1 -maxdepth 1 -type l | wc -l); \
+    expected=$(cat /opt/.some-count); \
+    [ "$actual" -eq "$expected" ] && [ "$actual" -gt 0 ] || { echo "FATAL: ..." >&2; exit 1; }
+```
+
+See the `~/.claude/skills` symlink count in `containers/base/development-full/Dockerfile`.
 
 ## Workflow Build Chain
 
