@@ -75,6 +75,15 @@ MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
 [[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=120
 
+# How many times to retry the `gh api user` identity lookup, and how long to wait between
+# attempts, before giving up. The lookup is cheap and cached for the rest of the run once it
+# succeeds, so a transient blip should not sacrifice a whole cycle (#1085). Overridable from the
+# environment (tests set the delay to 0 to keep the suite fast).
+GH_USER_RETRY_ATTEMPTS="${GH_USER_RETRY_ATTEMPTS:-3}"
+[[ "${GH_USER_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_USER_RETRY_ATTEMPTS=3
+GH_USER_RETRY_DELAY_SECS="${GH_USER_RETRY_DELAY_SECS:-2}"
+[[ "${GH_USER_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_USER_RETRY_DELAY_SECS=2
+
 # Token window at which the agent's own Claude Code session should auto-compact its context
 # rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
 # container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
@@ -392,19 +401,35 @@ fetch_all_priorities() {
     ]' || die "Failed to parse priorities JSON"
 }
 
+# Resolves the current GitHub login into the cached _GH_ME, retrying a few times on failure.
+# Returns 0 with _GH_ME set on success; on ultimate failure warns and returns 1 WITHOUT dying —
+# a transient identity-lookup blip should skip the current item, not abort the whole run (#1085).
+resolve_gh_me() {
+    [ -n "${_GH_ME}" ] && return 0
+    local attempt=1 login
+    while [ "${attempt}" -le "${GH_USER_RETRY_ATTEMPTS}" ]; do
+        if login=$(gh api user --jq '.login' 2>/dev/null) && [ -n "${login}" ]; then
+            _GH_ME="${login}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_USER_RETRY_ATTEMPTS}" ] && [ "${GH_USER_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_USER_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    warn "Failed to determine current GitHub user after ${GH_USER_RETRY_ATTEMPTS} attempt(s)"
+    return 1
+}
+
 # Queries GitHub for the first open, non-blocked PR authored by @me in the given repo.
 # Outputs the PR number on stdout, or empty string if none found.
 # Returns 1 if the gh call fails (caller should treat as an error).
 # Avoids --author @me because gh 2.93.0 broke that flag (exits 1 with "malformed version:").
 # Instead, fetches all open PRs with their author field and filters client-side using _GH_ME.
-# _GH_ME is resolved lazily on the first call and cached for subsequent calls.
+# _GH_ME is resolved lazily (with retries) on the first call and cached for subsequent calls.
 find_open_nonblocked_pr_for_repo() {
     local repo_full="$1"
 
-    if [ -z "${_GH_ME}" ]; then
-        _GH_ME=$(gh api user --jq '.login' 2>/dev/null) \
-            || die "Failed to determine current GitHub user"
-    fi
+    resolve_gh_me || return 1
 
     local pr_list
     pr_list=$(gh pr list \
@@ -2382,7 +2407,7 @@ notify_discord_work_item() {
 }
 
 # Sends a Discord notification when no actionable work items are found.
-# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open
+# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open, count_error
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 # Suppresses duplicate messages: if the same message was sent within the last hour, it is
 # silently dropped.  A changed message is always sent immediately.  At most one send per hour
@@ -2394,6 +2419,7 @@ notify_discord_no_work() {
     local count_unchanged="${3:-0}"
     local count_active_repo="${4:-0}"
     local count_not_open="${5:-0}"
+    local count_error="${6:-0}"
     local prefix message detail payload
     if [ -n "${owner}" ]; then
         prefix="[${owner}] "
@@ -2406,6 +2432,7 @@ notify_discord_no_work() {
     [ "${count_unchanged}" -gt 0 ]   && detail="${detail:+${detail}, }unchanged: ${count_unchanged}"
     [ "${count_active_repo}" -gt 0 ] && detail="${detail:+${detail}, }repo-active: ${count_active_repo}"
     [ "${count_not_open}" -gt 0 ]    && detail="${detail:+${detail}, }not-open: ${count_not_open}"
+    [ "${count_error}" -gt 0 ]       && detail="${detail:+${detail}, }errors: ${count_error}"
     [ -n "${detail}" ] && message="${message} (${detail})"
 
     # Dedup: suppress if the same message was sent within the last hour.
@@ -2719,6 +2746,7 @@ main() {
     local count_unchanged=0
     local count_active_repo=0
     local count_not_open=0
+    local count_error=0
     local item_index=0
     # Declare all loop-body variables here so they are function-scoped.
     # 'local' inside a while loop is a no-op after the first iteration in bash,
@@ -2778,8 +2806,13 @@ main() {
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open non-blocked PR that we authored?
-            open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}") \
-                || die "Failed to query open PRs for ${item_repo}"
+            # A transient gh failure here (identity lookup or PR list) should skip just this item,
+            # not abort the whole cycle and throw away every other priority item (#1085).
+            if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}"); then
+                warn "Failed to query open PRs for ${item_repo} — skipping this item for now"
+                count_error=$((count_error + 1))
+                continue
+            fi
 
             if [ -n "${open_pr}" ]; then
                 [[ "${open_pr}" =~ ^[0-9]+$ ]] \
@@ -3150,8 +3183,8 @@ COMMENT
         exit 0
     done
 
-    notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}"
-    success "No actionable work items found across all priorities (blocked: ${count_blocked}, unchanged: ${count_unchanged}, repo-active: ${count_active_repo}, not-open: ${count_not_open})"
+    notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}" "${count_error}"
+    success "No actionable work items found across all priorities (blocked: ${count_blocked}, unchanged: ${count_unchanged}, repo-active: ${count_active_repo}, not-open: ${count_not_open}, errors: ${count_error})"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

@@ -1667,6 +1667,55 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# --- resolve_gh_me (#1085) ----------------------------------------------------
+
+@test "resolve_gh_me sets _GH_ME and returns 0 when gh api user succeeds (#1085)" {
+    _GH_ME=""
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'printf "testuser\n"'
+    run resolve_gh_me
+    [ "${status}" -eq 0 ]
+    resolve_gh_me
+    [ "${_GH_ME}" = "testuser" ]
+}
+
+@test "resolve_gh_me short-circuits and returns 0 when _GH_ME is already cached (#1085)" {
+    _GH_ME="cacheduser"
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run resolve_gh_me
+    [ "${status}" -eq 0 ]
+}
+
+@test "resolve_gh_me retries and succeeds after a transient failure (#1085)" {
+    _GH_ME=""
+    GH_USER_RETRY_ATTEMPTS=3
+    GH_USER_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub gh 'n=$(cat "'"${TEST_TMP}"'/ghuser" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/ghuser"; [ "$n" -lt 2 ] && exit 1; printf "testuser\n"'
+    resolve_gh_me
+    [ "${_GH_ME}" = "testuser" ]
+}
+
+@test "resolve_gh_me returns 1 without dying after exhausting retries (#1085)" {
+    _GH_ME=""
+    GH_USER_RETRY_ATTEMPTS=2
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run resolve_gh_me
+    [ "${status}" -ne 0 ]
+    [ -z "${_GH_ME}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns 1 (not fatal) when identity lookup fails (#1085)" {
+    _GH_ME=""
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
 # --- find_ai_instructions (updated behaviour) ---------------------------------
 
 @test "find_ai_instructions returns non-zero (not die) when neither path has .ai-instructions" {
@@ -2086,6 +2135,22 @@ STUBEOF
     [ "${status}" -eq 0 ]
     # Valid repo name accepted — issue processed (then skipped as blocked)
     [[ "${output}" == *"Issue #1 in org/my-repo is blocked"* ]]
+}
+
+@test "main skips an Issue and does not die when the PR lookup fails transiently (#1085)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/my-repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { return 1; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    # A transient PR-lookup failure must skip the item, not abort the run.
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Failed to query open PRs for org/my-repo — skipping"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
 @test "main accepts a repo name starting with underscore from priorities API" {
