@@ -90,6 +90,7 @@ teardown() {
     local tmr="${TEST_TMP}/units/credfeto-orchestrator-testuser.timer"
 
     [ -f "${svc}" ]
+    grep -q "TimeoutStartSec=6300" "${svc}"
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
@@ -97,9 +98,9 @@ teardown() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
-    grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -q "ExecStartPre=-/usr/bin/pkill -u testuser ssh-agent" "${svc}"
+    grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
+    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
@@ -139,6 +140,17 @@ teardown() {
     grep -q "MemoryDenyWriteExecute=no" "${svc}"
 }
 
+@test "install-timer respects ORCHESTRATOR_TIMEOUT_START_SEC override (#1098)" {
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+    ORCHESTRATOR_TIMEOUT_START_SEC=1234
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    grep -q "TimeoutStartSec=1234" "${svc}"
+}
+
 @test "install-timer --owner creates owner-scoped unit files with --owner in ExecStart" {
     run main --owner myorg
     [ "${status}" -eq 0 ]
@@ -147,6 +159,7 @@ teardown() {
     local tmr="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.timer"
 
     [ -f "${svc}" ]
+    grep -q "TimeoutStartSec=6300" "${svc}"
     grep -q "User=testuser" "${svc}"
     grep -q "RuntimeDirectory=credfeto-orchestrator-testuser-myorg" "${svc}"
     grep -q "RuntimeDirectoryMode=0700" "${svc}"
@@ -154,9 +167,9 @@ teardown() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
-    grep -qE "ExecStartPre=.*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=.*/git -C .* merge --ff-only origin/main$" "${svc}"
-    grep -q "ExecStartPre=-/usr/bin/pkill -u testuser ssh-agent" "${svc}"
+    grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
+    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket$" "${svc}"
     grep -qE "ExecStartPre=.*/gpgconf --launch gpg-agent$" "${svc}"
