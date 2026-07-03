@@ -266,6 +266,14 @@ teardown() {
     [[ "${output}" == *"stop without taking action"* ]]
 }
 
+@test "build_pr_claude_md for dependency PR checks for a failed required check before treating auto-merge-enabled as done" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    local before_failed="${output%%If any required check has FAILED*}"
+    local before_automerge="${output%%Else if auto-merge is already enabled*}"
+    [ "${#before_failed}" -lt "${#before_automerge}" ]
+}
+
 @test "build_pr_claude_md for dependency PR skips rebase steps even when merge state is BEHIND" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch" "" "" "true"
     [ "${status}" -eq 0 ]
