@@ -634,6 +634,32 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_is_terminal is false when auto-merge is enabled but reviewDecision is CHANGES_REQUESTED (#1083)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"CHANGES_REQUESTED"}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal is true when auto-merge is enabled and reviewDecision is APPROVED or absent (#1083)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}'
+    [ "${status}" -eq 0 ]
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_unaddressed_review_request is true for reviewDecision CHANGES_REQUESTED (#1083)" {
+    run pr_json_has_unaddressed_review_request '{"reviewDecision":"CHANGES_REQUESTED"}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_unaddressed_review_request is false for reviewDecision APPROVED, REVIEW_REQUIRED, or absent (#1083)" {
+    run pr_json_has_unaddressed_review_request '{"reviewDecision":"APPROVED"}'
+    [ "${status}" -ne 0 ]
+    run pr_json_has_unaddressed_review_request '{"reviewDecision":"REVIEW_REQUIRED"}'
+    [ "${status}" -ne 0 ]
+    run pr_json_has_unaddressed_review_request '{}'
+    [ "${status}" -ne 0 ]
+}
+
 @test "pr_json_has_failed_required_check is true for a required CheckRun with conclusion FAILURE" {
     run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
     [ "${status}" -eq 0 ]
@@ -5614,6 +5640,27 @@ STUBEOF
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main blocks unchanged PR with idle budget exhausted and an unaddressed review request in direct-PR path (#1083)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"

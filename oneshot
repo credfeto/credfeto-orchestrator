@@ -474,6 +474,7 @@ pr_json_is_terminal() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '
         .autoMergeRequest != null
+        and .reviewDecision != "CHANGES_REQUESTED"
         and (
             (.statusCheckRollup // [])
             | all(.[];
@@ -521,6 +522,27 @@ block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
+COMMENT
+    )" 2>/dev/null || true
+    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+}
+
+# Returns 0 (true) if GitHub's own review-decision aggregate is CHANGES_REQUESTED — a reviewer
+# has asked for changes and not yet re-approved or dismissed. GitHub does not clear this on a new
+# push, so it stays true until a human is satisfied — exactly the signal needed to keep driving a
+# PR that already has auto-merge enabled (which otherwise makes pr_json_is_terminal stop early).
+pr_json_has_unaddressed_review_request() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.reviewDecision == "CHANGES_REQUESTED"' > /dev/null 2>&1
+}
+
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
+# while a reviewer's requested changes are still outstanding, so a human is pulled in instead of
+# the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
+block_pr_for_idle_exhausted_review() {
+    local item_id="$1" item_repo="$2"
+    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
 COMMENT
     )" 2>/dev/null || true
     gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
@@ -1927,7 +1949,7 @@ fetch_pr_json() {
     local item_id="$1"
     gh pr view "${item_id}" \
         --repo "${REPO_FULL}" \
-        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
+        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
         2>/dev/null || return 1
 }
 
@@ -2840,6 +2862,9 @@ COMMENT
                                 if pr_json_has_failed_required_check "${pr_json}"; then
                                     info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
                                     block_pr_for_idle_exhausted_failure "${open_pr}" "${item_repo}"
+                                elif pr_json_has_unaddressed_review_request "${pr_json}"; then
+                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
+                                    block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
                                 else
                                     info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
                                 fi
@@ -2953,6 +2978,9 @@ COMMENT
                     if pr_json_has_failed_required_check "${pr_json}"; then
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
                         block_pr_for_idle_exhausted_failure "${item_id}" "${item_repo}"
+                    elif pr_json_has_unaddressed_review_request "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
+                        block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
                     else
                         info "PR #${item_id} in ${item_repo} unchanged — skipping"
                     fi
