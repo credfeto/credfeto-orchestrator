@@ -93,6 +93,15 @@ PRIORITIES_FETCH_RETRY_ATTEMPTS="${PRIORITIES_FETCH_RETRY_ATTEMPTS:-3}"
 PRIORITIES_FETCH_RETRY_DELAY_SECS="${PRIORITIES_FETCH_RETRY_DELAY_SECS:-2}"
 [[ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || PRIORITIES_FETCH_RETRY_DELAY_SECS=2
 
+# Same retry treatment for the per-item gh fetches (fetch_pr_json/fetch_issue_json) called
+# throughout the main loop — a transient blip on any one of these previously died the whole run
+# and threw away every other priority item in the cycle (#1090). Overridable from the environment
+# (tests set the delay to 0 to keep the suite fast).
+GH_ITEM_FETCH_RETRY_ATTEMPTS="${GH_ITEM_FETCH_RETRY_ATTEMPTS:-3}"
+[[ "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+GH_ITEM_FETCH_RETRY_DELAY_SECS="${GH_ITEM_FETCH_RETRY_DELAY_SECS:-2}"
+[[ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_ITEM_FETCH_RETRY_DELAY_SECS=2
+
 # Token window at which the agent's own Claude Code session should auto-compact its context
 # rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
 # container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
@@ -254,15 +263,31 @@ get_trusted_logins() {
     printf '%s' "${_TRUSTED_LOGINS_JSON}"
 }
 
+# Returns 0 on success, 1 on failure (a transient network blip on the rules repo — unrelated to
+# any individual work item — must not die the whole run and throw away every other priority item
+# in the cycle, #1090). A stale or absent rules checkout is handled gracefully downstream by
+# find_ai_instructions, which already has its own "no .ai-instructions found" fallback.
 ensure_rules_current() {
     if [ -d "${RULES_DIR}/.git" ]; then
         info "Updating rules (cs-template) at ${RULES_DIR}..."
-        git -C "${RULES_DIR}" checkout main || die "Failed to switch cs-template to main at ${RULES_DIR}"
-        git -C "${RULES_DIR}" pull --ff-only || die "Failed to update cs-template at ${RULES_DIR}"
+        if ! git -C "${RULES_DIR}" checkout main; then
+            warn "Failed to switch cs-template to main at ${RULES_DIR}"
+            return 1
+        fi
+        if ! git -C "${RULES_DIR}" pull --ff-only; then
+            warn "Failed to update cs-template at ${RULES_DIR}"
+            return 1
+        fi
     else
         info "Cloning rules (cs-template) to ${RULES_DIR}..."
-        mkdir -p "$(dirname "${RULES_DIR}")" || die "Failed to create parent directory for ${RULES_DIR}"
-        git clone git@github.com:credfeto/cs-template.git "${RULES_DIR}" || die "Failed to clone cs-template to ${RULES_DIR}"
+        if ! mkdir -p "$(dirname "${RULES_DIR}")"; then
+            warn "Failed to create parent directory for ${RULES_DIR}"
+            return 1
+        fi
+        if ! git clone git@github.com:credfeto/cs-template.git "${RULES_DIR}"; then
+            warn "Failed to clone cs-template to ${RULES_DIR}"
+            return 1
+        fi
     fi
 }
 
@@ -281,6 +306,10 @@ clean_local_git_url_rewrites() {
         | grep -iE '\.(insteadof|pushinsteadof)$' || true)
 }
 
+# Returns 0 on success. Returns 1 for a dirty/orphaned working tree — the existing "hand off to
+# agent to recover" signal. Returns 2 for a transient git-fetch failure specifically: unlike a
+# dirty tree, there is nothing for the agent to recover from a network blip, so the caller must
+# skip the item entirely rather than burning an agent invocation on stale local state (#1090).
 ensure_repo_current() {
     if [ -d "${REPO_WORK_DIR}/.git" ]; then
         # Reset the remote URL to SSH on every iteration. The agent running inside
@@ -292,7 +321,10 @@ ensure_repo_current() {
         git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
         git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
         info "Fetching latest changes for ${REPO_FULL}..."
-        git -C "${REPO_WORK_DIR}" fetch --prune origin || die "Failed to fetch from origin for ${REPO_FULL}"
+        if ! git -C "${REPO_WORK_DIR}" fetch --prune origin; then
+            warn "Failed to fetch from origin for ${REPO_FULL}"
+            return 2
+        fi
 
         local current_branch
         current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
@@ -1762,12 +1794,30 @@ invoke_claude() {
     container_name="orchestrator-${OWNER}"
 
     if podman inspect "${container_name}" >/dev/null 2>&1; then
-        die "Container ${container_name} already exists — remove it manually before running"
+        # A container left behind by a hard host crash (despite --rm) previously made every
+        # subsequent run die permanently until a human removed it manually (#1090). If it is not
+        # actively running, it is safe to assume it is such a leftover and remove it ourselves;
+        # only die if it is genuinely running, which means something else is actively using it.
+        if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
+            die "Container ${container_name} already exists and is running — remove it manually before running"
+        fi
+        warn "Removing leftover (non-running) container ${container_name} from a previous run"
+        podman rm -f "${container_name}" >&2 \
+            || die "Failed to remove leftover container ${container_name}"
     fi
 
     cleanup_dangling_images
     info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
-    podman pull "${ORCHESTRATOR_IMAGE}" >&2 || die "Failed to pull ${ORCHESTRATOR_IMAGE}"
+    if ! podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
+        # A registry hiccup should not fail the run when a usable cached image already exists
+        # locally — fall back to it instead of dying outright (#1090). Only die if there is truly
+        # no image to run at all.
+        if podman image exists "${ORCHESTRATOR_IMAGE}"; then
+            warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
+        else
+            die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
+        fi
+    fi
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
@@ -2033,13 +2083,24 @@ pr_fingerprint_file_path() {
     printf '%s/PullRequest_%s.fingerprint' "${SESSION_BASE_DIR}" "${item_id}"
 }
 
-# Fetches the PR state JSON used for fingerprinting; returns 1 on gh failure.
+# Fetches the PR state JSON used for fingerprinting. Retries transient gh failures a few times;
+# returns 1 (does not die) once retries are exhausted, so a single blip on this frequently-called
+# fetch skips just the current item rather than killing the whole run (#1090).
 fetch_pr_json() {
-    local item_id="$1"
-    gh pr view "${item_id}" \
-        --repo "${REPO_FULL}" \
-        --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
-        2>/dev/null || return 1
+    local item_id="$1" attempt=1 result
+    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh pr view "${item_id}" \
+            --repo "${REPO_FULL}" \
+            --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
+            2>/dev/null); then
+            printf '%s' "${result}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
 }
 
 # Computes a deterministic fingerprint from pre-fetched PR state JSON.
@@ -2264,12 +2325,23 @@ issue_fingerprint_file_path() {
     printf '%s/Issue_%s.fingerprint' "${SESSION_BASE_DIR}" "${item_id}"
 }
 
-# Fetches the Issue state JSON used for fingerprinting; returns 1 on gh failure.
+# Fetches the Issue state JSON used for fingerprinting. Retries transient gh failures a few
+# times; returns 1 (does not die) once retries are exhausted, so a single blip on this
+# frequently-called fetch skips just the current item rather than killing the whole run (#1090).
 fetch_issue_json() {
-    local item_id="$1"
-    gh issue view "${item_id}" \
-        --repo "${REPO_FULL}" \
-        --json title,body,state,labels,comments,assignees,milestone || return 1
+    local item_id="$1" attempt=1 result
+    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh issue view "${item_id}" \
+            --repo "${REPO_FULL}" \
+            --json title,body,state,labels,comments,assignees,milestone 2>/dev/null); then
+            printf '%s' "${result}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
 }
 
 # Computes a deterministic fingerprint from pre-fetched Issue state JSON.
@@ -2835,6 +2907,7 @@ main() {
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
+    local ensure_repo_current_status
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -2845,14 +2918,26 @@ main() {
         item_type=$(printf '%s' "${item}" | jq -r '.itemType')
         item_priority=$(printf '%s' "${item}" | jq -r '.priority')
 
-        [[ "${item_id}" =~ ^[0-9]+$ ]] \
-            || die "Non-numeric id from priorities API: ${item_id}"
+        # A single malformed entry from the priorities API must not brick every future cycle by
+        # dying on the same bad item every tick (#1090) — warn and skip just this one instead.
+        if [[ ! "${item_id}" =~ ^[0-9]+$ ]]; then
+            warn "Non-numeric id from priorities API: ${item_id} — skipping this item"
+            count_error=$((count_error + 1))
+            continue
+        fi
         case "${item_type}" in
             Issue|PullRequest) ;;
-            *) die "Unexpected itemType from priorities API: ${item_type}" ;;
+            *)
+                warn "Unexpected itemType from priorities API: ${item_type} — skipping this item"
+                count_error=$((count_error + 1))
+                continue
+                ;;
         esac
-        [[ "${item_repo}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]] \
-            || die "Malformed repository from priorities API: ${item_repo}"
+        if [[ ! "${item_repo}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*/[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]]; then
+            warn "Malformed repository from priorities API: ${item_repo} — skipping this item"
+            count_error=$((count_error + 1))
+            continue
+        fi
 
         # Skip Issue items in repos that already have an active (non-blocked) PR.
         # PullRequests are always evaluated regardless of skip_repos — the guard
@@ -2893,13 +2978,21 @@ main() {
             fi
 
             if [ -n "${open_pr}" ]; then
-                [[ "${open_pr}" =~ ^[0-9]+$ ]] \
-                    || die "Non-numeric open PR number from GitHub: ${open_pr}"
+                if [[ ! "${open_pr}" =~ ^[0-9]+$ ]]; then
+                    warn "Non-numeric open PR number from GitHub: ${open_pr} — skipping this item"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
 
                 # Before pivoting to the PR workflow, verify the issue is still open and
                 # unblocked — a PR can outlive its issue if the issue was closed as not planned.
-                issue_json=$(fetch_issue_json "${item_id}") \
-                    || die "Failed to fetch state for Issue #${item_id} in ${item_repo}"
+                # A transient fetch failure here skips just this item rather than the whole
+                # run (#1090) — fetch_issue_json already retries before giving up.
+                if ! issue_json=$(fetch_issue_json "${item_id}"); then
+                    warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
                     info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
@@ -2918,8 +3011,11 @@ main() {
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
-                pr_json=$(fetch_pr_json "${open_pr}") \
-                    || die "Failed to fetch state for PR #${open_pr} in ${item_repo}"
+                if ! pr_json=$(fetch_pr_json "${open_pr}"); then
+                    warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
 
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
                 if [ "${pr_state}" != "OPEN" ]; then
@@ -2993,8 +3089,11 @@ main() {
 
             else
                 # No active PR — check the issue itself.
-                issue_json=$(fetch_issue_json "${item_id}") \
-                    || die "Failed to fetch state for Issue #${item_id} in ${item_repo}"
+                if ! issue_json=$(fetch_issue_json "${item_id}"); then
+                    warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
 
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
@@ -3029,8 +3128,11 @@ main() {
 
         else
             # PullRequest appearing directly in the priorities list.
-            pr_json=$(fetch_pr_json "${item_id}") \
-                || die "Failed to fetch state for PR #${item_id} in ${item_repo}"
+            if ! pr_json=$(fetch_pr_json "${item_id}"); then
+                warn "Failed to fetch state for PR #${item_id} in ${item_repo} — skipping this item for now"
+                count_error=$((count_error + 1))
+                continue
+            fi
 
             pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
             if [ "${pr_state}" != "OPEN" ]; then
@@ -3115,15 +3217,28 @@ main() {
             sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
 
-        if ! ensure_repo_current; then
+        ensure_repo_current
+        ensure_repo_current_status=$?
+        if [ "${ensure_repo_current_status}" -eq 2 ]; then
+            count_error=$((count_error + 1))
+            continue
+        elif [ "${ensure_repo_current_status}" -ne 0 ]; then
             info "Repo not clean for ${item_repo} — handing off to agent to recover"
         elif [ "${item_type}" = "PullRequest" ]; then
             if [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ]; then
                 if try_nonagentic_rebase "${branch_name}"; then
                     info "PR #${item_id} in ${item_repo} rebased non-agentically — updating fingerprint"
-                    post_fp=$(compute_pr_fingerprint "${item_id}") \
-                        || die "Failed to compute post-rebase fingerprint for PR #${item_id} in ${item_repo}"
-                    save_pr_fingerprint "${item_id}" "${post_fp}"
+                    # The rebase itself already succeeded and was force-pushed — that work is
+                    # durable in GitHub regardless of what happens next. A transient gh blip here
+                    # should not fail the whole run (#1090): worst case of skipping the
+                    # fingerprint update is one redundant re-evaluation on the next tick, once
+                    # fetch_pr_json's own retries (see #1090) are also exhausted.
+                    if post_fp=$(compute_pr_fingerprint "${item_id}"); then
+                        save_pr_fingerprint "${item_id}" "${post_fp}"
+                    else
+                        warn "Failed to compute post-rebase fingerprint for PR #${item_id} in ${item_repo} — will re-evaluate next tick"
+                        count_error=$((count_error + 1))
+                    fi
                     continue
                 fi
                 info "Non-agentic rebase of PR #${item_id} in ${item_repo} had conflicts — handing off to agent"
