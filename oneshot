@@ -1730,6 +1730,13 @@ invoke_claude() {
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
     [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
 
+    # Lets the agent container announce what it's working on at startup. Only
+    # set when both are known — most callers (tests, ad-hoc invocations) pass
+    # empty item_type/item_id and simply won't get this env var.
+    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
+        PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
+    fi
+
     if [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
@@ -2289,6 +2296,17 @@ validate_config() {
     [ "${errors}" -eq 0 ] || die "Config validation failed — fix the above and re-run"
 }
 
+# Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
+# item_id. Falls back to the bare repo URL for an unrecognised/empty item_type.
+build_item_url() {
+    local item_type="$1" item_id="$2"
+    case "${item_type}" in
+        Issue)       printf '%s' "https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) printf '%s' "https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           printf '%s' "https://github.com/${REPO_FULL}" ;;
+    esac
+}
+
 # Sends a Discord embed notification when starting or resuming work on an item.
 # Arguments: msg_type (start|resume), item_type, item_id, item_title
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
@@ -2302,11 +2320,7 @@ notify_discord_work_item() {
         *) warn "Discord: unknown notification type '${msg_type}'"; return 0 ;;
     esac
 
-    case "${item_type}" in
-        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
-        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
-        *)           url="https://github.com/${REPO_FULL}" ;;
-    esac
+    url="$(build_item_url "${item_type}" "${item_id}")"
 
     if [ "${msg_type}" = "start" ]; then
         color=3066993    # green  (#2ECC71)
@@ -2491,11 +2505,7 @@ notify_discord_blocked_item() {
     # Already notified for this blocked spell — stay silent until re-armed.
     [ -f "${marker_file}" ] && return 0
 
-    case "${item_type}" in
-        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
-        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
-        *)           url="https://github.com/${REPO_FULL}" ;;
-    esac
+    url="$(build_item_url "${item_type}" "${item_id}")"
 
     payload=$(jq --null-input \
         --argjson color 15158332 \
@@ -2528,11 +2538,7 @@ notify_discord_claude_error() {
     local item_type="${1:-}" item_id="${2:-}" error_message="$3"
     local url payload
 
-    case "${item_type}" in
-        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
-        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
-        *)           url="https://github.com/${REPO_FULL}" ;;
-    esac
+    url="$(build_item_url "${item_type}" "${item_id}")"
 
     # Truncate to stay within Discord's 1024-character field limit.
     local truncated_error="${error_message:0:900}"
@@ -2565,11 +2571,7 @@ notify_discord_rate_limited() {
     local item_type="${1:-}" item_id="${2:-}" error_message="$3" reset_unix="${4:-}"
     local url payload reset_display truncated_error
 
-    case "${item_type}" in
-        Issue)       url="https://github.com/${REPO_FULL}/issues/${item_id}" ;;
-        PullRequest) url="https://github.com/${REPO_FULL}/pull/${item_id}" ;;
-        *)           url="https://github.com/${REPO_FULL}" ;;
-    esac
+    url="$(build_item_url "${item_type}" "${item_id}")"
 
     truncated_error="${error_message:0:900}"
 

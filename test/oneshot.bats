@@ -3356,6 +3356,20 @@ STUBEOF
     make_stub gpg-connect-agent 'exit 0'
 }
 
+# --- build_item_url unit tests --------------------------------------------------
+
+@test "build_item_url builds an issues URL for an Issue" {
+    [ "$(build_item_url "Issue" "42")" = "https://github.com/${REPO_FULL}/issues/42" ]
+}
+
+@test "build_item_url builds a pull URL for a PullRequest" {
+    [ "$(build_item_url "PullRequest" "17")" = "https://github.com/${REPO_FULL}/pull/17" ]
+}
+
+@test "build_item_url falls back to the bare repo URL for an unrecognised item_type" {
+    [ "$(build_item_url "" "")" = "https://github.com/${REPO_FULL}" ]
+}
+
 # --- invoke_claude git identity env var passing --------------------------------
 
 @test "invoke_claude passes GIT_USER_NAME as container env var when set" {
@@ -3429,6 +3443,55 @@ STUBEOF
 
     invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
     run grep -qx 'GIT_USER_NAME=' "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "invoke_claude passes WORK_ITEM_URL as container env var for an Issue" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx "WORK_ITEM_URL=https://github.com/${REPO_FULL}/issues/42" "${args_log}"
+}
+
+@test "invoke_claude passes WORK_ITEM_URL as container env var for a PullRequest" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "PullRequest" "17" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx "WORK_ITEM_URL=https://github.com/${REPO_FULL}/pull/17" "${args_log}"
+}
+
+@test "invoke_claude does not pass WORK_ITEM_URL when item_type and item_id are empty" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    run grep -q 'WORK_ITEM_URL=' "${args_log}"
     [ "${status}" -ne 0 ]
 }
 
