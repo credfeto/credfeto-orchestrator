@@ -319,6 +319,25 @@ teardown() {
     [ ! -f "${TEST_TMP}/claude_log" ]
 }
 
+@test "main skips (does not die on) a post-rebase fingerprint compute failure (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()        { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json()  { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { return 0; }
+    compute_pr_fingerprint() { return 1; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"rebased non-agentically"* ]]
+    [[ "${output}" == *"Failed to compute post-rebase fingerprint"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
 @test "main passes BEHIND merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -1541,10 +1560,11 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
-@test "invoke_claude dies if container already exists" {
+@test "invoke_claude dies if container already exists and is running" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
+[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf 'true\n'; exit 0; }
 [ "$1" = "inspect" ] && exit 0
 [ "$1" = "pull" ] && exit 0
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
@@ -1553,7 +1573,27 @@ STUBEOF
 
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"already exists"* ]]
+    [[ "${output}" == *"already exists and is running"* ]]
+}
+
+@test "invoke_claude removes a leftover non-running container and proceeds (#1090)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    local args_log="${TEST_TMP}/podman_args"
+    # shellcheck disable=SC2016
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf "%s\n" "\$*" >> "${args_log}"
+[ "\$1" = "inspect" ] && [ "\$2" = "--format" ] && { printf 'false\n'; exit 0; }
+[ "\$1" = "inspect" ] && exit 0
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "rm" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    grep -qx -- "rm -f orchestrator-credfeto" "${args_log}"
 }
 
 @test "invoke_claude dies with specific message when podman run fails due to container name in use" {
@@ -1805,6 +1845,44 @@ STUBEOF
     GH_USER_RETRY_DELAY_SECS=0
     make_stub gh 'exit 1'
     run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
+# --- fetch_pr_json / fetch_issue_json retry (#1090) ---------------------------
+
+@test "fetch_pr_json retries and succeeds after a transient gh failure (#1090)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub gh 'n=$(cat "'"${TEST_TMP}"'/ghcount" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/ghcount"; [ "$n" -lt 2 ] && exit 1; printf "{}\n"'
+    run fetch_pr_json 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "{}" ]
+}
+
+@test "fetch_pr_json returns 1 without dying after exhausting retries (#1090)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run fetch_pr_json 5
+    [ "${status}" -ne 0 ]
+}
+
+@test "fetch_issue_json retries and succeeds after a transient gh failure (#1090)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub gh 'n=$(cat "'"${TEST_TMP}"'/ghcount" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/ghcount"; [ "$n" -lt 2 ] && exit 1; printf "{}\n"'
+    run fetch_issue_json 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "{}" ]
+}
+
+@test "fetch_issue_json returns 1 without dying after exhausting retries (#1090)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run fetch_issue_json 5
     [ "${status}" -ne 0 ]
 }
 
@@ -2214,24 +2292,32 @@ STUBEOF
     [[ "${output}" == *"Failed to determine item count from priorities JSON"* ]]
 }
 
-@test "main dies on malformed repository name from priorities API (path traversal)" {
+@test "main skips (does not die on) a malformed repository name from priorities API (path traversal) (#1090)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"../evil/path","priority":1,"status":"Open","isOnHold":false}]'
     }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
     run main
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"Malformed repository from priorities API"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
-@test "main dies on repository name with no slash from priorities API" {
+@test "main skips (does not die on) a repository name with no slash from priorities API (#1090)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"noslash","priority":1,"status":"Open","isOnHold":false}]'
     }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
     run main
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"Malformed repository from priorities API"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
 @test "main accepts a well-formed owner/repo name from priorities API" {
@@ -2279,6 +2365,49 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Malformed repository from priorities API"* ]]
     [[ "${output}" == *"Issue #1 in isaacs/_git_ignore_patterns is blocked"* ]]
+}
+
+@test "main skips (does not die on) a non-numeric id from priorities API (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":"not-a-number","itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Non-numeric id from priorities API"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main skips (does not die on) an unexpected itemType from priorities API (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Discussion","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Unexpected itemType from priorities API"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main skips (does not die on) a non-numeric open PR number from GitHub (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf 'not-a-number\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Non-numeric open PR number from GitHub"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
 # --- issue-to-PR pivot: issue state/blocked checks ----------------------------
@@ -4021,6 +4150,40 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+@test "invoke_claude falls back to the cached image when podman pull fails but the image exists locally (#1090)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 1
+[ "$1" = "image" ] && [ "$2" = "exists" ] && exit 0
+[ "$1" = "image" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"falling back to the cached local image"* ]]
+}
+
+@test "invoke_claude dies when podman pull fails and no cached image exists locally (#1090)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 1
+[ "$1" = "image" ] && [ "$2" = "exists" ] && exit 1
+[ "$1" = "image" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"no cached local image is available"* ]]
+}
+
 @test "invoke_claude prunes dangling images before pulling the orchestrator image" {
     local call_log="${TEST_TMP}/podman_calls"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
@@ -4395,6 +4558,55 @@ STUBEOF
     run ensure_repo_current
     [ "${status}" -eq 0 ]
     grep -q -- "--local --unset-all url.https://x-oauth-basic:@github.com/.pushinsteadof" "${git_log}"
+}
+
+@test "ensure_repo_current returns 2 (not dies) when git fetch fails transiently (#1090)" {
+    mkdir -p "${REPO_WORK_DIR}/.git"
+    cat > "${STUB_BIN}/git" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg in "$@"; do [ "${arg}" = "fetch" ] && exit 1; done
+for arg in "$@"; do [ "${arg}" = "--show-current" ] && { printf 'main\n'; exit 0; }; done
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run ensure_repo_current
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"Failed to fetch from origin"* ]]
+}
+
+# --- ensure_rules_current (#1090) ---------------------------------------------
+
+@test "ensure_rules_current returns 1 (not dies) when the pull fails transiently" {
+    mkdir -p "${RULES_DIR}/.git"
+    cat > "${STUB_BIN}/git" << 'STUBEOF'
+#!/usr/bin/env bash
+for arg in "$@"; do [ "${arg}" = "pull" ] && exit 1; done
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run ensure_rules_current
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to update cs-template"* ]]
+}
+
+@test "ensure_rules_current returns 1 (not dies) when the initial clone fails transiently" {
+    make_stub git 'exit 1'
+
+    run ensure_rules_current
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to clone cs-template"* ]]
+}
+
+@test "ensure_rules_current succeeds when checkout and pull both succeed" {
+    mkdir -p "${RULES_DIR}/.git"
+    make_stub git 'exit 0'
+
+    run ensure_rules_current
+    [ "${status}" -eq 0 ]
 }
 
 # --- disk_space_available_kb --------------------------------------------------
@@ -5834,6 +6046,21 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
+@test "main skips (does not die on) a transient fetch_pr_json failure in the direct-PR path (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { return 1; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Failed to fetch state for PR #5 in org/repo — skipping this item for now"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
 @test "main invokes agent when PR CI checks are all COMPLETED" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -5847,6 +6074,24 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a transient repo-fetch failure (#1090)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    ensure_repo_current() { return 2; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" != *"handing off to agent"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
 @test "main blocks unchanged PR when CI has been pending past timeout in direct-PR path" {
