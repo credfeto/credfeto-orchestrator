@@ -1752,6 +1752,13 @@ invoke_claude() {
         --output-format json
         --dangerously-skip-permissions
         --add-dir "${CONTAINER_REPO_PATH}"
+        # -- terminates option/variadic parsing before the positional prompt.
+        # --add-dir takes <directories...> (variadic) — without this separator the
+        # CLI parser greedily swallows the prompt as an extra --add-dir value
+        # instead of recognizing it as the [prompt] argument, which then dies with
+        # "Input must be provided either through stdin or as a prompt argument"
+        # despite a real prompt being passed (#1062 recurrence after #1077).
+        --
         "${CLAUDE_PROMPT}"
     )
 

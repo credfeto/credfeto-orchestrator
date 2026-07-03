@@ -215,6 +215,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Dependency-PR agent instructions now check for a failed required check before treating auto-merge-enabled as nothing-to-do, so a dependency PR with a broken build gets fixed and blocked instead of silently abandoned
 - A PR whose idle-invocation budget is exhausted while it still has a failed required check is now marked Blocked with an explanatory comment instead of being silently parked forever with no human ever notified
 - Agent container's prompt is now passed as a positional CLI argument to claude --print instead of via stdin redirection, eliminating the host-to-container stdin-attach timing race that intermittently caused the whole orchestrator run to fail
+- Agent container's claude invocation now terminates option parsing with -- before the prompt argument, fixing the variadic --add-dir flag greedily swallowing the prompt instead of recognizing it, which intermittently caused the whole orchestrator run to fail
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
