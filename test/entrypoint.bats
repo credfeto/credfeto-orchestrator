@@ -767,3 +767,23 @@ GHEOF
     [[ "${output}" == *"development-full:    unknown"* ]]
     [[ "${output}" == *"development-agent:   unknown"* ]]
 }
+
+@test "entrypoint logs the work item URL at startup when WORK_ITEM_URL is set" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORK_ITEM_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1056" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Working on: https://github.com/credfeto/credfeto-orchestrator/issues/1056"* ]]
+}
+
+@test "entrypoint omits the work item URL line when WORK_ITEM_URL is not set" {
+    setup_entrypoint_stubs
+    run env -u WORK_ITEM_URL \
+        CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Working on:"* ]]
+}
