@@ -1759,10 +1759,6 @@ invoke_claude() {
         --print
         --output-format json
         --dangerously-skip-permissions
-        # Explicit, in case auto-compact defaults to off outside an interactive session —
-        # CLAUDE_CODE_AUTO_COMPACT_WINDOW above sets the trigger point, this ensures the
-        # feature itself is on regardless of that default.
-        --settings '{"autoCompactEnabled":true}'
         --add-dir "${CONTAINER_REPO_PATH}"
         # -- terminates option/variadic parsing before the positional prompt.
         # --add-dir takes <directories...> (variadic) — without this separator the

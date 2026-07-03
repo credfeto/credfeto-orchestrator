@@ -3411,23 +3411,6 @@ STUBEOF
     grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000' "${args_log}"
 }
 
-@test "invoke_claude passes --settings autoCompactEnabled:true to podman claude command (#1070)" {
-    local args_log="${TEST_TMP}/podman_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "pull" ] && exit 0
-[ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "pull" ] && exit 0
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx '{"autoCompactEnabled":true}' "${args_log}"
-}
-
 @test "invoke_claude passes GIT_USER_EMAIL as container env var when set" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
