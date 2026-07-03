@@ -987,6 +987,31 @@ STUBEOF
     grep -qx -- 'unique-prompt-marker-xyz' "${args_log}"
 }
 
+@test "invoke_claude terminates option parsing with -- immediately before the prompt so --add-dir cannot swallow it (#1062 recurrence)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    # --add-dir takes <directories...> (variadic) — without a "--" separator right
+    # before the prompt, the CLI parser swallows the prompt as an extra --add-dir
+    # value instead of the positional [prompt] argument. Assert "--" is the line
+    # immediately preceding the prompt marker in the logged argv.
+    local prompt_line
+    prompt_line=$(grep -nx -- 'unique-prompt-marker-xyz' "${args_log}" | cut -d: -f1)
+    [ -n "${prompt_line}" ]
+    local separator_line=$((prompt_line - 1))
+    [ "$(sed -n "${separator_line}p" "${args_log}")" = "--" ]
+}
+
 @test "invoke_claude passes resource limit flags to podman run" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
