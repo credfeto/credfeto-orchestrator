@@ -163,6 +163,15 @@ The build job MUST include an `if` condition so it skips when the parent workflo
 
 Stage 2-4 workflows MUST include `pull: true` in the build-push step to ensure the base `:latest` image is always pulled fresh.
 
+Every `build-development-*.yml` workflow's `cache-to` MUST include `ignore-error=true`:
+
+```yaml
+          cache-from: "type=gha"
+          cache-to: "type=gha,mode=max,ignore-error=true"
+```
+
+GitHub's Actions Cache backend has per-repo storage/write-rate limits; with five build workflows all writing `type=gha` caches on an hourly cron plus push triggers, cache-write contention/quota exhaustion periodically fails the export with `error writing layer blob: failed to reserve cache` — **after** the actual image has already been fully pushed to ghcr.io. Without `ignore-error=true`, buildx treats that as a fatal build failure even though the image is fine; with it, a cache-export failure just logs a warning.
+
 ## File Placement
 
 - Dockerfiles: `containers/base/<stage>/Dockerfile`
