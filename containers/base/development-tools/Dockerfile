@@ -100,6 +100,9 @@ RUN useradd -m -s /bin/bash developer
 #   ttf-mscorefonts-installer — real MS fonts needed by tools (e.g.
 #                      SixLabors.Fonts) that match by internal family-name
 #                      records rather than fontconfig aliases
+#   procps     — provides ps/pkill/free; needed by .NET benchmark tooling
+#                      (BenchmarkDotNet process-priority/affinity handling),
+#                      e.g. funfair-server-code-analysis#463
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
@@ -117,6 +120,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         jq \
         libicu76 \
         openssh-client \
+        procps \
         python3 \
         python3-pip \
         shellcheck \
