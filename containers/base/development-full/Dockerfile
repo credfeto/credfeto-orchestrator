@@ -15,11 +15,11 @@ ARG MARKDOWN_LINTER_FIXER_REF=v1.5.4
 # verified commit so a force-push or tag mutation on the upstream cannot silently
 # change what is baked into the image. Update each ARG intentionally when pulling
 # in new upstream changes.
-ARG DOTNET_CLAUDE_KIT_COMMIT=9a9a91107596b3ac3ad1d0ad5ec5eef189e74515
-ARG WSHOBSON_AGENTS_COMMIT=cc37bfdd292ce520ba1c44df7a3a70d5f8137236
+ARG DOTNET_CLAUDE_KIT_COMMIT=cbad34af27faf94b52a86694925b91ba49f3d10c
+ARG WSHOBSON_AGENTS_COMMIT=5cc2549a50fc672230efd0a0307e2fd27ffba792
 ARG CC_DEVOPS_SKILLS_COMMIT=feaf2b2f3c9544aa559836731cc80e363183f788
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
-ARG CREDFETO_PRECOMMIT_COMMIT=dcd40f11d35abb06db1066e27f7619c09d323356
+ARG CREDFETO_PRECOMMIT_COMMIT=717fdfbe2a693ef7fbf1432effcc5e02482881f4
 
 # ---- NuGet package sources (FunFair private feeds) ---------------------------
 # NuGet.Config is baked in root:root mode 0444 so the agent (running as the
