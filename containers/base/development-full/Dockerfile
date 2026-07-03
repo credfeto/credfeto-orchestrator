@@ -11,15 +11,27 @@ ARG DOTNET_TOOLS_CACHE_BUST
 ARG CREDFETO_PRECOMMIT_CACHE_BUST
 ARG PRECOMMIT_UPSTREAM=https://github.com/credfeto/credfeto-global-pre-commit.git
 ARG MARKDOWN_LINTER_FIXER_REF=v1.5.4
-# Commit hashes for external GitHub repo clones. Pins each clone to a specific,
-# verified commit so a force-push or tag mutation on the upstream cannot silently
-# change what is baked into the image. Update each ARG intentionally when pulling
-# in new upstream changes.
+ARG CC_DEVOPS_SKILLS_REF=v1.0.0
+# Pins for external GitHub repo clones so upstream cannot silently change what
+# is baked into the image. Policy per repo (re-evaluate the choice, not just
+# the value, whenever bumping):
+#   - Third-party repos with a current, compatible tagged release: pin to
+#     that tag (REF) and verify the commit it resolves to (COMMIT) — a tag
+#     mutation is caught immediately. See cc-devops-skills / markdown-linter-fixer.
+#   - Third-party repos with no usable tag: pin to an exact commit SHA,
+#     fetched directly (`git fetch <url> <sha>`) rather than cloned from the
+#     moving default-branch tip — this only fails the build if that commit
+#     becomes unreachable (a force-push/history rewrite), not merely because
+#     main has advanced. dotnet-claude-kit's only tag (v0.7.0) is stale and
+#     predates a skill-catalog refactor this image depends on, so it is
+#     pinned this way instead of to that tag. wshobson/agents publishes no
+#     tags at all, so it is pinned this way too.
+#   - credfeto-owned repos are implicitly trusted: credfeto-global-pre-commit
+#     always tracks live main HEAD with no pinned-commit assertion.
 ARG DOTNET_CLAUDE_KIT_COMMIT=cbad34af27faf94b52a86694925b91ba49f3d10c
 ARG WSHOBSON_AGENTS_COMMIT=5cc2549a50fc672230efd0a0307e2fd27ffba792
-ARG CC_DEVOPS_SKILLS_COMMIT=feaf2b2f3c9544aa559836731cc80e363183f788
+ARG CC_DEVOPS_SKILLS_COMMIT=7fe7595e4512f8ce43dcf956aa5190b96d627dd1
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
-ARG CREDFETO_PRECOMMIT_COMMIT=717fdfbe2a693ef7fbf1432effcc5e02482881f4
 
 # ---- NuGet package sources (FunFair private feeds) ---------------------------
 # NuGet.Config is baked in root:root mode 0444 so the agent (running as the
@@ -116,30 +128,39 @@ RUN su developer -c '\
     ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint'
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
-# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
-RUN git clone --depth 1 https://github.com/codewithmukesh/dotnet-claude-kit.git /opt/dotnet-claude-kit \
-    && test "$(git -C /opt/dotnet-claude-kit rev-parse HEAD)" = "${DOTNET_CLAUDE_KIT_COMMIT}" \
+# Fetches the exact pinned commit directly (not the moving default-branch
+# tip), so this only fails if that commit becomes unreachable upstream.
+RUN git init -q /opt/dotnet-claude-kit \
+    && git -C /opt/dotnet-claude-kit fetch -q --depth 1 \
+        https://github.com/codewithmukesh/dotnet-claude-kit.git "${DOTNET_CLAUDE_KIT_COMMIT}" \
+    && git -C /opt/dotnet-claude-kit checkout -q FETCH_HEAD \
     && chown -R root:root /opt/dotnet-claude-kit
 
 # ---- wshobson/agents marketplace — sparse-checkout three plugins -------------
 # The full repo is ~78 plugins; we only want javascript-typescript, python-
-# development, and shell-scripting. `--filter=blob:none --sparse` pulls only
-# the metadata up front, then sparse-checkout materialises just those subtrees.
-# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
+# development, and shell-scripting. `--filter=blob:none` pulls only the
+# metadata up front, then sparse-checkout materialises just those subtrees.
+# Upstream publishes no tags, so this fetches the exact pinned commit
+# directly (not the moving default-branch tip) — see dotnet-claude-kit above.
 # hadolint ignore=DL3059
-RUN git clone --depth 1 --filter=blob:none --sparse \
-        https://github.com/wshobson/agents.git /opt/wshobson-agents \
+RUN git init -q /opt/wshobson-agents \
+    && git -C /opt/wshobson-agents sparse-checkout init --cone \
+    && git -C /opt/wshobson-agents fetch -q --depth 1 --filter=blob:none \
+        https://github.com/wshobson/agents.git "${WSHOBSON_AGENTS_COMMIT}" \
     && git -C /opt/wshobson-agents sparse-checkout set \
         plugins/javascript-typescript \
         plugins/python-development \
         plugins/shell-scripting \
-    && test "$(git -C /opt/wshobson-agents rev-parse HEAD)" = "${WSHOBSON_AGENTS_COMMIT}" \
+    && git -C /opt/wshobson-agents checkout -q FETCH_HEAD \
     && chown -R root:root /opt/wshobson-agents
 
 # ---- akin-ozer/cc-devops-skills (GitHub Actions et al) ----------------------
-# Pinned to a specific commit hash; build fails if upstream HEAD diverges.
+# CC_DEVOPS_SKILLS_REF is the git tag used for the shallow clone.
+# CC_DEVOPS_SKILLS_COMMIT is the full commit SHA that tag currently resolves
+# to; the build verifies the two match so a tag mutation is caught immediately.
 # hadolint ignore=DL3059
-RUN git clone --depth 1 https://github.com/akin-ozer/cc-devops-skills.git /opt/cc-devops-skills \
+RUN git clone --depth 1 --branch "${CC_DEVOPS_SKILLS_REF}" \
+        https://github.com/akin-ozer/cc-devops-skills.git /opt/cc-devops-skills \
     && test "$(git -C /opt/cc-devops-skills rev-parse HEAD)" = "${CC_DEVOPS_SKILLS_COMMIT}" \
     && chown -R root:root /opt/cc-devops-skills
 
@@ -198,13 +219,14 @@ RUN chown root:root /home/developer/.claude/hooks \
     && chmod 0755 /home/developer/.claude/hooks
 
 # ---- /opt/pre-commit (global pre-commit config) + hook shims ----------------
-# Clone the upstream config repo, verify the HEAD SHA matches the expected
-# commit, record provenance in .env, strip git metadata, then wire up shims
-# in /opt/git-global-hooks (referenced by core.hooksPath in /etc/gitconfig).
+# Clone the upstream config repo, record provenance in .env, strip git
+# metadata, then wire up shims in /opt/git-global-hooks (referenced by
+# core.hooksPath in /etc/gitconfig). credfeto/credfeto-global-pre-commit is
+# credfeto-owned, so this always tracks live main HEAD — no pinned-commit
+# assertion, unlike the third-party clones above.
 # hadolint ignore=DL3059
 RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
     git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
-    && test "$(git -C /opt/pre-commit rev-parse HEAD)" = "${CREDFETO_PRECOMMIT_COMMIT}" \
     && test -f /opt/pre-commit/src/.pre-commit-config.yaml \
     && HEAD_SHA="$(git -C /opt/pre-commit rev-parse HEAD)" \
     && rm -rf /opt/pre-commit/.git \
