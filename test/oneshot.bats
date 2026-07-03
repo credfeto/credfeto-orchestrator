@@ -596,9 +596,45 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_is_terminal is true when auto-merge is enabled and the only required check is COMPLETED/SUCCESS" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_terminal is true when auto-merge is enabled and a required check is still IN_PROGRESS" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_terminal is false when auto-merge is enabled but a required CheckRun has FAILED" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal is true when auto-merge is enabled and only a non-required check has FAILED" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_terminal is false when auto-merge is enabled but a required legacy StatusContext has state FAILURE" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"legacy","state":"FAILURE","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal is true when auto-merge is enabled and a required legacy StatusContext has state SUCCESS" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"legacy","state":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_should_advance_unchanged parks a terminal (auto-merge enabled) PR" {
     run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}'
     [ "${status}" -ne 0 ]
+}
+
+@test "pr_should_advance_unchanged advances a PR with auto-merge enabled but a failed required check" {
+    save_pr_invocation_counts 42 4 2
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
 }
 
 @test "pr_should_advance_unchanged advances a non-terminal PR within the idle budget" {
