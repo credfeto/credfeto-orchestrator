@@ -457,11 +457,29 @@ save_pr_invocation_counts() {
 }
 
 # Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
-# auto-merge is enabled (it will merge once checks/approvals land).  Merged/closed PRs never
-# reach here (filtered earlier as non-OPEN); Blocked PRs are filtered by their label.
+# auto-merge is enabled and no required check has hard-failed (it will merge once the remaining
+# checks/approvals land).  Merged/closed PRs never reach here (filtered earlier as non-OPEN);
+# Blocked PRs are filtered by their label.  Auto-merge alone is not enough — it can be enabled
+# long before a later push breaks a required check, at which point GitHub will never complete
+# the merge and the orchestrator needs to step back in and fix it rather than walk away.  Uses
+# the same CheckRun-vs-legacy-StatusContext classification as pr_json_has_pending_ci_checks.
 pr_json_is_terminal() {
     local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -e '.autoMergeRequest != null' > /dev/null 2>&1
+    printf '%s' "${pr_json}" | jq -e '
+        .autoMergeRequest != null
+        and (
+            (.statusCheckRollup // [])
+            | all(.[];
+                .isRequired == false
+                or (
+                    if (.status != null)
+                    then .conclusion != "FAILURE"
+                    else ((.state // "") | . != "FAILURE" and . != "ERROR")
+                    end
+                )
+            )
+        )
+    ' > /dev/null 2>&1
 }
 
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
