@@ -651,6 +651,69 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+# --- apply_blocked_label (#1092) ----------------------------------------------
+
+@test "apply_blocked_label returns 0 when the label is confirmed present on first try (#1092)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    run apply_blocked_label "PullRequest" 5 "org/repo"
+    [ "${status}" -eq 0 ]
+}
+
+@test "apply_blocked_label self-heals by creating the label then retries (#1092)" {
+    # First view (before any create attempt) reports false; after "label create" runs, report true.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in
+        *"label create"*) printf "created\n" >> "'"${TEST_TMP}"'/created"; exit 0 ;;
+        *"--json labels"*) if [ -f "'"${TEST_TMP}"'/created" ]; then printf "true\n"; else printf "false\n"; fi ;;
+    esac
+    exit 0'
+    run apply_blocked_label "PullRequest" 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/created" ]
+}
+
+@test "apply_blocked_label returns 1 without dying when the label never verifies as present (#1092)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    run apply_blocked_label "PullRequest" 5 "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
+@test "apply_blocked_label uses the issue noun for Issue items (#1092)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    run apply_blocked_label "Issue" 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -qx 'issue edit 5 --repo org/repo --add-label Blocked' "${call_log}"
+}
+
+@test "block_pr_for_idle_exhausted_failure does not post a comment when the label cannot be verified (#1092)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s\n' "$1" "$2" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_failure posts the comment once the label is verified present (#1092)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s\n' "$1" "$2" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q 'pr comment 5' "${call_log}"
+    grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
+}
+
 @test "pr_json_has_unaddressed_review_request is false for reviewDecision APPROVED, REVIEW_REQUIRED, or absent (#1083)" {
     run pr_json_has_unaddressed_review_request '{"reviewDecision":"APPROVED"}'
     [ "${status}" -ne 0 ]
@@ -5760,7 +5823,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5800,7 +5863,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5822,7 +5885,7 @@ STUBEOF
     save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5843,7 +5906,7 @@ STUBEOF
     save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5864,7 +5927,7 @@ STUBEOF
     save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5894,7 +5957,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5919,7 +5982,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -5927,6 +5990,34 @@ STUBEOF
     local state_file
     state_file=$(pr_head_oid_file_path 5)
     [ ! -f "${state_file}" ]
+}
+
+@test "main preserves CI pending state file when the timeout escalation's label cannot be verified (#1092)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    local old_time
+    old_time=$(( $(date +%s) - 7200 ))
+    save_pr_head_oid 5 "abc" "${old_time}"
+    CI_CHECK_TIMEOUT_MINUTES=60
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Label was never confirmed present — the 24h timeout clock must NOT be re-armed, and the
+    # explanatory comment must NOT be posted (both were the exact spam/lost-escalation bug).
+    local state_file
+    state_file=$(pr_head_oid_file_path 5)
+    [ -f "${state_file}" ]
+    run grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "main clears CI pending state file when Issue-to-PR CI timeout fires" {
@@ -5947,7 +6038,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -6039,7 +6130,7 @@ STUBEOF
     CI_CHECK_TIMEOUT_MINUTES=60
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main

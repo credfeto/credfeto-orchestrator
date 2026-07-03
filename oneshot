@@ -558,19 +558,51 @@ pr_json_has_failed_required_check() {
     ' > /dev/null 2>&1
 }
 
+# Applies the Blocked label to an Issue or PullRequest and VERIFIES it actually landed —
+# `gh ... edit --add-label` can fail silently (e.g. the repo has no "Blocked" label yet), and an
+# unverified label-add is how every escalation path in this file used to lose its escalation:
+# the label never lands, so the next tick's pr_json_has_blocked_label check never catches it, the
+# item falls back into the work queue, and (because the bot's own comment is trusted) gets
+# re-invoked and re-blocked every tick forever (#1092). Retries once, self-healing by creating
+# the label if it doesn't exist in the repo. Returns 0 only once the label is CONFIRMED present.
+apply_blocked_label() {
+    local item_type="$1" item_id="$2" item_repo="$3"
+    local gh_noun="pr"
+    [ "${item_type}" = "Issue" ] && gh_noun="issue"
+
+    local attempt
+    for attempt in 1 2; do
+        gh "${gh_noun}" edit "${item_id}" --repo "${item_repo}" --add-label Blocked >/dev/null 2>&1
+        if gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
+            --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null | grep -q '^true$'; then
+            return 0
+        fi
+        [ "${attempt}" -eq 1 ] \
+            && gh label create Blocked --repo "${item_repo}" --color "d73a4a" --description "Needs human attention" >/dev/null 2>&1
+    done
+    warn "Failed to verify Blocked label on ${item_type} #${item_id} in ${item_repo} after retry"
+    return 1
+}
+
 # Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been
 # exhausted while a required check is still definitively failed, so a human is pulled in instead
-# of the PR silently rotting forever — the idle budget alone has no way to escalate.  No separate
-# Discord call here: adding the Blocked label means the next tick's existing earlier
-# pr_json_has_blocked_label check catches it first, and its already-idempotent notifier fires
-# there, same as every other Blocked-label path in this file.
+# of the PR silently rotting forever — the idle budget alone has no way to escalate. The label is
+# applied and VERIFIED first; the comment is only posted once the label is confirmed, so a label
+# failure never produces a comment-without-a-label (which would otherwise re-trigger this same
+# escalation every tick forever, see apply_blocked_label). notify_discord_blocked_item is called
+# directly (it is idempotent per blocked spell) rather than relying on the next tick's
+# pr_json_has_blocked_label check, since that indirection is exactly what a label failure breaks.
 block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"
+    if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
+        notify_discord_blocked_item "PullRequest" "${item_id}"
+        return 1
+    fi
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
 COMMENT
     )" 2>/dev/null || true
-    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+    notify_discord_blocked_item "PullRequest" "${item_id}"
 }
 
 # Returns 0 (true) if GitHub's own review-decision aggregate is CHANGES_REQUESTED — a reviewer
@@ -587,11 +619,15 @@ pr_json_has_unaddressed_review_request() {
 # the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
 block_pr_for_idle_exhausted_review() {
     local item_id="$1" item_repo="$2"
+    if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
+        notify_discord_blocked_item "PullRequest" "${item_id}"
+        return 1
+    fi
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
 COMMENT
     )" 2>/dev/null || true
-    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+    notify_discord_blocked_item "PullRequest" "${item_id}"
 }
 
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
@@ -2163,6 +2199,26 @@ clear_pr_ci_pending_state() {
     rm -f "${state_file}" 2>/dev/null || true
 }
 
+# Posts a Blocked-marking comment and label when a PR's CI checks have been pending past the
+# configured timeout, so a human is pulled in. The label is applied and VERIFIED first (see
+# apply_blocked_label); the pending-CI state file is only cleared once the label is confirmed —
+# otherwise the timeout clock is left alone so the NEXT tick re-attempts the escalation, rather
+# than silently re-arming a fresh full-length wait every tick forever (#1092).
+block_pr_for_ci_timeout() {
+    local item_id="$1" item_repo="$2"
+    info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+    if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
+        notify_discord_blocked_item "PullRequest" "${item_id}"
+        return 1
+    fi
+    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
+COMMENT
+    )" 2>/dev/null || true
+    clear_pr_ci_pending_state "${item_id}"
+    notify_discord_blocked_item "PullRequest" "${item_id}"
+}
+
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
 pr_json_has_blocked_label() {
     local pr_json="$1"
@@ -2892,13 +2948,7 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if pr_json_has_pending_ci_checks "${pr_json}"; then
                         if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
-                            info "PR #${open_pr} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-                            gh pr comment "${open_pr}" --repo "${item_repo}" --body "$(cat <<COMMENT
-CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
-COMMENT
-                            )" 2>/dev/null || true
-                            gh pr edit "${open_pr}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-                            clear_pr_ci_pending_state "${open_pr}"
+                            block_pr_for_ci_timeout "${open_pr}" "${item_repo}"
                         else
                             info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
                         fi
@@ -3009,13 +3059,7 @@ COMMENT
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                 if pr_json_has_pending_ci_checks "${pr_json}"; then
                     if ci_checks_timed_out "${item_id}" "${pr_json}"; then
-                        info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-                        gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
-COMMENT
-                        )" 2>/dev/null || true
-                        gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-                        clear_pr_ci_pending_state "${item_id}"
+                        block_pr_for_ci_timeout "${item_id}" "${item_repo}"
                     else
                         info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
                     fi
@@ -3060,13 +3104,7 @@ COMMENT
 
             if pr_json_has_pending_ci_checks "${pr_json}"; then
                 if ci_checks_timed_out "${item_id}" "${pr_json}"; then
-                    info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-                    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
-COMMENT
-                    )" 2>/dev/null || true
-                    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-                    clear_pr_ci_pending_state "${item_id}"
+                    block_pr_for_ci_timeout "${item_id}" "${item_repo}"
                 else
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring agent invocation"
                     save_pr_fingerprint "${item_id}" "${pr_fp}"
@@ -3104,11 +3142,8 @@ COMMENT
 
         if ! ai_instructions=$(find_ai_instructions); then
             warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
-            if [ "${item_type}" = "Issue" ]; then
-                gh issue edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-            else
-                gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
-            fi
+            apply_blocked_label "${item_type}" "${item_id}" "${item_repo}" \
+                || notify_discord_blocked_item "${item_type}" "${item_id}"
             continue
         fi
 
@@ -3133,11 +3168,12 @@ COMMENT
             load_pr_invocation_counts "${item_id}"
             if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
                 warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
-                gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+                if apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
+                    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate.
 COMMENT
-                )" 2>/dev/null || true
-                gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+                    )" 2>/dev/null || true
+                fi
                 notify_discord_blocked_item "PullRequest" "${item_id}"
                 count_blocked=$((count_blocked + 1))
                 continue
