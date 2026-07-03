@@ -2,10 +2,6 @@
 name: "Test: Shell Scripts"
 
 on:
-  push:
-    branches-ignore:
-      - "release/**"
-      - "hotfix/**"
   pull_request:
     branches:
       - main
