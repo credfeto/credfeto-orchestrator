@@ -8,6 +8,15 @@
 # OnUnitActiveSec is valid (e.g. "30sec", "1min", "5min").
 ORCHESTRATOR_TIMER_INTERVAL="${ORCHESTRATOR_TIMER_INTERVAL:-30sec}"
 
+# Upper bound on how long the ExecStartPre steps plus oneshot itself may run before systemd
+# kills the unit and reports it failed. Type=oneshot has NO start timeout by default (infinity),
+# so a single network hang anywhere in the unit — e.g. the self-update git fetch below — would
+# otherwise leave the service permanently "activating" and the timer would never fire again,
+# silently stopping the orchestrator until a human notices and manually intervenes (#1098). Set
+# comfortably above oneshot's own AGENT_TIMEOUT_MINUTES (default 90) to leave margin for the
+# self-update and agent-startup steps. Override with ORCHESTRATOR_TIMEOUT_START_SEC.
+ORCHESTRATOR_TIMEOUT_START_SEC="${ORCHESTRATOR_TIMEOUT_START_SEC:-6300}"
+
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
     exit 1
@@ -77,6 +86,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# See ORCHESTRATOR_TIMEOUT_START_SEC above: without this, a hung ExecStartPre step never times
+# out and the timer stops firing forever (#1098).
+TimeoutStartSec=${ORCHESTRATOR_TIMEOUT_START_SEC}
 User=${CURRENT_USER}
 RuntimeDirectory=${runtime_dir}
 RuntimeDirectoryMode=0700
@@ -98,9 +110,17 @@ Environment=XDG_RUNTIME_DIR=/run/user/${owner_uid}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${owner_uid}/bus
 Environment=SSH_AUTH_SOCK=${ssh_socket}
 WorkingDirectory=${REPO_DIR}
-ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" fetch origin
-ExecStartPre=/usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
-ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} ssh-agent
+# Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
+# unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the
+# orchestrator from running with whatever was last successfully pulled (#1098). Genuine repo
+# corruption still surfaces via oneshot's own git error handling once it starts.
+ExecStartPre=-/usr/bin/timeout 60 /usr/bin/git -C \"${REPO_DIR}\" fetch origin
+ExecStartPre=-/usr/bin/timeout 30 /usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
+# -f scopes this to the ssh-agent bound to THIS instance's own socket, not every ssh-agent
+# belonging to this user — an unscoped 'pkill -u <user> ssh-agent' kills the agent of any other
+# concurrently-running instance (--owner variants share the same User=) or interactive session
+# for this user (#1098).
+ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} -f \"ssh-agent -a ${ssh_socket}\"
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 # All paths below must be absolute. The %h specifier expands to the home of
