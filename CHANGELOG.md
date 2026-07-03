@@ -209,6 +209,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container images now fail to build if any pre-commit linter wrapper (run-eslint, run-stylelint, run-psscriptanalyzer, run-bats) is not resolvable on the developer user's PATH, preventing images that break commits with an "Executable run-eslint not found" hook error
 - development-full now runs the pre-commit check-setup health-check at build time (as the developer user) and fails the build if the pre-commit config is invalid or any required linter tool is missing
 - Bumped drifted pinned commit references (dotnet-claude-kit, wshobson/agents, credfeto-global-pre-commit) in the development-full base image so the scheduled build no longer fails when those upstream default branches advance (#1047)
+- PR CI-check detection no longer treats a legacy commit-status check as permanently pending, which was preventing the orchestrator from noticing and fixing real CI failures on affected PRs and blocked sibling issues in the same repo from being worked
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

@@ -5250,6 +5250,31 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_pending_ci_checks returns false for a completed legacy StatusContext with no status field" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"legacy","state":"SUCCESS"}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false for a failed legacy StatusContext with no status field" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"legacy","state":"FAILURE"}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true for a legacy StatusContext with state PENDING" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"legacy","state":"PENDING"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true for a legacy StatusContext with state EXPECTED" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"legacy","state":"EXPECTED"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when a failed required CheckRun is mixed with a completed legacy StatusContext" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"FAILURE","isRequired":true},{"name":"legacy","state":"SUCCESS"}]}'
+    [ "${status}" -ne 0 ]
+}
+
 @test "clear_pr_ci_pending_state removes the state file when it exists" {
     save_pr_head_oid 42 "deadbeef" "1700000000"
     local state_file
