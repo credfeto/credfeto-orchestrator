@@ -213,6 +213,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Orchestrator no longer permanently walks away from a PR just because auto-merge was enabled — it now also checks whether a required check has since failed, and steps back in to fix the build when GitHub can never complete the merge as-is
 - development-full's pinned upstream repo clones no longer break the build merely because an upstream default branch advances: pin to a maintainer's tagged release where one is current and compatible (cc-devops-skills), fetch the exact commit directly rather than the moving branch tip where no usable tag exists (dotnet-claude-kit, wshobson/agents), and let credfeto-owned repos track live main HEAD with no pinned-commit assertion (credfeto-global-pre-commit) (#1066)
 - Dependency-PR agent instructions now check for a failed required check before treating auto-merge-enabled as nothing-to-do, so a dependency PR with a broken build gets fixed and blocked instead of silently abandoned
+- A PR whose idle-invocation budget is exhausted while it still has a failed required check is now marked Blocked with an explanatory comment instead of being silently parked forever with no human ever notified
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
