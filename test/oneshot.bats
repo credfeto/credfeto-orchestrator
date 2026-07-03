@@ -634,6 +634,45 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_has_failed_required_check is true for a required CheckRun with conclusion FAILURE" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_failed_required_check is false for a non-required CheckRun with conclusion FAILURE" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_failed_required_check is false when all required checks are SUCCESS or pending" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"name":"lint","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_failed_required_check is true for a required legacy StatusContext with state FAILURE" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"legacy","state":"FAILURE","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_failed_required_check is true for a required legacy StatusContext with state ERROR" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"legacy","state":"ERROR","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_failed_required_check is false for a required legacy StatusContext with state SUCCESS or PENDING" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"legacy","state":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"legacy","state":"PENDING","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_failed_required_check is false when statusCheckRollup is empty or absent" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[]}'
+    [ "${status}" -ne 0 ]
+    run pr_json_has_failed_required_check '{}'
+    [ "${status}" -ne 0 ]
+}
+
 @test "pr_should_advance_unchanged parks a terminal (auto-merge enabled) PR" {
     run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}'
     [ "${status}" -ne 0 ]
@@ -5490,6 +5529,50 @@ STUBEOF
     [[ "${output}" == *"timeout"* ]]
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main blocks unchanged PR with idle budget exhausted and a failed required check in direct-PR path" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main silently parks unchanged PR with idle budget exhausted but no failed required check (regression guard)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    if [ -f "${GH_CALL_LOG}" ]; then
+        ! grep -q 'Blocked' "${GH_CALL_LOG}"
+        ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    fi
 }
 
 @test "main blocks PR and posts complaint when CI checks exceed timeout in Issue-to-PR pivot path" {

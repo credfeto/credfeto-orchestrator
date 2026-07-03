@@ -482,6 +482,43 @@ pr_json_is_terminal() {
     ' > /dev/null 2>&1
 }
 
+# Returns 0 (true) if any required check has definitively failed (CheckRun conclusion FAILURE, or
+# legacy StatusContext state FAILURE/ERROR).  Used to distinguish a PR that has legitimately
+# settled (idle-parked while waiting on a human, e.g. for review/approval) from one that is
+# idle-parked *despite* an active failure nobody is fixing — the idle-invocation budget alone
+# cannot tell these apart.  Uses the same CheckRun-vs-legacy-StatusContext classification as
+# pr_json_has_pending_ci_checks / pr_json_is_terminal.
+pr_json_has_failed_required_check() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '
+        (.statusCheckRollup // [])
+        | any(.[];
+            .isRequired != false
+            and (
+                if (.status != null)
+                then .conclusion == "FAILURE"
+                else ((.state // "") | . == "FAILURE" or . == "ERROR")
+                end
+            )
+        )
+    ' > /dev/null 2>&1
+}
+
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been
+# exhausted while a required check is still definitively failed, so a human is pulled in instead
+# of the PR silently rotting forever — the idle budget alone has no way to escalate.  No separate
+# Discord call here: adding the Blocked label means the next tick's existing earlier
+# pr_json_has_blocked_label check catches it first, and its already-idempotent notifier fires
+# there, same as every other Blocked-label path in this file.
+block_pr_for_idle_exhausted_failure() {
+    local item_id="$1" item_repo="$2"
+    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
+COMMENT
+    )" 2>/dev/null || true
+    gh pr edit "${item_id}" --repo "${item_repo}" --add-label Blocked 2>/dev/null || true
+}
+
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
 # can run (phases that only advance the board — e.g. a clean review — leave the fingerprint
 # unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the
@@ -2785,7 +2822,12 @@ COMMENT
                                 info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                                 pr_idle_advance=1
                             else
-                                info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                                if pr_json_has_failed_required_check "${pr_json}"; then
+                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
+                                    block_pr_for_idle_exhausted_failure "${open_pr}" "${item_repo}"
+                                else
+                                    info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                                fi
                                 count_unchanged=$((count_unchanged + 1))
                                 continue
                             fi
@@ -2893,7 +2935,12 @@ COMMENT
                     info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                     pr_idle_advance=1
                 else
-                    info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                    if pr_json_has_failed_required_check "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
+                        block_pr_for_idle_exhausted_failure "${item_id}" "${item_repo}"
+                    else
+                        info "PR #${item_id} in ${item_repo} unchanged — skipping"
+                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
