@@ -97,6 +97,36 @@ RUN : "${SOME_CACHE_BUST}"; \
 
 Without this, changing the ARG in the workflow has no effect on the cached layer.
 
+## Pinned Upstream Repo Clones (MANDATORY)
+
+Never clone an external repo with a plain `git clone --depth 1 <url>` and then assert the resulting `HEAD` equals a pinned commit — that clones whatever the default branch's tip is *right now*, so the assertion (and the build) fails every time upstream gets a new commit, not just on an actual tamper event. Pick the mechanism per repo, and re-evaluate the choice (not just the value) whenever bumping:
+
+- **Third-party repo with a current, compatible tagged release**: pin to that tag and verify the commit it resolves to:
+
+  ```dockerfile
+  ARG SOME_REF=v1.0.0
+  ARG SOME_COMMIT=<sha the tag resolves to>
+  RUN git clone --depth 1 --branch "${SOME_REF}" https://github.com/<org>/<repo>.git /opt/tool \
+      && test "$(git -C /opt/tool rev-parse HEAD)" = "${SOME_COMMIT}" \
+      && chown -R root:root /opt/tool
+  ```
+
+  "Compatible" means: check the tag isn't stale relative to what the Dockerfile actually consumes (e.g. a hardcoded file/skill list or count) — diff the tag's relevant subtree against current default-branch HEAD before adopting it. A stale tag that predates a refactor the build depends on is worse than no tag.
+
+- **Third-party repo with no usable tag** (none published, or the latest one is stale/incompatible): pin to an exact commit SHA, fetched directly rather than cloned from the moving tip:
+
+  ```dockerfile
+  ARG SOME_COMMIT=<pinned sha>
+  RUN git init -q /opt/tool \
+      && git -C /opt/tool fetch -q --depth 1 https://github.com/<org>/<repo>.git "${SOME_COMMIT}" \
+      && git -C /opt/tool checkout -q FETCH_HEAD \
+      && chown -R root:root /opt/tool
+  ```
+
+  This only fails the build if that commit becomes unreachable upstream (a force-push/history rewrite) — verified: `git fetch <url> <bogus-sha>` fails hard (`fatal: remote error: upload-pack: not our ref ...`, exit 128), so the tamper-detection property is preserved. For a sparse-checkout repo, run `git sparse-checkout init --cone` before the `fetch` and `sparse-checkout set <paths>` before the `checkout`.
+
+- **credfeto-owned repo**: implicitly trusted — always track live main HEAD with no pinned-commit assertion at all (plain `git clone --depth 1 <url>`, no `test`). Still cache-bust on a live-resolved value (e.g. `git ls-remote <url> HEAD` in the workflow) so the layer refreshes when upstream changes — see `credfeto-global-pre-commit` in `containers/base/development-full/Dockerfile`.
+
 ## Workflow Build Chain
 
 Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`, in addition to the cron fallback:
