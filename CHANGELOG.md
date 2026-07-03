@@ -223,6 +223,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR is no longer treated as done once auto-merge is enabled if a reviewer has an outstanding CHANGES_REQUESTED review, so the automation keeps engaging with review feedback instead of silently ignoring it
 - A transient GitHub identity lookup failure while checking a repo for existing PRs no longer aborts the whole orchestrator run — the lookup is retried and, if it still fails, only that one work item is skipped so the rest of the cycle still runs
 - All five build-development-*.yml workflows now set ignore-error=true on their GHA cache-to exporter, so a transient GitHub Actions cache-write contention/quota failure (error writing layer blob: failed to reserve cache) no longer fails the whole build after the image has already been successfully pushed to ghcr.io (#1087)
+- A priorities-API outage or malformed response was previously silently reported as a healthy 'no work items found' run; the fetch is now retried and any ultimate failure now fails the run loudly instead of masquerading as success
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

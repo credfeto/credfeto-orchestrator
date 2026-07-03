@@ -1618,6 +1618,35 @@ STUBEOF
     [[ "${repos}" == *"org/repoB"* ]]
 }
 
+@test "fetch_all_priorities retries and succeeds after a transient curl failure (#1089)" {
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=3
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub curl 'n=$(cat "'"${TEST_TMP}"'/curlcount" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/curlcount"; [ "$n" -lt 2 ] && exit 1; printf "{\"priorities\":[]}\n"'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+}
+
+@test "fetch_all_priorities returns 1 without dying after exhausting retries on a persistent curl failure (#1089)" {
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=2
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    make_stub curl 'exit 1'
+
+    run fetch_all_priorities
+    [ "${status}" -ne 0 ]
+}
+
+@test "fetch_all_priorities returns 1 without dying when the response is not valid JSON (#1089)" {
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=1
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    make_stub curl 'printf "not json"'
+
+    run fetch_all_priorities
+    [ "${status}" -ne 0 ]
+}
+
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
 
 @test "find_open_nonblocked_pr_for_repo returns first non-blocked PR number" {
@@ -2101,6 +2130,26 @@ STUBEOF
 }
 
 # --- repository name validation -----------------------------------------------
+
+@test "main dies loudly (does not report success) when fetch_all_priorities ultimately fails (#1089)" {
+    setup_main_mocks
+    fetch_all_priorities() { return 1; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to fetch priorities"* ]]
+    [[ "${output}" != *"No actionable work items"* ]]
+    [[ "${output}" != *"No open work items"* ]]
+}
+
+@test "main dies loudly when the priorities item count cannot be determined (#1089)" {
+    setup_main_mocks
+    fetch_all_priorities() { printf 'not valid json\n'; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to determine item count from priorities JSON"* ]]
+}
 
 @test "main dies on malformed repository name from priorities API (path traversal)" {
     setup_main_mocks
