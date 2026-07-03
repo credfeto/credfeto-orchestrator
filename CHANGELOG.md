@@ -220,6 +220,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container's prompt is now passed as a positional CLI argument to claude --print instead of via stdin redirection, eliminating the host-to-container stdin-attach timing race that intermittently caused the whole orchestrator run to fail
 - Agent container's claude invocation now terminates option parsing with -- before the prompt argument, fixing the variadic --add-dir flag greedily swallowing the prompt instead of recognizing it, which intermittently caused the whole orchestrator run to fail
 - Agent container now enables Claude Code's built-in auto-compaction so long-running sessions summarize their own context automatically instead of eventually crashing with 'Prompt is too long'
+- PR is no longer treated as done once auto-merge is enabled if a reviewer has an outstanding CHANGES_REQUESTED review, so the automation keeps engaging with review feedback instead of silently ignoring it
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
