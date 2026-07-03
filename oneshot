@@ -84,6 +84,15 @@ GH_USER_RETRY_ATTEMPTS="${GH_USER_RETRY_ATTEMPTS:-3}"
 GH_USER_RETRY_DELAY_SECS="${GH_USER_RETRY_DELAY_SECS:-2}"
 [[ "${GH_USER_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_USER_RETRY_DELAY_SECS=2
 
+# How many times to retry fetching the priorities feed, and how long to wait between attempts,
+# before giving up. This is the single most load-bearing network call in the script — a transient
+# blip here must not be reported to the operator as a healthy "no work" run (#1089). Overridable
+# from the environment (tests set the delay to 0 to keep the suite fast).
+PRIORITIES_FETCH_RETRY_ATTEMPTS="${PRIORITIES_FETCH_RETRY_ATTEMPTS:-3}"
+[[ "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PRIORITIES_FETCH_RETRY_ATTEMPTS=3
+PRIORITIES_FETCH_RETRY_DELAY_SECS="${PRIORITIES_FETCH_RETRY_DELAY_SECS:-2}"
+[[ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || PRIORITIES_FETCH_RETRY_DELAY_SECS=2
+
 # Token window at which the agent's own Claude Code session should auto-compact its context
 # rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
 # container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
@@ -389,16 +398,28 @@ hash_sha256() {
 }
 
 # Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
+# Retries transient fetch failures a few times before giving up. Returns 1 (does NOT die,
+# does NOT exit the shell) on ultimate failure — the caller must check this explicitly and
+# die itself, because a swallowed failure here previously fell through to a "No actionable
+# work items found" success report, masking a priorities-API outage as a healthy idle run (#1089).
 fetch_all_priorities() {
-    local priorities_json
+    local priorities_json attempt=1
 
-    priorities_json=$(curl --silent --fail "${PRIORITIES_URL}") \
-        || die "Failed to fetch priorities from ${PRIORITIES_URL}"
-
-    printf '%s' "${priorities_json}" | jq -c '[
-        .priorities[]
-            | select((.status == "Open" or .status == "Draft") and .isOnHold == false)
-    ]' || die "Failed to parse priorities JSON"
+    while [ "${attempt}" -le "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ]; do
+        if priorities_json=$(curl --silent --fail --connect-timeout 10 --max-time 60 "${PRIORITIES_URL}" 2>/dev/null); then
+            printf '%s' "${priorities_json}" | jq -c '[
+                .priorities[]
+                    | select((.status == "Open" or .status == "Draft") and .isOnHold == false)
+            ]' && return 0
+            warn "Failed to parse priorities JSON from ${PRIORITIES_URL}"
+            return 1
+        fi
+        [ "${attempt}" -lt "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ] && [ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${PRIORITIES_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    warn "Failed to fetch priorities from ${PRIORITIES_URL} after ${PRIORITIES_FETCH_RETRY_ATTEMPTS} attempt(s)"
+    return 1
 }
 
 # Resolves the current GitHub login into the cached _GH_ME, retrying a few times on failure.
@@ -2723,7 +2744,7 @@ main() {
 
     local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."
-    items_json=$(fetch_all_priorities)
+    items_json=$(fetch_all_priorities) || die "Failed to fetch priorities from ${PRIORITIES_URL}"
 
     if [ -n "${owner_filter}" ]; then
         items_json=$(printf '%s' "${items_json}" | jq -c --arg owner "${owner_filter}" \
@@ -2732,6 +2753,7 @@ main() {
     fi
 
     item_count=$(printf '%s' "${items_json}" | jq 'length')
+    [[ "${item_count}" =~ ^[0-9]+$ ]] || die "Failed to determine item count from priorities JSON"
     if [ "${item_count}" -eq 0 ]; then
         success "No open work items found in priorities"
         notify_discord_no_work "${owner_filter}"
