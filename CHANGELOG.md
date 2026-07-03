@@ -207,6 +207,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Use the real service username instead of systemd's %u specifier in install-timer's pkill ExecStartPre lines — %u resolves to root (the system manager's user) in system services, not the service's User=, so the pre-start ssh-agent/gpg-agent cleanup was always a silent no-op
 - Instruct agent sessions to wait synchronously for slow pre-commit hooks (build+test) instead of ending the turn and expecting to be notified later — under the fresh-session-per-phase design, stopping mid-commit tears down the container, killing the hook before it finishes and leaving the branch stuck in an endless dirty-retry loop.
 - Agent container images now fail to build if any pre-commit linter wrapper (run-eslint, run-stylelint, run-psscriptanalyzer, run-bats) is not resolvable on the developer user's PATH, preventing images that break commits with an "Executable run-eslint not found" hook error
+- development-full now runs the pre-commit check-setup health-check at build time (as the developer user) and fails the build if the pre-commit config is invalid or any required linter tool is missing
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

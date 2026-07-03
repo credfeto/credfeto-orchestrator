@@ -336,6 +336,18 @@ RUN set -e; \
     su developer -c /tmp/pre-commit-test/acceptance-test; \
     rm -rf /tmp/pre-commit-test
 
+# ---- /opt/pre-commit setup health-check (fail build if incomplete) ----------
+# check-setup validates the bundled pre-commit config (`pre-commit validate-config`)
+# and asserts every tool the hooks dispatch is installed and on PATH, exiting
+# non-zero if the config is invalid or anything is missing. On a generic CI runner
+# some tools are legitimately absent, so its non-zero exit is tolerated there — but
+# this image installs the full toolchain by design, so a non-zero exit here means a
+# tool or config regression and MUST fail the build. Run as the developer user so it
+# sees the same PATH and per-user dotnet global tools (cscleanup, pwsh, …) that exist
+# at runtime; check-setup performs no network/.env access, so no /tmp copy is needed.
+# hadolint ignore=DL3059
+RUN su developer -c /opt/pre-commit/check-setup
+
 # Bake the git SHA of the orchestrator commit that built this image layer into the
 # environment so entrypoint.sh can log it for debugging. Placed last so changing
 # the SHA only invalidates this cheap final layer.
