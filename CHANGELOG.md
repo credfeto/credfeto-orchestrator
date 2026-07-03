@@ -208,6 +208,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Instruct agent sessions to wait synchronously for slow pre-commit hooks (build+test) instead of ending the turn and expecting to be notified later — under the fresh-session-per-phase design, stopping mid-commit tears down the container, killing the hook before it finishes and leaving the branch stuck in an endless dirty-retry loop.
 - Agent container images now fail to build if any pre-commit linter wrapper (run-eslint, run-stylelint, run-psscriptanalyzer, run-bats) is not resolvable on the developer user's PATH, preventing images that break commits with an "Executable run-eslint not found" hook error
 - development-full now runs the pre-commit check-setup health-check at build time (as the developer user) and fails the build if the pre-commit config is invalid or any required linter tool is missing
+- PR CI-check detection no longer treats a legacy commit-status check as permanently pending, which was preventing the orchestrator from noticing and fixing real CI failures on affected PRs and blocked sibling issues in the same repo from being worked
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

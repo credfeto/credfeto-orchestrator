@@ -1929,8 +1929,22 @@ load_pr_fingerprint() {
 # Non-required (optional) checks are ignored so they cannot gate agent invocation.
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
+    # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
+    # checks, has .status) and StatusContext (legacy commit statuses, has only .state
+    # and no .status at all). Treating a StatusContext's absent .status as "not
+    # COMPLETED" makes it look pending forever, even once its .state is a terminal
+    # SUCCESS/FAILURE/ERROR — so each entry is classified by which field it actually has.
     printf '%s' "${pr_json}" | jq -e '
-        (.statusCheckRollup // []) | (length > 0) and any(.[]; .status != "COMPLETED" and .isRequired != false)
+        (.statusCheckRollup // [])
+        | (length > 0) and any(.[];
+            .isRequired != false
+            and (
+                if (.status != null)
+                then .status != "COMPLETED"
+                else ((.state // "") | . == "PENDING" or . == "EXPECTED")
+                end
+            )
+        )
     ' > /dev/null
 }
 
