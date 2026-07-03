@@ -217,6 +217,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - A PR whose idle-invocation budget is exhausted while it still has a failed required check is now marked Blocked with an explanatory comment instead of being silently parked forever with no human ever notified
 - Agent container's prompt is now passed as a positional CLI argument to claude --print instead of via stdin redirection, eliminating the host-to-container stdin-attach timing race that intermittently caused the whole orchestrator run to fail
 - Agent container's claude invocation now terminates option parsing with -- before the prompt argument, fixing the variadic --add-dir flag greedily swallowing the prompt instead of recognizing it, which intermittently caused the whole orchestrator run to fail
+- Agent container now enables Claude Code's built-in auto-compaction so long-running sessions summarize their own context automatically instead of eventually crashing with 'Prompt is too long'
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

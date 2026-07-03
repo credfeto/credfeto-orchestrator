@@ -75,6 +75,13 @@ MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
 [[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=120
 
+# Token window at which the agent's own Claude Code session should auto-compact its context
+# rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
+# container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
+# over any settings.json value. Override with CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment.
+CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
+[[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000
+
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
 # Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
@@ -1745,6 +1752,7 @@ invoke_claude() {
         PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
+    PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
