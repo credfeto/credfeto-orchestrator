@@ -1075,14 +1075,62 @@ teardown() {
     printf '%s' "${result}" | jq -e 'index("spaced2") != null' > /dev/null
 }
 
-@test "get_trusted_logins falls back gracefully when GitHub API fails" {
+@test "get_trusted_logins fails closed (does not fall back to a shrunken list) when GitHub API always fails (#1094)" {
     set_repo_context "myorg/myrepo"
     WHITELISTED_USERS=""
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
     make_stub gh 'exit 1'
+    run get_trusted_logins
+    [ "${status}" -ne 0 ]
+    [ -z "${_TRUSTED_LOGINS_JSON}" ]
+}
+
+@test "get_trusted_logins retries GH_COLLABORATORS_RETRY_ATTEMPTS times before giving up (#1094)" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    GH_COLLABORATORS_RETRY_ATTEMPTS=3
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${call_log}'; exit 1"
+    run get_trusted_logins
+    [ "${status}" -ne 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 3 ]
+}
+
+@test "get_trusted_logins succeeds after a transient failure on an earlier attempt (#1094)" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${call_log}'; if [ \$(wc -l < '${call_log}') -lt 2 ]; then exit 1; fi; printf 'collab1\n'"
     local result
     result=$(get_trusted_logins)
-    [ -n "${result}" ]
-    printf '%s' "${result}" | jq -e 'index("myorg") != null' > /dev/null
+    printf '%s' "${result}" | jq -e 'index("collab1") != null' > /dev/null
+}
+
+@test "get_trusted_logins passes --paginate to the collaborators API call (#1094)" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    export ARGS_LOG="${TEST_TMP}/gh_args"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${ARGS_LOG}"; exit 0'
+    get_trusted_logins > /dev/null
+    grep -q -- '--paginate' "${ARGS_LOG}"
+}
+
+@test "get_trusted_logins does not cache a failed fetch, so the next call retries (#1094)" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${call_log}'; exit 1"
+    run get_trusted_logins
+    [ "${status}" -ne 0 ]
+    local first_calls
+    first_calls=$(wc -l < "${call_log}")
+    run get_trusted_logins
+    [ "${status}" -ne 0 ]
+    [ "$(wc -l < "${call_log}")" -gt "${first_calls}" ]
 }
 
 @test "get_trusted_logins deduplicates logins when OWNER appears as a collaborator" {
@@ -1130,6 +1178,24 @@ teardown() {
     fingerprint_pr_json() { captured_trusted="${2:-missing}"; printf 'test-fp\n'; }
     compute_pr_fingerprint 5
     [ "${captured_trusted}" = '["testowner"]' ]
+}
+
+@test "compute_issue_fingerprint returns non-zero without calling fingerprint_issue_json when get_trusted_logins fails (#1094)" {
+    fetch_issue_json() { printf '{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    get_trusted_logins() { return 1; }
+    fingerprint_issue_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'test-fp\n'; }
+    run compute_issue_fingerprint 42
+    [ "${status}" -ne 0 ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+}
+
+@test "compute_pr_fingerprint returns non-zero without calling fingerprint_pr_json when get_trusted_logins fails (#1094)" {
+    fetch_pr_json() { printf '{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    get_trusted_logins() { return 1; }
+    fingerprint_pr_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'test-fp\n'; }
+    run compute_pr_fingerprint 5
+    [ "${status}" -ne 0 ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
 }
 
 # --- model selection -----------------------------------------------------------
@@ -6150,6 +6216,23 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a get_trusted_logins failure in the direct-PR path (#1094)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    get_trusted_logins() { return 1; }
+    fingerprint_pr_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'fp-new\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+    [[ "${output}" == *"Failed to fetch trusted collaborators for org/repo"* ]]
 }
 
 @test "main blocks a PR and does not invoke claude when its invocation total is at the runaway cap (#1093)" {
