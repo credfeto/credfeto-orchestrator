@@ -6175,6 +6175,35 @@ STUBEOF
     [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
+@test "main still blocks and warns loudly when the runaway-blocked marker cannot be written (#1093 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    # Guard file already written above; now make the directory unwritable so the runaway-blocked
+    # marker touch fails — the label/comment escalation (a gh call, unaffected by local fs
+    # permissions) must still go through, and the failure must be surfaced via warn rather than
+    # silently swallowed.
+    chmod 555 "${SESSION_BASE_DIR}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    chmod 755 "${SESSION_BASE_DIR}"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+    [[ "${output}" == *"Failed to write runaway-blocked marker for PR #5"* ]]
+}
+
 @test "main resets a PR's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
     setup_main_mocks
     fetch_all_priorities() {

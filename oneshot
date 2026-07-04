@@ -506,6 +506,15 @@ find_open_nonblocked_pr_for_repo() {
     '
 }
 
+# Shared invocation-guard file path for the runaway backstop, keyed by item type + id. The PR
+# and Issue guards below store different shapes (PRs also track an idle counter — see
+# load/save_pr_invocation_counts vs. the Issue-only total) so their load/save logic stays
+# separate, but the naming/location logic is identical and lives in one place (#1093 review).
+invocation_guard_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.invocations' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
 # Per-PR invocation guard.  Because every run is a fresh session that advances the workflow by
 # one phase, a PR is re-invoked repeatedly across ticks until it reaches a terminal state.  The
 # guard file holds two space-separated counters, "<total> <idle>":
@@ -519,7 +528,7 @@ find_open_nonblocked_pr_for_repo() {
 # Absence of the file also signals the first-ever touch of the PR.
 pr_invocation_guard_file_path() {
     local item_id="$1"
-    printf '%s/PullRequest_%s.invocations' "${SESSION_BASE_DIR}" "${item_id}"
+    invocation_guard_file_path "PullRequest" "${item_id}"
 }
 
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
@@ -587,7 +596,7 @@ reset_pr_invocation_counts_if_capped() {
 # every tick forever, since PullRequest_*.invocations only starts counting once a PR exists.
 issue_invocation_guard_file_path() {
     local item_id="$1"
-    printf '%s/Issue_%s.invocations' "${SESSION_BASE_DIR}" "${item_id}"
+    invocation_guard_file_path "Issue" "${item_id}"
 }
 
 # Reads the saved total invocation count for an Issue, defaulting missing/corrupt values to 0.
@@ -3382,8 +3391,10 @@ main() {
 This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate.
 COMMENT
                     )" 2>/dev/null || true
-                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || true
-                    touch "$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")" 2>/dev/null || true
+                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                    if ! touch "$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")" 2>/dev/null; then
+                        warn "Failed to write runaway-blocked marker for PR #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
+                    fi
                 fi
                 notify_discord_blocked_item "PullRequest" "${item_id}"
                 count_blocked=$((count_blocked + 1))
@@ -3402,8 +3413,10 @@ COMMENT
 This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate.
 COMMENT
                     )" 2>/dev/null || true
-                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || true
-                    touch "$(runaway_blocked_marker_file_path "Issue" "${item_id}")" 2>/dev/null || true
+                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                    if ! touch "$(runaway_blocked_marker_file_path "Issue" "${item_id}")" 2>/dev/null; then
+                        warn "Failed to write runaway-blocked marker for Issue #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
+                    fi
                 fi
                 notify_discord_blocked_item "Issue" "${item_id}"
                 count_blocked=$((count_blocked + 1))
