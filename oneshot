@@ -302,6 +302,19 @@ get_trusted_logins() {
     printf '%s' "${_TRUSTED_LOGINS_JSON}"
 }
 
+# Fetches trusted logins for the current repo into the caller's `trusted_logins` variable,
+# warning and bumping the caller's `count_error` on failure (#1094 review). Relies on bash's
+# dynamic scoping of `local`s: this must only be called from within main()'s per-item loop,
+# where both `trusted_logins` and `count_error` are already declared local — `continue` itself
+# can't live inside a called function, so callers combine this with `|| continue` to skip the
+# item this tick, e.g.: `require_trusted_logins || continue`.
+require_trusted_logins() {
+    trusted_logins=$(get_trusted_logins) && return 0
+    warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"
+    count_error=$((count_error + 1))
+    return 1
+}
+
 # Returns 0 on success, 1 on failure (a transient network blip on the rules repo — unrelated to
 # any individual work item — must not die the whole run and throw away every other priority item
 # in the cycle, #1090). A stale or absent rules checkout is handled gracefully downstream by
@@ -1149,11 +1162,16 @@ _wf_invite_trusted_collaborators() {
     local login
 
     # Phase 1 — collect logins, skipping the copilot bot (no gh calls yet)
+    local trusted_json
+    trusted_json=$(get_trusted_logins) || {
+        warn "Workflow project: failed to fetch trusted collaborators for ${REPO_FULL} — skipping collaborator invites"
+        return 0
+    }
     while IFS= read -r login; do
         [ -z "${login}" ] && continue
         [ "${login}" = "copilot-pull-request-reviewer" ] && continue
         logins+=("${login}")
-    done < <(get_trusted_logins | jq -r '.[]' 2>/dev/null)
+    done < <(printf '%s' "${trusted_json}" | jq -r '.[]' 2>/dev/null)
     [ "${#logins[@]}" -eq 0 ] && return 0
 
     # Phase 2 — single batched GraphQL user-node lookup using field aliases
@@ -3166,8 +3184,7 @@ main() {
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
 
-                trusted_logins=$(get_trusted_logins) \
-                    || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                require_trusted_logins || continue
                 pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
@@ -3186,8 +3203,7 @@ main() {
                     clear_pr_ci_pending_state "${open_pr}"
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
-                        trusted_logins=$(get_trusted_logins) \
-                            || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                        require_trusted_logins || continue
                         issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
@@ -3247,8 +3263,7 @@ main() {
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
 
-                trusted_logins=$(get_trusted_logins) \
-                    || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                require_trusted_logins || continue
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
@@ -3293,8 +3308,7 @@ main() {
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
 
-            trusted_logins=$(get_trusted_logins) \
-                || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+            require_trusted_logins || continue
             pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
@@ -3468,8 +3482,7 @@ COMMENT
         discover_or_create_workflow_project
         [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
 
-        trusted_logins=$(get_trusted_logins) \
-            || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+        require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
             fetch_board_approved_items
             local plan_approved="false"
