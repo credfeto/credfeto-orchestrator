@@ -2907,6 +2907,7 @@ main() {
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
     local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
+    local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -3338,19 +3339,36 @@ COMMENT
 
         success "Completed one workflow phase for ${item_type} #${item_id} in ${item_repo}"
 
+        # The agent's work (commits, comments, board moves) is already durable in GitHub at this
+        # point — a transient gh failure computing the post-run fingerprint must not fail the run
+        # (#1091): the fingerprint would be missing, the same phase would be re-invoked next tick
+        # (potentially duplicating agent actions), and PR_INVOCATION_TOTAL — already incremented
+        # above — would be charged twice for one phase of real work. Both fingerprints (PR + its
+        # linked issue, when pivoting) are computed FIRST and only saved once BOTH succeed, so a
+        # failure on one side never leaves the pair half-written (which would itself guarantee a
+        # spurious re-invocation via the "PR unchanged, issue changed" branch next tick).
         if [ "${item_type}" = "PullRequest" ]; then
-            post_fp=$(compute_pr_fingerprint "${item_id}") \
-                || die "Failed to compute post-run fingerprint for PR #${item_id} in ${item_repo}"
-            save_pr_fingerprint "${item_id}" "${post_fp}"
+            post_pr_fp_ok=1
+            post_issue_fp_ok=1
+            post_issue_fp=""
+            post_fp=$(compute_pr_fingerprint "${item_id}") && post_pr_fp_ok=0
             if [ -n "${original_issue_id}" ]; then
-                post_fp=$(compute_issue_fingerprint "${original_issue_id}") \
-                    || die "Failed to compute post-run fingerprint for Issue #${original_issue_id} in ${item_repo}"
-                save_issue_fingerprint "${original_issue_id}" "${post_fp}"
+                post_issue_fp=$(compute_issue_fingerprint "${original_issue_id}") && post_issue_fp_ok=0
+            else
+                post_issue_fp_ok=0
+            fi
+            if [ "${post_pr_fp_ok}" -eq 0 ] && [ "${post_issue_fp_ok}" -eq 0 ]; then
+                save_pr_fingerprint "${item_id}" "${post_fp}"
+                [ -n "${original_issue_id}" ] && save_issue_fingerprint "${original_issue_id}" "${post_issue_fp}"
+            else
+                warn "Failed to compute post-run fingerprint(s) for ${item_type} #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
             fi
         elif [ "${item_type}" = "Issue" ]; then
-            post_fp=$(compute_issue_fingerprint "${item_id}") \
-                || die "Failed to compute post-run fingerprint for Issue #${item_id} in ${item_repo}"
-            save_issue_fingerprint "${item_id}" "${post_fp}"
+            if post_fp=$(compute_issue_fingerprint "${item_id}"); then
+                save_issue_fingerprint "${item_id}" "${post_fp}"
+            else
+                warn "Failed to compute post-run fingerprint for Issue #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
+            fi
         fi
 
         exit 0

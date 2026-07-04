@@ -6076,6 +6076,67 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
 }
 
+@test "main does not die and does not save when the post-run PR fingerprint compute fails (#1091)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    compute_pr_fingerprint() { return 1; }
+    save_pr_fingerprint() { printf 'saved\n' >> "${TEST_TMP}/save_log"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/save_log" ]
+    [[ "${output}" == *"Failed to compute post-run fingerprint"* ]]
+    [[ "${output}" == *"will re-evaluate next tick"* ]]
+}
+
+@test "main saves neither fingerprint when the PR succeeds but the linked issue's compute fails (atomicity, #1091)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '5\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    compute_pr_fingerprint() { printf 'pr-fp-ok\n'; return 0; }
+    compute_issue_fingerprint() { return 1; }
+    save_pr_fingerprint() { printf 'saved-pr\n' >> "${TEST_TMP}/save_log"; }
+    save_issue_fingerprint() { printf 'saved-issue\n' >> "${TEST_TMP}/save_log"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/save_log" ]
+    [[ "${output}" == *"Failed to compute post-run fingerprint"* ]]
+}
+
+@test "main does not die and does not save when the post-run Issue fingerprint compute fails (#1091)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    compute_issue_fingerprint() { return 1; }
+    save_issue_fingerprint() { printf 'saved\n' >> "${TEST_TMP}/save_log"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/save_log" ]
+    [[ "${output}" == *"Failed to compute post-run fingerprint for Issue #10"* ]]
+}
+
 @test "main skips (does not die on, and does not hand off to agent for) a transient repo-fetch failure (#1090)" {
     setup_main_mocks
     fetch_all_priorities() {
