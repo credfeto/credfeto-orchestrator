@@ -61,6 +61,14 @@ MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-30}"
 [[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=30
 
+# Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
+# Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked
+# without producing a PR (agent keeps planning/erroring and posting comments) re-fires every
+# tick with no cap (#1093). Default is lower than the PR cap — the Issue-only phase count
+# (plan → produce PR) should be small; once a PR exists the PR backstop takes over.
+MAX_ISSUE_TOTAL_INVOCATIONS="${MAX_ISSUE_TOTAL_INVOCATIONS:-15}"
+[[ "${MAX_ISSUE_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_ISSUE_TOTAL_INVOCATIONS=15
+
 # How many consecutive "in-progress" re-invocations to allow on an unchanged PR fingerprint
 # before parking it.  Phases that advance the board without pushing (a clean code/security
 # review, or the finalize step on a repo where auto-merge cannot be enabled) do not change the
@@ -498,6 +506,15 @@ find_open_nonblocked_pr_for_repo() {
     '
 }
 
+# Shared invocation-guard file path for the runaway backstop, keyed by item type + id. The PR
+# and Issue guards below store different shapes (PRs also track an idle counter — see
+# load/save_pr_invocation_counts vs. the Issue-only total) so their load/save logic stays
+# separate, but the naming/location logic is identical and lives in one place (#1093 review).
+invocation_guard_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.invocations' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
 # Per-PR invocation guard.  Because every run is a fresh session that advances the workflow by
 # one phase, a PR is re-invoked repeatedly across ticks until it reaches a terminal state.  The
 # guard file holds two space-separated counters, "<total> <idle>":
@@ -511,7 +528,7 @@ find_open_nonblocked_pr_for_repo() {
 # Absence of the file also signals the first-ever touch of the PR.
 pr_invocation_guard_file_path() {
     local item_id="$1"
-    printf '%s/PullRequest_%s.invocations' "${SESSION_BASE_DIR}" "${item_id}"
+    invocation_guard_file_path "PullRequest" "${item_id}"
 }
 
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
@@ -539,6 +556,83 @@ save_pr_invocation_counts() {
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
     printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
         || die "Failed to write invocation guard file: ${guard_file}"
+}
+
+# Marks that an item was blocked specifically by the runaway invocation backstop (as opposed to
+# a CI-timeout or idle-exhausted escalation), once the Blocked label has been CONFIRMED applied.
+# This is the signal the reset_*_invocation_counts_if_capped helpers use to tell "the count
+# happens to be at/above the cap on THIS tick — the tick the backstop is about to fire on" apart
+# from "this item was already capped-and-blocked by a PRIOR tick, and a human has since cleared
+# the label" — only the latter should forgive the counter. Comparing the counter to the cap
+# directly cannot make that distinction, and doing so would reset (and thus never actually
+# apply) the very block the backstop is in the middle of raising.
+runaway_blocked_marker_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.runaway-blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Resets a PR's invocation-total counter once it is observed un-blocked, but only when it was
+# blocked by the runaway backstop itself (runaway_blocked_marker_file_path present). Without
+# this, a human clearing the Blocked label on a cap-blocked PR would be a no-op: the guard file
+# is never otherwise cleared, so the very next tick reloads the same at-or-over-cap total and
+# immediately re-blocks it, turning "unblock" into a silent re-block loop. Blocks for unrelated
+# reasons (CI timeout, idle-exhausted review/check) leave the total untouched here — resetting
+# those would hand back an undeserved fresh budget instead of preserving the PR's history.
+# Call alongside clear_blocked_marker, every place a PR is observed open and un-blocked.
+reset_pr_invocation_counts_if_capped() {
+    local item_id="$1" marker_file
+    marker_file=$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")
+    if [ -f "${marker_file}" ]; then
+        save_pr_invocation_counts "${item_id}" 0 0
+        rm -f "${marker_file}" 2>/dev/null || true
+    fi
+}
+
+# Per-Issue invocation guard — same runaway-backstop idea as the PR guard above, but Issues have
+# no idle-park case (an unchanged Issue is simply skipped, never re-invoked), so this only tracks
+# a single total: every agent invocation ever spent on this Issue while it has no active PR.  At
+# MAX_ISSUE_TOTAL_INVOCATIONS the Issue is marked Blocked for a human (#1093) — this closes the
+# gap where a non-converging Issue (agent keeps planning/erroring, never opens a PR) re-fires
+# every tick forever, since PullRequest_*.invocations only starts counting once a PR exists.
+issue_invocation_guard_file_path() {
+    local item_id="$1"
+    invocation_guard_file_path "Issue" "${item_id}"
+}
+
+# Reads the saved total invocation count for an Issue, defaulting missing/corrupt values to 0.
+# Sets global ISSUE_INVOCATION_TOTAL.
+ISSUE_INVOCATION_TOTAL=0
+load_issue_invocation_counts() {
+    local item_id="$1" guard_file total
+    ISSUE_INVOCATION_TOTAL=0
+    guard_file=$(issue_invocation_guard_file_path "${item_id}")
+    [ -f "${guard_file}" ] || return 0
+    total=$(cat "${guard_file}" 2>/dev/null)
+    total="${total%% *}"
+    [[ "${total}" =~ ^[0-9]+$ ]] && ISSUE_INVOCATION_TOTAL="${total}"
+    return 0
+}
+
+# Persists the total invocation count for an Issue.
+save_issue_invocation_counts() {
+    local item_id="$1" total="$2" guard_file
+    guard_file=$(issue_invocation_guard_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${total}" > "${guard_file}" \
+        || die "Failed to write invocation guard file: ${guard_file}"
+}
+
+# Same reset-on-unblock treatment as reset_pr_invocation_counts_if_capped, for Issues (#1093):
+# only reset when this Issue was blocked by the runaway backstop itself (marker file present),
+# so clearing the Blocked label actually un-sticks it instead of it re-capping on the next tick.
+# Call alongside clear_blocked_marker, every place an Issue is observed open and un-blocked.
+reset_issue_invocation_counts_if_capped() {
+    local item_id="$1" marker_file
+    marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
+    if [ -f "${marker_file}" ]; then
+        save_issue_invocation_counts "${item_id}" 0
+        rm -f "${marker_file}" 2>/dev/null || true
+    fi
 }
 
 # Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
@@ -3007,8 +3101,10 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier.
+                # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
+                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
                 clear_blocked_marker "Issue" "${item_id}"
+                reset_issue_invocation_counts_if_capped "${item_id}"
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
@@ -3031,8 +3127,10 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
-                # PR observed open and un-blocked — re-arm its blocked notifier.
+                # PR observed open and un-blocked — re-arm its blocked notifier and, if the
+                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
                 clear_blocked_marker "PullRequest" "${open_pr}"
+                reset_pr_invocation_counts_if_capped "${open_pr}"
 
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
@@ -3109,8 +3207,10 @@ main() {
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier.
+                # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
+                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
                 clear_blocked_marker "Issue" "${item_id}"
+                reset_issue_invocation_counts_if_capped "${item_id}"
 
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
@@ -3148,8 +3248,10 @@ main() {
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
-            # PR observed open and un-blocked — re-arm its blocked notifier.
+            # PR observed open and un-blocked — re-arm its blocked notifier and, if the
+            # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
             clear_blocked_marker "PullRequest" "${item_id}"
+            reset_pr_invocation_counts_if_capped "${item_id}"
 
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
@@ -3289,8 +3391,34 @@ main() {
 This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate.
 COMMENT
                     )" 2>/dev/null || true
+                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                    if ! touch "$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")" 2>/dev/null; then
+                        warn "Failed to write runaway-blocked marker for PR #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
+                    fi
                 fi
                 notify_discord_blocked_item "PullRequest" "${item_id}"
+                count_blocked=$((count_blocked + 1))
+                continue
+            fi
+        elif [ "${item_type}" = "Issue" ]; then
+            # Runaway backstop (Issues): same idea as the PR backstop above, for the
+            # Issue-stays-Issue path (an Issue with no active PR that keeps being worked without
+            # ever producing one). Once a PR exists the item pivots to "PullRequest" above and
+            # the PR backstop takes over (#1093).
+            load_issue_invocation_counts "${item_id}"
+            if [ "${ISSUE_INVOCATION_TOTAL}" -ge "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]; then
+                warn "Issue #${item_id} in ${item_repo} used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
+                if apply_blocked_label "Issue" "${item_id}" "${item_repo}"; then
+                    gh issue comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate.
+COMMENT
+                    )" 2>/dev/null || true
+                    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                    if ! touch "$(runaway_blocked_marker_file_path "Issue" "${item_id}")" 2>/dev/null; then
+                        warn "Failed to write runaway-blocked marker for Issue #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
+                    fi
+                fi
+                notify_discord_blocked_item "Issue" "${item_id}"
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
@@ -3328,8 +3456,9 @@ COMMENT
             local pr_new_idle=0
             [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
             save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
-        elif [ "${item_type}" = "Issue" ] && [ -z "$(load_issue_fingerprint "${item_id}")" ]; then
-            update_workflow_status "${item_type}" "${item_id}" "Not Started"
+        elif [ "${item_type}" = "Issue" ]; then
+            [ -z "$(load_issue_fingerprint "${item_id}")" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
+            save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))"
         fi
 
         invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"

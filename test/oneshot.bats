@@ -616,6 +616,82 @@ teardown() {
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
+@test "reset_pr_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
+    save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 3
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked"
+    reset_pr_invocation_counts_if_capped 42
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
+}
+
+@test "reset_pr_invocation_counts_if_capped leaves the total untouched when no runaway-blocked marker exists" {
+    save_pr_invocation_counts 42 5 3
+    reset_pr_invocation_counts_if_capped 42
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 5 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+}
+
+@test "reset_pr_invocation_counts_if_capped does not reset a total that just now reached the cap without a marker" {
+    # Regression guard: the tick the backstop is ABOUT to trip on has total >= cap but no marker
+    # yet (the marker is only written once the block is actually applied). Resetting here would
+    # erase the counter before the backstop ever gets to fire, defeating the cap entirely.
+    save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    reset_pr_invocation_counts_if_capped 42
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq "${MAX_PR_TOTAL_INVOCATIONS}" ]
+}
+
+# --- per-Issue invocation guard ----------------------------------------------
+
+@test "load_issue_invocation_counts defaults to 0 when no guard file exists" {
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+}
+
+@test "save_issue_invocation_counts and load_issue_invocation_counts round-trip" {
+    save_issue_invocation_counts 99 4
+    [ -f "${SESSION_BASE_DIR}/Issue_99.invocations" ]
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 4 ]
+}
+
+@test "load_issue_invocation_counts treats a corrupt guard file as 0" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'garbage not numbers\n' > "${SESSION_BASE_DIR}/Issue_99.invocations"
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+}
+
+@test "reset_issue_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_99.runaway-blocked"
+    reset_issue_invocation_counts_if_capped 99
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "reset_issue_invocation_counts_if_capped leaves the total untouched when no runaway-blocked marker exists" {
+    save_issue_invocation_counts 99 5
+    reset_issue_invocation_counts_if_capped 99
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 5 ]
+}
+
+@test "reset_issue_invocation_counts_if_capped does not reset a total that just now reached the cap without a marker" {
+    # Regression guard: same rationale as the PR-side test — a not-yet-blocked Issue whose total
+    # just reached the cap must not be reset before the backstop gets a chance to fire.
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    reset_issue_invocation_counts_if_capped 99
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]
+}
+
 @test "pr_json_is_terminal is true when auto-merge is enabled and false otherwise" {
     run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}'
     [ "${status}" -eq 0 ]
@@ -6076,6 +6152,81 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
 }
 
+@test "main blocks a PR and does not invoke claude when its invocation total is at the runaway cap (#1093)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+    [[ "${output}" == *"used ${MAX_PR_TOTAL_INVOCATIONS} agent invocations without converging"* ]]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "main still blocks and warns loudly when the runaway-blocked marker cannot be written (#1093 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    # Guard file already written above; now make the directory unwritable so the runaway-blocked
+    # marker touch fails — the label/comment escalation (a gh call, unaffected by local fs
+    # permissions) must still go through, and the failure must be surfaced via warn rather than
+    # silently swallowed.
+    chmod 555 "${SESSION_BASE_DIR}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    chmod 755 "${SESSION_BASE_DIR}"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+    [[ "${output}" == *"Failed to write runaway-blocked marker for PR #5"* ]]
+}
+
+@test "main resets a PR's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    # No Blocked label — a human has already cleared it — but the guard file still holds the
+    # capped total, and the runaway-blocked marker from the prior blocking tick is still present,
+    # exercising the reset-on-unblock path (#1093).
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked"
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    # Reset to 0/0 then bumped once for this invocation — proof the stale cap did not re-block it.
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.invocations")" = "1 0" ]
+}
+
 @test "main does not die and does not save when the post-run PR fingerprint compute fails (#1091)" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -6135,6 +6286,66 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
     [ ! -f "${TEST_TMP}/save_log" ]
     [[ "${output}" == *"Failed to compute post-run fingerprint for Issue #10"* ]]
+}
+
+@test "main blocks an Issue and does not invoke claude when its invocation total is at the runaway cap (#1093)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'issue comment 10' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+    [[ "${output}" == *"used ${MAX_ISSUE_TOTAL_INVOCATIONS} agent invocations without converging"* ]]
+    [ -f "${SESSION_BASE_DIR}/Issue_10.runaway-blocked" ]
+}
+
+@test "main invokes agent and increments the invocation counter for an Issue below the runaway cap (#1093)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ -f "${SESSION_BASE_DIR}/Issue_10.invocations" ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1" ]
+}
+
+@test "main resets an Issue's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    # No Blocked label — a human has already cleared it — but the guard file still holds the
+    # capped total, and the runaway-blocked marker from the prior blocking tick is still present,
+    # exercising the reset-on-unblock path (#1093).
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_10.runaway-blocked"
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    # Reset to 0 then bumped once for this invocation — proof the stale cap did not re-block it.
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1" ]
 }
 
 @test "main skips (does not die on, and does not hand off to agent for) a transient repo-fetch failure (#1090)" {
