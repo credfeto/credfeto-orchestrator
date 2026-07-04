@@ -110,6 +110,15 @@ GH_ITEM_FETCH_RETRY_ATTEMPTS="${GH_ITEM_FETCH_RETRY_ATTEMPTS:-3}"
 GH_ITEM_FETCH_RETRY_DELAY_SECS="${GH_ITEM_FETCH_RETRY_DELAY_SECS:-2}"
 [[ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_ITEM_FETCH_RETRY_DELAY_SECS=2
 
+# Same retry treatment for the repo-collaborators fetch inside get_trusted_logins — a transient
+# blip here previously got swallowed and cached as a silently shrunken (but valid-looking) trust
+# list for the rest of the item's processing (#1094). Overridable from the environment (tests
+# set the delay to 0 to keep the suite fast).
+GH_COLLABORATORS_RETRY_ATTEMPTS="${GH_COLLABORATORS_RETRY_ATTEMPTS:-3}"
+[[ "${GH_COLLABORATORS_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_COLLABORATORS_RETRY_ATTEMPTS=3
+GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
+[[ "${GH_COLLABORATORS_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_COLLABORATORS_RETRY_DELAY_SECS=2
+
 # Token window at which the agent's own Claude Code session should auto-compact its context
 # rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
 # container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
@@ -239,19 +248,41 @@ set_repo_context() {
     _TRUSTED_LOGINS_JSON=""
 }
 
+# Fetches the current repo's collaborator logins (paginated), retrying on transient gh
+# failures. Outputs one login per line on success; returns non-zero after
+# GH_COLLABORATORS_RETRY_ATTEMPTS failed attempts (#1094).
+_fetch_repo_collaborators() {
+    local attempt=1 result
+    while [ "${attempt}" -le "${GH_COLLABORATORS_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh api "repos/${REPO_FULL}/collaborators" --paginate --jq '.[].login' 2>/dev/null); then
+            printf '%s' "${result}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_COLLABORATORS_RETRY_ATTEMPTS}" ] && [ "${GH_COLLABORATORS_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_COLLABORATORS_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
 # Returns a JSON array of trusted GitHub logins for the current repo context.
 # Includes: OWNER, repo collaborators, the GitHub Copilot reviewer bot, and WHITELISTED_USERS.
 # The result is cached in _TRUSTED_LOGINS_JSON; cache is cleared by set_repo_context.
+# Returns non-zero (and leaves _TRUSTED_LOGINS_JSON empty) if the collaborators list cannot be
+# fetched after retrying — callers must skip the item this tick rather than proceed with a
+# silently shrunken (and therefore wrong) trust list (#1094): a fingerprint/trust comparison
+# using the wrong set of trusted users is worse than doing nothing for one tick.
 get_trusted_logins() {
-    [ -n "${_TRUSTED_LOGINS_JSON}" ] && { printf '%s' "${_TRUSTED_LOGINS_JSON}"; return; }
+    [ -n "${_TRUSTED_LOGINS_JSON}" ] && { printf '%s' "${_TRUSTED_LOGINS_JSON}"; return 0; }
 
     local -a logins=()
     [ -n "${OWNER}" ] && logins+=("${OWNER}")
 
-    local login
+    local login collaborators
+    collaborators=$(_fetch_repo_collaborators) || return 1
     while IFS= read -r login; do
         [ -n "${login}" ] && logins+=("${login}")
-    done < <(gh api "repos/${REPO_FULL}/collaborators" --jq '.[].login' 2>/dev/null || true)
+    done <<< "${collaborators}"
 
     logins+=("copilot-pull-request-reviewer")
 
@@ -2236,7 +2267,7 @@ compute_pr_fingerprint() {
     local item_id="$1"
     local pr_json trusted
     pr_json=$(fetch_pr_json "${item_id}") || return 1
-    trusted=$(get_trusted_logins)
+    trusted=$(get_trusted_logins) || return 1
     fingerprint_pr_json "${pr_json}" "${trusted}"
 }
 
@@ -2464,7 +2495,7 @@ compute_issue_fingerprint() {
     local item_id="$1"
     local issue_json trusted
     issue_json=$(fetch_issue_json "${item_id}") || return 1
-    trusted=$(get_trusted_logins)
+    trusted=$(get_trusted_logins) || return 1
     fingerprint_issue_json "${issue_json}" "${trusted}"
 }
 
@@ -3002,7 +3033,7 @@ main() {
     local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local ensure_repo_current_status
+    local ensure_repo_current_status trusted_logins
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -3135,7 +3166,9 @@ main() {
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
 
-                pr_fp=$(fingerprint_pr_json "${pr_json}" "$(get_trusted_logins)") \
+                trusted_logins=$(get_trusted_logins) \
+                    || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
@@ -3153,7 +3186,9 @@ main() {
                     clear_pr_ci_pending_state "${open_pr}"
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
-                        issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
+                        trusted_logins=$(get_trusted_logins) \
+                            || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                        issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
@@ -3212,7 +3247,9 @@ main() {
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
 
-                issue_fp=$(fingerprint_issue_json "${issue_json}" "$(get_trusted_logins)") \
+                trusted_logins=$(get_trusted_logins) \
+                    || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
@@ -3256,7 +3293,9 @@ main() {
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")
 
-            pr_fp=$(fingerprint_pr_json "${pr_json}" "$(get_trusted_logins)") \
+            trusted_logins=$(get_trusted_logins) \
+                || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
+            pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
@@ -3429,8 +3468,8 @@ COMMENT
         discover_or_create_workflow_project
         [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
 
-        local trusted_logins
-        trusted_logins=$(get_trusted_logins)
+        trusted_logins=$(get_trusted_logins) \
+            || { warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"; count_error=$((count_error + 1)); continue; }
         if [ "${item_type}" = "Issue" ]; then
             fetch_board_approved_items
             local plan_approved="false"
