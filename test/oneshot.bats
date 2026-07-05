@@ -692,6 +692,46 @@ teardown() {
     [ "${ISSUE_INVOCATION_TOTAL}" -eq "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]
 }
 
+# --- mark_capped_block_for_forgiveness (#1115) ------------------------------
+
+@test "mark_capped_block_for_forgiveness writes the marker for a PR at the cap" {
+    save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    mark_capped_block_for_forgiveness PullRequest 42
+    [ -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness does not write the marker for a PR below the cap" {
+    save_pr_invocation_counts 42 5 0
+    mark_capped_block_for_forgiveness PullRequest 42
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness writes the marker for an Issue at the cap" {
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    mark_capped_block_for_forgiveness Issue 99
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness does not write the marker for an Issue below the cap" {
+    save_issue_invocation_counts 99 5
+    mark_capped_block_for_forgiveness Issue 99
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness then reset forgives a PR blocked by a non-backstop rule (#1115 regression)" {
+    # Reproduces the #116 bug: a PR blocked by something other than oneshot's own backstop (e.g.
+    # the code-review workflow's "3+ rounds" rule) while its total already sits at the cap. Before
+    # this fix, no marker existed for that block, so a human clearing the label was a no-op and
+    # the very next observe-unblocked tick found the same stale total.
+    save_pr_invocation_counts 116 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    mark_capped_block_for_forgiveness PullRequest 116
+    reset_pr_invocation_counts_if_capped 116
+    load_pr_invocation_counts 116
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
+}
+
 @test "pr_json_is_terminal is true when auto-merge is enabled and false otherwise" {
     run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}'
     [ "${status}" -eq 0 ]
@@ -6308,6 +6348,58 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
     # Reset to 0/0 then bumped once for this invocation — proof the stale cap did not re-block it.
     [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.invocations")" = "1 0" ]
+}
+
+@test "main writes the runaway-blocked marker when observing a PR blocked by a non-backstop rule while at the cap (#1115 regression)" {
+    # Reproduces the #116 bug's first half: a PR already carries the Blocked label (applied by
+    # something other than oneshot's own backstop, e.g. the code-review workflow's "3+ rounds"
+    # rule — hence no pre-existing marker) while its invocation total already sits at the cap.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":116,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    save_pr_invocation_counts 116 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #116 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
+    # The total is untouched by observing the block — only forgiven once a human clears the label.
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_116.invocations")" = "${MAX_PR_TOTAL_INVOCATIONS} 0" ]
+}
+
+@test "main resumes work on a capped PR across two ticks after a human clears a non-backstop Blocked label (#1115 regression)" {
+    # End-to-end reproduction of #116: tick 1 observes the PR blocked by a non-backstop rule while
+    # at the cap (writes the marker); a human then clears the label; tick 2 must reset the counter
+    # and actually invoke the agent instead of instantly re-blocking with zero new activity.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":116,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    save_pr_invocation_counts 116 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
+
+    # Human clears the label — simulate the next tick observing it unblocked.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_116.invocations")" = "1 0" ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
 }
 
 @test "main does not die and does not save when the post-run PR fingerprint compute fails (#1091)" {
