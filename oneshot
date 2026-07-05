@@ -78,6 +78,15 @@ MAX_ISSUE_TOTAL_INVOCATIONS="${MAX_ISSUE_TOTAL_INVOCATIONS:-15}"
 MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 [[ "${MAX_PR_IDLE_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_IDLE_INVOCATIONS=5
 
+# How many times oneshot will auto-clear the Blocked label on a PR the agent itself diagnosed as
+# blocked by an environment/infrastructure failure (#1118) once a newer agent image has been
+# built. Bounds the (rare, low-frequency) case where the "environment" diagnosis was actually
+# wrong — a real code bug mistaken for one — which would otherwise auto-clear and immediately
+# re-block every time the image happens to rebuild, forever, with no human ever notified.
+# Override with MAX_PR_ENV_AUTO_UNBLOCKS.
+MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
+[[ "${MAX_PR_ENV_AUTO_UNBLOCKS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_ENV_AUTO_UNBLOCKS=3
+
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
@@ -663,6 +672,94 @@ reset_pr_invocation_counts_if_capped() {
         save_pr_invocation_counts "${item_id}" 0 0
         rm -f "${marker_file}" 2>/dev/null || true
     fi
+}
+
+# Guard-file paths for the environment-block auto-unblock feature (#1118). PR-only: Issues have
+# no container session to diagnose an environment failure against before a PR exists.
+env_unblock_attempts_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.env-unblocks' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+env_unblock_cap_notice_marker_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.env-unblock-cap-notified' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Reads how many times oneshot has already auto-cleared Blocked on this PR for an environment
+# diagnosis. Sets global ENV_UNBLOCK_ATTEMPTS, defaulting to 0 for a missing/corrupt guard file.
+ENV_UNBLOCK_ATTEMPTS=0
+load_env_unblock_attempts() {
+    local item_id="$1" guard_file total
+    ENV_UNBLOCK_ATTEMPTS=0
+    guard_file=$(env_unblock_attempts_file_path "${item_id}")
+    [ -f "${guard_file}" ] || return 0
+    total=$(cat "${guard_file}" 2>/dev/null)
+    [[ "${total}" =~ ^[0-9]+$ ]] && ENV_UNBLOCK_ATTEMPTS="${total}"
+    return 0
+}
+
+save_env_unblock_attempts() {
+    local item_id="$1" total="$2" guard_file
+    guard_file=$(env_unblock_attempts_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${total}" > "${guard_file}" \
+        || die "Failed to write env-unblock-attempts guard file: ${guard_file}"
+}
+
+# Clears both the attempts counter and the cap-notice marker. Call alongside
+# reset_pr_invocation_counts_if_capped, every place a PR is observed open and un-blocked — once a
+# PR is genuinely moving again, any prior environment-block history is stale and should not count
+# towards a future MAX_PR_ENV_AUTO_UNBLOCKS budget.
+reset_env_unblock_attempts() {
+    local item_id="$1"
+    rm -f "$(env_unblock_attempts_file_path "${item_id}")" 2>/dev/null || true
+    rm -f "$(env_unblock_cap_notice_marker_file_path "${item_id}")" 2>/dev/null || true
+}
+
+# Attempts to auto-clear Blocked on a PR the agent itself diagnosed as blocked by an environment/
+# infrastructure failure (#1118), once a newer agent image (a different baked-in git SHA) has been
+# built since the diagnosis — see pr_json_env_block_image_sha and current_agent_image_sha. Bounded
+# by MAX_PR_ENV_AUTO_UNBLOCKS so a wrong "environment" diagnosis (really a code bug) cannot loop
+# forever unblocking-and-reblocking itself with no human ever notified; once the cap is hit, posts
+# a one-time explanatory comment and leaves Blocked for a human from then on.
+#
+# Returns 0 if it auto-cleared the label this tick (caller should count it and move to the next
+# item — the next tick will observe the PR fresh, no agent work happens in this same tick).
+# Returns 1 if there is nothing to do (no environment-block marker, image unchanged, or the cap is
+# already hit) — caller falls through to its normal blocked handling.
+try_auto_unblock_env_diagnosed_pr() {
+    local item_id="$1" item_repo="$2" pr_json="$3"
+    local blocked_sha current_sha attempts cap_notice_marker
+
+    blocked_sha=$(pr_json_env_block_image_sha "${pr_json}") || return 1
+    current_sha=$(current_agent_image_sha) || return 1
+    [ "${current_sha}" != "${blocked_sha}" ] || return 1
+
+    load_env_unblock_attempts "${item_id}"
+    if [ "${ENV_UNBLOCK_ATTEMPTS}" -ge "${MAX_PR_ENV_AUTO_UNBLOCKS}" ]; then
+        cap_notice_marker=$(env_unblock_cap_notice_marker_file_path "${item_id}")
+        if [ ! -f "${cap_notice_marker}" ]; then
+            warn "PR #${item_id} in ${item_repo}: environment auto-unblock already attempted ${ENV_UNBLOCK_ATTEMPTS} times without the underlying failure clearing — leaving Blocked for a human"
+            gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This PR has been auto-unblocked ${ENV_UNBLOCK_ATTEMPTS} times after the agent diagnosed an environment/infrastructure failure, but the same failure recurred each time after the container was rebuilt — the diagnosis may be wrong (a real code issue, not an environment one). Leaving Blocked for a human to investigate; no further automatic unblocking will happen for this PR.
+COMMENT
+            )" 2>/dev/null || true
+            mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+            touch "${cap_notice_marker}" 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    attempts=$((ENV_UNBLOCK_ATTEMPTS + 1))
+    save_env_unblock_attempts "${item_id}" "${attempts}"
+    info "PR #${item_id} in ${item_repo}: environment-block image sha ${blocked_sha} superseded by ${current_sha} — auto-clearing Blocked (attempt ${attempts}/${MAX_PR_ENV_AUTO_UNBLOCKS})"
+    gh pr edit "${item_id}" --repo "${item_repo}" --remove-label Blocked >/dev/null 2>&1
+    gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+Automatically unblocked — this PR was blocked for an environment/infrastructure reason (image sha \`${blocked_sha}\`), and the agent container has since been rebuilt (now \`${current_sha}\`). Resuming automatically.
+COMMENT
+    )" 2>/dev/null || true
+    return 0
 }
 
 # Per-Issue invocation guard — same runaway-backstop idea as the PR guard above, but Issues have
@@ -2463,6 +2560,36 @@ pr_json_has_blocked_label() {
     printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
 }
 
+# Extracts the image SHA an agent recorded when it self-diagnosed a Blocked-ing failure as an
+# environment/infrastructure problem (#1118) — e.g. a missing tool in the container, not a bug in
+# the PR's own code. The agent leaves a machine-readable trailer alongside its human-facing
+# diagnosis comment:
+#   <!-- orchestrator:env-block image-sha=<sha> -->
+# Uses the LAST matching comment (not the first) so a later re-diagnosis on the same PR always
+# wins over a stale one. Outputs the SHA on stdout; empty output (and non-zero status) if no PR
+# comment carries the marker — the normal case for every other kind of Blocked.
+pr_json_env_block_image_sha() {
+    local pr_json="$1" sha
+    sha=$(printf '%s' "${pr_json}" | jq -r '
+        [.comments[]?.body // "" | capture("<!--\\s*orchestrator:env-block\\s+image-sha=(?<sha>[0-9a-f]+)\\s*-->").sha] | last // empty
+    ' 2>/dev/null)
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
+
+# Reads the git SHA baked into the agent image's IMAGE_SHA_DEVELOPMENT_AGENT env var (set at build
+# time — see containers/agent/Dockerfile) directly off the image config, without running a
+# container (#1118). Assumes invoke_claude has already pulled the current ${ORCHESTRATOR_IMAGE}
+# tag. Best-effort: prints nothing and returns non-zero on any inspect failure — a failure here
+# only means the auto-unblock check below is skipped for this tick, never that anything breaks.
+current_agent_image_sha() {
+    local sha
+    sha=$(podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${ORCHESTRATOR_IMAGE}" 2>/dev/null \
+        | sed -n 's/^IMAGE_SHA_DEVELOPMENT_AGENT=//p')
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
+
 # Copies labels from all closing issues linked to a PR onto the PR, adding any that are missing.
 # Never removes existing labels. Uses --add-label for each missing one.
 # Arguments: pr_id pr_json
@@ -3207,6 +3334,10 @@ main() {
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}"; then
+                    if try_auto_unblock_env_diagnosed_pr "${open_pr}" "${item_repo}" "${pr_json}"; then
+                        count_blocked=$((count_blocked + 1))
+                        continue
+                    fi
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
                     mark_capped_block_for_forgiveness "PullRequest" "${open_pr}"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
@@ -3215,9 +3346,10 @@ main() {
                 fi
                 # PR observed open and un-blocked — re-arm its blocked notifier and, if the
                 # Blocked label was applied while already at/over the cap, reset its budget
-                # (#1093, #1115).
+                # (#1093, #1115); also clear any environment-auto-unblock history (#1118).
                 clear_blocked_marker "PullRequest" "${open_pr}"
                 reset_pr_invocation_counts_if_capped "${open_pr}"
+                reset_env_unblock_attempts "${open_pr}"
 
                 # PR is confirmed open, non-blocked — mark repo as having active work.
                 skip_repos+=("${item_repo}")
@@ -3335,6 +3467,10 @@ main() {
             fi
 
             if pr_json_has_blocked_label "${pr_json}"; then
+                if try_auto_unblock_env_diagnosed_pr "${item_id}" "${item_repo}" "${pr_json}"; then
+                    count_blocked=$((count_blocked + 1))
+                    continue
+                fi
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
                 mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
                 notify_discord_blocked_item "PullRequest" "${item_id}"
@@ -3343,9 +3479,10 @@ main() {
             fi
             # PR observed open and un-blocked — re-arm its blocked notifier and, if the
             # Blocked label was applied while already at/over the cap, reset its budget
-            # (#1093, #1115).
+            # (#1093, #1115); also clear any environment-auto-unblock history (#1118).
             clear_blocked_marker "PullRequest" "${item_id}"
             reset_pr_invocation_counts_if_capped "${item_id}"
+            reset_env_unblock_attempts "${item_id}"
 
             # Non-blocked, open PR = active work for this repo.
             skip_repos+=("${item_repo}")

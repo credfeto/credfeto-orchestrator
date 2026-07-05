@@ -732,6 +732,113 @@ teardown() {
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
 }
 
+# --- environment-block auto-unblock (#1118) ---------------------------------
+
+@test "pr_json_env_block_image_sha extracts the sha from a single marker comment" {
+    run pr_json_env_block_image_sha '{"comments":[{"body":"Diagnosis text\n<!-- orchestrator:env-block image-sha=abc1234 -->"}]}'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "abc1234" ]
+}
+
+@test "pr_json_env_block_image_sha returns the LAST matching comment's sha when the agent re-diagnosed" {
+    run pr_json_env_block_image_sha '{"comments":[{"body":"first\n<!-- orchestrator:env-block image-sha=abc1234 -->"},{"body":"unrelated"},{"body":"second\n<!-- orchestrator:env-block image-sha=def5678 -->"}]}'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "def5678" ]
+}
+
+@test "pr_json_env_block_image_sha fails when no comment carries the marker" {
+    run pr_json_env_block_image_sha '{"comments":[{"body":"a normal blocked comment with no marker"}]}'
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+}
+
+@test "pr_json_env_block_image_sha fails on an empty comments array" {
+    run pr_json_env_block_image_sha '{"comments":[]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "current_agent_image_sha extracts IMAGE_SHA_DEVELOPMENT_AGENT from podman inspect output" {
+    # shellcheck disable=SC2016
+    make_stub podman 'printf "PATH=/usr/bin\nIMAGE_SHA_DEVELOPMENT_AGENT=deadbeef\nHOME=/root\n"'
+    run current_agent_image_sha
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "deadbeef" ]
+}
+
+@test "current_agent_image_sha fails when the image has no IMAGE_SHA_DEVELOPMENT_AGENT env var" {
+    make_stub podman 'printf "PATH=/usr/bin\nHOME=/root\n"'
+    run current_agent_image_sha
+    [ "${status}" -ne 0 ]
+}
+
+@test "current_agent_image_sha fails when podman inspect itself fails" {
+    make_stub podman 'exit 1'
+    run current_agent_image_sha
+    [ "${status}" -ne 0 ]
+}
+
+@test "try_auto_unblock_env_diagnosed_pr does nothing when the PR has no environment-block marker" {
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    run try_auto_unblock_env_diagnosed_pr 5 org/repo '{"comments":[{"body":"a design question, not an environment issue"}]}'
+    [ "${status}" -ne 0 ]
+    [ ! -f "${GH_CALL_LOG}" ]
+}
+
+@test "try_auto_unblock_env_diagnosed_pr does nothing when the image sha has not changed" {
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=abc1234\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    run try_auto_unblock_env_diagnosed_pr 5 org/repo '{"comments":[{"body":"diagnosis\n<!-- orchestrator:env-block image-sha=abc1234 -->"}]}'
+    [ "${status}" -ne 0 ]
+    [ ! -f "${GH_CALL_LOG}" ]
+}
+
+@test "try_auto_unblock_env_diagnosed_pr clears Blocked and comments when a newer image has been built" {
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=def5678\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    run try_auto_unblock_env_diagnosed_pr 5 org/repo '{"comments":[{"body":"diagnosis\n<!-- orchestrator:env-block image-sha=abc1234 -->"}]}'
+    [ "${status}" -eq 0 ]
+    grep -q 'pr edit 5 --repo org/repo --remove-label Blocked' "${GH_CALL_LOG}"
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.env-unblocks")" = "1" ]
+}
+
+@test "try_auto_unblock_env_diagnosed_pr stops auto-clearing once MAX_PR_ENV_AUTO_UNBLOCKS is reached and notifies once" {
+    save_env_unblock_attempts 5 "${MAX_PR_ENV_AUTO_UNBLOCKS}"
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=def5678\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+
+    run try_auto_unblock_env_diagnosed_pr 5 org/repo '{"comments":[{"body":"diagnosis\n<!-- orchestrator:env-block image-sha=abc1234 -->"}]}'
+    [ "${status}" -ne 0 ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    [[ "$(cat "${GH_CALL_LOG}")" != *"remove-label Blocked"* ]]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.env-unblock-cap-notified" ]
+
+    # A second tick while still capped must not post the notice again (no new gh calls).
+    : > "${GH_CALL_LOG}"
+    run try_auto_unblock_env_diagnosed_pr 5 org/repo '{"comments":[{"body":"diagnosis\n<!-- orchestrator:env-block image-sha=abc1234 -->"}]}'
+    [ "${status}" -ne 0 ]
+    [ ! -s "${GH_CALL_LOG}" ]
+}
+
+@test "reset_env_unblock_attempts clears both the attempts counter and the cap-notice marker" {
+    save_env_unblock_attempts 5 2
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_5.env-unblock-cap-notified"
+    reset_env_unblock_attempts 5
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.env-unblocks" ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.env-unblock-cap-notified" ]
+    load_env_unblock_attempts 5
+    [ "${ENV_UNBLOCK_ATTEMPTS}" -eq 0 ]
+}
+
 @test "pr_json_is_terminal is true when auto-merge is enabled and false otherwise" {
     run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}'
     [ "${status}" -eq 0 ]
@@ -6400,6 +6507,73 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
     [ "$(cat "${SESSION_BASE_DIR}/PullRequest_116.invocations")" = "1 0" ]
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
+}
+
+@test "main auto-clears Blocked on an environment-diagnosed PR once a newer agent image has been built (#1118)" {
+    # Reproduces the funfair-server-code-analysis#463 case: the agent diagnosed a missing-tool
+    # environment failure and blocked itself; the fix has since shipped (a new image was built);
+    # oneshot must notice on its own, without a human clearing the label — no agent work happens
+    # this tick, the PR is simply freed up for the next tick to pick up normally.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":463,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[{"body":"Missing pgrep in the container. <!-- orchestrator:env-block image-sha=abc1234 -->"}],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=def5678\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr edit 463 --repo org/repo --remove-label Blocked' "${GH_CALL_LOG}"
+    grep -q 'pr comment 463' "${GH_CALL_LOG}"
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_463.env-unblocks")" = "1" ]
+}
+
+@test "main leaves an environment-diagnosed PR blocked when no newer agent image has been built (#1118)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":463,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[{"body":"Missing pgrep in the container. <!-- orchestrator:env-block image-sha=abc1234 -->"}],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=abc1234\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #463 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [[ "$(cat "${GH_CALL_LOG}")" != *"remove-label Blocked"* ]]
+}
+
+@test "main stops auto-unblocking an environment-diagnosed PR once MAX_PR_ENV_AUTO_UNBLOCKS is reached (#1118)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":463,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[{"body":"Missing pgrep in the container. <!-- orchestrator:env-block image-sha=abc1234 -->"}],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    save_env_unblock_attempts 463 "${MAX_PR_ENV_AUTO_UNBLOCKS}"
+    make_stub podman 'printf "IMAGE_SHA_DEVELOPMENT_AGENT=def5678\n"'
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "$(cat "${GH_CALL_LOG}")" != *"remove-label Blocked"* ]]
+    grep -q 'pr comment 463' "${GH_CALL_LOG}"
+    [ -f "${SESSION_BASE_DIR}/PullRequest_463.env-unblock-cap-notified" ]
 }
 
 @test "main does not die and does not save when the post-run PR fingerprint compute fails (#1091)" {
