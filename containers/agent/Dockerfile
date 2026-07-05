@@ -188,7 +188,7 @@ RUN set -e; \
 WORKDIR /workspace/repo
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD claude --version >/dev/null 2>&1 || exit 1
+    CMD claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]
 
