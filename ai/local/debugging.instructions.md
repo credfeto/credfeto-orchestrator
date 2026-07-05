@@ -90,6 +90,19 @@ Delete the file to reset both counters (also makes the next run treat the PR as 
 rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
 ```
 
+### 5a — Environment auto-unblock files (#1118)
+
+When an agent diagnoses a `Blocked`-ing failure as environmental/infrastructure (e.g. a missing tool in the container), it leaves a machine-readable trailer on its diagnosis comment: `<!-- orchestrator:env-block image-sha=<sha> -->` (see `agent-roles.instructions.md` § "Environment/Infrastructure Block Marker"). `oneshot` checks every `Blocked` PR carrying this marker against the currently-pulled agent image's own baked-in `IMAGE_SHA_DEVELOPMENT_AGENT` — if a newer image has been built since the diagnosis (different SHA), it auto-clears `Blocked` and comments, with no human needed:
+
+```bash
+find ~/.orchestrator -name 'PullRequest_*.env-unblocks' -exec echo "=== {} ===" \; -exec cat {} \;
+find ~/.orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
+```
+
+- `PullRequest_<n>.env-unblocks` — count of times oneshot has auto-cleared this PR's Blocked label for an environment diagnosis. Resets to nothing whenever the PR is next observed open-and-unblocked through the normal path (a human clearing it, or a fresh unrelated block cycle).
+- At `MAX_PR_ENV_AUTO_UNBLOCKS` (default 3), oneshot stops auto-clearing and instead posts a one-time comment saying the same failure recurred after a rebuild (the "environment" diagnosis was likely wrong) — `PullRequest_<n>.env-unblock-cap-notified` marks that this notice has already been sent, so it isn't repeated every tick.
+- If a PR you expected to auto-unblock is still sitting `Blocked`, check (a) whether its latest diagnosis comment actually carries the marker, (b) whether `current_agent_image_sha` (a `podman inspect` on `${ORCHESTRATOR_IMAGE}`) actually differs from the recorded SHA — the image may not have rebuilt yet — and (c) whether the `.env-unblock-cap-notified` marker is already present (the cap was hit).
+
 ### 6 — Fingerprint files
 
 ```bash
