@@ -602,23 +602,56 @@ save_pr_invocation_counts() {
         || die "Failed to write invocation guard file: ${guard_file}"
 }
 
-# Marks that an item was blocked specifically by the runaway invocation backstop (as opposed to
-# a CI-timeout or idle-exhausted escalation), once the Blocked label has been CONFIRMED applied.
-# This is the signal the reset_*_invocation_counts_if_capped helpers use to tell "the count
-# happens to be at/above the cap on THIS tick — the tick the backstop is about to fire on" apart
-# from "this item was already capped-and-blocked by a PRIOR tick, and a human has since cleared
-# the label" — only the latter should forgive the counter. Comparing the counter to the cap
-# directly cannot make that distinction, and doing so would reset (and thus never actually
-# apply) the very block the backstop is in the middle of raising.
+# Marks that an item is in (or is about to enter) a Blocked spell while its invocation total is
+# already at/above the cap, regardless of which mechanism applied the Blocked label — oneshot's
+# own runaway backstop, the code-review workflow's own rules (e.g. "3+ rounds with findings"),
+# CI-timeout, or idle-exhaustion. This is the signal the reset_*_invocation_counts_if_capped
+# helpers use to tell "the count happens to be at/above the cap while this item sits Blocked"
+# apart from "the count just reached the cap this tick and the backstop is about to fire for the
+# first time" — only the former should forgive the counter (#1115). Comparing the counter to the
+# cap directly, with no marker at all, cannot make that distinction: an unmarked item whose total
+# reaches the cap during active (unblocked) work must still let the backstop actually apply the
+# block, not get silently forgiven before it ever fires.
 runaway_blocked_marker_file_path() {
     local item_type="$1" item_id="$2"
     printf '%s/%s_%s.runaway-blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
 }
 
+# Writes the marker for an item observed carrying the Blocked label whose invocation total is
+# already at/above its cap (#1115) — covers blocks NOT authored by oneshot's own backstop (e.g.
+# the code-review workflow's "3+ rounds" rule), which never call this on their own. Without this,
+# a human clearing such a Blocked label is a no-op: the total survives untouched, and the very
+# next tick that reaches the item reloads the same at-or-over-cap total and re-blocks it before
+# any new work happens — turning "unblock" into a silent instant re-block. Best-effort: a failure
+# to write only means a future clear-the-label won't auto-reset, not that anything breaks now.
+mark_capped_block_for_forgiveness() {
+    local item_type="$1" item_id="$2" total cap
+    case "${item_type}" in
+        PullRequest)
+            load_pr_invocation_counts "${item_id}"
+            total="${PR_INVOCATION_TOTAL}"
+            cap="${MAX_PR_TOTAL_INVOCATIONS}"
+            ;;
+        Issue)
+            load_issue_invocation_counts "${item_id}"
+            total="${ISSUE_INVOCATION_TOTAL}"
+            cap="${MAX_ISSUE_TOTAL_INVOCATIONS}"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+    [ "${total}" -ge "${cap}" ] || return 0
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    touch "$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
+        || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
+}
+
 # Resets a PR's invocation-total counter once it is observed un-blocked, but only when it was
-# blocked by the runaway backstop itself (runaway_blocked_marker_file_path present). Without
-# this, a human clearing the Blocked label on a cap-blocked PR would be a no-op: the guard file
-# is never otherwise cleared, so the very next tick reloads the same at-or-over-cap total and
+# blocked while already at/over the cap (runaway_blocked_marker_file_path present — written either
+# by oneshot's own backstop or by mark_capped_block_for_forgiveness for other block sources).
+# Without this, a human clearing the Blocked label on a cap-blocked PR would be a no-op: the guard
+# file is never otherwise cleared, so the very next tick reloads the same at-or-over-cap total and
 # immediately re-blocks it, turning "unblock" into a silent re-block loop. Blocks for unrelated
 # reasons (CI timeout, idle-exhausted review/check) leave the total untouched here — resetting
 # those would hand back an undeserved fresh budget instead of preserving the PR's history.
@@ -666,10 +699,11 @@ save_issue_invocation_counts() {
         || die "Failed to write invocation guard file: ${guard_file}"
 }
 
-# Same reset-on-unblock treatment as reset_pr_invocation_counts_if_capped, for Issues (#1093):
-# only reset when this Issue was blocked by the runaway backstop itself (marker file present),
-# so clearing the Blocked label actually un-sticks it instead of it re-capping on the next tick.
-# Call alongside clear_blocked_marker, every place an Issue is observed open and un-blocked.
+# Same reset-on-unblock treatment as reset_pr_invocation_counts_if_capped, for Issues (#1093,
+# #1115): only reset when this Issue was blocked while already at/over the cap (marker file
+# present), so clearing the Blocked label actually un-sticks it instead of it re-capping on the
+# next tick. Call alongside clear_blocked_marker, every place an Issue is observed open and
+# un-blocked.
 reset_issue_invocation_counts_if_capped() {
     local item_id="$1" marker_file
     marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
@@ -3146,12 +3180,14 @@ main() {
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    mark_capped_block_for_forgiveness "Issue" "${item_id}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
                 # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
+                # Blocked label was applied while already at/over the cap, reset its budget
+                # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
 
@@ -3172,12 +3208,14 @@ main() {
 
                 if pr_json_has_blocked_label "${pr_json}"; then
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
+                    mark_capped_block_for_forgiveness "PullRequest" "${open_pr}"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
                 # PR observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
+                # Blocked label was applied while already at/over the cap, reset its budget
+                # (#1093, #1115).
                 clear_blocked_marker "PullRequest" "${open_pr}"
                 reset_pr_invocation_counts_if_capped "${open_pr}"
 
@@ -3254,12 +3292,14 @@ main() {
 
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
+                    mark_capped_block_for_forgiveness "Issue" "${item_id}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
                     continue
                 fi
                 # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
+                # Blocked label was applied while already at/over the cap, reset its budget
+                # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
 
@@ -3296,12 +3336,14 @@ main() {
 
             if pr_json_has_blocked_label "${pr_json}"; then
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
+                mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
                 notify_discord_blocked_item "PullRequest" "${item_id}"
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
             # PR observed open and un-blocked — re-arm its blocked notifier and, if the
-            # Blocked label was the runaway backstop's own doing, reset its budget (#1093).
+            # Blocked label was applied while already at/over the cap, reset its budget
+            # (#1093, #1115).
             clear_blocked_marker "PullRequest" "${item_id}"
             reset_pr_invocation_counts_if_capped "${item_id}"
 

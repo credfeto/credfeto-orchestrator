@@ -21,6 +21,16 @@ ssh markr@nanoclaw.lan
 
 Run the relevant commands from the State Inventory below, interpret the output, and report your findings.  Only after you have done this should you propose a fix or ask the user a question.
 
+## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
+
+When investigating any Issue or PR, pull its full timeline — not just its current labels/state via `gh pr view`/`gh issue view`:
+
+```bash
+gh api repos/<owner>/<repo>/issues/<n>/timeline --paginate -q '.[] | select(.event=="labeled" or .event=="unlabeled" or .event=="reviewed" or .event=="committed" or .event=="head_ref_force_pushed") | [.event, (.label.name // .state // .sha // ""), .created_at, .actor?.login] | @tsv'
+```
+
+Current state alone is a snapshot and hides *when* things happened and *what didn't happen in between* — exactly the evidence that matters for "why did this get stuck". For example, PR #116 in `credfeto-enum-source-generation` looked like an ordinary blocked PR from its current state; only the timeline revealed that a human removed the `Blocked` label and approved it, and the bot re-added `Blocked` under two hours later with **zero** commits, reviews, or force-pushes in between — proving the automation never even got a turn, rather than that it failed to resolve something (see #1115).
+
 ## State Inventory
 
 ### 1 — Orchestrator version
@@ -71,6 +81,8 @@ find ~/.orchestrator -name 'PullRequest_*.invocations' -exec echo "=== {} ===" \
 
 - `total` — every agent invocation ever spent on the PR. At `MAX_PR_TOTAL_INVOCATIONS` (default 30) the PR is marked Blocked. A PR stuck at a high total that never merges is churning without converging.
 - `idle` — consecutive re-invocations where the PR fingerprint did not change (a phase that advanced the board without pushing). At `MAX_PR_IDLE_INVOCATIONS` (default 5) the PR is parked (skipped) until its state changes. A PR parked here is either done and waiting on a human, or a phase failed to leave a durable trace.
+
+A companion `PullRequest_<n>.runaway-blocked` (or `Issue_<n>.runaway-blocked`) marker file records that this item was observed `Blocked` while its total already sat at/over the cap — written both by oneshot's own runaway backstop *and*, since #1115, whenever oneshot observes the item blocked by any other mechanism (the code-review workflow's own rules, CI-timeout, idle-exhaustion, a manual label) while already capped. When a human clears the `Blocked` label, oneshot only resets `total`/`idle` to `0` if this marker is present — so a human-driven unblock on a capped item reliably gets a fresh invocation budget regardless of which rule applied the block. If a capped PR/Issue was re-blocked instantly after a human cleared it with no new agent activity in between (check the GitHub timeline — see above), first confirm the marker was written on the observing tick; its absence points to a gap in marker coverage, not user error.
 
 Delete the file to reset both counters (also makes the next run treat the PR as first-touch and re-initialise its board status to "Not Started"):
 

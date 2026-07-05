@@ -231,6 +231,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add a runaway invocation backstop for Issue items (MAX_ISSUE_TOTAL_INVOCATIONS, default 15), mirroring the existing PR backstop, so a non-converging Issue that never produces a PR no longer re-invokes the agent forever with no cap (#1093)
 - Clearing the Blocked label after a runaway-invocation-cap block (PRs and Issues) now actually resets the invocation counter via a dedicated runaway-blocked marker file, so unblocking a capped item no longer silently re-blocks it on the very next tick
 - get_trusted_logins now paginates the repo-collaborators fetch (previously first-page-only, silently dropping collaborator #31+ from the trust list) and retries transient gh failures instead of silently caching a shrunken trust list — on ultimate failure it fails closed and the item is skipped for that tick rather than proceeding with a wrong (or, at the main-loop fingerprint call sites, effectively unfiltered) trust list (#1094)
+- Human clearing the Blocked label on a PR/Issue whose invocation total already sat at the runaway cap now reliably resets the counter, even when the block was applied by something other than oneshot's own backstop (e.g. the code-review workflow's "3+ rounds" rule) — previously such a PR would instantly re-block with zero new agent activity
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
