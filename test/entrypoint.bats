@@ -434,7 +434,19 @@ STUBEOF
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
-    jq -e '.projects["/workspace/repo"].hasTrustDialogAccepted == true' "${HOME}/.claude.json" > /dev/null
+    grep -q '"projects":{"/workspace/repo":{"hasTrustDialogAccepted":true}}' "${HOME}/.claude.json"
+}
+
+@test "entrypoint seeds the trust dialog for WORKSPACE_REPO_DIR instead of the default when overridden" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/custom-repo"
+    mkdir -p "${repo_dir}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -Fq "\"projects\":{\"${repo_dir}\":{\"hasTrustDialogAccepted\":true}}" "${HOME}/.claude.json"
 }
 
 @test "entrypoint does not overwrite ~/.claude.json when it already exists" {
@@ -669,6 +681,74 @@ exit 0'
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Forbidden [url \"...\" insteadOf] or [url \"...\" pushInsteadOf] rules found in user git config"* ]]
     [[ "${output}" == *"file:/home/node/.gitconfig"* ]]
+}
+
+# --- verify_no_repo_claude_config (#1130 review) -----------------------------------
+
+@test "entrypoint succeeds when the repo checkout carries no Claude Code project config" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies when the repo checkout contains its own .claude/settings.json" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    printf '{"hooks":{}}\n' > "${repo_dir}/.claude/settings.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"refusing to grant workspace trust"* ]]
+    [[ "${output}" == *"${repo_dir}/.claude/settings.json"* ]]
+}
+
+@test "entrypoint dies when the repo checkout contains its own .claude/settings.local.json" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    printf '{"hooks":{}}\n' > "${repo_dir}/.claude/settings.local.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"refusing to grant workspace trust"* ]]
+    [[ "${output}" == *"${repo_dir}/.claude/settings.local.json"* ]]
+}
+
+@test "entrypoint dies when the repo checkout contains its own .mcp.json" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    printf '{"mcpServers":{}}\n' > "${repo_dir}/.mcp.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"refusing to grant workspace trust"* ]]
+    [[ "${output}" == *"${repo_dir}/.mcp.json"* ]]
+}
+
+@test "entrypoint does not seed ~/.claude.json when the repo checkout carries its own Claude Code project config" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    printf '{"hooks":{}}\n' > "${repo_dir}/.claude/settings.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${HOME}/.claude.json" ]
 }
 
 # --- enforce_gh_git_protocol_ssh -------------------------------------------------
