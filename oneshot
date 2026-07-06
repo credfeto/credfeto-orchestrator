@@ -2390,11 +2390,18 @@ fetch_pr_json() {
 # re-invoked agent (confirmed against credfeto-global-pre-commit#163: the review body was blank,
 # the real question ("Why this change?") was an inline comment, and the PR idled out to a Blocked
 # label instead of being answered — see #1127). Same retry treatment as fetch_pr_json (#1090).
+# `--paginate` alone prints each page's JSON array back-to-back (e.g. `[...][...]` for a PR with
+# enough inline comments to span two pages), which is not valid JSON on its own and breaks the
+# downstream `jq --argjson`. `--slurp` wraps the pages into one outer array of page-arrays
+# instead, so a separate `flatten(1)` un-wraps that one level of page-nesting into a single flat
+# array of comment objects — done as its own command substitution (not piped) so a `gh` failure
+# is detected via its own exit code rather than being masked by jq's (no `pipefail` in this file).
 fetch_pr_review_comments() {
-    local item_id="$1" attempt=1 result
+    local item_id="$1" attempt=1 result flattened
     while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh api "repos/${REPO_FULL}/pulls/${item_id}/comments" --paginate 2>/dev/null); then
-            printf '%s' "${result}"
+        if result=$(gh api "repos/${REPO_FULL}/pulls/${item_id}/comments" --paginate --slurp 2>/dev/null); then
+            flattened=$(printf '%s' "${result}" | jq -c 'flatten(1)') || return 1
+            printf '%s' "${flattened}"
             return 0
         fi
         [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
@@ -3404,8 +3411,11 @@ main() {
                 skip_repos+=("${item_repo}")
 
                 require_trusted_logins || continue
-                pr_review_comments=$(fetch_pr_review_comments "${open_pr}") \
-                    || die "Failed to fetch review comments for PR #${open_pr} in ${item_repo}"
+                if ! pr_review_comments=$(fetch_pr_review_comments "${open_pr}"); then
+                    warn "Failed to fetch review comments for PR #${open_pr} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
                 pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
@@ -3539,8 +3549,11 @@ main() {
             skip_repos+=("${item_repo}")
 
             require_trusted_logins || continue
-            pr_review_comments=$(fetch_pr_review_comments "${item_id}") \
-                || die "Failed to fetch review comments for PR #${item_id} in ${item_repo}"
+            if ! pr_review_comments=$(fetch_pr_review_comments "${item_id}"); then
+                warn "Failed to fetch review comments for PR #${item_id} in ${item_repo} — skipping this item for now"
+                count_error=$((count_error + 1))
+                continue
+            fi
             pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")

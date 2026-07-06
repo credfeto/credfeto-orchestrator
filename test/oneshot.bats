@@ -1313,12 +1313,23 @@ teardown() {
 
 # --- fetch_pr_review_comments (#1127) -------------------------------------------
 
-@test "fetch_pr_review_comments requests the pulls/<n>/comments REST endpoint with pagination (#1127)" {
+@test "fetch_pr_review_comments requests the pulls/<n>/comments REST endpoint with pagination and slurp (#1127)" {
     make_stub gh 'printf "%s" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
     fetch_pr_review_comments 42 > /dev/null
     run cat "${TEST_TMP}/gh_args"
     [[ "${output}" == *"repos/credfeto/credfeto-orchestrator/pulls/42/comments"* ]]
     [[ "${output}" == *"--paginate"* ]]
+    [[ "${output}" == *"--slurp"* ]]
+}
+
+@test "fetch_pr_review_comments flattens multiple pages into a single flat array of comments (#1127)" {
+    # --slurp wraps multi-page gh api --paginate output into one array of page-arrays
+    # ([[...page1...],[...page2...]]); without flattening, a PR with enough inline comments
+    # to span two pages would produce a nested structure that miscounts/breaks downstream jq.
+    make_stub gh 'printf "[[{\"id\":1},{\"id\":2}],[{\"id\":3}]]"'
+    run fetch_pr_review_comments 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"id":1},{"id":2},{"id":3}]' ]
 }
 
 @test "fetch_pr_review_comments retries and succeeds after a transient gh failure (#1127)" {
@@ -6592,6 +6603,45 @@ STUBEOF
     [ ! -f "${TEST_TMP}/claude_log" ]
     [ ! -f "${TEST_TMP}/fp_called" ]
     [[ "${output}" == *"Failed to fetch trusted collaborators for org/repo"* ]]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a fetch_pr_review_comments failure in the direct-PR path (#1127)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_review_comments() { return 1; }
+    fingerprint_pr_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'fp-new\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+    [[ "${output}" == *"Failed to fetch review comments for PR #5 in org/repo — skipping this item for now"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a fetch_pr_review_comments failure in the Issue-to-PR pivot path (#1127)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fetch_pr_review_comments()  { return 1; }
+    fingerprint_pr_json()       { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'fp-new\n'; }
+    invoke_claude()             { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+    [[ "${output}" == *"Failed to fetch review comments for PR #99 in org/repo — skipping this item for now"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
 }
 
 @test "main blocks a PR and does not invoke claude when its invocation total is at the runaway cap (#1093)" {
