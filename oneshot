@@ -1717,6 +1717,7 @@ PHASE A — Setup / rebase (do this if the PR is not yet checked out, is BEHIND/
 PHASE B — CI pending: if any required check is still running (gh pr checks ${item_id} --repo ${REPO_FULL}), STOP immediately and take no action — the orchestrator waits for CI and re-invokes you.
 
 PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddressed comments/reviews, or linked-issue work remains):
+  - Check BOTH comment surfaces before concluding there is nothing to address — they are different GitHub object models and neither shows the other: top-level PR comments and review summaries (gh pr view ${item_id} --repo ${REPO_FULL} --json comments,reviews,reviewDecision) AND inline/diff-level review comments (gh api repos/${REPO_FULL}/pulls/${item_id}/comments). A reviewer can submit a CHANGES_REQUESTED review with an empty top-level body and put their actual question only in an inline diff comment — that review decision alone is reason enough to treat this PR as having unaddressed work, and the inline comment endpoint is the only place its content is visible.
   - If a required check FAILED: diagnose and fix it in a commit. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
   - Set the board status to "Development".
   - Commit and push your fix in the foreground, then STOP. (CI will run; the next cycle continues.)
@@ -2382,17 +2383,44 @@ fetch_pr_json() {
     return 1
 }
 
+# Fetches inline (diff-level) PR review comments via the REST comments endpoint — a separate
+# GitHub object model from `gh pr view`'s `reviews`/`comments` fields. A reviewer can submit a
+# CHANGES_REQUESTED review with an empty top-level body and put their actual feedback only in an
+# inline diff comment; that feedback was previously invisible to both the fingerprint and the
+# re-invoked agent (confirmed against credfeto-global-pre-commit#163: the review body was blank,
+# the real question ("Why this change?") was an inline comment, and the PR idled out to a Blocked
+# label instead of being answered — see #1127). Same retry treatment as fetch_pr_json (#1090).
+fetch_pr_review_comments() {
+    local item_id="$1" attempt=1 result
+    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh api "repos/${REPO_FULL}/pulls/${item_id}/comments" --paginate 2>/dev/null); then
+            printf '%s' "${result}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
 # Computes a deterministic fingerprint from pre-fetched PR state JSON.
-# Optional second argument: JSON array of trusted logins; when provided, only comments
-# and reviews from those users are included so untrusted activity does not trigger re-runs.
+# Optional second argument: JSON array of trusted logins; when provided, only comments,
+# reviews, and inline review comments from those users are included so untrusted activity does
+# not trigger re-runs.
+# Optional third argument: JSON array of inline review comments from fetch_pr_review_comments
+# (REST shape — author under `.user.login`, timestamp under `.updated_at`), defaulting to an
+# empty array for callers that predate #1127.
 # Outputs the hash on stdout; returns non-zero if jq fails.
 fingerprint_pr_json() {
     local pr_json="$1"
     local trusted_logins="${2:-null}"
+    local review_comments_json="${3:-[]}"
     local canonical
 
-    canonical=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" '
+    canonical=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --argjson reviewComments "${review_comments_json}" '
         def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
+        def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
         .title,
         (.body // ""),
         (.isDraft | tostring),
@@ -2407,6 +2435,8 @@ fingerprint_pr_json() {
         ([((.reviewRequests // [])[] | (.login // .slug // .name // "unknown"))] | sort | join(",")),
         ([((.assignees // [])[] | .login)] | sort | join(",")),
         (.milestone.title // "none"),
+        (trc($reviewComments) | length | tostring),
+        ((trc($reviewComments) | sort_by(.updated_at) | last | .updated_at) // "none"),
         ([((.statusCheckRollup // [])[]
             | (.name // "unknown") as $n
             | (.conclusion // .status // "none") as $c
@@ -2420,14 +2450,17 @@ fingerprint_pr_json() {
     printf '%s' "${canonical}" | hash_sha256
 }
 
-# Computes a deterministic hash of the PR's current state using a single gh pr view call.
-# Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
+# Computes a deterministic hash of the PR's current state, folding in inline review comments
+# (#1127) alongside the gh pr view fields. Outputs the hash on stdout; returns non-zero if any
+# gh call or jq fails — fails closed rather than fingerprinting against stale/empty inline
+# comment data (mirrors the get_trusted_logins fail-closed rule, #1094).
 compute_pr_fingerprint() {
     local item_id="$1"
-    local pr_json trusted
+    local pr_json trusted review_comments
     pr_json=$(fetch_pr_json "${item_id}") || return 1
     trusted=$(get_trusted_logins) || return 1
-    fingerprint_pr_json "${pr_json}" "${trusted}"
+    review_comments=$(fetch_pr_review_comments "${item_id}") || return 1
+    fingerprint_pr_json "${pr_json}" "${trusted}" "${review_comments}"
 }
 
 # Writes the fingerprint to the fingerprint file for a given PR ID.
@@ -3224,7 +3257,7 @@ main() {
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped original_issue_id pr_idle_advance
-    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name
+    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
     local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
@@ -3371,7 +3404,9 @@ main() {
                 skip_repos+=("${item_repo}")
 
                 require_trusted_logins || continue
-                pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
+                pr_review_comments=$(fetch_pr_review_comments "${open_pr}") \
+                    || die "Failed to fetch review comments for PR #${open_pr} in ${item_repo}"
+                pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
@@ -3504,7 +3539,9 @@ main() {
             skip_repos+=("${item_repo}")
 
             require_trusted_logins || continue
-            pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}") \
+            pr_review_comments=$(fetch_pr_review_comments "${item_id}") \
+                || die "Failed to fetch review comments for PR #${item_id} in ${item_repo}"
+            pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
