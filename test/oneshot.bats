@@ -1172,6 +1172,74 @@ teardown() {
     [ "${fp_base}" != "${fp_review}" ]
 }
 
+@test "fingerprint_pr_json changes when reviewDecision flips (#1096)" {
+    local pr_a='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewDecision":"APPROVED"}'
+    local pr_b='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewDecision":"REVIEW_REQUIRED"}'
+    local fp_a fp_b
+    fp_a=$(fingerprint_pr_json "${pr_a}")
+    fp_b=$(fingerprint_pr_json "${pr_b}")
+    [ "${fp_a}" != "${fp_b}" ]
+}
+
+@test "fingerprint_pr_json changes when baseRefName is retargeted (#1096)" {
+    local pr_a='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","baseRefName":"main","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_b='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","baseRefName":"develop","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local fp_a fp_b
+    fp_a=$(fingerprint_pr_json "${pr_a}")
+    fp_b=$(fingerprint_pr_json "${pr_b}")
+    [ "${fp_a}" != "${fp_b}" ]
+}
+
+@test "fingerprint_pr_json changes when a reviewer is requested or removed (#1096)" {
+    local pr_none='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewRequests":[]}'
+    local pr_requested='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewRequests":[{"login":"alice"}]}'
+    local fp_none fp_requested
+    fp_none=$(fingerprint_pr_json "${pr_none}")
+    fp_requested=$(fingerprint_pr_json "${pr_requested}")
+    [ "${fp_none}" != "${fp_requested}" ]
+}
+
+@test "fingerprint_pr_json includes team review requests by slug (#1096)" {
+    local pr_a='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewRequests":[{"slug":"team-a"}]}'
+    local pr_b='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"reviewRequests":[{"slug":"team-b"}]}'
+    local fp_a fp_b
+    fp_a=$(fingerprint_pr_json "${pr_a}")
+    fp_b=$(fingerprint_pr_json "${pr_b}")
+    [ "${fp_a}" != "${fp_b}" ]
+}
+
+@test "fingerprint_pr_json changes when a PR is assigned (#1096)" {
+    local pr_unassigned='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[]}'
+    local pr_assigned='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"bob"}]}'
+    local fp_unassigned fp_assigned
+    fp_unassigned=$(fingerprint_pr_json "${pr_unassigned}")
+    fp_assigned=$(fingerprint_pr_json "${pr_assigned}")
+    [ "${fp_unassigned}" != "${fp_assigned}" ]
+}
+
+@test "fingerprint_pr_json changes when milestone is set or changed (#1096)" {
+    local pr_none='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"milestone":null}'
+    local pr_v1='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"milestone":{"title":"v1"}}'
+    local pr_v2='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"milestone":{"title":"v2"}}'
+    local fp_none fp_v1 fp_v2
+    fp_none=$(fingerprint_pr_json "${pr_none}")
+    fp_v1=$(fingerprint_pr_json "${pr_v1}")
+    fp_v2=$(fingerprint_pr_json "${pr_v2}")
+    [ "${fp_none}" != "${fp_v1}" ]
+    [ "${fp_v1}" != "${fp_v2}" ]
+}
+
+@test "fetch_pr_json requests baseRefName, reviewDecision, reviewRequests, assignees, and milestone fields (#1096)" {
+    make_stub gh 'printf "%s" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "{}"'
+    fetch_pr_json 42 > /dev/null
+    run cat "${TEST_TMP}/gh_args"
+    [[ "${output}" == *"baseRefName"* ]]
+    [[ "${output}" == *"reviewDecision"* ]]
+    [[ "${output}" == *"reviewRequests"* ]]
+    [[ "${output}" == *"assignees"* ]]
+    [[ "${output}" == *"milestone"* ]]
+}
+
 # --- get_trusted_logins --------------------------------------------------------
 
 @test "get_trusted_logins includes OWNER" {
