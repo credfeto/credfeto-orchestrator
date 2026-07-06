@@ -68,6 +68,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Install procps (ps, pkill, free) in the development-tools base image, needed by .NET benchmark tooling used in downstream repos (e.g. funfair-server-code-analysis#463) (#1061)
 - HEALTHCHECK instruction to development-agent Dockerfile so Docker/Podman reports accurate container health rather than always reporting healthy (#170)
 - Auto-clear the Blocked label on a PR the agent diagnosed as blocked by an environment/infrastructure failure (a structured marker in its comment) once a newer agent container image has been built — bounded by MAX_PR_ENV_AUTO_UNBLOCKS so a wrong diagnosis cannot loop forever unblocking itself (#1118)
+- oneshot's generated per-item CLAUDE.md now instructs the containerized agent to never pass a tool-level timeout that could truncate pre-commit, a git commit in a repo with pre-commit enabled, dotnet test, npm test, or bun test — these must run to completion, using the maximum available timeout or run_in_background/Monitor instead of accepting a truncated run. A killed run skips the target process's own cleanup and can leave orphaned state behind (#942)
 ### Fixed
 - oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
 - oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments
