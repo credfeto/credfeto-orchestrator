@@ -428,6 +428,15 @@ STUBEOF
     grep -q '"firstStartTime"' "${HOME}/.claude.json"
 }
 
+@test "entrypoint pre-accepts the workspace trust dialog for /workspace/repo in the seeded ~/.claude.json" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    jq -e '.projects["/workspace/repo"].hasTrustDialogAccepted == true' "${HOME}/.claude.json" > /dev/null
+}
+
 @test "entrypoint does not overwrite ~/.claude.json when it already exists" {
     setup_entrypoint_stubs
     printf '{"firstStartTime":"2020-01-01T00:00:00.000Z","custom":"value"}\n' \
