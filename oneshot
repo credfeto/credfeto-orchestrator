@@ -2365,7 +2365,7 @@ fetch_pr_json() {
     while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
         if result=$(gh pr view "${item_id}" \
             --repo "${REPO_FULL}" \
-            --json state,title,body,isDraft,labels,headRefOid,headRefName,comments,reviews,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
+            --json state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
             2>/dev/null); then
             printf '%s' "${result}"
             return 0
@@ -2393,10 +2393,15 @@ fingerprint_pr_json() {
         (.isDraft | tostring),
         ([((.labels // [])[] | .name)] | sort | .[]),
         .headRefOid,
+        (.baseRefName // "none"),
         (tc(.comments // []) | length | tostring),
         ((tc(.comments // []) | sort_by(.updatedAt) | last | .updatedAt) // "none"),
         ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
         ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
+        (.reviewDecision // "none"),
+        ([((.reviewRequests // [])[] | (.login // .slug // .name // "unknown"))] | sort | join(",")),
+        ([((.assignees // [])[] | .login)] | sort | join(",")),
+        (.milestone.title // "none"),
         ([((.statusCheckRollup // [])[]
             | (.name // "unknown") as $n
             | (.conclusion // .status // "none") as $c
