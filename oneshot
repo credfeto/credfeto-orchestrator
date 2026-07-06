@@ -3136,6 +3136,13 @@ tag_pr_closed_issue() {
 main() {
     local owner_filter=""
 
+    # Registered first, before any die-capable step below, so an early failure
+    # (bad argument, missing tool, invalid config, missing signing key) still
+    # cleans up the ssh-agent the service unit's ExecStartPre already started
+    # before oneshot ran — otherwise it leaks and systemd logs "Found
+    # left-over process ... in control group" on the next timer firing (#1103).
+    trap stop_ssh_agent EXIT
+
     while [ $# -gt 0 ]; do
         case "$1" in
             --owner)
@@ -3161,7 +3168,6 @@ main() {
     fi
     preload_ssh_keys
     setup_cgroup_leaf
-    trap stop_ssh_agent EXIT
 
     if ! check_disk_space; then
         notify_discord_low_disk_space "${owner_filter}"
