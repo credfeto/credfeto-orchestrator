@@ -195,8 +195,17 @@ git config --global commit.gpgsign  true
 # a "configuration file not found" warning on stderr before backing up and continuing.
 # Pre-seeding it silences that noise.  Claude will overwrite it with full config on
 # first run; the only required key is firstStartTime.
+#
+# Also pre-accept the workspace-trust dialog for /workspace/repo (CONTAINER_REPO_PATH
+# in oneshot, and this image's WORKDIR): every invocation is a fresh container with no
+# memory of prior runs (by design, see oneshot's PHASE DISCIPLINE), so there is never a
+# prior run to have accepted the interactive trust prompt, and --print mode has no way
+# to show it. Without this, Claude Code silently ignores every permissions.allow entry
+# in the project's own /home/developer/.claude/settings.json (real effect on this run
+# is masked by --dangerously-skip-permissions also being passed, but the allow-list
+# exists as its own defence-in-depth layer and should actually be honoured).
 if [ ! -f "${HOME}/.claude.json" ]; then
-    printf '{"firstStartTime":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+    printf '{"firstStartTime":"%s","projects":{"/workspace/repo":{"hasTrustDialogAccepted":true}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
         > "${HOME}/.claude.json"
 fi
 
