@@ -1933,9 +1933,12 @@ cleanup_dangling_images() {
 # cgroup is clean when the next timer fires and systemd does not warn about
 # left-over processes.  Registered as an EXIT trap by main so it runs on any
 # exit — success, die, or signal — regardless of whether invoke_claude was called.
+# Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring install-timer's
+# ExecStartPre pkill) — an unscoped 'pkill ssh-agent' matches any process with that
+# name system-wide, including an unrelated interactive login agent (#1122).
 stop_ssh_agent() {
     [ -n "${SSH_AUTH_SOCK:-}" ] || return 0
-    pkill ssh-agent 2>/dev/null || true
+    pkill -u "$(id -un)" -f "ssh-agent -a ${SSH_AUTH_SOCK}" 2>/dev/null || true
 }
 
 # Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
