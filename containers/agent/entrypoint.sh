@@ -177,12 +177,33 @@ verify_no_user_insteadof() {
     die "These rules are only allowed in the system /etc/gitconfig. Remove them from your local or global git config."
 }
 
+# Workspace trust is what actually gates whether Claude Code auto-loads and acts on a
+# project's own .claude/settings(.local).json and .mcp.json — including hooks (e.g.
+# SessionStart, PreToolUse) and MCP server definitions that execute arbitrary commands.
+# --dangerously-skip-permissions does not grant this; it only bypasses interactive
+# tool-call approval prompts once Claude is already running. Pre-accepting trust below
+# for the repo checkout is safe ONLY because that checkout never carries its own such
+# config today — refuse to proceed rather than silently trust one, since the checkout
+# can contain content from an untrusted PR branch and a future .claude/settings.json,
+# .claude/settings.local.json, or .mcp.json added there (maliciously or otherwise)
+# would auto-run the instant trust is granted, with no confirmation from Claude itself.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+verify_no_repo_claude_config() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    local f
+    for f in "${repo_dir}/.claude/settings.json" "${repo_dir}/.claude/settings.local.json" "${repo_dir}/.mcp.json"; do
+        [ -e "${f}" ] || continue
+        die "Repo checkout contains ${f} — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"
+    done
+}
+
 enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
 verify_ssh_signing
 verify_repo_ssh_remotes
 verify_no_user_insteadof
+verify_no_repo_claude_config
 
 verify_hooks_fresh
 
@@ -196,16 +217,19 @@ git config --global commit.gpgsign  true
 # Pre-seeding it silences that noise.  Claude will overwrite it with full config on
 # first run; the only required key is firstStartTime.
 #
-# Also pre-accept the workspace-trust dialog for /workspace/repo (CONTAINER_REPO_PATH
-# in oneshot, and this image's WORKDIR): every invocation is a fresh container with no
-# memory of prior runs (by design, see oneshot's PHASE DISCIPLINE), so there is never a
-# prior run to have accepted the interactive trust prompt, and --print mode has no way
-# to show it. Without this, Claude Code silently ignores every permissions.allow entry
-# in the project's own /home/developer/.claude/settings.json (real effect on this run
-# is masked by --dangerously-skip-permissions also being passed, but the allow-list
-# exists as its own defence-in-depth layer and should actually be honoured).
+# Also pre-accept the workspace-trust dialog for the repo checkout (CONTAINER_REPO_PATH
+# in oneshot, and this image's WORKDIR — verify_no_repo_claude_config above has already
+# confirmed it carries no .claude/.mcp config of its own): every invocation is a fresh
+# container with no memory of prior runs (by design, see oneshot's PHASE DISCIPLINE), so
+# there is never a prior run to have accepted the interactive trust prompt, and --print
+# mode has no way to show it. Without this, Claude Code silently ignores every
+# permissions.allow entry in the project's own /home/developer/.claude/settings.json
+# (real effect on this run is masked by --dangerously-skip-permissions also being
+# passed, but the allow-list exists as its own defence-in-depth layer and should
+# actually be honoured).
 if [ ! -f "${HOME}/.claude.json" ]; then
-    printf '{"firstStartTime":"%s","projects":{"/workspace/repo":{"hasTrustDialogAccepted":true}}}\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+    printf '{"firstStartTime":"%s","projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "${WORKSPACE_REPO_DIR:-/workspace/repo}" \
         > "${HOME}/.claude.json"
 fi
 
