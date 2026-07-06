@@ -406,6 +406,17 @@ teardown() {
     [[ "${output}" == *"Unknown argument"* ]]
 }
 
+@test "main still cleans up ssh-agent when it dies on the earliest argument-parsing path (#1103)" {
+    setup_main_mocks
+    export SSH_AUTH_SOCK="${TEST_TMP}/ssh-agent.sock"
+    local pkill_log="${TEST_TMP}/pkill.log"
+    make_stub pkill "printf '%s\n' \"\$*\" >> \"${pkill_log}\"; exit 0"
+    run main --unknown-flag
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown argument"* ]]
+    grep -qxe "-u $(id -un) -f ssh-agent -a ${SSH_AUTH_SOCK}" "${pkill_log}"
+}
+
 @test "main --owner with invalid characters dies" {
     setup_main_mocks
     run main --owner "evil;rm"
