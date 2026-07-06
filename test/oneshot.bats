@@ -4469,12 +4469,12 @@ STUBEOF
     [ ! -f "${pkill_log}" ]
 }
 
-@test "stop_ssh_agent calls pkill ssh-agent when SSH_AUTH_SOCK is set" {
+@test "stop_ssh_agent calls pkill scoped to its own user and socket when SSH_AUTH_SOCK is set (#1122)" {
     export SSH_AUTH_SOCK="${TEST_TMP}/ssh-agent.sock"
     local pkill_log="${TEST_TMP}/pkill.log"
     make_stub pkill "printf '%s\n' \"\$*\" >> \"${pkill_log}\"; exit 0"
     stop_ssh_agent
-    grep -qx "ssh-agent" "${pkill_log}"
+    grep -qxe "-u $(id -un) -f ssh-agent -a ${SSH_AUTH_SOCK}" "${pkill_log}"
 }
 
 @test "stop_ssh_agent succeeds even when pkill finds no process" {
@@ -4482,6 +4482,22 @@ STUBEOF
     make_stub pkill 'exit 1'
     run stop_ssh_agent
     [ "${status}" -eq 0 ]
+}
+
+@test "stop_ssh_agent does not kill an unrelated ssh-agent bound to a different socket (#1122)" {
+    local decoy_sock="${TEST_TMP}/decoy-agent.sock"
+    ssh-agent -a "${decoy_sock}" > /dev/null
+    local decoy_pid
+    decoy_pid=$(pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}")
+    [ -n "${decoy_pid}" ]
+
+    export SSH_AUTH_SOCK="${TEST_TMP}/this-run-agent.sock"
+    stop_ssh_agent
+
+    local still_alive=0
+    kill -0 "${decoy_pid}" 2>/dev/null || still_alive=1
+    kill "${decoy_pid}" 2>/dev/null || true
+    [ "${still_alive}" -eq 0 ]
 }
 
 # --- cleanup_dangling_images unit tests ---------------------------------------
@@ -4588,6 +4604,9 @@ STUBEOF
     python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     SSH_AUTH_SOCK="${ssh_sock}"
+    # stop_ssh_agent runs as an EXIT trap inside invoke_claude — stub pkill so the
+    # trap never reaches the real system binary (#1122).
+    make_stub pkill 'exit 1'
     make_gpg_stubs
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
@@ -4623,6 +4642,10 @@ STUBEOF
 @test "invoke_claude warns and skips SSH mount when SSH_AUTH_SOCK path is not a socket" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     export SSH_AUTH_SOCK="${TEST_TMP}/nonexistent-sock"
+    # stop_ssh_agent runs as an EXIT trap inside invoke_claude even though the
+    # socket path is bogus — SSH_AUTH_SOCK is still non-empty. Stub pkill so the
+    # trap never reaches the real system binary (#1122).
+    make_stub pkill 'exit 1'
     make_gpg_stubs
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
