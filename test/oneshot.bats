@@ -1260,6 +1260,74 @@ teardown() {
     [[ "${output}" == *"milestone"* ]]
 }
 
+@test "fingerprint_pr_json changes when a new inline review comment appears with no other field changed (#1127)" {
+    local pr='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local rc_none='[]'
+    local rc_one='[{"user":{"login":"anyone"},"body":"Why this change?","updated_at":"2024-01-01T00:00:00Z"}]'
+    local fp_none fp_one
+    fp_none=$(fingerprint_pr_json "${pr}" "null" "${rc_none}")
+    fp_one=$(fingerprint_pr_json "${pr}" "null" "${rc_one}")
+    [ "${fp_none}" != "${fp_one}" ]
+}
+
+@test "fingerprint_pr_json defaults inline review comments to empty when the third argument is omitted (#1127)" {
+    local pr='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local fp_omitted fp_explicit_empty
+    fp_omitted=$(fingerprint_pr_json "${pr}")
+    fp_explicit_empty=$(fingerprint_pr_json "${pr}" "null" "[]")
+    [ "${fp_omitted}" = "${fp_explicit_empty}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: trusted inline review comment changes fingerprint (#1127)" {
+    local pr='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local rc_none='[]'
+    local rc_trusted='[{"user":{"login":"owner"},"body":"Why this change?","updated_at":"2024-01-01T00:00:00Z"}]'
+    local trusted='["owner"]'
+    local fp_none fp_trusted
+    fp_none=$(fingerprint_pr_json "${pr}" "${trusted}" "${rc_none}")
+    fp_trusted=$(fingerprint_pr_json "${pr}" "${trusted}" "${rc_trusted}")
+    [ "${fp_none}" != "${fp_trusted}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: untrusted inline review comment does not change fingerprint (#1127)" {
+    local pr='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local rc_none='[]'
+    local rc_untrusted='[{"user":{"login":"randomer"},"body":"spam","updated_at":"2024-01-01T00:00:00Z"}]'
+    local trusted='["owner"]'
+    local fp_none fp_untrusted
+    fp_none=$(fingerprint_pr_json "${pr}" "${trusted}" "${rc_none}")
+    fp_untrusted=$(fingerprint_pr_json "${pr}" "${trusted}" "${rc_untrusted}")
+    [ "${fp_none}" = "${fp_untrusted}" ]
+}
+
+# --- fetch_pr_review_comments (#1127) -------------------------------------------
+
+@test "fetch_pr_review_comments requests the pulls/<n>/comments REST endpoint with pagination (#1127)" {
+    make_stub gh 'printf "%s" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
+    fetch_pr_review_comments 42 > /dev/null
+    run cat "${TEST_TMP}/gh_args"
+    [[ "${output}" == *"repos/credfeto/credfeto-orchestrator/pulls/42/comments"* ]]
+    [[ "${output}" == *"--paginate"* ]]
+}
+
+@test "fetch_pr_review_comments retries and succeeds after a transient gh failure (#1127)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub gh 'n=$(cat "'"${TEST_TMP}"'/ghcount" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/ghcount"; [ "$n" -lt 2 ] && exit 1; printf "[]\n"'
+    run fetch_pr_review_comments 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+}
+
+@test "fetch_pr_review_comments returns 1 without dying after exhausting retries (#1127)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run fetch_pr_review_comments 5
+    [ "${status}" -ne 0 ]
+}
+
 # --- get_trusted_logins --------------------------------------------------------
 
 @test "get_trusted_logins includes OWNER" {
@@ -1410,9 +1478,30 @@ teardown() {
     local captured_trusted="none"
     fetch_pr_json() { printf '{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     get_trusted_logins() { printf '["testowner"]\n'; }
+    fetch_pr_review_comments() { printf '[]\n'; }
     fingerprint_pr_json() { captured_trusted="${2:-missing}"; printf 'test-fp\n'; }
     compute_pr_fingerprint 5
     [ "${captured_trusted}" = '["testowner"]' ]
+}
+
+@test "compute_pr_fingerprint passes inline review comments from fetch_pr_review_comments to fingerprint_pr_json (#1127)" {
+    local captured_review_comments="none"
+    fetch_pr_json() { printf '{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fetch_pr_review_comments() { printf '[{"user":{"login":"testowner"},"body":"Why this change?","updated_at":"2024-01-01T00:00:00Z"}]\n'; }
+    fingerprint_pr_json() { captured_review_comments="${3:-missing}"; printf 'test-fp\n'; }
+    compute_pr_fingerprint 5
+    printf '%s' "${captured_review_comments}" | jq -e '.[0].body == "Why this change?"' > /dev/null
+}
+
+@test "compute_pr_fingerprint returns non-zero without calling fingerprint_pr_json when fetch_pr_review_comments fails (#1127)" {
+    fetch_pr_json() { printf '{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fetch_pr_review_comments() { return 1; }
+    fingerprint_pr_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'test-fp\n'; }
+    run compute_pr_fingerprint 5
+    [ "${status}" -ne 0 ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
 }
 
 @test "compute_issue_fingerprint returns non-zero without calling fingerprint_issue_json when get_trusted_logins fails (#1094)" {
@@ -2306,6 +2395,7 @@ setup_main_mocks() {
     load_env_config()             { return 0; }
     validate_config()             { return 0; }
     get_trusted_logins()          { printf '["credfeto"]\n'; }
+    fetch_pr_review_comments()    { printf '[]\n'; }
     notify_discord_work_item()         { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
