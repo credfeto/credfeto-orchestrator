@@ -134,6 +134,16 @@ teardown() {
     [[ "${output}" == *"survives independently of this container"* ]]
 }
 
+@test "build_issue_claude_md forbids truncating pre-commit, dotnet test, npm test, or bun test with a tool timeout" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Never pass a tool-level timeout that could truncate"* ]]
+    [[ "${output}" == *"dotnet test"* ]]
+    [[ "${output}" == *"npm test"* ]]
+    [[ "${output}" == *"bun test"* ]]
+    [[ "${output}" == *"run_in_background"* ]]
+}
+
 @test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" ""
     [ "${status}" -eq 0 ]
@@ -195,6 +205,16 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"WAIT for the foreground command to return no matter how long it takes"* ]]
     [[ "${output}" == *"genuinely hung"* ]]
+}
+
+@test "build_pr_claude_md forbids truncating pre-commit, dotnet test, npm test, or bun test with a tool timeout" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Never pass a tool-level timeout that could truncate"* ]]
+    [[ "${output}" == *"dotnet test"* ]]
+    [[ "${output}" == *"npm test"* ]]
+    [[ "${output}" == *"bun test"* ]]
+    [[ "${output}" == *"run_in_background"* ]]
 }
 
 @test "build_pr_claude_md states the container-vs-GitHub survival rule" {
