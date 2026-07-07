@@ -6484,28 +6484,65 @@ STUBEOF
 
 @test "board_substatus_for_item returns Unknown when the board is not configured" {
     _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
     run board_substatus_for_item 42
     [ "${output}" = "Unknown" ]
 }
 
+@test "board_substatus_for_item calls discover_or_create_workflow_project first (#1136 review)" {
+    # Most notify_discord_blocked_item call sites fire before the per-item work block's own
+    # discovery call ever runs — board_substatus_for_item must trigger discovery itself so it
+    # doesn't always report Unknown for those.
+    _WF_PROJECT_ID=""
+    local call_log="${TEST_TMP}/discover_calls"
+    discover_or_create_workflow_project() { printf 'called\n' >> "${call_log}"; }
+    board_substatus_for_item 42
+    [ -f "${call_log}" ]
+}
+
 @test "board_substatus_for_item returns the resolved status name for a known item" {
+    set_repo_context "org/repo"
+    # Simulates discovery having already resolved this repo's project — the fast-path guard
+    # in discover_or_create_workflow_project (_WF_CACHED_REPO == REPO_FULL) makes it a no-op
+    # so it does not overwrite the project ID set up below via a real (unstubbed) discovery.
+    _WF_CACHED_REPO="org/repo"
     _WF_PROJECT_ID="PVT_test"
     _WF_OPTION_IDS[Development]="opt_dev"
     local items_json='{"data":{"node":{"items":{"nodes":[
         {"content":{"number":42,"repository":{"nameWithOwner":"org/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_dev","field":{"name":"Workflow Status"}}]}}
     ]}}}}'
     make_stub gh "printf '%s\n' '${items_json}'"
-    set_repo_context "org/repo"
     run board_substatus_for_item 42
     [ "${output}" = "Development" ]
 }
 
 @test "board_substatus_for_item returns Unknown for an item not yet on the board" {
+    set_repo_context "org/repo"
+    _WF_CACHED_REPO="org/repo"
     _WF_PROJECT_ID="PVT_test"
     make_stub gh 'printf "%s\n" "{\"data\":{\"node\":{\"items\":{\"nodes\":[]}}}}"'
-    set_repo_context "org/repo"
     run board_substatus_for_item 999
     [ "${output}" = "Unknown" ]
+}
+
+@test "board_substatus_for_item re-resolves the project when REPO_FULL changes across repos (#1136 review)" {
+    # Regression coverage for the multi-repo staleness bug: a stale _WF_PROJECT_ID left over
+    # from a previously processed repo must not silently poison this repo's lookup.
+    set_repo_context "repo-a/repo-a"
+    _WF_CACHED_REPO="repo-a/repo-a"
+    _WF_PROJECT_ID="PVT_stale_from_repo_a"
+    discover_or_create_workflow_project() {
+        _WF_PROJECT_ID="PVT_repo_b"
+        _WF_CACHED_REPO="${REPO_FULL}"
+    }
+    local items_json='{"data":{"node":{"items":{"nodes":[
+        {"content":{"number":7,"repository":{"nameWithOwner":"repo-b/repo-b"}},"fieldValues":{"nodes":[{"optionId":"opt_review","field":{"name":"Workflow Status"}}]}}
+    ]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    set_repo_context "repo-b/repo-b"
+    _WF_OPTION_IDS["Human Review"]="opt_review"
+    run board_substatus_for_item 7
+    [ "${output}" = "Human Review" ]
 }
 
 # --- coarse_status_for_substatus (#1136) ----------------------------------------

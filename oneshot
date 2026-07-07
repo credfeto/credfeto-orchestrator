@@ -1094,6 +1094,18 @@ pr_json_has_failed_required_check() {
     ' > /dev/null 2>&1
 }
 
+# Maps an item_type ("Issue"|"PullRequest") to the gh CLI noun ("issue"|"pr") used in `gh pr
+# ...`/`gh issue ...` subcommands. Single definition shared by every call site that needs this
+# mapping so a future item type can't be updated in only some of them (#1136 review).
+gh_noun_for_item_type() {
+    local item_type="$1"
+    if [ "${item_type}" = "Issue" ]; then
+        printf 'issue'
+    else
+        printf 'pr'
+    fi
+}
+
 # Applies the Blocked label to an Issue or PullRequest and VERIFIES it actually landed —
 # `gh ... edit --add-label` can fail silently (e.g. the repo has no "Blocked" label yet), and an
 # unverified label-add is how every escalation path in this file used to lose its escalation:
@@ -1103,8 +1115,8 @@ pr_json_has_failed_required_check() {
 # the label if it doesn't exist in the repo. Returns 0 only once the label is CONFIRMED present.
 apply_blocked_label() {
     local item_type="$1" item_id="$2" item_repo="$3"
-    local gh_noun="pr"
-    [ "${item_type}" = "Issue" ] && gh_noun="issue"
+    local gh_noun
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
 
     local attempt
     for attempt in 1 2; do
@@ -1830,6 +1842,17 @@ workflow_status_name_for_option_id() {
 # Claude invocation — #1136).
 board_substatus_for_item() {
     local item_id="$1" opt_id substatus
+    # Ensures _WF_PROJECT_ID is resolved for the CURRENT REPO_FULL before fetch_board_item_
+    # statuses checks it — most callers of this function (notify_discord_blocked_item's ~12
+    # call sites) fire from scan/skip branches that `continue` long before the per-item work
+    # block's own discover_or_create_workflow_project call, so without this every one of them
+    # would see an empty _WF_PROJECT_ID and report "Unknown" regardless of whether a board is
+    # actually configured (#1136 review). discover_or_create_workflow_project's own
+    # _WF_CACHED_REPO guard makes this a cheap no-op when already resolved for this repo, and
+    # correctly RE-resolves when REPO_FULL has changed since the last call — which also closes
+    # the multi-repo staleness gap (a stale _WF_PROJECT_ID from a previously processed repo
+    # silently poisoning this repo's lookup and permanently caching "Unknown" against it).
+    discover_or_create_workflow_project
     fetch_board_item_statuses
     opt_id="${_WF_ITEM_STATUS_OPTION_ID["${REPO_FULL}/${item_id}"]:-}"
     substatus=$(workflow_status_name_for_option_id "${opt_id}")
@@ -3481,8 +3504,7 @@ notify_discord_blocked_item() {
 
     url="$(build_item_url "${item_type}" "${item_id}")"
 
-    gh_noun="pr"
-    [ "${item_type}" = "Issue" ] && gh_noun="issue"
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
     labels_json=$(gh "${gh_noun}" view "${item_id}" --repo "${REPO_FULL}" --json labels --jq '.labels' 2>/dev/null)
     [ -n "${labels_json}" ] || labels_json="[]"
     priority=$(priority_for_labels "${labels_json}")
@@ -4307,8 +4329,8 @@ COMMENT
             if [ "${new_infra_failures}" -ge "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]; then
                 warn "${item_type} #${item_id} in ${item_repo}: agent container failed ${new_infra_failures} times in a row before Claude could even start — marking Blocked"
                 if apply_blocked_label "${item_type}" "${item_id}" "${item_repo}"; then
-                    local infra_gh_noun="pr"
-                    [ "${item_type}" = "Issue" ] && infra_gh_noun="issue"
+                    local infra_gh_noun
+                    infra_gh_noun=$(gh_noun_for_item_type "${item_type}")
                     gh "${infra_gh_noun}" comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever.
 COMMENT
