@@ -1943,16 +1943,15 @@ build_pr_prompt() {
         "${item_id}" "${REPO_FULL}" "${repo_path}"
 }
 
-# Prints Claude's error result (if any), removes tmpfile, and dies.
-die_claude_failed() {
-    local tmpfile="$1"
-    jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
-    rm -f "${tmpfile}"
-    die "Claude invocation failed"
-}
-
 # Runs a single podman-based claude invocation, writing JSON output to tmpfile.
 # On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
+# Returns 0 on success (including a valid is_error=true result — the caller inspects that).
+# Returns 2 when the container exited before Claude ever produced a result at all — most
+# commonly an entrypoint.sh pre-flight check dying before `exec claude` runs (e.g. #1133's
+# workspace-trust guard). Claude never started, so this is an infra/pre-flight failure, not a
+# Claude-level one; the caller must not count it against the item's invocation budget and must
+# not die the whole run over it — return a distinguishable code instead so main() can skip just
+# this item and retry it next tick (#1133).
 run_claude_fresh() {
     local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
     local stderrfile podman_exit=0
@@ -1994,7 +1993,9 @@ run_claude_fresh() {
                 && jq -e '.type == "result" and .is_error == true' "${tmpfile}" >/dev/null 2>&1; then
             return 0
         fi
-        die_claude_failed "${tmpfile}"
+        jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
+        rm -f "${tmpfile}"
+        return 2
     fi
     cat "${stderrfile}" >&2
     rm -f "${stderrfile}"
@@ -2236,10 +2237,22 @@ validate_bind_mounts() {
     done
 }
 
+# Removes the per-invocation CLAUDE.md tempfile and GPG pubkey tempdir and resets their
+# globals. Shared by every invoke_claude exit path (success, infra-failure early-return, and
+# the "no result object" die) so cleanup cannot drift between them (#1133).
+cleanup_claude_invocation_tmpfiles() {
+    rm -f "${CLAUDE_MD_TMPFILE}"
+    CLAUDE_MD_TMPFILE=""
+    rm -rf "${GPG_PUBKEY_TMPDIR}"
+    GPG_PUBKEY_TMPDIR=""
+}
+
 # Runs a single FRESH claude session for one workflow phase and returns 0 on success.
 # All user-visible messages and Claude's text response go to stderr so the caller can
 # review what was done.  No session is persisted — every invocation starts clean.
 # Runs claude inside a rootless Podman container named orchestrator-<OWNER>.
+# Returns 2 when the container failed before Claude ever ran (see run_claude_fresh) — the
+# caller (main) must skip this item without counting it against the invocation budget (#1133).
 invoke_claude() {
     local prompt="$1" item_type="${2:-}" item_id="${3:-}" claude_md_content="${4:-}"
     local tmpfile owner_token container_name
@@ -2395,6 +2408,15 @@ invoke_claude() {
     tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
 
     run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
+    local run_claude_exit=$?
+    if [ "${run_claude_exit}" -eq 2 ]; then
+        # Infra/pre-flight failure — Claude never started (#1133). run_claude_fresh already
+        # removed tmpfile; propagate the distinguishable code so main() skips just this item
+        # instead of dying the whole run and counting it against the invocation budget.
+        cleanup_claude_invocation_tmpfiles
+        cleanup_dangling_images
+        return 2
+    fi
 
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
@@ -2408,13 +2430,10 @@ invoke_claude() {
     # or a stream fragment — a fresh run that dies before the final result would otherwise be
     # treated as a silent success.
     jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { rm -f "${tmpfile}" "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; GPG_PUBKEY_TMPDIR=""; die "Claude did not return a result object"; }
+        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 
-    rm -f "${CLAUDE_MD_TMPFILE}"
-    CLAUDE_MD_TMPFILE=""
-    rm -rf "${GPG_PUBKEY_TMPDIR}"
-    GPG_PUBKEY_TMPDIR=""
+    cleanup_claude_invocation_tmpfiles
     cleanup_dangling_images
 }
 
@@ -4003,24 +4022,44 @@ COMMENT
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
         # Initialise the board to "Not Started" only on the first-ever touch of the item, so
-        # re-invocations never clobber a phase the agent has already advanced the board to.
-        # Also record this invocation against the PR budgets: always bump the total; bump the
-        # idle counter only when this run is a no-external-change phase advance, and reset it to
-        # 0 otherwise (a push, a new comment, or CI change is real progress).
+        # re-invocations never clobber a phase the agent has already advanced the board to. This
+        # must happen BEFORE invoke_claude — the agent's own session can move the board forward
+        # during this very invocation, and setting it afterwards would clobber that.
         if [ "${item_type}" = "PullRequest" ]; then
             [ "${pr_first_touch}" = "true" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
-            local pr_new_idle=0
-            [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
-            save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
         elif [ "${item_type}" = "Issue" ]; then
             [ -z "$(load_issue_fingerprint "${item_id}")" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
-            save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))"
         fi
 
         invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"
         invoke_claude_exit=$?
         git -C "${REPO_WORK_DIR}" clean -fdX
+
+        if [ "${invoke_claude_exit}" -eq 2 ]; then
+            # Container failed before Claude ever ran (e.g. an entrypoint.sh pre-flight check —
+            # #1133). Nothing agentic happened, so this attempt must not count against the
+            # item's invocation budget; skip it and let the next tick retry fresh. Note: unlike
+            # a converging failure, this does not (yet) escalate on repeated occurrence — a
+            # backoff/escalation mechanism for a persistently failing pre-flight check is
+            # deliberately deferred to a follow-up.
+            warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure) — not counted against the invocation budget"
+            count_error=$((count_error + 1))
+            continue
+        fi
         [ "${invoke_claude_exit}" -eq 0 ] || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
+
+        # Record this invocation against the budget now that Claude has actually run a session
+        # (a pre-flight/infra failure above never reaches here — #1133): always bump the total;
+        # for PRs, bump the idle counter only when this run is a no-external-change phase
+        # advance, and reset it to 0 otherwise (a push, a new comment, or CI change is real
+        # progress).
+        if [ "${item_type}" = "PullRequest" ]; then
+            local pr_new_idle=0
+            [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+            save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
+        elif [ "${item_type}" = "Issue" ]; then
+            save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))"
+        fi
 
         success "Completed one workflow phase for ${item_type} #${item_id} in ${item_repo}"
 

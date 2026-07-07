@@ -2103,6 +2103,65 @@ STUBEOF
     [[ "${output}" == *"already in use"* ]]
 }
 
+# --- pre-flight/infra container failure (#1133) --------------------------------
+
+@test "invoke_claude returns 2 when the container fails before Claude produces any result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '✗ Repo checkout contains /workspace/repo/.claude/settings.json — refusing to grant workspace trust\n' >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+}
+
+@test "invoke_claude cleans up CLAUDE_MD_TMPFILE when the container fails before Claude produces any result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+    # The CLAUDE.md tempfile (created under XDG_RUNTIME_DIR) must not survive the call.
+    [ -z "$(find "${XDG_RUNTIME_DIR}" -name '*.claude-md' 2>/dev/null)" ]
+}
+
+@test "invoke_claude still dies (not returns 2) when podman exits nonzero but Claude produced a valid is_error result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '{"type":"result","is_error":true,"result":"boom"}\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 2 ]
+}
+
 @test "invoke_claude does not mount host .claude directory" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${HOME}/.claude"
@@ -3029,6 +3088,67 @@ STUBEOF
     [ "${status}" -ne 0 ]
     grep -q "clean -fdX" "${git_log}"
     [[ "${output}" == *"Failed to invoke Claude"* ]]
+}
+
+# --- pre-flight/infra container failure: budget exemption (#1133) --------------
+
+@test "main does not count a pre-flight/infra container failure against the issue invocation budget (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not counted against the invocation budget"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+
+    load_issue_invocation_counts 10
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+}
+
+@test "main does not count a pre-flight/infra container failure against the PR invocation budget (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    invoke_claude() { return 2; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not counted against the invocation budget"* ]]
+
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+}
+
+@test "main still runs git clean -fdX and does not die when invoke_claude returns a pre-flight failure (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "clean -fdX" "${git_log}"
+    [[ "${output}" != *"Failed to invoke Claude"* ]]
 }
 
 @test "main runs git clean -fdX after invoke_claude succeeds for a PullRequest" {

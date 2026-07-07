@@ -182,18 +182,27 @@ verify_no_user_insteadof() {
 # SessionStart, PreToolUse) and MCP server definitions that execute arbitrary commands.
 # --dangerously-skip-permissions does not grant this; it only bypasses interactive
 # tool-call approval prompts once Claude is already running. Pre-accepting trust below
-# for the repo checkout is safe ONLY because that checkout never carries its own such
-# config today — refuse to proceed rather than silently trust one, since the checkout
-# can contain content from an untrusted PR branch and a future .claude/settings.json,
-# .claude/settings.local.json, or .mcp.json added there (maliciously or otherwise)
-# would auto-run the instant trust is granted, with no confirmation from Claude itself.
+# for the repo checkout is safe ONLY because any such config it carries is verified
+# below to be byte-identical to the human-reviewed version already merged to
+# origin/main — some repos legitimately commit a .claude/settings.json (e.g. a
+# permissions.allow linter allowlist) and that must not be treated as untrusted
+# (#1133). A file that differs from origin/main, or does not exist there at all, is
+# unreviewed content that could have been introduced or modified by an untrusted PR
+# branch and would auto-run the instant trust is granted with no confirmation from
+# Claude itself — refuse to proceed rather than silently trust it.
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 verify_no_repo_claude_config() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
-    local f
+    local f rel_path main_content local_content
     for f in "${repo_dir}/.claude/settings.json" "${repo_dir}/.claude/settings.local.json" "${repo_dir}/.mcp.json"; do
         [ -e "${f}" ] || continue
-        die "Repo checkout contains ${f} — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"
+        rel_path="${f#"${repo_dir}"/}"
+        if main_content=$(git -C "${repo_dir}" show "origin/main:${rel_path}" 2>/dev/null) \
+            && local_content=$(cat "${f}" 2>/dev/null) \
+            && [ "${main_content}" = "${local_content}" ]; then
+            continue
+        fi
+        die "Repo checkout contains ${f} that differs from the reviewed origin/main version — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"
     done
 }
 
