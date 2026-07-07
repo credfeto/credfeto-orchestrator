@@ -196,6 +196,14 @@ teardown() {
     [ "${dirty_pos}" -lt "${step1_pos}" ]
 }
 
+@test "build_issue_claude_md dirty-branch cleanup resets the index before checking out (#1140 review)" {
+    # git reset HEAD must come BEFORE git checkout -- . — the reverse order leaves staged
+    # changes present in the working tree, since checkout -- . only copies index -> worktree.
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "some-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"git -C /workspace/repo reset HEAD && git -C /workspace/repo checkout -- ."* ]]
+}
+
 # --- "never block without a comment" mandatory rule (#1140) ---------------------
 
 @test "build_issue_claude_md mandates a comment on every Blocked application" {
@@ -220,12 +228,26 @@ teardown() {
     [[ "${output}" == *"Silently re-applying Blocked with no comment is NEVER acceptable"* ]]
 }
 
+@test "build_issue_claude_md board-configured not-approved-yet text still instructs revising the plan on feedback (#1140 review)" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"revise it and re-post the FULL updated plan"* ]]
+}
+
 @test "build_issue_claude_md no-board not-approved-yet text demands a diagnostic comment" {
     _WF_PROJECT_ID=""
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"no approval comment"* ]]
     [[ "${output}" == *"Silently re-applying Blocked with no comment is NEVER acceptable"* ]]
+}
+
+@test "build_issue_claude_md no-board not-approved-yet text still instructs revising the plan on feedback (#1140 review)" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"revise it and re-post the FULL updated plan"* ]]
 }
 
 @test "build_pr_claude_md includes trusted-commenters section listing supplied logins" {
@@ -1081,6 +1103,35 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q 'pr comment 5' "${call_log}"
     grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
+}
+
+# --- apply_blocked_label_with_reason (#1140 review) -----------------------------
+
+@test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run apply_blocked_label_with_reason "Issue" 42 "org/repo" "custom reason text"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 42 --repo org/repo --body custom reason text" "${call_log}"
+    grep -qx "type=Issue id=42 reason=custom reason text" "${_notif_log}"
+}
+
+@test "apply_blocked_label_with_reason still notifies but skips the comment when the label cannot be verified" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run apply_blocked_label_with_reason "PullRequest" 5 "org/repo" "unverifiable reason"
+    [ "${status}" -ne 0 ]
+    run grep -q 'comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -qx "type=PullRequest id=5 reason=unverifiable reason" "${_notif_log}"
 }
 
 @test "pr_json_has_unaddressed_review_request is false for reviewDecision APPROVED, REVIEW_REQUIRED, or absent (#1083)" {
@@ -4270,6 +4321,21 @@ STUBEOF
     run grep -q "$(printf 'x%.0s' $(seq 1 2000))" "${args_log}"
     [ "${status}" -ne 0 ]
     grep -q "$(printf 'x%.0s' $(seq 1 900))" "${args_log}"
+}
+
+@test "notify_discord_blocked_item truncates a very long title to stay under Discord's embed title limit (#1140 review)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    local long_title
+    long_title=$(printf 'y%.0s' $(seq 1 300))
+    make_stub gh "printf '{\"title\":\"${long_title}\",\"labels\":[],\"comments\":[]}'"
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    run grep -q "$(printf 'y%.0s' $(seq 1 300))" "${args_log}"
+    [ "${status}" -ne 0 ]
+    grep -q "$(printf 'y%.0s' $(seq 1 240))" "${args_log}"
 }
 
 @test "notify_discord_blocked_item is silent on a repeat call while the item stays blocked" {
