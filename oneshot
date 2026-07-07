@@ -3043,9 +3043,10 @@ block_pr_for_ci_timeout() {
     local item_id="$1" item_repo="$2"
     local reason="CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates."
     info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
-    if apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"; then
-        clear_pr_ci_pending_state "${item_id}"
+    if ! apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"; then
+        return 1
     fi
+    clear_pr_ci_pending_state "${item_id}"
 }
 
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
@@ -3545,8 +3546,10 @@ notify_discord_blocked_item() {
     # title itself well under that (240) — a GitHub issue/PR title can run close to GitHub's
     # own ~256-char limit, and without this curl --fail would reject the whole payload with a
     # 4xx, yet the blocked-marker file is still written unconditionally afterward, permanently
-    # suppressing any notification for this blocked spell (#1140 review).
-    item_title="${item_title:0:240}"
+    # suppressing any notification for this blocked spell (#1140 review). Sliced via jq (codepoint-
+    # aware) rather than bash's byte-offset ${var:0:N}, which can split a multi-byte UTF-8
+    # character in half under a non-UTF-8 locale and corrupt the title (#1140 review).
+    item_title=$(printf '%s' "${item_title}" | jq -Rsr '.[0:240]' 2>/dev/null)
     labels_json=$(printf '%s' "${item_json}" | jq -c '.labels // []' 2>/dev/null)
     [ -n "${labels_json}" ] || labels_json="[]"
     priority=$(priority_for_labels "${labels_json}")
@@ -3556,7 +3559,8 @@ notify_discord_blocked_item() {
         reason=$(printf '%s' "${item_json}" | jq -r '(.comments // []) | last | .body // empty' 2>/dev/null)
         [ -n "${reason}" ] || reason="No reason found in the automation's own comments — check the item's labels and comment history on GitHub."
     fi
-    truncated_reason="${reason:0:900}"
+    # Same codepoint-aware slicing as item_title above, and for the same reason (#1140 review).
+    truncated_reason=$(printf '%s' "${reason}" | jq -Rsr '.[0:900]' 2>/dev/null)
 
     payload=$(jq --null-input \
         --argjson color 15158332 \

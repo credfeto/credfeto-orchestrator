@@ -204,6 +204,13 @@ teardown() {
     [[ "${output}" == *"git -C /workspace/repo reset HEAD && git -C /workspace/repo checkout -- ."* ]]
 }
 
+@test "build_issue_claude_md dirty-branch section offers stashing when changes may be relevant (#1140)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "some-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"git -C /workspace/repo stash"* ]]
+    [[ "${output}" == *"clearly relevant to THIS issue"* ]]
+}
+
 # --- "never block without a comment" mandatory rule (#1140) ---------------------
 
 @test "build_issue_claude_md mandates a comment on every Blocked application" {
@@ -1105,6 +1112,31 @@ teardown() {
     grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
 }
 
+@test "block_pr_for_idle_exhausted_review does not post a comment when the label cannot be verified (#1140 review)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified PullRequest #5 reason=This PR has an unaddressed review requesting changes' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_review posts the review-specific reason once the label is verified present (#1140 review)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q 'pr comment 5 --repo org/repo --body This PR has an unaddressed review requesting changes' "${call_log}"
+    grep -q 'notified PullRequest #5 reason=This PR has an unaddressed review requesting changes' "${TEST_TMP}/discord_calls"
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
@@ -1132,6 +1164,56 @@ teardown() {
     run grep -q 'comment 5' "${call_log}"
     [ "${status}" -ne 0 ]
     grep -qx "type=PullRequest id=5 reason=unverifiable reason" "${_notif_log}"
+}
+
+@test "apply_blocked_label_with_reason still notifies and returns success when the label verifies but the comment call itself fails (#1140 review)" {
+    # The label is confirmed present, but the "gh ... comment" invocation fails (e.g. a transient
+    # API error) — the 2>/dev/null || true swallows that failure, so the function must still
+    # report the label's own success and must still fire the Discord notification with the reason.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in
+        *"--json labels"*) printf "true\n" ;;
+        *"comment"*) exit 1 ;;
+    esac
+    exit 0'
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run apply_blocked_label_with_reason "Issue" 42 "org/repo" "custom reason text"
+    [ "${status}" -eq 0 ]
+    grep -qx "type=Issue id=42 reason=custom reason text" "${_notif_log}"
+}
+
+# --- block_pr_for_ci_timeout (#1140 review) --------------------------------------
+
+@test "block_pr_for_ci_timeout posts the timeout-specific reason and clears the pending-CI state once the label is verified (#1140 review)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+    save_pr_head_oid 5 "abc123" "$(date +%s)"
+
+    run block_pr_for_ci_timeout 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body CI checks have been pending for over 60 minutes" "${call_log}"
+    grep -q 'notified PullRequest #5 reason=CI checks have been pending for over 60 minutes' "${_notif_log}"
+    [ ! -f "$(pr_head_oid_file_path 5)" ]
+}
+
+@test "block_pr_for_ci_timeout leaves the pending-CI state alone when the label cannot be verified (#1140 review)" {
+    # If escalation itself failed, the timeout clock must NOT be cleared — otherwise the next
+    # tick silently re-arms a fresh full-length wait instead of re-attempting the escalation.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    CI_CHECK_TIMEOUT_MINUTES=60
+    save_pr_head_oid 5 "abc123" "$(date +%s)"
+
+    run block_pr_for_ci_timeout 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ -f "$(pr_head_oid_file_path 5)" ]
 }
 
 @test "pr_json_has_unaddressed_review_request is false for reviewDecision APPROVED, REVIEW_REQUIRED, or absent (#1083)" {
@@ -3370,6 +3452,27 @@ STUBEOF
     [[ "${output}" == *"BLOCKED Issue #10"* ]]
     [[ "${output}" == *"failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start"* ]]
     [[ "${output}" == *"blocked: 1"* ]]
+}
+
+@test "main posts the infra-failure reason as the comment body and to Discord when escalating (#1140 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+    save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 10 --repo org/repo --body This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${call_log}"
+    grep -q "type=Issue id=10 reason=This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${_notif_log}"
 }
 
 @test "main does not escalate to Blocked below the consecutive-infra-failure threshold (#1133 review)" {
@@ -7980,6 +8083,28 @@ STUBEOF
     [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
+@test "main posts the PR-runaway reason as the comment body and to Discord when at the runaway cap (#1140 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR has been worked ${MAX_PR_TOTAL_INVOCATIONS} times by the automation without reaching a mergeable state" "${GH_CALL_LOG}"
+    grep -q "type=PullRequest id=5 reason=This PR has been worked ${MAX_PR_TOTAL_INVOCATIONS} times by the automation without reaching a mergeable state" "${_notif_log}"
+}
+
 @test "main still blocks and warns loudly when the runaway-blocked marker cannot be written (#1093 review)" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -8232,6 +8357,27 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
     [[ "${output}" == *"used ${MAX_ISSUE_TOTAL_INVOCATIONS} agent invocations without converging"* ]]
     [ -f "${SESSION_BASE_DIR}/Issue_10.runaway-blocked" ]
+}
+
+@test "main posts the Issue-runaway reason as the comment body and to Discord when at the runaway cap (#1140 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    local _notif_log="${TEST_TMP}/discord_calls"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "$3" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 10 --repo org/repo --body This issue has been worked ${MAX_ISSUE_TOTAL_INVOCATIONS} times by the automation without producing a mergeable pull request" "${GH_CALL_LOG}"
+    grep -q "type=Issue id=10 reason=This issue has been worked ${MAX_ISSUE_TOTAL_INVOCATIONS} times by the automation without producing a mergeable pull request" "${_notif_log}"
 }
 
 @test "main invokes agent and increments the invocation counter for an Issue below the runaway cap (#1093)" {
