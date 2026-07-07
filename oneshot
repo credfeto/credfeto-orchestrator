@@ -1142,15 +1142,16 @@ apply_blocked_label() {
 # pr_json_has_blocked_label check, since that indirection is exactly what a label failure breaks.
 block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"
+    local reason="This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
     if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
-        notify_discord_blocked_item "PullRequest" "${item_id}"
+        notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
         return 1
     fi
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
+${reason}
 COMMENT
     )" 2>/dev/null || true
-    notify_discord_blocked_item "PullRequest" "${item_id}"
+    notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
 }
 
 # Returns 0 (true) if GitHub's own review-decision aggregate is CHANGES_REQUESTED — a reviewer
@@ -1167,15 +1168,16 @@ pr_json_has_unaddressed_review_request() {
 # the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
 block_pr_for_idle_exhausted_review() {
     local item_id="$1" item_repo="$2"
+    local reason="This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
     if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
-        notify_discord_blocked_item "PullRequest" "${item_id}"
+        notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
         return 1
     fi
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates.
+${reason}
 COMMENT
     )" 2>/dev/null || true
-    notify_discord_blocked_item "PullRequest" "${item_id}"
+    notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
 }
 
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
@@ -1907,7 +1909,7 @@ _build_plan_approval_check() {
     if [ "${plan_approved}" = "true" ]; then
         printf '   Result "true"  → plan exists and was approved on the Workflow board by a human — skip to step 5 (Implementation mode).'
     elif [ -n "${_WF_PROJECT_ID}" ]; then
-        printf '   Result "true"  → plan exists but has not been approved on the Workflow board yet. Revise or re-post the plan, mark Blocked, and STOP (step 3).'
+        printf '   Result "true"  → plan exists but has not been approved on the Workflow board yet. If no changes are needed, post a brief issue comment explaining the plan is unchanged and what the human must do to approve it (set the Workflow board status to "Approved" and remove the Blocked label), then re-apply the Blocked label and STOP. If changes are needed, revise and re-post the plan, re-apply the Blocked label, and STOP (step 3).'
     else
         local jq_expr="(.comments) as \$c | (first(range(\$c|length)|select(\$c[.].body|test(\"##\\\\s*Implementation Plan\";\"i\"))) // -1) as \$i | if \$i>=0 then \$c[(\$i+1):]|map(.body|test(\"\\\\b(approved|go ahead|looks good|lgtm)\\\\b\";\"i\"))|any else false end"
         printf '   Result "true"  → plan exists. Check for a human approval comment posted AFTER the plan comment\n'
@@ -1945,7 +1947,14 @@ GITSSH
 }
 
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}"
+    local dirty_branch_section=""
+    if [ -n "${dirty_branch}" ]; then
+        dirty_branch_section="- Dirty working tree: The working tree has uncommitted changes on branch '${dirty_branch}' unrelated to issue #${item_id} — clean them up before starting any work:
+  a. git -C ${repo_path} status   (inspect what is there)
+  b. If the changes belong to this issue's own prior work-in-progress: git -C ${repo_path} stash && git -C ${repo_path} checkout main
+     Otherwise (changes are truly unrelated): git -C ${repo_path} checkout -- . && git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout main"
+    fi
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -1964,6 +1973,8 @@ PHASE DISCIPLINE (MANDATORY — read first):
 - Container-vs-GitHub rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed the instant your turn ends, no matter what you say about waiting for it — block on it in the foreground until it actually finishes, however long that takes, and only intervene if it is genuinely hung rather than merely slow. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container — for those, STOP and let the orchestrator re-invoke you next cycle instead of polling.
 - Do EXACTLY ONE phase and then STOP: either PLAN mode (steps 3–4) or IMPLEMENTATION mode (steps 5–7), never both in one session. The orchestrator re-invokes you on the next cycle.
 - Once a draft pull request exists, this issue's work continues under the pull-request workflow on later cycles — do not try to drive reviews or merging from the issue session.
+- MANDATORY: Never apply the Blocked label without posting a same-turn comment on the issue explaining exactly why. Every blocking action must leave a human-readable explanation on GitHub — a Blocked label with no comment forces the human to dig through logs to understand what happened.${dirty_branch_section:+
+${dirty_branch_section}}
 
 Steps:
 1. Assign yourself: gh issue edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
@@ -3010,17 +3021,18 @@ clear_pr_ci_pending_state() {
 # than silently re-arming a fresh full-length wait every tick forever (#1092).
 block_pr_for_ci_timeout() {
     local item_id="$1" item_repo="$2"
+    local reason="CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates."
     info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
     if ! apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
-        notify_discord_blocked_item "PullRequest" "${item_id}"
+        notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
         return 1
     fi
     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates.
+${reason}
 COMMENT
     )" 2>/dev/null || true
     clear_pr_ci_pending_state "${item_id}"
-    notify_discord_blocked_item "PullRequest" "${item_id}"
+    notify_discord_blocked_item "PullRequest" "${item_id}" "${reason}"
 }
 
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
@@ -3495,8 +3507,8 @@ clear_blocked_marker() {
 # tick a blocked item is (re-)observed.
 notify_discord_blocked_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local item_type="$1" item_id="$2"
-    local url payload marker_file gh_noun labels_json substatus priority
+    local item_type="$1" item_id="$2" reason="${3:-}"
+    local url payload marker_file gh_noun item_json labels_json substatus priority item_title
 
     marker_file=$(blocked_marker_file_path "${item_type}" "${item_id}")
     # Already notified for this blocked spell — stay silent until re-armed.
@@ -3505,25 +3517,44 @@ notify_discord_blocked_item() {
     url="$(build_item_url "${item_type}" "${item_id}")"
 
     gh_noun=$(gh_noun_for_item_type "${item_type}")
-    labels_json=$(gh "${gh_noun}" view "${item_id}" --repo "${REPO_FULL}" --json labels --jq '.labels' 2>/dev/null)
+    # Fetch labels, title, and comments in a single gh call so the title can be used as the
+    # Discord embed title (matching notify_discord_work_item) and the latest comment can serve
+    # as a best-effort reason when none is explicitly provided — without an extra API round-trip.
+    # The type-guard in each jq filter handles the case where gh fails or returns unexpected
+    # output (e.g. an empty string or an array instead of an object).
+    item_json=$(gh "${gh_noun}" view "${item_id}" --repo "${REPO_FULL}" --json labels,title,comments 2>/dev/null)
+    labels_json=$(printf '%s' "${item_json}" | jq -c 'if type == "object" then (.labels // []) else [] end' 2>/dev/null)
     [ -n "${labels_json}" ] || labels_json="[]"
+    item_title=$(printf '%s' "${item_json}" | jq -r 'if type == "object" then (.title // empty) else empty end' 2>/dev/null)
+    [ -n "${item_title}" ] || item_title="${item_type} #${item_id}"
     priority=$(priority_for_labels "${labels_json}")
     substatus=$(board_substatus_for_item "${item_id}")
 
+    # For orchestrator-observed blocks (agent applied the label in a prior tick) there is no
+    # explicit reason — fall back to the most recent comment, which the new mandatory rule
+    # requires the agent to have posted immediately before applying the label.
+    if [ -z "${reason}" ]; then
+        reason=$(printf '%s' "${item_json}" | jq -r 'if type == "object" then (.comments[-1].body // empty) else empty end' 2>/dev/null)
+        reason="${reason:0:900}"
+    fi
+    [ -n "${reason}" ] || reason="(no reason recorded — check the item for details)"
+
     payload=$(jq --null-input \
         --argjson color 15158332 \
-        --arg title "Blocked: ${item_type} #${item_id}" \
+        --arg title "${item_title}" \
         --arg url "${url}" \
         --arg repo "${REPO_FULL}" \
         --arg type "${item_type}" \
         --arg priority "${priority}" \
         --arg substatus "${substatus}" \
+        --arg reason "${reason}" \
         '{embeds:[{title:$title,url:$url,color:$color,fields:[
             {name:"Repository",value:$repo,inline:true},
             {name:"Type",value:$type,inline:true},
             {name:"Priority",value:$priority,inline:true},
             {name:"Status",value:"Blocked",inline:true},
-            {name:"Sub-status",value:$substatus,inline:true}
+            {name:"Sub-status",value:$substatus,inline:true},
+            {name:"Reason",value:$reason,inline:false}
         ]}]}') \
         || { warn "Discord: failed to build blocked payload for ${item_type} #${item_id}"; return 0; }
 
@@ -4195,8 +4226,13 @@ main() {
 
         if ! ai_instructions=$(find_ai_instructions); then
             warn "Skipping ${item_type} #${item_id} in ${item_repo}: no .ai-instructions found — marking as blocked"
-            apply_blocked_label "${item_type}" "${item_id}" "${item_repo}" \
-                || notify_discord_blocked_item "${item_type}" "${item_id}"
+            local no_ai_gh_noun no_ai_reason
+            no_ai_gh_noun=$(gh_noun_for_item_type "${item_type}")
+            no_ai_reason="No \`.ai-instructions\` file was found in this repository. The orchestrator requires this file to generate agent session instructions. Please add \`.ai-instructions\` to the repository root and remove the Blocked label when ready."
+            if apply_blocked_label "${item_type}" "${item_id}" "${item_repo}"; then
+                gh "${no_ai_gh_noun}" comment "${item_id}" --repo "${item_repo}" --body "${no_ai_reason}" 2>/dev/null || true
+            fi
+            notify_discord_blocked_item "${item_type}" "${item_id}" "${no_ai_reason}"
             continue
         fi
 
@@ -4239,9 +4275,10 @@ main() {
             load_pr_invocation_counts "${item_id}"
             if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
                 warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
+                local runaway_pr_reason="This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate."
                 if apply_blocked_label "PullRequest" "${item_id}" "${item_repo}"; then
                     gh pr comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate.
+${runaway_pr_reason}
 COMMENT
                     )" 2>/dev/null || true
                     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
@@ -4249,7 +4286,7 @@ COMMENT
                         warn "Failed to write runaway-blocked marker for PR #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
                     fi
                 fi
-                notify_discord_blocked_item "PullRequest" "${item_id}"
+                notify_discord_blocked_item "PullRequest" "${item_id}" "${runaway_pr_reason}"
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
@@ -4261,9 +4298,10 @@ COMMENT
             load_issue_invocation_counts "${item_id}"
             if [ "${ISSUE_INVOCATION_TOTAL}" -ge "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]; then
                 warn "Issue #${item_id} in ${item_repo} used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
+                local runaway_issue_reason="This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate."
                 if apply_blocked_label "Issue" "${item_id}" "${item_repo}"; then
                     gh issue comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate.
+${runaway_issue_reason}
 COMMENT
                     )" 2>/dev/null || true
                     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
@@ -4271,7 +4309,7 @@ COMMENT
                         warn "Failed to write runaway-blocked marker for Issue #${item_id} in ${item_repo} — invocation budget will not auto-reset once a human clears the Blocked label"
                     fi
                 fi
-                notify_discord_blocked_item "Issue" "${item_id}"
+                notify_discord_blocked_item "Issue" "${item_id}" "${runaway_issue_reason}"
                 count_blocked=$((count_blocked + 1))
                 continue
             fi
@@ -4288,7 +4326,7 @@ COMMENT
             local plan_approved="false"
             [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && plan_approved="true"
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')
@@ -4328,15 +4366,16 @@ COMMENT
             save_infra_failure_count "${item_type}" "${item_id}" "${new_infra_failures}"
             if [ "${new_infra_failures}" -ge "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]; then
                 warn "${item_type} #${item_id} in ${item_repo}: agent container failed ${new_infra_failures} times in a row before Claude could even start — marking Blocked"
+                local infra_reason="This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever."
                 if apply_blocked_label "${item_type}" "${item_id}" "${item_repo}"; then
                     local infra_gh_noun
                     infra_gh_noun=$(gh_noun_for_item_type "${item_type}")
                     gh "${infra_gh_noun}" comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
-This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever.
+${infra_reason}
 COMMENT
                     )" 2>/dev/null || true
                 fi
-                notify_discord_blocked_item "${item_type}" "${item_id}"
+                notify_discord_blocked_item "${item_type}" "${item_id}" "${infra_reason}"
                 count_blocked=$((count_blocked + 1))
                 continue
             fi

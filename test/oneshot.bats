@@ -2839,6 +2839,31 @@ STUBEOF
     [[ "${output}" == *".ai-instructions"* ]]
 }
 
+@test "main posts a comment and notifies Discord with a reason when .ai-instructions is missing" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_issue_json() { printf '{"title":"Fix something","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    issue_json_has_blocked_label() { return 1; }
+    find_ai_instructions() { return 1; }
+    apply_blocked_label() { return 0; }
+    local _gh_log="${TEST_TMP}/gh_log"
+    make_stub gh "printf '%s\n' \"\$@\" >> '${_gh_log}'"
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "${3:-}" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # A comment must have been posted explaining the missing .ai-instructions.
+    grep -q "comment" "${_gh_log}"
+    grep -q ".ai-instructions" "${_gh_log}"
+    # Discord must have been notified with an explicit reason (non-empty 3rd arg).
+    grep -q "type=Issue id=10" "${_notif_log}"
+    grep -q "reason=No" "${_notif_log}"
+}
+
 # --- main() skip_repos integration tests -------------------------------------
 # These tests exercise the multi-repo iteration logic in main() by overriding
 # all external-call functions.  No PATH stubs are used — all overrides are
@@ -4117,7 +4142,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[{\"name\":\"Urgent\"}]"'
+    make_stub gh 'printf "{\"labels\":[{\"name\":\"Urgent\"}],\"title\":\"Test item\",\"comments\":[]}"'
     run notify_discord_blocked_item "Issue" "42"
     [ "${status}" -eq 0 ]
     grep -q "Priority" "${args_log}"
@@ -4172,6 +4197,64 @@ STUBEOF
     run clear_blocked_marker "PullRequest" "7"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
+}
+
+@test "notify_discord_blocked_item uses the item title as the embed title" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"labels\":[],\"title\":\"My blocked issue title\",\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "My blocked issue title" "${args_log}"
+}
+
+@test "notify_discord_blocked_item falls back to type and number when title fetch fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'exit 1'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Issue #42" "${args_log}"
+}
+
+@test "notify_discord_blocked_item includes an explicit reason in the payload" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"labels\":[],\"title\":\"T\",\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42" "CI timed out after 60 minutes."
+    [ "${status}" -eq 0 ]
+    grep -q "Reason" "${args_log}"
+    grep -q "CI timed out" "${args_log}"
+}
+
+@test "notify_discord_blocked_item fetches the latest comment as a fallback reason" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"labels\":[],\"title\":\"T\",\"comments\":[{\"body\":\"Blocked: CI was broken\"}]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Reason" "${args_log}"
+    grep -q "Blocked: CI was broken" "${args_log}"
+}
+
+@test "notify_discord_blocked_item uses fallback text when no comment is available" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"labels\":[],\"title\":\"T\",\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Reason" "${args_log}"
+    grep -q "no reason recorded" "${args_log}"
 }
 
 # --- main() blocked Discord notification integration --------------------------
@@ -6262,6 +6345,40 @@ STUBEOF
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"approval comment"* ]]
+}
+
+@test "build_issue_claude_md with board not approved instructs agent to post a comment before re-blocking" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"post a brief issue comment"* ]]
+}
+
+@test "build_issue_claude_md includes mandatory no-block-without-comment rule in phase discipline" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Never apply the Blocked label without posting a same-turn comment"* ]]
+}
+
+@test "build_issue_claude_md with dirty_branch includes recovery instructions" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/repo" "false" "" "feature/old-work"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"feature/old-work"* ]]
+    [[ "${output}" == *"uncommitted changes"* ]]
+    [[ "${output}" == *"git -C /repo status"* ]]
+}
+
+@test "build_issue_claude_md without dirty_branch has no dirty-tree recovery instructions" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/repo" "false" "" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"uncommitted changes"* ]]
+    [[ "${output}" != *"Dirty working tree"* ]]
+}
+
+@test "build_issue_claude_md dirty_branch section names the specific branch" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/repo" "false" "" "dependabot/nuget/foo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependabot/nuget/foo"* ]]
 }
 
 # --- fetch_board_approved_items unit tests ------------------------------------
