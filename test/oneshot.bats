@@ -2240,9 +2240,11 @@ STUBEOF
 
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
 
-@test "find_open_nonblocked_pr_for_repo returns first non-blocked PR number" {
+@test "find_open_nonblocked_pr_for_repo returns first non-blocked PR with a bot-authored commit (#1131)" {
     _GH_ME="testuser"
-    make_stub gh 'printf '"'"'[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":99,"labels":[{"name":"enhancement"}],"author":{"login":"testuser"}}]\n'"'"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":99,"labels":[{"name":"enhancement"}],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42.json" ;; *) exit 1 ;; esac'
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
@@ -2250,10 +2252,43 @@ STUBEOF
 
 @test "find_open_nonblocked_pr_for_repo skips PRs with the Blocked label" {
     _GH_ME="testuser"
-    make_stub gh 'printf '"'"'[{"number":7,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}},{"number":8,"labels":[],"author":{"login":"testuser"}}]\n'"'"
+    printf '%s' '[{"number":7,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}},{"number":8,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr8.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 8"*"--json commits"*) cat "'"${TEST_TMP}"'/pr8.json" ;; *) exit 1 ;; esac'
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -eq 0 ]
     [ "${output}" = "8" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo skips a candidate with no bot-authored commits and returns the next (#1131)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":50,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr50.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42.json" ;; *"pr view 50"*"--json commits"*) cat "'"${TEST_TMP}"'/pr50.json" ;; *) exit 1 ;; esac'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "50" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns empty when the only candidate has no bot-authored commits (#1131)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42.json" ;; *) exit 1 ;; esac'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_open_nonblocked_pr_for_repo returns 1 when the commits fetch fails (#1131)" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    run find_open_nonblocked_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
 }
 
 @test "find_open_nonblocked_pr_for_repo returns empty when all PRs are blocked" {
@@ -2285,6 +2320,134 @@ STUBEOF
     make_stub gh 'exit 1'
     run find_open_nonblocked_pr_for_repo "org/repo"
     [ "${status}" -ne 0 ]
+}
+
+# --- pr_has_bot_authored_commit (#1131) ----------------------------------------
+
+@test "pr_has_bot_authored_commit returns 0 when the bot authored a commit" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser"}]},{"authors":[{"login":"testuser"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_has_bot_authored_commit returns 0 when the bot co-authored a commit" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser"},{"login":"testuser"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_has_bot_authored_commit returns 1 when only humans authored commits" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit ignores commits whose author has no mapped login" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":null}]},{"authors":[]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit returns 2 when gh fails after retries" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 2 ]
+}
+
+# --- find_human_taken_over_pr_for_issue (#1131) --------------------------------
+
+@test "find_human_taken_over_pr_for_issue returns the PR that closes the issue when a human took it over" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 1 when the taken-over PR closes a different issue" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 99
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 1 when the candidate PR has bot-authored commits" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+# --- pr_is_human_driven (#1131) -------------------------------------------------
+
+@test "pr_is_human_driven exempts dependencies-labelled PRs even with human commits and no bot commits" {
+    _GH_ME="testuser"
+    # gh must not even be needed — the label short-circuits before any fetch.
+    make_stub gh 'exit 1'
+    run pr_is_human_driven 5 '{"labels":[{"name":"dependencies"}]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven returns 1 when the bot has authored a commit" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"author":{"login":"testuser"},"commits":[{"authors":[{"login":"testuser"}]}]}\n'"'"
+    run pr_is_human_driven 5 '{"labels":[]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven returns 0 for a bot-created PR with zero bot commits (taken over)" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}\n'"'"
+    run pr_is_human_driven 5 '{"labels":[]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_is_human_driven returns 0 when a trusted human authored commits on a non-bot PR" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"author":{"login":"someone-else"},"commits":[{"authors":[{"login":"credfeto"}]}]}\n'"'"
+    run pr_is_human_driven 5 '{"labels":[]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_is_human_driven returns 1 for an untrusted automation PR (dependabot-style, unlabelled)" {
+    _GH_ME="testuser"
+    make_stub gh 'printf '"'"'{"author":{"login":"app/dependabot"},"commits":[{"authors":[{"login":"app/dependabot"}]}]}\n'"'"
+    run pr_is_human_driven 5 '{"labels":[]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven returns 2 when gh fails after retries" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run pr_is_human_driven 5 '{"labels":[]}' '["credfeto"]'
+    [ "${status}" -eq 2 ]
 }
 
 # --- resolve_gh_me (#1085) ----------------------------------------------------
@@ -2399,6 +2562,10 @@ setup_main_mocks() {
     ensure_repo_current()       { return 0; }
     recover_orphaned_branch()   { return 1; }
     try_nonagentic_rebase()     { return 1; }
+    # Default: no human-driven PRs anywhere (#1131) — tests that exercise the
+    # stand-off paths override these individually.
+    find_human_taken_over_pr_for_issue() { return 1; }
+    pr_is_human_driven()                 { return 1; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
     host_to_container_path()    { printf '%s\n' "$1"; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
@@ -4088,6 +4255,89 @@ setup_local_git_remote() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+# --- human-driven PR stand-off integration (#1131) -----------------------------
+
+@test "main stands off an issue whose PR a human has taken over (#1131)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    find_human_taken_over_pr_for_issue() { printf '167'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #164 in org/repo: PR #167 is being developed by a human — standing off"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
+}
+
+@test "main still works another issue in the same repo after a human-driven stand-off (#1131)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":200,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    find_human_taken_over_pr_for_issue() {
+        if [ "$1" = "164" ]; then
+            printf '167'
+            return 0
+        fi
+        return 1
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Issue #164 is stood off, but the repo is NOT marked active...
+    [[ "${output}" == *"Issue #164 in org/repo: PR #167 is being developed by a human — standing off"* ]]
+    [[ "${output}" != *"repo already has active work"* ]]
+    # ...so issue #200 in the same repo is still worked.
+    [[ "${output}" == *"Found actionable Issue #200 in org/repo"* ]]
+}
+
+@test "main skips the item (not the run) when the human-takeover check fails transiently (#1131)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    find_human_taken_over_pr_for_issue() { return 2; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to check for a human-driven PR for Issue #164 in org/repo"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main stands off a human-driven PR from the priorities feed without marking the repo active (#1131)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    pr_is_human_driven()        { return 0; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is being developed by a human — standing off"* ]]
+    # The repo is NOT marked active: issue #10 reaches its own evaluation (blocked path)
+    # instead of being skipped with "repo already has active work".
+    [[ "${output}" != *"repo already has active work"* ]]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
 }
 
 # --- load_env_config git identity tests ----------------------------------------
