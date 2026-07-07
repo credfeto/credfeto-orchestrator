@@ -6267,7 +6267,7 @@ STUBEOF
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"projectsV2"* ]]; then
-    printf '%s\n' '${project_json}'
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
     exit 0
 fi
 exit 1
@@ -6285,7 +6285,7 @@ STUBEOF
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"projectsV2"* ]]; then
-    printf '%s\n' '${project_json}'
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
     exit 0
 fi
 exit 1
@@ -6318,7 +6318,7 @@ STUBEOF
 #!/usr/bin/env bash
 printf 'called\n' >> "${call_count_file}"
 if [[ "\$*" == *"projectsV2"* ]]; then
-    printf '%s\n' '${project_json}'
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
     exit 0
 fi
 exit 0
@@ -6351,7 +6351,7 @@ STUBEOF
 #!/usr/bin/env bash
 printf 'called\n' >> "${call_count_file}"
 if [[ "\$*" == *"projectsV2"* ]]; then
-    printf '%s\n' '${project_json}'
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
     exit 0
 fi
 exit 0
@@ -6388,13 +6388,54 @@ STUBEOF
 printf '%s\n' "\$*" >> "${gh_log}"
 if [[ "\$*" == *"hasProjectsEnabled"* ]]; then printf 'false\n'; exit 0; fi
 if [[ "\$*" == *"repo edit"* ]]; then exit 0; fi
-if [[ "\$*" == *"projectsV2"* ]]; then printf '%s\n' '${project_json}'; exit 0; fi
+if [[ "\$*" == *"projectsV2"* ]]; then printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'; exit 0; fi
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
     discover_or_create_workflow_project
     grep -q 'enable-projects' "${gh_log}"
     [ "${_WF_PROJECT_ID}" = "PVT_found" ]
+}
+
+@test "discover_or_create_workflow_project finds project on the second page" {
+    local project_json='[{"id":"PVT_page2","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_p2","name":"Workflow Status","options":[{"id":"opt1","name":"Planning"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    if [[ "\$*" == *"cursor="* ]]; then
+        printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    else
+        printf '{"nodes":[],"pageInfo":{"endCursor":"cursor_page2","hasNextPage":true}}\n'
+    fi
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_page2" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_p2" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "opt1" ]
+}
+
+@test "discover_or_create_workflow_project stops pagination when hasNextPage is true but endCursor is absent" {
+    local graphql_call_count_file="${TEST_TMP}/graphql_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf 'called\n' >> "${graphql_call_count_file}"
+    printf '{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":true}}\n'
+    exit 0
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    _wf_create_project() { return 1; }
+    discover_or_create_workflow_project
+    [ -z "${_WF_PROJECT_ID}" ]
+    local count
+    count=$(wc -l < "${graphql_call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 1 ]
 }
 
 # --- _wf_create_project / _wf_invite_trusted_collaborators unit tests ---------
@@ -6812,7 +6853,7 @@ esac'
     cat > "${STUB_BIN}/gh" << 'STUBEOF'
 #!/usr/bin/env bash
 if [[ "$*" == *"projectsV2"* ]]; then
-    printf '[]\n'
+    printf '{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":false}}\n'
     exit 0
 fi
 if [[ "$*" == *"organization"* ]]; then

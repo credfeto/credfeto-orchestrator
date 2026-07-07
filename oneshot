@@ -1356,28 +1356,39 @@ discover_or_create_workflow_project() {
             || warn "Workflow project: could not enable Projects on ${REPO_FULL} — discovery may fail"
     fi
 
-    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
-    local projects_json graphql_stderr graphql_err_content
-    graphql_stderr=$(mktemp --suffix=.stderr) || graphql_stderr=/dev/null
-    if ! projects_json=$(gh api graphql \
-            -f query="${query}" \
-            -f owner="${OWNER}" \
-            -f repo="${REPO}" \
-            --jq '.data.repository.projectsV2.nodes' 2>"${graphql_stderr}"); then
-        graphql_err_content=$(head -3 "${graphql_stderr}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        rm -f "${graphql_stderr}"
-        if printf '%s' "${graphql_err_content}" | grep -qiE 'scope|permission|authoriz'; then
-            warn "Workflow project: GraphQL auth failed for ${REPO_FULL} — run 'gh auth refresh -s project' on the host to enable Projects API access"
-        else
-            warn "Workflow project: GraphQL query failed for ${REPO_FULL}${graphql_err_content:+ — ${graphql_err_content}} — status updates disabled"
+    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}pageInfo{endCursor hasNextPage}}}}"
+    local project_json="" cursor="" has_next_page="true" graphql_stderr graphql_err_content page_json
+    local -a cursor_args
+    while true; do
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        graphql_stderr=$(mktemp --suffix=.stderr) || graphql_stderr=/dev/null
+        if ! page_json=$(gh api graphql \
+                -f query="${query}" \
+                -f owner="${OWNER}" \
+                -f repo="${REPO}" \
+                "${cursor_args[@]}" \
+                --jq '.data.repository.projectsV2' 2>"${graphql_stderr}"); then
+            graphql_err_content=$(head -3 "${graphql_stderr}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            rm -f "${graphql_stderr}"
+            if printf '%s' "${graphql_err_content}" | grep -qiE 'scope|permission|authoriz'; then
+                warn "Workflow project: GraphQL auth failed for ${REPO_FULL} — run 'gh auth refresh -s project' on the host to enable Projects API access"
+            else
+                warn "Workflow project: GraphQL query failed for ${REPO_FULL}${graphql_err_content:+ — ${graphql_err_content}} — status updates disabled"
+            fi
+            return 0
         fi
-        return 0
-    fi
-    rm -f "${graphql_stderr}"
+        rm -f "${graphql_stderr}"
 
-    local project_json
-    project_json=$(printf '%s' "${projects_json}" | \
-        jq -c 'map(select(.title == "Workflow")) | first // empty' 2>/dev/null)
+        project_json=$(printf '%s' "${page_json}" | \
+            jq -c '.nodes | map(select(.title == "Workflow")) | first // empty' 2>/dev/null)
+        [ -n "${project_json}" ] && break
+
+        has_next_page=$(printf '%s' "${page_json}" | jq -r '.pageInfo.hasNextPage // "false"' 2>/dev/null)
+        cursor=$(printf '%s' "${page_json}" | jq -r '.pageInfo.endCursor // ""' 2>/dev/null)
+        [ "${has_next_page}" = "true" ] || break
+        [ -n "${cursor}" ] || break
+    done
 
     if [ -z "${project_json}" ]; then
         info "Workflow project: no 'Workflow' project found for ${REPO_FULL} — creating one"
