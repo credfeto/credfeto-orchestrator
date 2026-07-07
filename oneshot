@@ -2041,10 +2041,16 @@ run_claude_fresh() {
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
         # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
-        # when it has written a valid result JSON to stdout.  Return 0 so invoke_claude
-        # can inspect the JSON via handle_claude_is_error rather than losing the context.
+        # when it has written a valid result JSON to stdout.  Return 0 whenever a valid
+        # result object exists AT ALL — not only when is_error is true — so invoke_claude's
+        # own is_error inspection (which already handles both true and false correctly) does
+        # the classification. Requiring is_error==true here would misclassify the narrow but
+        # real case of podman exiting non-zero (e.g. an OOM-kill racing a clean exit) AFTER
+        # Claude had already written a genuinely successful (is_error:false) result: that
+        # completed work would be treated as a pre-flight infra failure — not counted, and
+        # silently re-invoked next tick, risking duplicated agent actions (#1133 review).
         if [ -s "${tmpfile}" ] \
-                && jq -e '.type == "result" and .is_error == true' "${tmpfile}" >/dev/null 2>&1; then
+                && jq -e '.type == "result"' "${tmpfile}" >/dev/null 2>&1; then
             return 0
         fi
         jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
@@ -2306,10 +2312,14 @@ validate_bind_mounts() {
 # of being removed immediately (#1133 review). Calling this explicitly on every path closes
 # that gap regardless of how long the caller's process keeps running afterwards.
 cleanup_claude_invocation_tmpfiles() {
-    rm -f "${CLAUDE_MD_TMPFILE}"
-    CLAUDE_MD_TMPFILE=""
-    rm -rf "${GPG_PUBKEY_TMPDIR}"
-    GPG_PUBKEY_TMPDIR=""
+    if [ -n "${CLAUDE_MD_TMPFILE}" ]; then
+        rm -f "${CLAUDE_MD_TMPFILE}"
+        CLAUDE_MD_TMPFILE=""
+    fi
+    if [ -n "${GPG_PUBKEY_TMPDIR}" ]; then
+        rm -rf "${GPG_PUBKEY_TMPDIR}"
+        GPG_PUBKEY_TMPDIR=""
+    fi
     if [ -n "${PODMAN_SECRET_NAME}" ]; then
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
         PODMAN_SECRET_NAME=""

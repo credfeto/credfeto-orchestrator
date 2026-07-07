@@ -1952,6 +1952,28 @@ STUBEOF
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
+# --- cleanup_claude_invocation_tmpfiles (#1133 review, Copilot) ----------------
+
+@test "cleanup_claude_invocation_tmpfiles is safe to call twice in a row" {
+    # Mirrors the real EXIT-trap backstop calling it again after the explicit call on every
+    # normal path already cleared these globals to empty — must not error the second time.
+    local tmpfile gpgdir
+    tmpfile=$(mktemp)
+    gpgdir=$(mktemp -d)
+    CLAUDE_MD_TMPFILE="${tmpfile}"
+    GPG_PUBKEY_TMPDIR="${gpgdir}"
+
+    cleanup_claude_invocation_tmpfiles
+    [ -z "${CLAUDE_MD_TMPFILE}" ]
+    [ -z "${GPG_PUBKEY_TMPDIR}" ]
+    [ ! -e "${tmpfile}" ]
+    [ ! -e "${gpgdir}" ]
+
+    run cleanup_claude_invocation_tmpfiles
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/jq" << 'JQEOF'
@@ -2216,6 +2238,27 @@ STUBEOF
 [ "$1" = "inspect" ] && exit 1
 if [ "$1" = "run" ]; then
     printf '{"type":"result","is_error":true,"result":"boom"}\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 2 ]
+}
+
+@test "invoke_claude does not return 2 when podman exits nonzero but Claude produced a genuinely successful result (#1133 review, Copilot)" {
+    # A valid is_error:false result proves Claude actually ran, even if the container's own
+    # exit code is nonzero for an unrelated reason (e.g. a kill racing a clean exit) — this
+    # must be classified as a real (successful) invocation, not a pre-flight infra failure.
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '{"type":"result","is_error":false,"result":"done"}\n'
     exit 1
 fi
 exit 0
