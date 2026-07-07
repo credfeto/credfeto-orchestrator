@@ -3724,7 +3724,12 @@ STUBEOF
     grep -q "https://discord.example.com/hook" "${args_log}"
     grep -q "Fix the bug" "${args_log}"
     grep -q "https://github.com/org/repo/issues/42" "${args_log}"
-    grep -q "New" "${args_log}"
+    # No board configured and no labels passed — status/sub-status/priority fall back
+    # gracefully (#1136) rather than the old meaningless New/Resume "session status".
+    grep -q "Priority" "${args_log}"
+    grep -q "Undefined" "${args_log}"
+    grep -q "Sub-status" "${args_log}"
+    grep -q "Unknown" "${args_log}"
 }
 
 @test "notify_discord_work_item calls curl with embed payload for PullRequest resume" {
@@ -3735,8 +3740,28 @@ STUBEOF
     run notify_discord_work_item "resume" "PullRequest" "7" "Update deps"
     [ "${status}" -eq 0 ]
     grep -q "https://github.com/org/repo/pull/7" "${args_log}"
-    grep -q "Resume" "${args_log}"
     grep -q "Update deps" "${args_log}"
+}
+
+@test "notify_discord_work_item includes the item's priority label in the payload (#1136)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" '[{"name":"High"}]'
+    [ "${status}" -eq 0 ]
+    grep -q "Priority" "${args_log}"
+    grep -q "High" "${args_log}"
+}
+
+@test "notify_discord_work_item matches Security before Urgent when both labels are present (#1136)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" '[{"name":"Urgent"},{"name":"Security"}]'
+    [ "${status}" -eq 0 ]
+    grep -q "Security" "${args_log}"
 }
 
 # --- notify_discord_no_work ---------------------------------------------------
@@ -4067,6 +4092,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "[]"'
     run notify_discord_blocked_item "Issue" "42"
     [ "${status}" -eq 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -4079,10 +4105,35 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "[]"'
     run notify_discord_blocked_item "PullRequest" "7"
     [ "${status}" -eq 0 ]
     grep -q "https://github.com/org/repo/pull/7" "${args_log}"
     grep -q "Blocked" "${args_log}"
+}
+
+@test "notify_discord_blocked_item includes the item's priority label in the payload (#1136)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "[{\"name\":\"Urgent\"}]"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Priority" "${args_log}"
+    grep -q "Urgent" "${args_log}"
+}
+
+@test "notify_discord_blocked_item defaults priority to Undefined when the label fetch fails (#1136)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'exit 1'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Priority" "${args_log}"
+    grep -q "Undefined" "${args_log}"
 }
 
 @test "notify_discord_blocked_item is silent on a repeat call while the item stays blocked" {
@@ -4090,6 +4141,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "[]"'
 
     notify_discord_blocked_item "Issue" "42"
     notify_discord_blocked_item "Issue" "42"
@@ -4104,6 +4156,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "[]"'
 
     notify_discord_blocked_item "Issue" "42"
     clear_blocked_marker "Issue" "42"
@@ -6359,6 +6412,207 @@ STUBEOF
     [ "${count}" -eq 2 ]
     [ "${_WF_APPROVED_ITEMS["owner/repo-a/1"]:-}" = "1" ]
     [ "${_WF_APPROVED_ITEMS["owner/repo-b/2"]:-}" = "1" ]
+}
+
+# --- fetch_board_item_statuses / board_substatus_for_item (#1136) --------------
+
+@test "fetch_board_item_statuses is a no-op when _WF_PROJECT_ID is empty" {
+    _WF_PROJECT_ID=""
+    local call_count_file="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_count_file}; exit 0"
+    fetch_board_item_statuses
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 0 ]
+}
+
+@test "fetch_board_item_statuses populates option IDs for both Issues and PRs" {
+    _WF_PROJECT_ID="PVT_test"
+    local items_json='{"data":{"node":{"items":{"nodes":[
+        {"content":{"number":42,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_dev","field":{"name":"Workflow Status"}}]}},
+        {"content":{"number":7,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_review","field":{"name":"Workflow Status"}}]}}
+    ]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    fetch_board_item_statuses
+    [ "${_WF_ITEM_STATUS_OPTION_ID["owner/repo/42"]:-}" = "opt_dev" ]
+    [ "${_WF_ITEM_STATUS_OPTION_ID["owner/repo/7"]:-}" = "opt_review" ]
+}
+
+@test "fetch_board_item_statuses ignores fieldValues for a field other than Workflow Status" {
+    _WF_PROJECT_ID="PVT_test"
+    local items_json='{"data":{"node":{"items":{"nodes":[
+        {"content":{"number":42,"repository":{"nameWithOwner":"owner/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_other","field":{"name":"Some Other Field"}}]}}
+    ]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    fetch_board_item_statuses
+    [ -z "${_WF_ITEM_STATUS_OPTION_ID["owner/repo/42"]:-}" ]
+}
+
+@test "fetch_board_item_statuses caches per repo and does not re-call gh on second call" {
+    _WF_PROJECT_ID="PVT_test"
+    local call_count_file="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf 'called\n' >> "${call_count_file}"
+printf '%s\n' '{"data":{"node":{"items":{"nodes":[]}}}}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    fetch_board_item_statuses
+    fetch_board_item_statuses
+    local count
+    count=$(wc -l < "${call_count_file}" 2>/dev/null || printf '0\n')
+    [ "${count}" -eq 1 ]
+}
+
+@test "workflow_status_name_for_option_id returns the matching status name" {
+    _WF_OPTION_IDS[Development]="opt_dev"
+    _WF_OPTION_IDS["Human Review"]="opt_review"
+    run workflow_status_name_for_option_id "opt_dev"
+    [ "${output}" = "Development" ]
+}
+
+@test "workflow_status_name_for_option_id returns empty for an unrecognised option ID" {
+    _WF_OPTION_IDS[Development]="opt_dev"
+    run workflow_status_name_for_option_id "opt_nonexistent"
+    [ -z "${output}" ]
+}
+
+@test "workflow_status_name_for_option_id returns empty for an empty option ID" {
+    run workflow_status_name_for_option_id ""
+    [ -z "${output}" ]
+}
+
+@test "board_substatus_for_item returns Unknown when the board is not configured" {
+    _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
+    run board_substatus_for_item 42
+    [ "${output}" = "Unknown" ]
+}
+
+@test "board_substatus_for_item calls discover_or_create_workflow_project first (#1136 review)" {
+    # Most notify_discord_blocked_item call sites fire before the per-item work block's own
+    # discovery call ever runs — board_substatus_for_item must trigger discovery itself so it
+    # doesn't always report Unknown for those.
+    _WF_PROJECT_ID=""
+    local call_log="${TEST_TMP}/discover_calls"
+    discover_or_create_workflow_project() { printf 'called\n' >> "${call_log}"; }
+    board_substatus_for_item 42
+    [ -f "${call_log}" ]
+}
+
+@test "board_substatus_for_item returns the resolved status name for a known item" {
+    set_repo_context "org/repo"
+    # Simulates discovery having already resolved this repo's project — the fast-path guard
+    # in discover_or_create_workflow_project (_WF_CACHED_REPO == REPO_FULL) makes it a no-op
+    # so it does not overwrite the project ID set up below via a real (unstubbed) discovery.
+    _WF_CACHED_REPO="org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Development]="opt_dev"
+    local items_json='{"data":{"node":{"items":{"nodes":[
+        {"content":{"number":42,"repository":{"nameWithOwner":"org/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_dev","field":{"name":"Workflow Status"}}]}}
+    ]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    run board_substatus_for_item 42
+    [ "${output}" = "Development" ]
+}
+
+@test "board_substatus_for_item returns Unknown for an item not yet on the board" {
+    set_repo_context "org/repo"
+    _WF_CACHED_REPO="org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh 'printf "%s\n" "{\"data\":{\"node\":{\"items\":{\"nodes\":[]}}}}"'
+    run board_substatus_for_item 999
+    [ "${output}" = "Unknown" ]
+}
+
+@test "board_substatus_for_item re-resolves the project when REPO_FULL changes across repos (#1136 review)" {
+    # Regression coverage for the multi-repo staleness bug: a stale _WF_PROJECT_ID left over
+    # from a previously processed repo must not silently poison this repo's lookup.
+    set_repo_context "repo-a/repo-a"
+    _WF_CACHED_REPO="repo-a/repo-a"
+    _WF_PROJECT_ID="PVT_stale_from_repo_a"
+    discover_or_create_workflow_project() {
+        _WF_PROJECT_ID="PVT_repo_b"
+        _WF_CACHED_REPO="${REPO_FULL}"
+    }
+    local items_json='{"data":{"node":{"items":{"nodes":[
+        {"content":{"number":7,"repository":{"nameWithOwner":"repo-b/repo-b"}},"fieldValues":{"nodes":[{"optionId":"opt_review","field":{"name":"Workflow Status"}}]}}
+    ]}}}}'
+    make_stub gh "printf '%s\n' '${items_json}'"
+    set_repo_context "repo-b/repo-b"
+    _WF_OPTION_IDS["Human Review"]="opt_review"
+    run board_substatus_for_item 7
+    [ "${output}" = "Human Review" ]
+}
+
+# --- coarse_status_for_substatus (#1136) ----------------------------------------
+
+@test "coarse_status_for_substatus maps Not Started and Planning to To Do" {
+    run coarse_status_for_substatus "Not Started"
+    [ "${output}" = "To Do" ]
+    run coarse_status_for_substatus "Planning"
+    [ "${output}" = "To Do" ]
+}
+
+@test "coarse_status_for_substatus maps the active phases to In Progress" {
+    for phase in Approved Development "AI Review" "AI Security Review" "Human Review"; do
+        run coarse_status_for_substatus "${phase}"
+        [ "${output}" = "In Progress" ]
+    done
+}
+
+@test "coarse_status_for_substatus maps Complete to Done" {
+    run coarse_status_for_substatus "Complete"
+    [ "${output}" = "Done" ]
+}
+
+@test "coarse_status_for_substatus maps an unrecognised sub-status to Unknown" {
+    run coarse_status_for_substatus "Unknown"
+    [ "${output}" = "Unknown" ]
+    run coarse_status_for_substatus ""
+    [ "${output}" = "Unknown" ]
+}
+
+# --- priority_for_labels (#1136) -------------------------------------------------
+
+@test "priority_for_labels matches Security with highest precedence" {
+    run priority_for_labels '[{"name":"Low"},{"name":"Urgent"},{"name":"Security"}]'
+    [ "${output}" = "Security" ]
+}
+
+@test "priority_for_labels matches Urgent over High" {
+    run priority_for_labels '[{"name":"High"},{"name":"Urgent"}]'
+    [ "${output}" = "Urgent" ]
+}
+
+@test "priority_for_labels matches each single priority label correctly" {
+    run priority_for_labels '[{"name":"High"}]'
+    [ "${output}" = "High" ]
+    run priority_for_labels '[{"name":"Medium"}]'
+    [ "${output}" = "Medium" ]
+    run priority_for_labels '[{"name":"Low"}]'
+    [ "${output}" = "Low" ]
+}
+
+@test "priority_for_labels is case-insensitive" {
+    run priority_for_labels '[{"name":"URGENT"}]'
+    [ "${output}" = "Urgent" ]
+}
+
+@test "priority_for_labels returns Undefined when no priority label is present" {
+    run priority_for_labels '[{"name":"AI-Work"},{"name":"bug"}]'
+    [ "${output}" = "Undefined" ]
+}
+
+@test "priority_for_labels returns Undefined for an empty labels array" {
+    run priority_for_labels '[]'
+    [ "${output}" = "Undefined" ]
+}
+
+@test "priority_for_labels returns Undefined without dying on malformed JSON" {
+    run priority_for_labels 'not json'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Undefined" ]
 }
 
 # --- build_pr_claude_md review-loop steps ------------------------------------

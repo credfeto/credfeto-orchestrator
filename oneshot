@@ -1094,6 +1094,18 @@ pr_json_has_failed_required_check() {
     ' > /dev/null 2>&1
 }
 
+# Maps an item_type ("Issue"|"PullRequest") to the gh CLI noun ("issue"|"pr") used in `gh pr
+# ...`/`gh issue ...` subcommands. Single definition shared by every call site that needs this
+# mapping so a future item type can't be updated in only some of them (#1136 review).
+gh_noun_for_item_type() {
+    local item_type="$1"
+    if [ "${item_type}" = "Issue" ]; then
+        printf 'issue'
+    else
+        printf 'pr'
+    fi
+}
+
 # Applies the Blocked label to an Issue or PullRequest and VERIFIES it actually landed —
 # `gh ... edit --add-label` can fail silently (e.g. the repo has no "Blocked" label yet), and an
 # unverified label-add is how every escalation path in this file used to lose its escalation:
@@ -1103,8 +1115,8 @@ pr_json_has_failed_required_check() {
 # the label if it doesn't exist in the repo. Returns 0 only once the label is CONFIRMED present.
 apply_blocked_label() {
     local item_type="$1" item_id="$2" item_repo="$3"
-    local gh_noun="pr"
-    [ "${item_type}" = "Issue" ] && gh_noun="issue"
+    local gh_noun
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
 
     local attempt
     for attempt in 1 2; do
@@ -1218,6 +1230,14 @@ _WF_CREATION_FAILED=""
 declare -gA _WF_APPROVED_ITEMS
 # Per-repo fetch guard: value "1" means fetch_board_approved_items has already run for that repo.
 declare -gA _WF_APPROVED_FETCHED
+
+# Board item-status cache — populated by fetch_board_item_statuses (#1136).
+# Keys are "owner/repo/number"; value is the Workflow Status field's current option ID for
+# that item. Covers BOTH Issues and PRs (unlike _WF_APPROVED_ITEMS, which only ever needs
+# Issues for the plan-approval flow).
+declare -gA _WF_ITEM_STATUS_OPTION_ID
+# Per-repo fetch guard: value "1" means fetch_board_item_statuses has already run for that repo.
+declare -gA _WF_ITEM_STATUS_FETCHED
 
 # How long (seconds) a disk-persisted project cache entry stays valid before
 # discover_or_create_workflow_project falls back to a live re-discovery. Override in the
@@ -1762,6 +1782,120 @@ fetch_board_approved_items() {
         [ "${has_next_page}" = "true" ] || break
         [ -n "${cursor}" ] || break
     done
+}
+
+# Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Workflow Status field
+# option ID, keyed "owner/repo/number" — covers BOTH Issues and PRs (unlike
+# fetch_board_approved_items, which only ever needs Issues for the plan-approval flow).
+# Results are cached per repo per tick; a no-op when the board is not configured. Used to show
+# the fine-grained workflow phase in Discord notifications at zero agentic cost — a pure GitHub
+# API read, no Claude invocation (#1136).
+fetch_board_item_statuses() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    [ "${_WF_ITEM_STATUS_FETCHED["${REPO_FULL}"]:-}" = "1" ] && return 0
+    _WF_ITEM_STATUS_FETCHED["${REPO_FULL}"]="1"
+    local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}...on PullRequest{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId field{...on ProjectV2SingleSelectField{name}}}}}}}}}}"
+    local cursor="" has_next_page="true" entry_key entry_opt page_json pagination
+    local -a cursor_args
+    while true; do
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        if ! page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" "${cursor_args[@]}" 2>/dev/null); then
+            warn "fetch_board_item_statuses: GraphQL request failed for ${REPO_FULL}"
+            break
+        fi
+        while IFS=$'\t' read -r entry_key entry_opt; do
+            [ -n "${entry_key}" ] && _WF_ITEM_STATUS_OPTION_ID["${entry_key}"]="${entry_opt}"
+        done < <(printf '%s' "${page_json}" | \
+            jq -r '
+                .data.node.items.nodes[]
+                | select((.content | type) == "object") | select(.content.number? != null)
+                | . as $item
+                | ($item.fieldValues.nodes[] | select(.field.name? == "Workflow Status") | .optionId) as $opt
+                | "\($item.content.repository.nameWithOwner)/\($item.content.number)\t\($opt)"
+            ' 2>/dev/null)
+        pagination=$(printf '%s' "${page_json}" | \
+            jq -r '(.data.node.items.pageInfo.hasNextPage // "false"), (.data.node.items.pageInfo.endCursor // "")' 2>/dev/null)
+        has_next_page=$(printf '%s' "${pagination}" | head -1)
+        cursor=$(printf '%s' "${pagination}" | tail -1)
+        [ "${has_next_page}" = "true" ] || break
+        [ -n "${cursor}" ] || break
+    done
+}
+
+# Reverse-looks-up a Workflow-status option ID against _WF_OPTION_IDS (name→id) to find its
+# status name. Outputs nothing (empty) if the ID is empty or unrecognised.
+workflow_status_name_for_option_id() {
+    local opt_id="$1" name
+    [ -n "${opt_id}" ] || return 0
+    for name in "${!_WF_OPTION_IDS[@]}"; do
+        if [ "${_WF_OPTION_IDS[${name}]}" = "${opt_id}" ]; then
+            printf '%s' "${name}"
+            return 0
+        fi
+    done
+}
+
+# Returns the current fine-grained Workflow-board sub-status name for an item — "Unknown" when
+# the board is not configured, the item isn't on the board yet, or its status can't be
+# resolved. Triggers fetch_board_item_statuses (a per-repo-per-tick cached GraphQL read, not a
+# Claude invocation — #1136).
+board_substatus_for_item() {
+    local item_id="$1" opt_id substatus
+    # Ensures _WF_PROJECT_ID is resolved for the CURRENT REPO_FULL before fetch_board_item_
+    # statuses checks it — most callers of this function (notify_discord_blocked_item's ~12
+    # call sites) fire from scan/skip branches that `continue` long before the per-item work
+    # block's own discover_or_create_workflow_project call, so without this every one of them
+    # would see an empty _WF_PROJECT_ID and report "Unknown" regardless of whether a board is
+    # actually configured (#1136 review). discover_or_create_workflow_project's own
+    # _WF_CACHED_REPO guard makes this a cheap no-op when already resolved for this repo, and
+    # correctly RE-resolves when REPO_FULL has changed since the last call — which also closes
+    # the multi-repo staleness gap (a stale _WF_PROJECT_ID from a previously processed repo
+    # silently poisoning this repo's lookup and permanently caching "Unknown" against it).
+    discover_or_create_workflow_project
+    fetch_board_item_statuses
+    opt_id="${_WF_ITEM_STATUS_OPTION_ID["${REPO_FULL}/${item_id}"]:-}"
+    substatus=$(workflow_status_name_for_option_id "${opt_id}")
+    if [ -n "${substatus}" ]; then
+        printf '%s' "${substatus}"
+    else
+        printf 'Unknown'
+    fi
+}
+
+# Maps a fine-grained Workflow-board sub-status to the coarse Discord status shown alongside
+# it: "Not Started"/"Planning" haven't begun real work yet; "Approved" through "Human Review"
+# are all actively in progress; "Complete" is done. An unrecognised/empty sub-status (no board
+# configured, custom status name) falls back to "Unknown" rather than guessing (#1136).
+coarse_status_for_substatus() {
+    local substatus="$1"
+    case "${substatus}" in
+        "Not Started"|Planning)
+            printf 'To Do' ;;
+        Approved|Development|"AI Review"|"AI Security Review"|"Human Review")
+            printf 'In Progress' ;;
+        Complete)
+            printf 'Done' ;;
+        *)
+            printf 'Unknown' ;;
+    esac
+}
+
+# Maps an item's labels (a JSON array of {name,...} objects) to its priority, matching
+# Security > Urgent > High > Medium > Low (first match wins, case-insensitive label name),
+# else "Undefined". Pure function — no I/O (#1136).
+priority_for_labels() {
+    local labels_json="$1"
+    printf '%s' "${labels_json}" | jq -r '
+        ([.[]?.name // empty | ascii_downcase]) as $names
+        | if ($names | index("security")) then "Security"
+          elif ($names | index("urgent")) then "Urgent"
+          elif ($names | index("high")) then "High"
+          elif ($names | index("medium")) then "Medium"
+          elif ($names | index("low")) then "Low"
+          else "Undefined"
+          end
+    ' 2>/dev/null || printf 'Undefined'
 }
 
 # Output the step-2 approval-check line(s) for build_issue_claude_md.
@@ -3151,12 +3285,17 @@ build_item_url() {
 }
 
 # Sends a Discord embed notification when starting or resuming work on an item.
-# Arguments: msg_type (start|resume), item_type, item_id, item_title
+# Arguments: msg_type (start|resume), item_type, item_id, item_title, labels_json (JSON array
+# of {name,...} — the item's current labels, used for the Priority field)
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Status/Sub-status/Priority are derived entirely from already-tracked GitHub state (labels,
+# the Workflow board) — no Claude invocation, zero extra agentic cost (#1136). Every session
+# is a fresh single-phase run, so "New vs. Resume" (the old Status field) was never actually
+# meaningful; this replaces it with the coarse board lifecycle stage instead.
 notify_discord_work_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4"
-    local url color status_label payload
+    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" labels_json="${5:-[]}"
+    local url color payload substatus status priority
 
     case "${msg_type}" in
         start|resume) ;;
@@ -3167,11 +3306,13 @@ notify_discord_work_item() {
 
     if [ "${msg_type}" = "start" ]; then
         color=3066993    # green  (#2ECC71)
-        status_label="New"
     else
         color=15844367   # gold   (#F1C40F)
-        status_label="Resume"
     fi
+
+    substatus=$(board_substatus_for_item "${item_id}")
+    status=$(coarse_status_for_substatus "${substatus}")
+    priority=$(priority_for_labels "${labels_json}")
 
     payload=$(jq --null-input \
         --argjson color "${color}" \
@@ -3179,11 +3320,15 @@ notify_discord_work_item() {
         --arg url "${url}" \
         --arg repo "${REPO_FULL}" \
         --arg type "${item_type}" \
-        --arg status "${status_label}" \
+        --arg status "${status}" \
+        --arg substatus "${substatus}" \
+        --arg priority "${priority}" \
         '{embeds:[{title:$title,url:$url,color:$color,fields:[
             {name:"Repository",value:$repo,inline:true},
             {name:"Type",value:$type,inline:true},
-            {name:"Status",value:$status,inline:true}
+            {name:"Priority",value:$priority,inline:true},
+            {name:"Status",value:$status,inline:true},
+            {name:"Sub-status",value:$substatus,inline:true}
         ]}]}') \
         || { warn "Discord: failed to build payload for ${item_type} #${item_id}"; return 0; }
 
@@ -3343,10 +3488,15 @@ clear_blocked_marker() {
 # suppresses repeat notifications while the item stays blocked. clear_blocked_marker
 # re-arms it once the item is observed un-blocked.
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Priority/Sub-status are derived from already-tracked GitHub state, not a Claude invocation
+# (#1136). Unlike notify_discord_work_item, this function's ~12 call sites mostly don't have
+# the item's labels JSON already in scope, so it fetches them itself — the marker-file
+# early-return above means that fetch only ever happens once per NEW blocked spell, not every
+# tick a blocked item is (re-)observed.
 notify_discord_blocked_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local item_type="$1" item_id="$2"
-    local url payload marker_file
+    local url payload marker_file gh_noun labels_json substatus priority
 
     marker_file=$(blocked_marker_file_path "${item_type}" "${item_id}")
     # Already notified for this blocked spell — stay silent until re-armed.
@@ -3354,15 +3504,26 @@ notify_discord_blocked_item() {
 
     url="$(build_item_url "${item_type}" "${item_id}")"
 
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
+    labels_json=$(gh "${gh_noun}" view "${item_id}" --repo "${REPO_FULL}" --json labels --jq '.labels' 2>/dev/null)
+    [ -n "${labels_json}" ] || labels_json="[]"
+    priority=$(priority_for_labels "${labels_json}")
+    substatus=$(board_substatus_for_item "${item_id}")
+
     payload=$(jq --null-input \
         --argjson color 15158332 \
         --arg title "Blocked: ${item_type} #${item_id}" \
         --arg url "${url}" \
         --arg repo "${REPO_FULL}" \
         --arg type "${item_type}" \
+        --arg priority "${priority}" \
+        --arg substatus "${substatus}" \
         '{embeds:[{title:$title,url:$url,color:$color,fields:[
             {name:"Repository",value:$repo,inline:true},
-            {name:"Type",value:$type,inline:true}
+            {name:"Type",value:$type,inline:true},
+            {name:"Priority",value:$priority,inline:true},
+            {name:"Status",value:"Blocked",inline:true},
+            {name:"Sub-status",value:$substatus,inline:true}
         ]}]}') \
         || { warn "Discord: failed to build blocked payload for ${item_type} #${item_id}"; return 0; }
 
@@ -4039,17 +4200,28 @@ main() {
             continue
         fi
 
+        # Moved ahead of notify_discord_work_item (was originally right before build_issue_prompt/
+        # build_pr_prompt below) so _WF_PROJECT_ID is populated before ANY Discord notification
+        # for this item fires this tick — otherwise board_substatus_for_item would always report
+        # "Unknown" for the very first item touched per repo (#1136). Idempotent/cached, so
+        # nothing downstream that still expects it at its old position is affected.
+        discover_or_create_workflow_project
+        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+
+        local item_labels_json
         if [ "${item_type}" = "Issue" ]; then
             item_title=$(printf '%s' "${issue_json}" | jq -r '.title // empty')
+            item_labels_json=$(printf '%s' "${issue_json}" | jq -c '.labels // []')
         else
             item_title=$(printf '%s' "${pr_json}" | jq -r '.title // empty')
+            item_labels_json=$(printf '%s' "${pr_json}" | jq -c '.labels // []')
         fi
 
         # Every run is a fresh single-phase session (no resume): the agent re-derives its
         # context from GitHub, does one workflow phase, and stops.  The orchestrator re-invokes
         # on later ticks to advance through the remaining phases.
         info "Starting fresh single-phase session for ${item_type} #${item_id} in ${item_repo}"
-        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}"
+        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}" "${item_labels_json}"
 
         # Runaway backstop (PRs): cap the total number of agent invocations spent on one PR so a
         # non-converging PR cannot loop forever.  Absence of the guard file also tells us this is
@@ -4107,8 +4279,8 @@ COMMENT
 
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
 
-        discover_or_create_workflow_project
-        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+        # discover_or_create_workflow_project already ran earlier this iteration (moved ahead
+        # of notify_discord_work_item, #1136) — no need to call it again here.
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
@@ -4157,8 +4329,8 @@ COMMENT
             if [ "${new_infra_failures}" -ge "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]; then
                 warn "${item_type} #${item_id} in ${item_repo}: agent container failed ${new_infra_failures} times in a row before Claude could even start — marking Blocked"
                 if apply_blocked_label "${item_type}" "${item_id}" "${item_repo}"; then
-                    local infra_gh_noun="pr"
-                    [ "${item_type}" = "Issue" ] && infra_gh_noun="issue"
+                    local infra_gh_noun
+                    infra_gh_noun=$(gh_noun_for_item_type "${item_type}")
                     gh "${infra_gh_noun}" comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
 This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever.
 COMMENT
