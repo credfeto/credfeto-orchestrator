@@ -241,6 +241,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Orchestrator now checks inline/diff-level PR review comments, not just top-level comments and review summaries, so a CHANGES_REQUESTED review whose only content is an inline comment is answered instead of idling out to a Blocked label
 - Agent container now pre-accepts the workspace trust dialog for /workspace/repo, so the project's baked-in .claude/settings.json permissions.allow entries are actually honoured instead of being silently ignored on every fresh-container invocation
 - Orchestrator no longer picks up PRs whose code is human-authored - PR pickup now requires at least one bot-authored commit, human-taken-over PRs and their linked issues are stood off (other issues in the repo stay workable), and dependencies-labelled PRs are exempt so the dependency takeover flow is unaffected (#1131)
+- Paginate projectsV2 discovery to handle repos with more than 20 GitHub Projects v2 boards
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
