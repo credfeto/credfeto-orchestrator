@@ -2410,8 +2410,56 @@ STUBEOF
     _GH_ME="testuser"
     printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
     printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *) exit 1 ;; esac'
+    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
     run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_human_taken_over_pr_for_issue scans past a candidate with unreadable references to a later match (#1134)" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    # PR 7's fetches always fail; PR 42 is a readable taken-over PR owning issue 164.
+    printf '%s' '[{"number":7,"labels":[],"author":{"login":"testuser"}},{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run --separate-stderr find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 2 when the only candidate has unreadable references (#1134)" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    printf '%s' '[{"number":7,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+@test "list_bot_created_open_prs raises the gh pr list page size above the default 30 (#1134)" {
+    _GH_ME="testuser"
+    # shellcheck disable=SC2016  # $* expands inside the stub at run time
+    make_stub gh 'printf "%s\n" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
+    run list_bot_created_open_prs "org/repo" false
+    [ "${status}" -eq 0 ]
+    grep -q -- "--limit 200" "${TEST_TMP}/gh_args"
+}
+
+# --- tag_pr_closed_issue result contract (#1134) --------------------------------
+
+@test "tag_pr_closed_issue returns 0 when at least one gh action lands" {
+    make_stub gh 'case "$*" in *"pr comment"*) exit 0 ;; *) exit 1 ;; esac'
+    run tag_pr_closed_issue 42 164
+    [ "${status}" -eq 0 ]
+}
+
+@test "tag_pr_closed_issue returns 1 when every gh action fails" {
+    make_stub gh 'exit 1'
+    run tag_pr_closed_issue 42 164
     [ "${status}" -eq 1 ]
 }
 
@@ -4452,6 +4500,53 @@ setup_local_git_remote() {
     [[ "${output}" == *"Issue #164 in org/repo is no longer open — skipping"* ]]
     # One-time check: the marker must exist so later ticks pay no API cost and post no repeat comment.
     [ -f "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked" ]
+}
+
+@test "main clears the closed-takeover marker when the issue is observed open again (#1134)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked"
+
+    run main
+    [ "${status}" -eq 0 ]
+    # Reopened issue re-arms the one-time check for the next closure.
+    [ ! -f "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked" ]
+}
+
+@test "main does not write the closed-takeover marker when tagging fails completely (#1134)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    find_human_taken_over_pr_for_issue() { printf '167'; }
+    tag_pr_closed_issue() { return 1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to tag PR #167"* ]]
+    # Marker unwritten — the tagging retries next tick instead of being lost forever.
+    [ ! -f "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked" ]
+}
+
+@test "main marks the repo active when a feed PR's state fetch fails, keeping issues serialized (#1134)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json() { return 1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to fetch state for PR #5 in org/repo"* ]]
+    [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
 }
 
 @test "main does not repeat the closed-issue takeover check once the marker exists (#1134)" {

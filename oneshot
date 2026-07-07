@@ -550,10 +550,14 @@ list_bot_created_open_prs() {
 
     resolve_gh_me || return 1
 
+    # --limit raised from gh's default page of 30: in a dependency-bot-heavy repo the bot's own
+    # PR can rank past 30, and a truncated list makes the pivot AND the stand-off blind to it —
+    # the issue then looks PR-less and gets duplicate work (#1134 review round 3).
     local pr_list
     pr_list=$(gh pr list \
         --repo "${repo_full}" \
         --state open \
+        --limit 200 \
         --json number,labels,author \
         2>/dev/null) || return 1
     printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" --argjson incb "${include_blocked}" '
@@ -653,32 +657,43 @@ pr_has_bot_authored_commit() {
 # stand-off must not silently vanish with it, but explicit references pointing at a different
 # issue must win over a stale branch name (#1134).  Blocked PRs are included: a Blocked
 # human-driven PR still owns its issue's work (#1134 review).
+# The ownership check runs FIRST, so candidates unrelated to this issue never need a commits
+# fetch, and a candidate whose references cannot be read is scanned past (like the pivot) — a
+# later matching PR still wins.  Only when the issue's OWN candidate cannot be classified does
+# this return 2: a permanently unfetchable candidate that might own the issue keeps its issue
+# conservatively parked (close the broken PR to clear it) rather than risking duplicate work
+# alongside it (#1134 review round 3).
 # Uses REPO_FULL from the current repo context (set_repo_context).
 # Outputs the PR number and returns 0 when such a PR exists; returns 1 when none does; returns 2
 # on a gh failure after retries (caller should skip the item rather than risk duplicating work).
 find_human_taken_over_pr_for_issue() {
     local issue_id="$1"
 
-    local candidates candidate commit_rc refs_json
+    local candidates candidate commit_rc refs_json scan_error=0
     candidates=$(list_bot_created_open_prs "${REPO_FULL}" true) || return 2
     while IFS= read -r candidate; do
         [ -n "${candidate}" ] || continue
+        if ! refs_json=$(fetch_pr_fields_json "${candidate}" closingIssuesReferences,headRefName); then
+            warn "Failed to fetch issue references for PR #${candidate} in ${REPO_FULL} — continuing scan"
+            scan_error=1
+            continue
+        fi
+        printf '%s' "${refs_json}" | jq -e --arg n "${issue_id}" '
+            ((.closingIssuesReferences // []) | length) > 0
+            and ([(.closingIssuesReferences // [])[] | .number | tostring] | index($n) != null)
+            or (((.closingIssuesReferences // []) | length) == 0
+                and ((.headRefName // "") | test("^[A-Za-z]+/" + $n + "([^0-9]|$)")))
+        ' > /dev/null 2>&1 || continue
+        # This candidate owns the issue — commit authorship decides who is driving it.
         commit_rc=0
         pr_has_bot_authored_commit "${REPO_FULL}" "${candidate}" || commit_rc=$?
         [ "${commit_rc}" -eq 2 ] && return 2
         # Bot-driven PR — not a takeover; the pivot handles it.
         [ "${commit_rc}" -eq 0 ] && continue
-        refs_json=$(fetch_pr_fields_json "${candidate}" closingIssuesReferences,headRefName) || return 2
-        if printf '%s' "${refs_json}" | jq -e --arg n "${issue_id}" '
-            if ([(.closingIssuesReferences // [])[]] | length) > 0
-            then ([(.closingIssuesReferences // [])[] | .number | tostring] | index($n) != null)
-            else ((.headRefName // "") | test("^[A-Za-z]+/" + $n + "([^0-9]|$)"))
-            end
-        ' > /dev/null 2>&1; then
-            printf '%s' "${candidate}"
-            return 0
-        fi
+        printf '%s' "${candidate}"
+        return 0
     done <<< "${candidates}"
+    [ "${scan_error}" -eq 0 ] || return 2
     return 1
 }
 
@@ -2533,20 +2548,7 @@ pr_fingerprint_file_path() {
 # returns 1 (does not die) once retries are exhausted, so a single blip on this frequently-called
 # fetch skips just the current item rather than killing the whole run (#1090).
 fetch_pr_json() {
-    local item_id="$1" attempt=1 result
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh pr view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits \
-            2>/dev/null); then
-            printf '%s' "${result}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 1
+    fetch_pr_fields_json "$1" state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits
 }
 
 # Fetches inline (diff-level) PR review comments via the REST comments endpoint — a separate
@@ -3330,15 +3332,19 @@ notify_discord_rate_limited() {
 }
 
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
-# Labels are added individually so a missing label does not prevent the others from being applied.
+# Labels are added individually so a missing label does not prevent the others from being
+# applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
+# (e.g. a total outage) — callers that mark the tagging as done must not do so on total failure,
+# or the anomaly is silently lost forever (#1134 review round 3).
 tag_pr_closed_issue() {
-    local pr_number="$1" issue_id="$2"
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null || true
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null || true
+    local pr_number="$1" issue_id="$2" tagged=1
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null && tagged=0
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null && tagged=0
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null && tagged=0
     gh pr comment "${pr_number}" --repo "${REPO_FULL}" \
         --body "Issue #${issue_id} was found closed while this PR is still open. Automated work has been paused pending manual investigation." \
-        2>/dev/null || true
+        2>/dev/null && tagged=0
+    return "${tagged}"
 }
 
 main() {
@@ -3544,12 +3550,18 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
+                # Issue observed open — re-arm the one-time closed-takeover check so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
                 if ! pr_json=$(fetch_pr_json "${open_pr}"); then
                     warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
+                    # The pivot has already confirmed a bot-driven PR exists here — serialize
+                    # the repo even though this tick cannot work it (#1134 review round 3).
+                    skip_repos+=("${item_repo}")
                     continue
                 fi
 
@@ -3662,7 +3674,13 @@ main() {
                         standoff_pr=$(find_human_taken_over_pr_for_issue "${item_id}") || standoff_rc=$?
                         if [ "${standoff_rc}" -eq 0 ]; then
                             info "Issue #${item_id} in ${item_repo} is closed but human-driven PR #${standoff_pr} is still open — tagging for investigation"
-                            tag_pr_closed_issue "${standoff_pr}" "${item_id}"
+                            if ! tag_pr_closed_issue "${standoff_pr}" "${item_id}"; then
+                                # Nothing landed on the PR (total gh failure) — leave the marker
+                                # unwritten so the tagging retries next tick instead of being
+                                # silently lost forever (#1134 review round 3).
+                                warn "Failed to tag PR #${standoff_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
+                                standoff_rc=2
+                            fi
                         fi
                         if [ "${standoff_rc}" -ne 2 ]; then
                             mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
@@ -3687,6 +3705,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
+                # Issue observed open — re-arm the one-time closed-takeover check so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
 
                 require_trusted_logins || continue
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
@@ -3728,6 +3749,9 @@ main() {
             if ! pr_json=$(fetch_pr_json "${item_id}"); then
                 warn "Failed to fetch state for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
+                # An open PR whose state cannot be fetched must still serialize its repo, like
+                # every other unknown-status path (#1134 review round 3).
+                skip_repos+=("${item_repo}")
                 continue
             fi
 
