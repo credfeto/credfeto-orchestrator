@@ -649,6 +649,38 @@ teardown() {
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
+# --- consecutive infra-failure guard (#1133 review) -----------------------------
+
+@test "load_infra_failure_count defaults to 0 when no guard file exists" {
+    load_infra_failure_count "Issue" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
+}
+
+@test "save_infra_failure_count and load_infra_failure_count round-trip" {
+    save_infra_failure_count "Issue" 42 3
+    [ -f "${SESSION_BASE_DIR}/Issue_42.infra-failures" ]
+    load_infra_failure_count "Issue" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 3 ]
+}
+
+@test "load_infra_failure_count treats a corrupt guard file as 0" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/PullRequest_42.infra-failures"
+    load_infra_failure_count "PullRequest" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
+}
+
+@test "clear_infra_failure_count removes the guard file" {
+    save_infra_failure_count "Issue" 42 3
+    clear_infra_failure_count "Issue" 42
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.infra-failures" ]
+}
+
+@test "clear_infra_failure_count is a no-op when no guard file exists" {
+    run clear_infra_failure_count "Issue" 999
+    [ "${status}" -eq 0 ]
+}
+
 @test "reset_pr_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
     save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
@@ -1920,6 +1952,28 @@ STUBEOF
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
+# --- cleanup_claude_invocation_tmpfiles (#1133 review, Copilot) ----------------
+
+@test "cleanup_claude_invocation_tmpfiles is safe to call twice in a row" {
+    # Mirrors the real EXIT-trap backstop calling it again after the explicit call on every
+    # normal path already cleared these globals to empty — must not error the second time.
+    local tmpfile gpgdir
+    tmpfile=$(mktemp)
+    gpgdir=$(mktemp -d)
+    CLAUDE_MD_TMPFILE="${tmpfile}"
+    GPG_PUBKEY_TMPDIR="${gpgdir}"
+
+    cleanup_claude_invocation_tmpfiles
+    [ -z "${CLAUDE_MD_TMPFILE}" ]
+    [ -z "${GPG_PUBKEY_TMPDIR}" ]
+    [ ! -e "${tmpfile}" ]
+    [ ! -e "${gpgdir}" ]
+
+    run cleanup_claude_invocation_tmpfiles
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/jq" << 'JQEOF'
@@ -2101,6 +2155,118 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already in use"* ]]
+}
+
+# --- pre-flight/infra container failure (#1133) --------------------------------
+
+@test "invoke_claude returns 2 when the container fails before Claude produces any result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '✗ Repo checkout contains /workspace/repo/.claude/settings.json — refusing to grant workspace trust\n' >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+}
+
+@test "invoke_claude removes the Claude OAuth podman secret when the container fails before Claude produces any result (#1133 review)" {
+    local secret_log="${TEST_TMP}/podman_secret"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+if [ "\$1" = "run" ]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+    # The stub logs one argument per line, so "podman secret rm X" appears as three lines.
+    # "rm" must appear twice: once as the pre-create cleanup of any stale secret from a prior
+    # run, once as THIS invocation's own post-failure cleanup (#1133 review) — previously only
+    # the first (pre-create) rm happened; the post-failure one was missing entirely.
+    local rm_count
+    rm_count=$(grep -c '^rm$' "${secret_log}" || true)
+    [ "${rm_count}" -eq 2 ]
+}
+
+@test "invoke_claude cleans up CLAUDE_MD_TMPFILE when the container fails before Claude produces any result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+    # The CLAUDE.md tempfile (created under XDG_RUNTIME_DIR) must not survive the call.
+    [ -z "$(find "${XDG_RUNTIME_DIR}" -name '*.claude-md' 2>/dev/null)" ]
+}
+
+@test "invoke_claude still dies (not returns 2) when podman exits nonzero but Claude produced a valid is_error result" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '{"type":"result","is_error":true,"result":"boom"}\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 2 ]
+}
+
+@test "invoke_claude does not return 2 when podman exits nonzero but Claude produced a genuinely successful result (#1133 review, Copilot)" {
+    # A valid is_error:false result proves Claude actually ran, even if the container's own
+    # exit code is nonzero for an unrelated reason (e.g. a kill racing a clean exit) — this
+    # must be classified as a real (successful) invocation, not a pre-flight infra failure.
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+if [ "$1" = "run" ]; then
+    printf '{"type":"result","is_error":false,"result":"done"}\n'
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 2 ]
 }
 
 @test "invoke_claude does not mount host .claude directory" {
@@ -3029,6 +3195,158 @@ STUBEOF
     [ "${status}" -ne 0 ]
     grep -q "clean -fdX" "${git_log}"
     [[ "${output}" == *"Failed to invoke Claude"* ]]
+}
+
+# --- pre-flight/infra container failure: budget exemption (#1133) --------------
+
+@test "main does not count a pre-flight/infra container failure against the issue invocation budget (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not counted against the invocation budget"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+
+    load_issue_invocation_counts 10
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    # The SEPARATE consecutive-infra-failure counter DOES advance (#1133 review).
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
+}
+
+@test "main does not count a pre-flight/infra container failure against the PR invocation budget (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    invoke_claude() { return 2; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not counted against the invocation budget"* ]]
+
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    load_infra_failure_count "PullRequest" 5
+    [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
+}
+
+@test "main escalates to Blocked after MAX_CONSECUTIVE_INFRA_FAILURES consecutive infra failures (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    apply_blocked_label() { printf 'BLOCKED %s #%s\n' "$1" "$2"; return 0; }
+    make_stub gh 'exit 0'
+    save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"BLOCKED Issue #10"* ]]
+    [[ "${output}" == *"failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start"* ]]
+    [[ "${output}" == *"blocked: 1"* ]]
+}
+
+@test "main does not escalate to Blocked below the consecutive-infra-failure threshold (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    apply_blocked_label() { printf 'BLOCKED %s #%s\n' "$1" "$2"; return 0; }
+    save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 2 ))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main does not reset the workflow board on a second consecutive infra failure (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    # Simulate a prior tick's infra failure already having happened.
+    save_infra_failure_count "Issue" 10 1
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${status_log}" ]
+}
+
+@test "main resets the workflow board on the very first attempt even though it fails (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'Issue 10 Not Started' "${status_log}"
+}
+
+@test "main clears the infra-failure streak once a real Claude session runs (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_infra_failure_count "Issue" 10 2
+    invoke_claude() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
+}
+
+@test "main still runs git clean -fdX and does not die when invoke_claude returns a pre-flight failure (#1133)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local git_log="${TEST_TMP}/git_calls"
+    cat > "${STUB_BIN}/git" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${git_log}"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/git"
+    hash git
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "clean -fdX" "${git_log}"
+    [[ "${output}" != *"Failed to invoke Claude"* ]]
 }
 
 @test "main runs git clean -fdX after invoke_claude succeeds for a PullRequest" {
