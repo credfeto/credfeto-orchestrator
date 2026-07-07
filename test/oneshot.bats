@@ -166,6 +166,68 @@ teardown() {
     [[ "${output}" != *"Trusted commenters"* ]]
 }
 
+# --- Issue session dirty-branch recovery (#1140 root cause) ---------------------
+
+@test "build_issue_claude_md omits the dirty-branch section when the working tree is clean" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"WORKING TREE IS DIRTY"* ]]
+}
+
+@test "build_issue_claude_md instructs recovery when the working tree is dirty (#1140)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "dependabot/github_actions/actions/checkout-7.0.0"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WORKING TREE IS DIRTY"* ]]
+    [[ "${output}" == *"dependabot/github_actions/actions/checkout-7.0.0"* ]]
+    [[ "${output}" == *"git -C /workspace/repo status"* ]]
+    [[ "${output}" == *"git -C /workspace/repo checkout main"* ]]
+    # Must explicitly say this is not grounds to block — the whole point of the fix.
+    [[ "${output}" == *"not a reason to block the issue"* ]]
+}
+
+@test "build_issue_claude_md dirty-branch section appears before step 1 (#1140)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "some-branch"
+    [ "${status}" -eq 0 ]
+    local dirty_pos step1_pos
+    dirty_pos=$(printf '%s' "${output}" | grep -n "WORKING TREE IS DIRTY" | head -1 | cut -d: -f1)
+    step1_pos=$(printf '%s' "${output}" | grep -n "^1\. Assign yourself" | head -1 | cut -d: -f1)
+    [ -n "${dirty_pos}" ]
+    [ -n "${step1_pos}" ]
+    [ "${dirty_pos}" -lt "${step1_pos}" ]
+}
+
+# --- "never block without a comment" mandatory rule (#1140) ---------------------
+
+@test "build_issue_claude_md mandates a comment on every Blocked application" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"NEVER apply the Blocked label without ALSO posting a comment"* ]]
+}
+
+@test "build_pr_claude_md mandates a comment on every Blocked application" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"NEVER apply the Blocked label without ALSO posting a comment"* ]]
+}
+
+# --- tightened plan-approval re-block instruction (#1140) -----------------------
+
+@test "build_issue_claude_md board-configured not-approved-yet text demands a diagnostic comment" {
+    _WF_PROJECT_ID="PVT_test"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"fetch the Workflow board's CURRENT status"* ]]
+    [[ "${output}" == *"Silently re-applying Blocked with no comment is NEVER acceptable"* ]]
+}
+
+@test "build_issue_claude_md no-board not-approved-yet text demands a diagnostic comment" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no approval comment"* ]]
+    [[ "${output}" == *"Silently re-applying Blocked with no comment is NEVER acceptable"* ]]
+}
+
 @test "build_pr_claude_md includes trusted-commenters section listing supplied logins" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" '["alice","bob"]'
     [ "${status}" -eq 0 ]
@@ -4092,7 +4154,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[]"'
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
     run notify_discord_blocked_item "Issue" "42"
     [ "${status}" -eq 0 ]
     grep -q "https://discord.example.com/hook" "${args_log}"
@@ -4105,7 +4167,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[]"'
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
     run notify_discord_blocked_item "PullRequest" "7"
     [ "${status}" -eq 0 ]
     grep -q "https://github.com/org/repo/pull/7" "${args_log}"
@@ -4117,7 +4179,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[{\"name\":\"Urgent\"}]"'
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[{\"name\":\"Urgent\"}],\"comments\":[]}"'
     run notify_discord_blocked_item "Issue" "42"
     [ "${status}" -eq 0 ]
     grep -q "Priority" "${args_log}"
@@ -4136,12 +4198,86 @@ STUBEOF
     grep -q "Undefined" "${args_log}"
 }
 
+@test "notify_discord_blocked_item uses the item's real title, not just type and number (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"Cache writes are not atomic\",\"labels\":[],\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Blocked: Cache writes are not atomic" "${args_log}"
+}
+
+@test "notify_discord_blocked_item falls back to type and number when the title fetch fails (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'exit 1'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "Blocked: Issue #42" "${args_log}"
+}
+
+@test "notify_discord_blocked_item uses an explicit reason when the caller provides one (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[{\"body\":\"unrelated latest comment\"}]}"'
+    run notify_discord_blocked_item "Issue" "42" "CI checks have been pending for over 1440 minutes."
+    [ "${status}" -eq 0 ]
+    grep -q "CI checks have been pending for over 1440 minutes" "${args_log}"
+    run grep -q "unrelated latest comment" "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "notify_discord_blocked_item falls back to the item's most recent comment when no reason is given (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[{\"body\":\"first comment\"},{\"body\":\"most recent explanation\"}]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "most recent explanation" "${args_log}"
+    run grep -q "first comment" "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "notify_discord_blocked_item shows a placeholder reason when there are no comments to fall back on (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "No reason found" "${args_log}"
+}
+
+@test "notify_discord_blocked_item truncates a very long reason to 900 characters (#1140)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
+    local long_reason
+    long_reason=$(printf 'x%.0s' $(seq 1 2000))
+    run notify_discord_blocked_item "Issue" "42" "${long_reason}"
+    [ "${status}" -eq 0 ]
+    run grep -q "$(printf 'x%.0s' $(seq 1 2000))" "${args_log}"
+    [ "${status}" -ne 0 ]
+    grep -q "$(printf 'x%.0s' $(seq 1 900))" "${args_log}"
+}
+
 @test "notify_discord_blocked_item is silent on a repeat call while the item stays blocked" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[]"'
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
 
     notify_discord_blocked_item "Issue" "42"
     notify_discord_blocked_item "Issue" "42"
@@ -4156,7 +4292,7 @@ STUBEOF
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub gh 'printf "[]"'
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
 
     notify_discord_blocked_item "Issue" "42"
     clear_blocked_marker "Issue" "42"
@@ -4223,6 +4359,27 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     grep -q 'type=PullRequest id=99' "${_notif_log}"
+}
+
+@test "main posts an explanatory comment and reason when no .ai-instructions is found (#1140)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    find_ai_instructions() { return 1; }
+    apply_blocked_label() { return 0; }
+    local comment_log="${TEST_TMP}/gh_comment_log"
+    make_stub gh "if [ \"\$1\" = \"issue\" ] && [ \"\$2\" = \"comment\" ]; then printf '%s\n' \"\$*\" >> '${comment_log}'; fi; exit 0"
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s reason=%s\n' "$1" "$2" "${3:-}" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${comment_log}" ]
+    grep -q "No .ai-instructions file was found" "${comment_log}"
+    grep -q "reason=No .ai-instructions file was found" "${_notif_log}"
 }
 
 @test "main sends blocked notification for Issue with linked PR when the Issue itself is blocked" {
