@@ -2445,20 +2445,53 @@ STUBEOF
     [ "${status}" -eq 1 ]
 }
 
+@test "find_human_taken_over_pr_for_issue lets explicit closing references beat a stale branch name (#1134)" {
+    _GH_ME="testuser"
+    # PR was retargeted to issue 264 (body edited) but still lives on branch fix/164-foo:
+    # querying 164 must NOT match — the explicit reference wins over the branch convention.
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":264}],"headRefName":"fix/164-foo"}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_human_taken_over_pr_for_issue still sees a Blocked taken-over PR (#1134)" {
+    _GH_ME="testuser"
+    # Tagging a taken-over PR adds Blocked; the stand-off must not go blind because of it,
+    # or a reopened issue would get duplicate work.
+    printf '%s' '[{"number":42,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
 # --- pr_is_human_driven (#1131) -------------------------------------------------
 # Operates on the caller's pr_json (author/commits included by fetch_pr_json, #1134) — no gh
 # fetch of its own; the stubs below exist only to prove no call happens or to fail resolve_gh_me.
 
-@test "pr_is_human_driven exempts dependencies-labelled PRs even with human commits and no bot commits" {
+@test "pr_is_human_driven exempts a dependencies-labelled dependency PR even after a trusted human pushed to it" {
     _GH_ME="testuser"
-    # gh must not even be needed — the label short-circuits before anything else.
+    # No gh call should be needed — everything comes from the passed pr_json.
     make_stub gh 'exit 1'
-    run pr_is_human_driven '{"labels":[{"name":"Dependencies"}],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
+    run pr_is_human_driven '{"labels":[{"name":"Dependencies"}],"author":{"login":"app/dependabot"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
     [ "${status}" -eq 1 ]
 }
 
-@test "pr_is_human_driven does not exempt a label merely containing dependencies as a substring (#1134)" {
+@test "pr_is_human_driven exempts customised dependency label variants like 'npm dependencies' (#1134)" {
     _GH_ME="testuser"
+    run pr_is_human_driven '{"labels":[{"name":"npm dependencies"}],"author":{"login":"app/dependabot"},"commits":[{"authors":[{"login":"app/dependabot"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven stands off a taken-over bot PR regardless of a dependencies-ish label (#1134)" {
+    _GH_ME="testuser"
+    # Issue-label sync can put any label on a bot-created PR — a takeover must win over the
+    # label exemption (the author check runs first).
     run pr_is_human_driven '{"labels":[{"name":"update-dependencies-major"}],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
     [ "${status}" -eq 0 ]
 }
@@ -4416,6 +4449,26 @@ setup_local_git_remote() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Issue #164 in org/repo is closed but human-driven PR #167 is still open — tagging for investigation"* ]]
     [[ "${output}" == *"TAGGED pr=167 issue=164"* ]]
+    [[ "${output}" == *"Issue #164 in org/repo is no longer open — skipping"* ]]
+    # One-time check: the marker must exist so later ticks pay no API cost and post no repeat comment.
+    [ -f "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked" ]
+}
+
+@test "main does not repeat the closed-issue takeover check once the marker exists (#1134)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    find_human_taken_over_pr_for_issue() { printf '167'; }
+    tag_pr_closed_issue() { printf 'TAGGED pr=%s issue=%s\n' "$1" "$2"; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"TAGGED"* ]]
     [[ "${output}" == *"Issue #164 in org/repo is no longer open — skipping"* ]]
 }
 
