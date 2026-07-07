@@ -190,16 +190,20 @@ verify_no_user_insteadof() {
 # unreviewed content that could have been introduced or modified by an untrusted PR
 # branch and would auto-run the instant trust is granted with no confirmation from
 # Claude itself — refuse to proceed rather than silently trust it.
+# Comparison is via git blob SHA (git hash-object on the working-tree file vs. git
+# rev-parse on the origin/main tree entry), not `$(cat ...)` — bash command substitution
+# silently strips embedded NUL bytes and would treat two files differing only by a NUL
+# as identical; hash-object reads raw bytes and cannot be fooled that way (#1133 review).
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 verify_no_repo_claude_config() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
-    local f rel_path main_content local_content
+    local f rel_path local_sha main_sha
     for f in "${repo_dir}/.claude/settings.json" "${repo_dir}/.claude/settings.local.json" "${repo_dir}/.mcp.json"; do
         [ -e "${f}" ] || continue
         rel_path="${f#"${repo_dir}"/}"
-        if main_content=$(git -C "${repo_dir}" show "origin/main:${rel_path}" 2>/dev/null) \
-            && local_content=$(cat "${f}" 2>/dev/null) \
-            && [ "${main_content}" = "${local_content}" ]; then
+        local_sha=$(git -C "${repo_dir}" hash-object "${f}" 2>/dev/null) || local_sha=""
+        main_sha=$(git -C "${repo_dir}" rev-parse "origin/main:${rel_path}" 2>/dev/null) || main_sha=""
+        if [ -n "${local_sha}" ] && [ -n "${main_sha}" ] && [ "${local_sha}" = "${main_sha}" ]; then
             continue
         fi
         die "Repo checkout contains ${f} that differs from the reviewed origin/main version — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"

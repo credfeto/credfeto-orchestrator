@@ -649,6 +649,38 @@ teardown() {
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
+# --- consecutive infra-failure guard (#1133 review) -----------------------------
+
+@test "load_infra_failure_count defaults to 0 when no guard file exists" {
+    load_infra_failure_count "Issue" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
+}
+
+@test "save_infra_failure_count and load_infra_failure_count round-trip" {
+    save_infra_failure_count "Issue" 42 3
+    [ -f "${SESSION_BASE_DIR}/Issue_42.infra-failures" ]
+    load_infra_failure_count "Issue" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 3 ]
+}
+
+@test "load_infra_failure_count treats a corrupt guard file as 0" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/PullRequest_42.infra-failures"
+    load_infra_failure_count "PullRequest" 42
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
+}
+
+@test "clear_infra_failure_count removes the guard file" {
+    save_infra_failure_count "Issue" 42 3
+    clear_infra_failure_count "Issue" 42
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.infra-failures" ]
+}
+
+@test "clear_infra_failure_count is a no-op when no guard file exists" {
+    run clear_infra_failure_count "Issue" 999
+    [ "${status}" -eq 0 ]
+}
+
 @test "reset_pr_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
     save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
@@ -2123,6 +2155,38 @@ STUBEOF
     [ "${status}" -eq 2 ]
 }
 
+@test "invoke_claude removes the Claude OAuth podman secret when the container fails before Claude produces any result (#1133 review)" {
+    local secret_log="${TEST_TMP}/podman_secret"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${secret_log}"
+    exit 0
+fi
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+if [ "\$1" = "run" ]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    [ "${status}" -eq 2 ]
+    # The stub logs one argument per line, so "podman secret rm X" appears as three lines.
+    # "rm" must appear twice: once as the pre-create cleanup of any stale secret from a prior
+    # run, once as THIS invocation's own post-failure cleanup (#1133 review) — previously only
+    # the first (pre-create) rm happened; the post-failure one was missing entirely.
+    local rm_count
+    rm_count=$(grep -c '^rm$' "${secret_log}" || true)
+    [ "${rm_count}" -eq 2 ]
+}
+
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE when the container fails before Claude produces any result" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
@@ -3108,6 +3172,9 @@ STUBEOF
 
     load_issue_invocation_counts 10
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    # The SEPARATE consecutive-infra-failure counter DOES advance (#1133 review).
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
 }
 
 @test "main does not count a pre-flight/infra container failure against the PR invocation budget (#1133)" {
@@ -3126,6 +3193,94 @@ STUBEOF
 
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    load_infra_failure_count "PullRequest" 5
+    [ "${INFRA_FAILURE_COUNT}" -eq 1 ]
+}
+
+@test "main escalates to Blocked after MAX_CONSECUTIVE_INFRA_FAILURES consecutive infra failures (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    apply_blocked_label() { printf 'BLOCKED %s #%s\n' "$1" "$2"; return 0; }
+    make_stub gh 'exit 0'
+    save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"BLOCKED Issue #10"* ]]
+    [[ "${output}" == *"failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start"* ]]
+    [[ "${output}" == *"blocked: 1"* ]]
+}
+
+@test "main does not escalate to Blocked below the consecutive-infra-failure threshold (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    apply_blocked_label() { printf 'BLOCKED %s #%s\n' "$1" "$2"; return 0; }
+    save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 2 ))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"BLOCKED"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main does not reset the workflow board on a second consecutive infra failure (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    # Simulate a prior tick's infra failure already having happened.
+    save_infra_failure_count "Issue" 10 1
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${status_log}" ]
+}
+
+@test "main resets the workflow board on the very first attempt even though it fails (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    invoke_claude() { return 2; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'Issue 10 Not Started' "${status_log}"
+}
+
+@test "main clears the infra-failure streak once a real Claude session runs (#1133 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_infra_failure_count "Issue" 10 2
+    invoke_claude() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    load_infra_failure_count "Issue" 10
+    [ "${INFRA_FAILURE_COUNT}" -eq 0 ]
 }
 
 @test "main still runs git clean -fdX and does not die when invoke_claude returns a pre-flight failure (#1133)" {

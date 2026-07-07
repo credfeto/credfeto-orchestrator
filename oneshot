@@ -87,6 +87,19 @@ MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 [[ "${MAX_PR_ENV_AUTO_UNBLOCKS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_ENV_AUTO_UNBLOCKS=3
 
+# How many CONSECUTIVE agent-container failures before Claude ever starts (invoke_claude
+# returning 2 — see run_claude_fresh, #1133) an item tolerates before being marked Blocked for
+# a human. This budget is separate from MAX_PR_TOTAL_INVOCATIONS/MAX_ISSUE_TOTAL_INVOCATIONS,
+# which a pre-flight failure never touches: without a SEPARATE escalation path, a persistently
+# broken container (bad image, always-failing pre-flight check) would retry silently forever —
+# previously any such failure called die(), killing the whole oneshot run and giving an
+# operator an immediate, visible signal; #1133's fix to stop killing the run for a genuinely
+# transient failure must not also remove the only escalation path for a non-transient one
+# (#1133 review). Resets to 0 the moment a real Claude session runs, however that session ends.
+# Override with MAX_CONSECUTIVE_INFRA_FAILURES.
+MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
+[[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
+
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
@@ -747,6 +760,47 @@ pr_is_human_driven() {
 invocation_guard_file_path() {
     local item_type="$1" item_id="$2"
     printf '%s/%s_%s.invocations' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Guard-file path for consecutive pre-flight/infra container failures (#1133 review) — separate
+# from invocation_guard_file_path's budget, which invoke_claude returning 2 never touches. Also
+# doubles as the "have we ever attempted this item" signal for the first-touch board-init check
+# below: on a persistently failing container, save_pr_invocation_counts/save_issue_invocation_
+# counts (which the normal first-touch check keys off) never run either, so without this the
+# board would be reset to "Not Started" on every single retry (#1133 review).
+infra_failure_guard_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.infra-failures' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Reads the saved consecutive-infra-failure count, defaulting a missing/corrupt value to 0.
+# Sets global INFRA_FAILURE_COUNT.
+INFRA_FAILURE_COUNT=0
+load_infra_failure_count() {
+    local item_type="$1" item_id="$2" guard_file value
+    INFRA_FAILURE_COUNT=0
+    guard_file=$(infra_failure_guard_file_path "${item_type}" "${item_id}")
+    [ -f "${guard_file}" ] || return 0
+    value=$(cat "${guard_file}" 2>/dev/null)
+    [[ "${value}" =~ ^[0-9]+$ ]] && INFRA_FAILURE_COUNT="${value}"
+    return 0
+}
+
+# Persists the consecutive-infra-failure count for an item.
+save_infra_failure_count() {
+    local item_type="$1" item_id="$2" count="$3" guard_file
+    guard_file=$(infra_failure_guard_file_path "${item_type}" "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${count}" > "${guard_file}" \
+        || die "Failed to write infra-failure guard file: ${guard_file}"
+}
+
+# Clears the consecutive-infra-failure guard file — call once a real Claude session has run
+# (regardless of outcome), so a one-off pre-flight blip does not count towards a later
+# persistent-failure streak.
+clear_infra_failure_count() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(infra_failure_guard_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
 }
 
 # Per-PR invocation guard.  Because every run is a fresh session that advances the workflow by
@@ -2240,11 +2294,30 @@ validate_bind_mounts() {
 # Removes the per-invocation CLAUDE.md tempfile and GPG pubkey tempdir and resets their
 # globals. Shared by every invoke_claude exit path (success, infra-failure early-return, and
 # the "no result object" die) so cleanup cannot drift between them (#1133).
+# Removes the per-invocation CLAUDE.md tempfile, GPG pubkey tempdir, and any podman secrets
+# created for this invocation (Claude OAuth / GH Enterprise tokens), resetting their globals.
+# Shared by every invoke_claude exit path (success, infra-failure early-return, and the "no
+# result object" die) so cleanup cannot drift between them, AND by the EXIT trap — which used
+# to be the ONLY thing that removed the podman secrets, firing only when the whole oneshot
+# process exits. That was fine while every invocation was followed by an immediate process
+# exit, but the #1133 infra-failure path uses `continue` to keep the main loop scanning other
+# items in the same run, so a secret created for a failed item could sit in the podman secret
+# store — readable by anything else with local podman access — for the rest of the run instead
+# of being removed immediately (#1133 review). Calling this explicitly on every path closes
+# that gap regardless of how long the caller's process keeps running afterwards.
 cleanup_claude_invocation_tmpfiles() {
     rm -f "${CLAUDE_MD_TMPFILE}"
     CLAUDE_MD_TMPFILE=""
     rm -rf "${GPG_PUBKEY_TMPDIR}"
     GPG_PUBKEY_TMPDIR=""
+    if [ -n "${PODMAN_SECRET_NAME}" ]; then
+        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
+        PODMAN_SECRET_NAME=""
+    fi
+    if [ -n "${GH_ENTERPRISE_SECRET_NAME}" ]; then
+        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
+        GH_ENTERPRISE_SECRET_NAME=""
+    fi
 }
 
 # Runs a single FRESH claude session for one workflow phase and returns 0 on success.
@@ -2320,7 +2393,11 @@ invoke_claude() {
     done
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
-    trap 'rm -f "${CLAUDE_MD_TMPFILE}"; CLAUDE_MD_TMPFILE=""; rm -rf "${GPG_PUBKEY_TMPDIR}"; [ -n "${PODMAN_SECRET_NAME}" ] && podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true; [ -n "${GH_ENTERPRISE_SECRET_NAME}" ] && podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true; stop_ssh_agent' EXIT
+    # Backstop only: every normal exit path below now calls cleanup_claude_invocation_tmpfiles
+    # itself (#1133 review), so by the time this trap fires those globals are usually already
+    # empty and its cleanup calls are no-ops — it only does real work if invoke_claude is
+    # interrupted somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
+    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -3955,10 +4032,17 @@ main() {
 
         # Runaway backstop (PRs): cap the total number of agent invocations spent on one PR so a
         # non-converging PR cannot loop forever.  Absence of the guard file also tells us this is
-        # the first time we have ever worked this PR (used to initialise the board below).
+        # the first time we have ever worked this PR (used to initialise the board below) — OR
+        # that every past attempt was a pre-flight/infra failure (#1133 review): those never
+        # write the invocation-count guard file, so the infra-failure guard file is also checked
+        # here to avoid re-declaring "first touch" (and re-resetting the board to "Not Started")
+        # on every single retry of a persistently failing container.
         local pr_first_touch="false"
         if [ "${item_type}" = "PullRequest" ]; then
-            [ -f "$(pr_invocation_guard_file_path "${item_id}")" ] || pr_first_touch="true"
+            if [ ! -f "$(pr_invocation_guard_file_path "${item_id}")" ] \
+                && [ ! -f "$(infra_failure_guard_file_path "PullRequest" "${item_id}")" ]; then
+                pr_first_touch="true"
+            fi
             load_pr_invocation_counts "${item_id}"
             if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
                 warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
@@ -4028,7 +4112,10 @@ COMMENT
         if [ "${item_type}" = "PullRequest" ]; then
             [ "${pr_first_touch}" = "true" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
         elif [ "${item_type}" = "Issue" ]; then
-            [ -z "$(load_issue_fingerprint "${item_id}")" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
+            if [ -z "$(load_issue_fingerprint "${item_id}")" ] \
+                && [ ! -f "$(infra_failure_guard_file_path "Issue" "${item_id}")" ]; then
+                update_workflow_status "${item_type}" "${item_id}" "Not Started"
+            fi
         fi
 
         invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"
@@ -4038,11 +4125,29 @@ COMMENT
         if [ "${invoke_claude_exit}" -eq 2 ]; then
             # Container failed before Claude ever ran (e.g. an entrypoint.sh pre-flight check —
             # #1133). Nothing agentic happened, so this attempt must not count against the
-            # item's invocation budget; skip it and let the next tick retry fresh. Note: unlike
-            # a converging failure, this does not (yet) escalate on repeated occurrence — a
-            # backoff/escalation mechanism for a persistently failing pre-flight check is
-            # deliberately deferred to a follow-up.
-            warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure) — not counted against the invocation budget"
+            # item's normal invocation budget — but it must still escalate on repeated
+            # occurrence, tracked via a SEPARATE consecutive-failure counter, or a persistently
+            # broken container would retry silently forever with no human ever notified (#1133
+            # review) — the die()-kills-the-whole-run behaviour this replaced was accidentally
+            # the only thing providing that signal.
+            load_infra_failure_count "${item_type}" "${item_id}"
+            local new_infra_failures=$(( INFRA_FAILURE_COUNT + 1 ))
+            save_infra_failure_count "${item_type}" "${item_id}" "${new_infra_failures}"
+            if [ "${new_infra_failures}" -ge "${MAX_CONSECUTIVE_INFRA_FAILURES}" ]; then
+                warn "${item_type} #${item_id} in ${item_repo}: agent container failed ${new_infra_failures} times in a row before Claude could even start — marking Blocked"
+                if apply_blocked_label "${item_type}" "${item_id}" "${item_repo}"; then
+                    local infra_gh_noun="pr"
+                    [ "${item_type}" = "Issue" ] && infra_gh_noun="issue"
+                    gh "${infra_gh_noun}" comment "${item_id}" --repo "${item_repo}" --body "$(cat <<COMMENT
+This item's agent container has failed ${new_infra_failures} times in a row before Claude could even start (a pre-flight/infra failure, not a Claude-level one — e.g. a workspace-trust or environment check in entrypoint.sh). Blocking for a human to investigate the container/image rather than retrying forever.
+COMMENT
+                    )" 2>/dev/null || true
+                fi
+                notify_discord_blocked_item "${item_type}" "${item_id}"
+                count_blocked=$((count_blocked + 1))
+                continue
+            fi
+            warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) — not counted against the invocation budget"
             count_error=$((count_error + 1))
             continue
         fi
@@ -4052,7 +4157,9 @@ COMMENT
         # (a pre-flight/infra failure above never reaches here — #1133): always bump the total;
         # for PRs, bump the idle counter only when this run is a no-external-change phase
         # advance, and reset it to 0 otherwise (a push, a new comment, or CI change is real
-        # progress).
+        # progress). A real session running — regardless of how it ends — also clears the
+        # consecutive-infra-failure streak: the container is demonstrably working again.
+        clear_infra_failure_count "${item_type}" "${item_id}"
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
             [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
