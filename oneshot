@@ -534,33 +534,86 @@ resolve_gh_me() {
     return 1
 }
 
+# Lists the numbers of open PRs created by the bot (@me) in the given repo, one per line, in
+# gh pr list order.  Shared by find_open_nonblocked_pr_for_repo and
+# find_human_taken_over_pr_for_issue so the author filter cannot drift between the pivot and
+# stand-off paths (#1134).  PRs carrying the Blocked label are excluded unless include_blocked
+# is "true" — the pivot must never work a Blocked PR, but the takeover stand-off must still see
+# a Blocked human-driven PR, otherwise tagging it Blocked blinds the stand-off and a reopened
+# issue gets duplicate work (#1134 review).
+# Returns 1 if the identity lookup or the gh call fails.
+# Avoids --author @me because gh 2.93.0 broke that flag (exits 1 with "malformed version:").
+# Instead, fetches all open PRs with their author field and filters client-side using _GH_ME.
+# _GH_ME is resolved lazily (with retries) on the first call and cached for subsequent calls.
+list_bot_created_open_prs() {
+    local repo_full="$1" include_blocked="${2:-false}"
+
+    resolve_gh_me || return 1
+
+    # --limit raised from gh's default page of 30: in a dependency-bot-heavy repo the bot's own
+    # PR can rank past 30, and a truncated list makes the pivot AND the stand-off blind to it —
+    # the issue then looks PR-less and gets duplicate work (#1134 review round 3).
+    local pr_list
+    pr_list=$(gh pr list \
+        --repo "${repo_full}" \
+        --state open \
+        --limit 200 \
+        --json number,labels,author \
+        2>/dev/null) || return 1
+    printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" --argjson incb "${include_blocked}" '
+        .[] | select(
+            .author.login == $me and
+            ($incb or (([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null))
+        ) | .number
+    '
+}
+
+# Fetches the given comma-separated --json fields for a PR with the standard retry treatment
+# (#1090); single definition shared by every helper that needs a partial PR fetch (#1134).
+# Arguments: PR number, field list, repo (defaults to REPO_FULL from the current repo context).
+fetch_pr_fields_json() {
+    local item_id="$1" fields="$2" repo_full="${3:-${REPO_FULL}}" attempt=1 result
+    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh pr view "${item_id}" \
+            --repo "${repo_full}" \
+            --json "${fields}" \
+            2>/dev/null); then
+            printf '%s' "${result}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+# Reads JSON with a .commits array on stdin and succeeds when any commit author or co-author
+# login equals the given login.  GitHub maps commit author emails to logins; commits whose
+# email maps to no account have no login and are ignored.  Single definition shared by the
+# pivot and human-driven predicates so they cannot diverge (#1134).
+json_has_commit_author_login() {
+    jq -e --arg me "$1" '
+        [(.commits // [])[] | (.authors // [])[] | .login // empty] | index($me) != null
+    ' > /dev/null 2>&1
+}
+
 # Queries GitHub for the first open, non-blocked PR in the given repo that the bot is actually
 # driving: created by @me AND containing at least one commit authored by @me (#1131).  PR
 # creation authorship alone is not enough — the issue workflow creates the draft PR, but a human
 # can take over the branch afterwards (rebasing the bot's placeholder commit away), and such a
 # PR must be left alone rather than re-invoked against the human's work.
 # Outputs the PR number on stdout, or empty string if no candidate qualifies.
-# Returns 1 if any gh call fails (caller should treat as an error).
-# Avoids --author @me because gh 2.93.0 broke that flag (exits 1 with "malformed version:").
-# Instead, fetches all open PRs with their author field and filters client-side using _GH_ME.
-# _GH_ME is resolved lazily (with retries) on the first call and cached for subsequent calls.
+# A candidate whose commits cannot be fetched is scanned past — one broken PR (e.g. from a
+# deleted fork) must not block pivoting to a healthy later one (#1134) — but if no bot-driven PR
+# is found after such a failure the lookup returns 1, because misreading "could not tell" as
+# "PR-less" would let the issue workflow open a duplicate branch.
+# Returns 1 if the PR list fetch fails.
 find_open_nonblocked_pr_for_repo() {
     local repo_full="$1"
 
-    resolve_gh_me || return 1
-
-    local pr_list candidates candidate commit_rc
-    pr_list=$(gh pr list \
-        --repo "${repo_full}" \
-        --state open \
-        --json number,labels,author \
-        2>/dev/null) || return 1
-    candidates=$(printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" '
-        .[] | select(
-            .author.login == $me and
-            ([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null
-        ) | .number
-    ') || return 1
+    local candidates candidate commit_rc scan_error=0
+    candidates=$(list_bot_created_open_prs "${repo_full}" false) || return 1
     while IFS= read -r candidate; do
         [ -n "${candidate}" ] || continue
         commit_rc=0
@@ -569,135 +622,115 @@ find_open_nonblocked_pr_for_repo() {
             printf '%s' "${candidate}"
             return 0
         fi
-        # A gh failure must surface as an error, not read as "no bot commits" — misreading it
-        # would make the linked issue look PR-less and risk a duplicate branch.
-        [ "${commit_rc}" -eq 2 ] && return 1
+        if [ "${commit_rc}" -eq 2 ]; then
+            warn "Failed to fetch commits for PR #${candidate} in ${repo_full} — continuing scan"
+            scan_error=1
+            continue
+        fi
+        # Diagnosable trail for a systemic misclassification: if GIT_USER_EMAIL stops mapping
+        # to the bot account, every bot PR lands here and the orchestrator goes quiet with only
+        # a "human-driven" count to show for it (#1134).
+        warn "PR #${candidate} in ${repo_full}: created by the bot but has no bot-authored commits — treating as human-driven"
     done <<< "${candidates}"
+    [ "${scan_error}" -eq 0 ] || return 1
     return 0
 }
 
 # Tests whether the bot (_GH_ME) has authored (or co-authored) at least one commit on the given
-# PR — the signal that the bot, not a human, is driving the branch (#1131).  GitHub maps commit
-# author emails to logins; commits whose email maps to no account have no login and are ignored.
+# PR — the signal that the bot, not a human, is driving the branch (#1131).
 # Returns 0 when a bot-authored commit exists, 1 when none does, and 2 when the gh fetch fails
 # after retries — distinct from 1 so callers can propagate a transient error instead of
-# misreading it as "human-driven".  Same retry treatment as fetch_pr_json (#1090).
+# misreading it as "human-driven".
 pr_has_bot_authored_commit() {
-    local repo_full="$1" pr_number="$2" attempt=1 commits_json
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if commits_json=$(gh pr view "${pr_number}" \
-            --repo "${repo_full}" \
-            --json commits \
-            2>/dev/null); then
-            if printf '%s' "${commits_json}" | jq -e --arg me "${_GH_ME}" '
-                [(.commits // [])[] | (.authors // [])[] | .login // empty] | index($me) != null
-            ' > /dev/null 2>&1; then
-                return 0
-            fi
-            return 1
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 2
+    local repo_full="$1" pr_number="$2" commits_json
+    commits_json=$(fetch_pr_fields_json "${pr_number}" commits "${repo_full}") || return 2
+    printf '%s' "${commits_json}" | json_has_commit_author_login "${_GH_ME}"
 }
 
 # Finds an open, non-blocked PR that the bot created but a human has since taken over (zero
-# bot-authored commits) and that closes the given issue (#1131).  Such an issue must be stood
-# off: it is invisible to the find_open_nonblocked_pr_for_repo pivot (no bot commits), but
+# bot-authored commits) and that belongs to the given issue (#1131).  Such an issue must be
+# stood off: it is invisible to the find_open_nonblocked_pr_for_repo pivot (no bot commits), but
 # re-working it as a fresh issue would open a duplicate branch/PR alongside the human's work.
+# Ownership is matched via closingIssuesReferences; only when a PR declares NO closing
+# references at all does the branch-naming convention <type>/<issue>-<name> serve as a fallback
+# — a human takeover can edit the "Closes #N" line out of the PR body entirely, and the
+# stand-off must not silently vanish with it, but explicit references pointing at a different
+# issue must win over a stale branch name (#1134).  Blocked PRs are included: a Blocked
+# human-driven PR still owns its issue's work (#1134 review).
+# The ownership check runs FIRST, so candidates unrelated to this issue never need a commits
+# fetch, and a candidate whose references cannot be read is scanned past (like the pivot) — a
+# later matching PR still wins.  Only when the issue's OWN candidate cannot be classified does
+# this return 2: a permanently unfetchable candidate that might own the issue keeps its issue
+# conservatively parked (close the broken PR to clear it) rather than risking duplicate work
+# alongside it (#1134 review round 3).
 # Uses REPO_FULL from the current repo context (set_repo_context).
 # Outputs the PR number and returns 0 when such a PR exists; returns 1 when none does; returns 2
 # on a gh failure after retries (caller should skip the item rather than risk duplicating work).
 find_human_taken_over_pr_for_issue() {
     local issue_id="$1"
 
-    resolve_gh_me || return 2
-
-    local pr_list candidates candidate commit_rc refs_json attempt
-    pr_list=$(gh pr list \
-        --repo "${REPO_FULL}" \
-        --state open \
-        --json number,labels,author \
-        2>/dev/null) || return 2
-    candidates=$(printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" '
-        .[] | select(
-            .author.login == $me and
-            ([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null
-        ) | .number
-    ') || return 2
+    local candidates candidate commit_rc refs_json scan_error=0
+    candidates=$(list_bot_created_open_prs "${REPO_FULL}" true) || return 2
     while IFS= read -r candidate; do
         [ -n "${candidate}" ] || continue
+        if ! refs_json=$(fetch_pr_fields_json "${candidate}" closingIssuesReferences,headRefName); then
+            warn "Failed to fetch issue references for PR #${candidate} in ${REPO_FULL} — continuing scan"
+            scan_error=1
+            continue
+        fi
+        printf '%s' "${refs_json}" | jq -e --arg n "${issue_id}" '
+            ((.closingIssuesReferences // []) | length) > 0
+            and ([(.closingIssuesReferences // [])[] | .number | tostring] | index($n) != null)
+            or (((.closingIssuesReferences // []) | length) == 0
+                and ((.headRefName // "") | test("^[A-Za-z]+/" + $n + "([^0-9]|$)")))
+        ' > /dev/null 2>&1 || continue
+        # This candidate owns the issue — commit authorship decides who is driving it.
         commit_rc=0
         pr_has_bot_authored_commit "${REPO_FULL}" "${candidate}" || commit_rc=$?
         [ "${commit_rc}" -eq 2 ] && return 2
         # Bot-driven PR — not a takeover; the pivot handles it.
         [ "${commit_rc}" -eq 0 ] && continue
-        attempt=1
-        refs_json=""
-        while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-            refs_json=$(gh pr view "${candidate}" \
-                --repo "${REPO_FULL}" \
-                --json closingIssuesReferences \
-                2>/dev/null) && break
-            refs_json=""
-            [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-                && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-            attempt=$((attempt + 1))
-        done
-        [ -n "${refs_json}" ] || return 2
-        if printf '%s' "${refs_json}" | jq -e --arg n "${issue_id}" '
-            [(.closingIssuesReferences // [])[] | .number | tostring] | index($n) != null
-        ' > /dev/null 2>&1; then
-            printf '%s' "${candidate}"
-            return 0
-        fi
+        printf '%s' "${candidate}"
+        return 0
     done <<< "${candidates}"
+    [ "${scan_error}" -eq 0 ] || return 2
     return 1
 }
 
 # Decides whether an open PR from the priorities feed is being driven by a human rather than the
 # bot (#1131): the bot has authored no commits on it, AND it is either a PR the bot itself
 # created (the issue workflow's draft PR, since taken over) or it contains commits authored by a
-# trusted human login.  PRs carrying the "dependencies" label are never human-driven —
-# dependency PRs (dependabot and similar) contain no bot commits by design and must keep flowing
-# to the CI-verify/auto-merge takeover prompt.  Uses REPO_FULL from the current repo context.
-# Returns 0 (human-driven — stand off), 1 (not human-driven — process normally), or 2 on a gh
-# failure after retries (caller should skip the item for this tick).
+# trusted human login.
+# Check order matters (#1134): a PR the bot CREATED with zero bot commits is a human takeover
+# regardless of its labels — issue-label sync can put a dependencies-ish label on any bot PR, so
+# the label must not be consulted first (that was the substring-exemption regression).  Only for
+# PRs the bot did NOT create does the "dependencies" label exempt the PR from the stand-off:
+# dependency PRs (dependabot and similar) contain no bot commits by design, carry customised
+# label variants like "npm dependencies" (hence a case-insensitive substring match), and must
+# keep flowing to the CI-verify/auto-merge takeover prompt even after a trusted human pushes a
+# conflict fix.
+# Operates entirely on the caller's pr_json — fetch_pr_json already includes author and commits
+# (#1134) — so the only remote failure mode is the identity lookup.
+# Returns 0 (human-driven — stand off), 1 (not human-driven — process normally), or 2 when the
+# identity lookup fails (caller should skip the item for this tick).
 pr_is_human_driven() {
-    local item_id="$1" pr_json="$2" trusted_logins="$3"
-
-    if printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name] | contains(["dependencies"])' > /dev/null 2>&1; then
-        return 1
-    fi
+    local pr_json="$1" trusted_logins="$2"
 
     resolve_gh_me || return 2
 
-    local details attempt=1
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        details=$(gh pr view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json author,commits \
-            2>/dev/null) && break
-        details=""
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    [ -n "${details}" ] || return 2
-
-    if printf '%s' "${details}" | jq -e --arg me "${_GH_ME}" '
-        [(.commits // [])[] | (.authors // [])[] | .login // empty] | index($me) != null
-    ' > /dev/null 2>&1; then
+    if printf '%s' "${pr_json}" | json_has_commit_author_login "${_GH_ME}"; then
         return 1
     fi
 
-    if printf '%s' "${details}" | jq -e --arg me "${_GH_ME}" '.author.login == $me' > /dev/null 2>&1; then
+    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" '.author.login == $me' > /dev/null 2>&1; then
         return 0
     fi
 
-    if printf '%s' "${details}" | jq -e --arg me "${_GH_ME}" --argjson trusted "${trusted_logins}" '
+    if printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(contains("dependencies"))' > /dev/null 2>&1; then
+        return 1
+    fi
+
+    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" --argjson trusted "${trusted_logins}" '
         [(.commits // [])[] | (.authors // [])[] | .login // empty]
         | any(. as $l | $l != $me and (($trusted | index($l)) != null))
     ' > /dev/null 2>&1; then
@@ -2515,20 +2548,7 @@ pr_fingerprint_file_path() {
 # returns 1 (does not die) once retries are exhausted, so a single blip on this frequently-called
 # fetch skips just the current item rather than killing the whole run (#1090).
 fetch_pr_json() {
-    local item_id="$1" attempt=1 result
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh pr view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest \
-            2>/dev/null); then
-            printf '%s' "${result}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 1
+    fetch_pr_fields_json "$1" state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits
 }
 
 # Fetches inline (diff-level) PR review comments via the REST comments endpoint — a separate
@@ -3312,15 +3332,19 @@ notify_discord_rate_limited() {
 }
 
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
-# Labels are added individually so a missing label does not prevent the others from being applied.
+# Labels are added individually so a missing label does not prevent the others from being
+# applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
+# (e.g. a total outage) — callers that mark the tagging as done must not do so on total failure,
+# or the anomaly is silently lost forever (#1134 review round 3).
 tag_pr_closed_issue() {
-    local pr_number="$1" issue_id="$2"
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null || true
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
-    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null || true
+    local pr_number="$1" issue_id="$2" tagged=1
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null && tagged=0
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null && tagged=0
+    gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null && tagged=0
     gh pr comment "${pr_number}" --repo "${REPO_FULL}" \
         --body "Issue #${issue_id} was found closed while this PR is still open. Automated work has been paused pending manual investigation." \
-        2>/dev/null || true
+        2>/dev/null && tagged=0
+    return "${tagged}"
 }
 
 main() {
@@ -3420,7 +3444,7 @@ main() {
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
-    local standoff_pr standoff_rc human_driven_rc
+    local standoff_pr standoff_rc human_driven_rc closed_takeover_marker
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -3526,12 +3550,18 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
+                # Issue observed open — re-arm the one-time closed-takeover check so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
                 if ! pr_json=$(fetch_pr_json "${open_pr}"); then
                     warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
+                    # The pivot has already confirmed a bot-driven PR exists here — serialize
+                    # the repo even though this tick cannot work it (#1134 review round 3).
+                    skip_repos+=("${item_repo}")
                     continue
                 fi
 
@@ -3631,6 +3661,33 @@ main() {
 
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
+                    # A taken-over PR is invisible to the pivot above, so the closed-issue-
+                    # with-open-PR anomaly tagging the pivot performs must also happen here
+                    # (#1134).  The marker file makes this a one-time check per closed issue:
+                    # without it, a feed that retains closed issues would pay the PR-list and
+                    # per-candidate commits fetches every tick AND re-post the investigation
+                    # comment on the human's PR every tick (#1134 review).  Best-effort: only a
+                    # transient lookup failure leaves the marker unwritten so the check retries.
+                    closed_takeover_marker="${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked"
+                    if [ ! -f "${closed_takeover_marker}" ]; then
+                        standoff_rc=0
+                        standoff_pr=$(find_human_taken_over_pr_for_issue "${item_id}") || standoff_rc=$?
+                        if [ "${standoff_rc}" -eq 0 ]; then
+                            info "Issue #${item_id} in ${item_repo} is closed but human-driven PR #${standoff_pr} is still open — tagging for investigation"
+                            if ! tag_pr_closed_issue "${standoff_pr}" "${item_id}"; then
+                                # Nothing landed on the PR (total gh failure) — leave the marker
+                                # unwritten so the tagging retries next tick instead of being
+                                # silently lost forever (#1134 review round 3).
+                                warn "Failed to tag PR #${standoff_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
+                                standoff_rc=2
+                            fi
+                        fi
+                        if [ "${standoff_rc}" -ne 2 ]; then
+                            mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                            touch "${closed_takeover_marker}" 2>/dev/null \
+                                || warn "Failed to write closed-takeover marker for Issue #${item_id} — the check will repeat next tick"
+                        fi
+                    fi
                     info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
                     count_not_open=$((count_not_open + 1))
                     continue
@@ -3648,23 +3705,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-
-                # A bot-created PR that a human has taken over (zero bot-authored commits) is
-                # invisible to the pivot above, which makes this issue look PR-less — but
-                # re-working it would open a duplicate branch/PR alongside the human's work.
-                # Stand the issue off; other issues in the repo remain workable, so the repo is
-                # deliberately NOT added to skip_repos (#1131).
-                standoff_rc=0
-                standoff_pr=$(find_human_taken_over_pr_for_issue "${item_id}") || standoff_rc=$?
-                if [ "${standoff_rc}" -eq 0 ]; then
-                    info "Issue #${item_id} in ${item_repo}: PR #${standoff_pr} is being developed by a human — standing off"
-                    count_human_driven=$((count_human_driven + 1))
-                    continue
-                elif [ "${standoff_rc}" -eq 2 ]; then
-                    warn "Failed to check for a human-driven PR for Issue #${item_id} in ${item_repo} — skipping this item for now"
-                    count_error=$((count_error + 1))
-                    continue
-                fi
+                # Issue observed open — re-arm the one-time closed-takeover check so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
 
                 require_trusted_logins || continue
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
@@ -3679,6 +3722,25 @@ main() {
                     fi
                     info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
                 fi
+
+                # A bot-created PR that a human has taken over (zero bot-authored commits) is
+                # invisible to the pivot above, which makes this issue look PR-less — but
+                # re-working it would open a duplicate branch/PR alongside the human's work.
+                # Stand the issue off; other issues in the repo remain workable, so the repo is
+                # deliberately NOT added to skip_repos (#1131).  Checked after the fingerprint
+                # short-circuit so idle issues do not pay the PR-list and per-candidate commits
+                # fetches every tick (#1134).
+                standoff_rc=0
+                standoff_pr=$(find_human_taken_over_pr_for_issue "${item_id}") || standoff_rc=$?
+                if [ "${standoff_rc}" -eq 0 ]; then
+                    info "Issue #${item_id} in ${item_repo}: PR #${standoff_pr} is being developed by a human — standing off"
+                    count_human_driven=$((count_human_driven + 1))
+                    continue
+                elif [ "${standoff_rc}" -eq 2 ]; then
+                    warn "Failed to check for a human-driven PR for Issue #${item_id} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
                 # Fall through to work block (item_type remains "Issue").
             fi
 
@@ -3687,6 +3749,9 @@ main() {
             if ! pr_json=$(fetch_pr_json "${item_id}"); then
                 warn "Failed to fetch state for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
+                # An open PR whose state cannot be fetched must still serialize its repo, like
+                # every other unknown-status path (#1134 review round 3).
+                skip_repos+=("${item_repo}")
                 continue
             fi
 
@@ -3715,14 +3780,20 @@ main() {
             reset_pr_invocation_counts_if_capped "${item_id}"
             reset_env_unblock_attempts "${item_id}"
 
-            require_trusted_logins || continue
+            # An open non-blocked PR whose status cannot be determined must still serialize its
+            # repo (#1134) — a transient failure here must not let a lower-priority issue start
+            # concurrent work alongside this PR.
+            if ! require_trusted_logins; then
+                skip_repos+=("${item_repo}")
+                continue
+            fi
 
             # Stand off PRs a human is driving (zero bot-authored commits on a bot-created or
             # trusted-human-committed PR) — the human's session owns the branch.  Dependency PRs
             # are exempt inside pr_is_human_driven and keep flowing to the takeover prompt.  The
             # repo is deliberately NOT marked active, so its other issues stay workable (#1131).
             human_driven_rc=0
-            pr_is_human_driven "${item_id}" "${pr_json}" "${trusted_logins}" || human_driven_rc=$?
+            pr_is_human_driven "${pr_json}" "${trusted_logins}" || human_driven_rc=$?
             if [ "${human_driven_rc}" -eq 0 ]; then
                 info "PR #${item_id} in ${item_repo} is being developed by a human — standing off"
                 count_human_driven=$((count_human_driven + 1))
@@ -3730,6 +3801,7 @@ main() {
             elif [ "${human_driven_rc}" -eq 2 ]; then
                 warn "Failed to determine commit authorship for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
+                skip_repos+=("${item_repo}")
                 continue
             fi
 
