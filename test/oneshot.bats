@@ -3054,6 +3054,9 @@ setup_main_mocks() {
     # stand-off paths override these individually.
     find_human_taken_over_pr_for_issue() { return 1; }
     pr_is_human_driven()                 { return 1; }
+    # Stub resolve_gh_me for the assignee standoff check (#1142) — no real gh call
+    # in integration tests.  := preserves any _GH_ME set directly by unit tests.
+    resolve_gh_me()                      { _GH_ME="${_GH_ME:-testuser}"; return 0; }
     find_ai_instructions()      { printf '/mock/.ai-instructions\n'; }
     host_to_container_path()    { printf '%s\n' "$1"; }
     build_issue_prompt()        { printf 'mock-issue-prompt\n'; }
@@ -5231,6 +5234,139 @@ setup_local_git_remote() {
     [[ "${output}" == *"Failed to tag PR #167"* ]]
     # Marker unwritten — the tagging retries next tick instead of being lost forever.
     [ ! -f "${SESSION_BASE_DIR}/Issue_164.closed-takeover-checked" ]
+}
+
+# --- main() assignee standoff (#1142) -----------------------------------------
+
+@test "main stands off an issue assigned only to a human (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[{"login":"alice"}],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is assigned to another user — standing off"* ]]
+    [[ "${output}" != *"Found actionable"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
+}
+
+@test "main processes an issue assigned to the bot (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[{"login":"testuser"}],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable Issue #10"* ]]
+}
+
+@test "main processes an unassigned issue (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable Issue #10"* ]]
+}
+
+@test "main processes an issue assigned to both the bot and a human (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[{"login":"alice"},{"login":"testuser"}],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable Issue #10"* ]]
+}
+
+@test "main stands off a PR assigned only to a human (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is assigned to another user — standing off"* ]]
+    # The repo is NOT marked active: issue #10 reaches its own evaluation (blocked path)
+    [[ "${output}" != *"repo already has active work"* ]]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
+}
+
+@test "main processes a PR assigned to the bot (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"testuser"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+}
+
+@test "main processes an unassigned PR (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+}
+
+@test "main processes a PR assigned to both the bot and a human (#1142)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"},{"login":"testuser"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
 }
 
 @test "main marks the repo active when a feed PR's state fetch fails, keeping issues serialized (#1134)" {

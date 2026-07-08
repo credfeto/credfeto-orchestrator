@@ -4041,6 +4041,21 @@ main() {
                 # reopen/re-close cycle is tagged again (#1134 review round 3).
                 rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
 
+                # Stand off if this issue is assigned to someone other than us — prevents
+                # duplicate work when a human owns the item (#1142).
+                if ! resolve_gh_me; then
+                    warn "Failed to determine current GitHub user for Issue #${item_id} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    continue
+                fi
+                if printf '%s' "${issue_json}" | jq -e --arg me "${_GH_ME}" \
+                    '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
+                    > /dev/null 2>&1; then
+                    info "Issue #${item_id} in ${item_repo} is assigned to another user — standing off"
+                    count_human_driven=$((count_human_driven + 1))
+                    continue
+                fi
+
                 require_trusted_logins || continue
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
@@ -4134,6 +4149,23 @@ main() {
                 warn "Failed to determine commit authorship for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
                 skip_repos+=("${item_repo}")
+                continue
+            fi
+
+            # Stand off if this PR is assigned to someone other than us — prevents
+            # duplicate work when a human owns the item (#1142).  _GH_ME was resolved
+            # above by pr_is_human_driven; resolve_gh_me is a no-op if already set.
+            if ! resolve_gh_me; then
+                warn "Failed to determine current GitHub user for PR #${item_id} in ${item_repo} — skipping this item for now"
+                count_error=$((count_error + 1))
+                skip_repos+=("${item_repo}")
+                continue
+            fi
+            if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
+                '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
+                > /dev/null 2>&1; then
+                info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
+                count_human_driven=$((count_human_driven + 1))
                 continue
             fi
 
