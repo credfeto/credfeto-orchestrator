@@ -4294,6 +4294,66 @@ STUBEOF
     grep -q 'active=1' "${_notif_log}"
 }
 
+@test "main does not block same-repo Issue after a successful non-agentic rebase of a direct PR (#1114)" {
+    # PR #5 (org/repo): BEHIND → non-agentic rebase succeeds → item_repo removed from skip_repos.
+    # Issue #10 (org/repo): same repo — must be evaluated, not skipped as "active work".
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":10,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()              { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    pr_json_has_blocked_label()  { return 1; }
+    fingerprint_pr_json()        { printf 'fp-new\n'; }
+    load_pr_fingerprint()        { printf 'fp-old\n'; }
+    try_nonagentic_rebase()      { return 0; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json()           { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo rebased non-agentically"* ]]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
+}
+
+@test "main does not block same-repo Issue after a successful non-agentic rebase via issue-to-PR pivot (#1114)" {
+    # Issue #10 (org/repo): pivots to PR #99 which is BEHIND → non-agentic rebase succeeds
+    #   → item_repo removed from skip_repos.
+    # Issue #20 (org/repo): same repo — must be evaluated, not skipped as "active work".
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    local _pr_call_file="${TEST_TMP}/_pr_call"
+    printf '0' > "${_pr_call_file}"
+    find_open_nonblocked_pr_for_repo() {
+        local _count
+        _count=$(cat "${_pr_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_call_file}"
+        [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
+    }
+    fetch_issue_json() {
+        local _id="$1"
+        if [ "${_id}" = "10" ]; then
+            printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+        else
+            printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'
+        fi
+    }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-new\n'; }
+    load_pr_fingerprint()       { printf 'fp-old\n'; }
+    try_nonagentic_rebase()     { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo rebased non-agentically"* ]]
+    [[ "${output}" == *"Issue #20 in org/repo is blocked — skipping"* ]]
+    [[ "${output}" != *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
+}
+
 # --- notify_discord_blocked_item -----------------------------------------------
 
 @test "notify_discord_blocked_item does not call curl when DISCORD_WEBHOOK_URL is empty" {
