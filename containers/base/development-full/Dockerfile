@@ -213,9 +213,13 @@ RUN mkdir -p /home/developer/.claude/skills \
         /opt/markdown-linter-fixer/skills \
         /opt/credfeto-ai-skills/ai/skills; do \
         test -d "${skills_root}" || { echo "FATAL: skills root ${skills_root} is missing" >&2; exit 1; }; \
+        prefix=""; \
+        case "${skills_root}" in \
+            /opt/credfeto-ai-skills/*) prefix="credfeto-" ;; \
+        esac; \
         find "${skills_root}" -mindepth 1 -maxdepth 1 -type d -print0 \
             | while IFS= read -r -d '' skill_dir; do \
-                skill_name="$(basename "${skill_dir}")"; \
+                skill_name="${prefix}$(basename "${skill_dir}")"; \
                 target="/home/developer/.claude/skills/${skill_name}"; \
                 test ! -e "${target}" \
                     || { echo "FATAL: duplicate skill name '${skill_name}' (from ${skill_dir})" >&2; exit 1; }; \

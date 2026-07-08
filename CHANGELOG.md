@@ -255,6 +255,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Second review round on the #1140 blocked-notification fix: block_pr_for_ci_timeout now correctly returns failure (instead of silently succeeding) when the Blocked label cannot be verified, and notify_discord_blocked_item truncates the item title and reason via jq (codepoint-aware) instead of bash byte-offset slicing, which could split a multi-byte UTF-8 character and corrupt Discord notification text under a non-UTF-8 locale
 - Orchestrator now stands off issues and PRs already assigned to another user, preventing duplicate work when a human owns the item
 - Non-agentic rebase no longer blocks same-repo Issues from being picked up in the same tick
+- development-full image build no longer fails on a skill-name collision — credfeto-ai-skills entries are now installed with the credfeto- prefix, matching that repo's own install.sh convention, instead of colliding with same-named skills from other bundled sources
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
