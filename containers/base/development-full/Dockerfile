@@ -253,6 +253,9 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
               /opt/pre-commit/.ai-instructions \
               /opt/pre-commit/ai \
               /opt/pre-commit/CLAUDE.md \
+              /opt/pre-commit/install \
+              /opt/pre-commit/install-deps-arch \
+              /opt/pre-commit/install-deps-debian \
     && printf 'SHA=%s\n' "$HEAD_SHA" > /opt/pre-commit/.env \
     && mkdir -p /opt/git-global-hooks \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-commit "$@"\n' \

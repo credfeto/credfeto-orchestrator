@@ -274,6 +274,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - test-shell-scripts.yml no longer runs on every push to main, only on pull_request — pushes to main were producing occasional noisy CI failures from the intermittent test/entrypoint.bats flake (#1073) without blocking anything, since main is already merged by that point
 ### Deprecated
 ### Removed
+- Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting
 ### Deployment Changes
 <!--
 Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
