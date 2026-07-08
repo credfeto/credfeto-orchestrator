@@ -3777,6 +3777,7 @@ main() {
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker
+    local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
         item=$(printf '%s' "${items_json}" | jq -c --argjson idx "${item_index}" '.[$idx]')
@@ -4263,6 +4264,15 @@ main() {
                         warn "Failed to compute post-rebase fingerprint for PR #${item_id} in ${item_repo} — will re-evaluate next tick"
                         count_error=$((count_error + 1))
                     fi
+                    # A free non-agentic rebase must not block other same-repo Issues from
+                    # being picked up in the same tick (#1114).
+                    _filtered_repos=()
+                    for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
+                        if [ "${skip_repo}" != "${item_repo}" ]; then
+                            _filtered_repos+=("${skip_repo}")
+                        fi
+                    done
+                    skip_repos=("${_filtered_repos[@]+"${_filtered_repos[@]}"}")
                     continue
                 fi
                 info "Non-agentic rebase of PR #${item_id} in ${item_repo} had conflicts — handing off to agent"
