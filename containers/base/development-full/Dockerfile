@@ -365,7 +365,7 @@ RUN set -e; \
     expected_skill_count=$(cat /opt/.claude-skill-count); \
     [ "$skill_count" -eq "$expected_skill_count" ] && [ "$skill_count" -gt 0 ] \
         || { echo "FATAL sanity: expected $expected_skill_count skill symlinks in ~/.claude/skills (recorded at build time), found $skill_count" >&2; exit 1; }; \
-    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator git-commit; do \
+    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator credfeto-git-commit; do \
         test -f "/home/developer/.claude/skills/${skill}/SKILL.md" \
             || { echo "FATAL sanity: skill '$skill' missing or has no SKILL.md" >&2; exit 1; }; \
     done; \
