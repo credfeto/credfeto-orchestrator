@@ -740,6 +740,17 @@ teardown() {
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
 }
 
+@test "load_pr_invocation_counts treats a single-token guard file as 0/0, not aliased into both counters (#1103)" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    # A single lone token used to alias into BOTH total and idle via independent
+    # ${line%% *}/${line##* *} extraction — total=7 idle=7 would instantly exhaust a 5-idle
+    # budget for a PR that was never actually invoked 7 times.
+    printf '7\n' > "${SESSION_BASE_DIR}/PullRequest_42.invocations"
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+}
+
 # --- consecutive infra-failure guard (#1133 review) -----------------------------
 
 @test "load_infra_failure_count defaults to 0 when no guard file exists" {
@@ -1293,6 +1304,38 @@ teardown() {
     run bash -c 'source "'"${REPO_ROOT}"'/oneshot"; printf "hello" | hash_sha256'
     [ "${status}" -eq 0 ]
     [ "${output}" = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" ]
+}
+
+# --- AGENT_TIMEOUT_MINUTES validation (#1103) -------------------------------
+
+@test "AGENT_TIMEOUT_MINUTES falls back to 90 when unset" {
+    run bash -c 'unset AGENT_TIMEOUT_MINUTES; source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${AGENT_TIMEOUT_MINUTES}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "90" ]
+}
+
+@test "AGENT_TIMEOUT_MINUTES falls back to 90 for a non-numeric value" {
+    run bash -c 'export AGENT_TIMEOUT_MINUTES=abc; source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${AGENT_TIMEOUT_MINUTES}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "90" ]
+}
+
+@test "AGENT_TIMEOUT_MINUTES falls back to 90 for a value with a trailing non-digit" {
+    run bash -c 'export AGENT_TIMEOUT_MINUTES=1x; source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${AGENT_TIMEOUT_MINUTES}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "90" ]
+}
+
+@test "AGENT_TIMEOUT_MINUTES falls back to 90 for zero" {
+    run bash -c 'export AGENT_TIMEOUT_MINUTES=0; source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${AGENT_TIMEOUT_MINUTES}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "90" ]
+}
+
+@test "AGENT_TIMEOUT_MINUTES accepts a valid positive integer" {
+    run bash -c 'export AGENT_TIMEOUT_MINUTES=45; source "'"${REPO_ROOT}"'/oneshot"; printf "%s" "${AGENT_TIMEOUT_MINUTES}"'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "45" ]
 }
 
 @test "fingerprint_pr_json is deterministic and changes when input changes" {
@@ -2147,6 +2190,23 @@ STUBEOF
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
 
+@test "invoke_claude notifies Discord before dying when claude_md_content is empty (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" ""
+    [ "${status}" -ne 0 ]
+    grep -q "claude_md_content is required" "${notify_log}"
+}
+
 # --- cleanup_claude_invocation_tmpfiles (#1133 review, Copilot) ----------------
 
 @test "cleanup_claude_invocation_tmpfiles is safe to call twice in a row" {
@@ -2167,6 +2227,34 @@ STUBEOF
     run cleanup_claude_invocation_tmpfiles
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
+}
+
+@test "invoke_claude does not leak CLAUDE_MD_TMPFILE when the state-dir mkdir loop fails (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    export XDG_RUNTIME_DIR="${TEST_TMP}/runtime"
+    mkdir -p "${XDG_RUNTIME_DIR}"
+    local claude_md_path="${XDG_RUNTIME_DIR}/fixed.claude-md"
+    cat > "${STUB_BIN}/mktemp" << STUBEOF
+#!/usr/bin/env bash
+touch "${claude_md_path}"
+printf '%s\n' "${claude_md_path}"
+STUBEOF
+    chmod +x "${STUB_BIN}/mktemp"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    # A FILE (not a directory) at the first state-dir path forces "mkdir -p" to fail there,
+    # between CLAUDE_MD_TMPFILE being populated and the container ever starting.
+    mkdir -p "${CLAUDE_STATE_DIR}"
+    touch "${CLAUDE_STATE_DIR}/sessions"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create persistent Claude state directory"* ]]
+    [ ! -e "${claude_md_path}" ]
 }
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE after successful invocation" {
@@ -2251,6 +2339,30 @@ STUBEOF
     grep -q 'claude-oauth-credfeto' "${args_log}"
 }
 
+@test "invoke_claude notifies Discord before dying when creating the Claude OAuth Podman secret fails (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "secret" ] && [ "$2" = "create" ] && exit 1
+[ "$1" = "secret" ] && exit 0
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create Podman secret for Claude OAuth token"* ]]
+    grep -q "Failed to create Podman secret for Claude OAuth token" "${notify_log}"
+}
+
 @test "invoke_claude passes GH_ENTERPRISE_TOKEN via Podman secret instead of --env" {
     local args_log="${TEST_TMP}/podman_args"
     local secret_log="${TEST_TMP}/podman_secret"
@@ -2279,6 +2391,29 @@ STUBEOF
     [ "${status}" -ne 0 ]
     # --secret flag IS present in the podman run args
     grep -q 'gh-enterprise-token' "${args_log}"
+}
+
+@test "invoke_claude notifies Discord before dying when creating the GH_ENTERPRISE_TOKEN Podman secret fails (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    # shellcheck disable=SC2030
+    GH_ENTERPRISE_TOKEN="my-gh-token"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "secret" ] && [ "$2" = "create" ] && exit 1
+[ "$1" = "secret" ] && exit 0
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create Podman secret for GH_ENTERPRISE_TOKEN"* ]]
+    grep -q "Failed to create Podman secret for GH_ENTERPRISE_TOKEN" "${notify_log}"
 }
 
 @test "invoke_claude never passes --resume (every run is a fresh session)" {
@@ -2313,6 +2448,46 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"already exists and is running"* ]]
+}
+
+@test "invoke_claude notifies Discord before dying when container already exists and is running (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf 'true\n'; exit 0; }
+[ "$1" = "inspect" ] && exit 0
+[ "$1" = "pull" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    grep -q "already exists and is running" "${notify_log}"
+}
+
+@test "invoke_claude notifies Discord before dying when a leftover container cannot be removed (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf 'false\n'; exit 0; }
+[ "$1" = "inspect" ] && exit 0
+[ "$1" = "rm" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to remove leftover container"* ]]
+    grep -q "Failed to remove leftover container" "${notify_log}"
 }
 
 @test "invoke_claude removes a leftover non-running container and proceeds (#1090)" {
@@ -2822,6 +2997,27 @@ STUBEOF
     make_stub gh 'exit 1'
     run tag_pr_closed_issue 42 164
     [ "${status}" -eq 1 ]
+}
+
+@test "tag_pr_closed_issue still tags a PR that is already Blocked for an unrelated reason (#1103 review)" {
+    # tag_pr_closed_issue itself must not special-case an existing Blocked label — the PR may be
+    # blocked for a totally unrelated reason (CI timeout, a human block) and still need the
+    # closed-issue investigation comment posted for the first time. Deduplication against
+    # repeated calls belongs to the caller (a marker file), not this function.
+    local gh_log="${TEST_TMP}/gh.log"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${gh_log}"
+case "\$*" in
+    *"pr view"*) printf '{"labels":[{"name":"Blocked"}]}' ;;
+    *"pr comment"*) exit 0 ;;
+    *) exit 1 ;;
+esac
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run tag_pr_closed_issue 42 164
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment" "${gh_log}"
 }
 
 @test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
@@ -3390,29 +3586,6 @@ STUBEOF
     grep -q "clean -fdX" "${git_log}"
 }
 
-@test "main runs git clean -fdX even when invoke_claude fails for an Issue" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    invoke_claude() { return 1; }
-    local git_log="${TEST_TMP}/git_calls"
-    cat > "${STUB_BIN}/git" << STUBEOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "${git_log}"
-exit 0
-STUBEOF
-    chmod +x "${STUB_BIN}/git"
-    hash git
-
-    run main
-    [ "${status}" -ne 0 ]
-    grep -q "clean -fdX" "${git_log}"
-    [[ "${output}" == *"Failed to invoke Claude"* ]]
-}
-
 # --- pre-flight/infra container failure: budget exemption (#1133) --------------
 
 @test "main does not count a pre-flight/infra container failure against the issue invocation budget (#1133)" {
@@ -3769,6 +3942,30 @@ STUBEOF
     [[ "${output}" != *"Starting new Claude session"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
     grep -q 'pr=99 issue=10' "${_tag_log}"
+}
+
+@test "main tags a closed-issue PR only once across ticks via the marker file, regardless of the PR's own labels (#1103 review)" {
+    # Reproduces the reviewer-found regression: tag_pr_closed_issue must not be skipped just
+    # because the PR happens to already carry Blocked (for a totally unrelated reason) — dedup
+    # is the marker file keyed on the Issue, not a check of the PR's current labels. Two ticks:
+    # first tags (marker absent), second is a no-op (marker present).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _tag_log="${TEST_TMP}/tag_log"
+    tag_pr_closed_issue() { printf 'pr=%s issue=%s\n' "$1" "$2" >> "${_tag_log}"; return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'pr=99 issue=10' "${_tag_log}"
+    [ "$(wc -l < "${_tag_log}")" -eq 1 ]
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${_tag_log}")" -eq 1 ]
 }
 
 @test "main skips issue-to-PR pivot without tagging PR when issue is blocked" {
@@ -5978,6 +6175,23 @@ STUBEOF
     [[ "${output}" == *"no SSH keys could be loaded"* ]]
 }
 
+@test "preload_ssh_keys dies rather than silently passing when ssh-add cannot connect to the agent (exit 2, #1103)" {
+    local ssh_sock="${TEST_TMP}/ssh-agent.sock"
+    python3 -c "import socket,os; s=socket.socket(socket.AF_UNIX); s.bind('${ssh_sock}')"
+    export SSH_AUTH_SOCK="${ssh_sock}"
+    # Exit 2 = "cannot connect to the agent" — a dead/stale socket. This must not be treated
+    # like exit 0 (already loaded); it must fail fast on the host instead of letting a dead
+    # socket get mounted into every agent container.
+    cat > "${STUB_BIN}/ssh-add" << 'STUBEOF'
+#!/usr/bin/env bash
+exit 2
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-add"
+    run preload_ssh_keys
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"cannot connect to the agent"* ]]
+}
+
 # --- stop_ssh_agent unit tests ------------------------------------------------
 
 @test "stop_ssh_agent is a no-op when SSH_AUTH_SOCK is unset" {
@@ -6075,6 +6289,26 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"no cached local image is available"* ]]
+}
+
+@test "invoke_claude notifies Discord before dying when podman pull fails and no cached image exists locally (#1103)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 1
+[ "$1" = "image" ] && [ "$2" = "exists" ] && exit 1
+[ "$1" = "image" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    grep -q "no cached local image is available" "${notify_log}"
 }
 
 @test "invoke_claude prunes dangling images before pulling the orchestrator image" {

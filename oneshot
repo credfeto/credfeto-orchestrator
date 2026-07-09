@@ -40,6 +40,7 @@ WF_SETUP_ISSUE_TITLE="Workflow project setup required"
 # Monitor loop from holding resources indefinitely.
 # Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
 AGENT_TIMEOUT_MINUTES="${AGENT_TIMEOUT_MINUTES:-90}"
+[[ "${AGENT_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || AGENT_TIMEOUT_MINUTES=90
 AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
 
 # Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
@@ -836,16 +837,19 @@ pr_invocation_guard_file_path() {
 PR_INVOCATION_TOTAL=0
 PR_INVOCATION_IDLE=0
 load_pr_invocation_counts() {
-    local item_id="$1" guard_file line total idle
+    local item_id="$1" guard_file line
     PR_INVOCATION_TOTAL=0
     PR_INVOCATION_IDLE=0
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
-    total="${line%% *}"
-    idle="${line##* }"
-    [[ "${total}" =~ ^[0-9]+$ ]] && PR_INVOCATION_TOTAL="${total}"
-    [[ "${idle}" =~ ^[0-9]+$ ]] && PR_INVOCATION_IDLE="${idle}"
+    # Match both tokens from the whole line at once — extracting total/idle independently via
+    # ${line%% *}/${line##* *} would alias a corrupt single-token file ("7") into BOTH counters,
+    # letting a bogus total silently exhaust the idle budget (#1103).
+    if [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+        PR_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
+        PR_INVOCATION_IDLE="${BASH_REMATCH[2]}"
+    fi
     return 0
 }
 
@@ -2376,12 +2380,21 @@ stop_ssh_agent() {
 
 # Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
 # currently holds no keys.  Silent when keys are already loaded (avoids
-# redundant re-adds across timer firings); warns rather than dies on failure.
+# redundant re-adds across timer firings) or when SSH_AUTH_SOCK is entirely
+# absent.  Dies (host-health path, same as the gpg-agent check beside it in
+# main) when the socket exists but nothing answers on it — a dead/stale agent
+# would otherwise pass silently, get mounted into every agent container, and
+# fail every push inside it instead of failing fast here (#1103).
 preload_ssh_keys() {
     [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] || return 0
     local ssh_keys_status=0
     ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
-    [ "${ssh_keys_status}" -eq 1 ] || return 0  # 0 = already loaded; 2 = no agent
+    case "${ssh_keys_status}" in
+        0) return 0 ;;  # already loaded
+        1) ;;           # agent reachable but empty — fall through to load keys
+        2) die "ssh-add: cannot connect to the agent at ${SSH_AUTH_SOCK} — the socket exists but nothing is listening on it" ;;
+        *) return 0 ;;
+    esac
     ssh-add -q 2>/dev/null \
         || die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
 }
@@ -2544,11 +2557,13 @@ invoke_claude() {
         # actively running, it is safe to assume it is such a leftover and remove it ourselves;
         # only die if it is genuinely running, which means something else is actively using it.
         if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${container_name} already exists and is running — remove it manually before running"
             die "Container ${container_name} already exists and is running — remove it manually before running"
         fi
         warn "Removing leftover (non-running) container ${container_name} from a previous run"
         podman rm -f "${container_name}" >&2 \
-            || die "Failed to remove leftover container ${container_name}"
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to remove leftover container ${container_name}"; die "Failed to remove leftover container ${container_name}"; }
     fi
 
     cleanup_dangling_images
@@ -2560,12 +2575,17 @@ invoke_claude() {
         if podman image exists "${ORCHESTRATOR_IMAGE}"; then
             warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
         else
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
             die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
         fi
     fi
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
-    [ -n "${claude_md_content}" ] || die "claude_md_content is required but was not provided"
+    if [ -z "${claude_md_content}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" "claude_md_content is required but was not provided"
+        die "claude_md_content is required but was not provided"
+    fi
 
     # Bake settings.json/policy-limits.json/hooks/skills into the image (see
     # containers/base/development-full/Dockerfile) and mount only the pieces of
@@ -2580,6 +2600,16 @@ invoke_claude() {
     #     they persist across invocations instead of being wiped every run.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+    PODMAN_SECRET_NAME=""
+    GH_ENTERPRISE_SECRET_NAME=""
+    # Registered immediately after CLAUDE_MD_TMPFILE is populated — not after the mkdir loop
+    # below — so a die() from that loop (or anything else between here and the container run)
+    # cannot leak the tmpfile before anything is tracking it (#1103). Backstop only: every
+    # normal exit path below now calls cleanup_claude_invocation_tmpfiles itself (#1133
+    # review), so by the time this trap fires those globals are usually already empty and its
+    # cleanup calls are no-ops — it only does real work if invoke_claude is interrupted
+    # somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
+    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
     # The prompt travels as a trailing positional argument to claude (see
     # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
     # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
@@ -2589,13 +2619,6 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
-    PODMAN_SECRET_NAME=""
-    GH_ENTERPRISE_SECRET_NAME=""
-    # Backstop only: every normal exit path below now calls cleanup_claude_invocation_tmpfiles
-    # itself (#1133 review), so by the time this trap fires those globals are usually already
-    # empty and its cleanup calls are no-ops — it only does real work if invoke_claude is
-    # interrupted somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
-    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -2651,14 +2674,14 @@ invoke_claude() {
         PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
         printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
-            || die "Failed to create Podman secret for Claude OAuth token"
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
         PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
     fi
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token"
         podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
         printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
-            || die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
         PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
@@ -3675,11 +3698,27 @@ notify_discord_rate_limited() {
         || warn "Discord webhook notification failed"
 }
 
+# Re-arms both one-time closed-issue markers (the pivot path's closed-pr-tagged and the
+# standoff path's closed-takeover-checked) so a future reopen/re-close cycle is tagged again
+# (#1134 review round 3, #1103). Called from both "issue observed open" sites — whichever path
+# runs first on a given tick may be the one to observe a reopen, so both must re-arm both
+# markers rather than only their own.
+rearm_closed_issue_markers() {
+    local item_id="$1"
+    rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+    rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being
 # applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
 # (e.g. a total outage) — callers that mark the tagging as done must not do so on total failure,
 # or the anomaly is silently lost forever (#1134 review round 3).
+# Deduplication against repeated calls for the same anomaly is the CALLER's responsibility (a
+# marker file, as both call sites now use — #1103) rather than this function's, because "the PR
+# already carries Blocked" is not a reliable signal here: the PR may be Blocked for a totally
+# unrelated reason (a CI timeout, a human block) and still need the closed-issue investigation
+# comment posted for the first time (#1103 review).
 tag_pr_closed_issue() {
     local pr_number="$1" issue_id="$2" tagged=1
     gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null && tagged=0
@@ -3788,7 +3827,7 @@ main() {
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
-    local standoff_pr standoff_rc human_driven_rc closed_takeover_marker
+    local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -3878,8 +3917,24 @@ main() {
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
-                    info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
-                    tag_pr_closed_issue "${open_pr}" "${item_id}"
+                    # The marker file makes this a one-time tagging per closed issue — without
+                    # it, a feed that retains closed issues would re-post the investigation
+                    # comment and re-add labels on the PR every tick (#1103). Deliberately keyed
+                    # on the Issue, not on the PR's own Blocked label — the PR can be Blocked for
+                    # a totally unrelated reason and still need this tagging done for the first
+                    # time (#1103 review). Best-effort: only a total tagging failure leaves the
+                    # marker unwritten so the check retries.
+                    closed_pr_tagged_marker="${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged"
+                    if [ ! -f "${closed_pr_tagged_marker}" ]; then
+                        info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
+                        if tag_pr_closed_issue "${open_pr}" "${item_id}"; then
+                            mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                            touch "${closed_pr_tagged_marker}" 2>/dev/null \
+                                || warn "Failed to write closed-pr-tagged marker for Issue #${item_id} — the check will repeat next tick"
+                        else
+                            warn "Failed to tag PR #${open_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
+                        fi
+                    fi
                     count_not_open=$((count_not_open + 1))
                     continue
                 fi
@@ -3895,9 +3950,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover check so a future
-                # reopen/re-close cycle is tagged again (#1134 review round 3).
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+                # Issue observed open — re-arm the one-time closed-issue checks so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
+                rearm_closed_issue_markers "${item_id}"
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
@@ -4050,9 +4105,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover check so a future
-                # reopen/re-close cycle is tagged again (#1134 review round 3).
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+                # Issue observed open — re-arm the one-time closed-issue checks so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
+                rearm_closed_issue_markers "${item_id}"
 
                 # Stand off if this issue is assigned to someone other than us — prevents
                 # duplicate work when a human owns the item (#1142).
@@ -4437,7 +4492,9 @@ main() {
             count_error=$((count_error + 1))
             continue
         fi
-        [ "${invoke_claude_exit}" -eq 0 ] || die "Failed to invoke Claude for ${item_type} #${item_id} in ${item_repo}"
+        # No other invoke_claude_exit value is reachable here: invoke_claude either dies
+        # internally on any real failure (terminating the whole process) or falls through to a
+        # normal return (0) — see invoke_claude's own header comment (#1103).
 
         # Record this invocation against the budget now that Claude has actually run a session
         # (a pre-flight/infra failure above never reaches here — #1133): always bump the total;
