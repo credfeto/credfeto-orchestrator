@@ -362,6 +362,25 @@ STUBEOF
     [[ "${output}" == *"SSH key is not authorized to access GitHub"* ]]
 }
 
+@test "entrypoint dies with a network-failure message (not a misdiagnosed auth failure) when GitHub is unreachable over SSH (#1099)" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/ssh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"git@github.com"* ]]; then
+    printf 'ssh: connect to host github.com port 22: Connection timed out\n'
+    exit 255
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Cannot reach github.com over SSH"* ]]
+    [[ "${output}" != *"SSH key is not authorized to access GitHub"* ]]
+}
+
 # --- verify_gpg_signing -----------------------------------------------------------
 
 @test "entrypoint dies when gpg-agent is not responding" {
@@ -471,6 +490,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/ssh-keyscan"
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        SYSTEM_KNOWN_HOSTS="${TEST_TMP}/nonexistent-system-known-hosts" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     [ -f "${HOME}/.ssh/known_hosts" ]
@@ -488,9 +508,39 @@ STUBEOF
     chmod +x "${STUB_BIN}/ssh-keyscan"
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        SYSTEM_KNOWN_HOSTS="${TEST_TMP}/nonexistent-system-known-hosts" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     grep -q 'github.com' "${HOME}/.ssh/known_hosts"
+}
+
+@test "entrypoint skips ssh-keyscan entirely when the baked system-wide known_hosts already has github.com (#1099)" {
+    setup_entrypoint_stubs
+    local system_known_hosts="${TEST_TMP}/system-known-hosts"
+    printf "github.com ssh-ed25519 BAKEDKEY\n" > "${system_known_hosts}"
+    cat > "${STUB_BIN}/ssh-keyscan" << 'STUBEOF'
+#!/usr/bin/env bash
+printf "SHOULD_NOT_BE_CALLED\n"
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-keyscan"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        SYSTEM_KNOWN_HOSTS="${system_known_hosts}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.ssh/known_hosts" ]
+}
+
+@test "entrypoint dies when ssh-keyscan fallback returns no output and the baked system-wide known_hosts is also missing github.com (#1099)" {
+    setup_entrypoint_stubs
+    make_stub ssh-keyscan 'exit 0'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        SYSTEM_KNOWN_HOSTS="${TEST_TMP}/nonexistent-system-known-hosts" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"ssh-keyscan for github.com returned no output"* ]]
 }
 
 # --- verify_repo_ssh_remotes -----------------------------------------------------
@@ -619,6 +669,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/ssh-keyscan"
     run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        SYSTEM_KNOWN_HOSTS="${TEST_TMP}/nonexistent-system-known-hosts" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
     grep -qx 'github.com ssh-ed25519 EXISTINGKEY' "${HOME}/.ssh/known_hosts"
