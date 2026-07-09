@@ -56,6 +56,9 @@
     "deny": [
       "Bash(git config --local *)",
       "Bash(git config --global *)",
+      "Bash(git -C * config --local *)",
+      "Bash(git -C * config --global *)",
+      "Bash(gh auth setup-git*)",
       "Bash(sudo *)"
     ]
   },
