@@ -2988,41 +2988,36 @@ STUBEOF
 # --- tag_pr_closed_issue result contract (#1134) --------------------------------
 
 @test "tag_pr_closed_issue returns 0 when at least one gh action lands" {
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
     make_stub gh 'case "$*" in *"pr comment"*) exit 0 ;; *) exit 1 ;; esac'
     run tag_pr_closed_issue 42 164
     [ "${status}" -eq 0 ]
 }
 
 @test "tag_pr_closed_issue returns 1 when every gh action fails" {
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
     make_stub gh 'exit 1'
     run tag_pr_closed_issue 42 164
     [ "${status}" -eq 1 ]
 }
 
-@test "tag_pr_closed_issue skips re-tagging when the PR already carries the Blocked label (#1103)" {
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+@test "tag_pr_closed_issue still tags a PR that is already Blocked for an unrelated reason (#1103 review)" {
+    # tag_pr_closed_issue itself must not special-case an existing Blocked label — the PR may be
+    # blocked for a totally unrelated reason (CI timeout, a human block) and still need the
+    # closed-issue investigation comment posted for the first time. Deduplication against
+    # repeated calls belongs to the caller (a marker file), not this function.
     local gh_log="${TEST_TMP}/gh.log"
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "${gh_log}"
 case "\$*" in
     *"pr view"*) printf '{"labels":[{"name":"Blocked"}]}' ;;
+    *"pr comment"*) exit 0 ;;
     *) exit 1 ;;
 esac
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
     run tag_pr_closed_issue 42 164
     [ "${status}" -eq 0 ]
-    [[ ! "${output}" == *"pr comment"* ]]
-    run grep -q "pr comment" "${gh_log}"
-    [ "${status}" -ne 0 ]
-    run grep -q "pr edit" "${gh_log}"
-    [ "${status}" -ne 0 ]
+    grep -q "pr comment" "${gh_log}"
 }
 
 @test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
@@ -3947,6 +3942,30 @@ STUBEOF
     [[ "${output}" != *"Starting new Claude session"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
     grep -q 'pr=99 issue=10' "${_tag_log}"
+}
+
+@test "main tags a closed-issue PR only once across ticks via the marker file, regardless of the PR's own labels (#1103 review)" {
+    # Reproduces the reviewer-found regression: tag_pr_closed_issue must not be skipped just
+    # because the PR happens to already carry Blocked (for a totally unrelated reason) — dedup
+    # is the marker file keyed on the Issue, not a check of the PR's current labels. Two ticks:
+    # first tags (marker absent), second is a no-op (marker present).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _tag_log="${TEST_TMP}/tag_log"
+    tag_pr_closed_issue() { printf 'pr=%s issue=%s\n' "$1" "$2" >> "${_tag_log}"; return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q 'pr=99 issue=10' "${_tag_log}"
+    [ "$(wc -l < "${_tag_log}")" -eq 1 ]
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${_tag_log}")" -eq 1 ]
 }
 
 @test "main skips issue-to-PR pivot without tagging PR when issue is blocked" {
