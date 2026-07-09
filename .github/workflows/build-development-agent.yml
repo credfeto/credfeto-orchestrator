@@ -29,6 +29,12 @@ on:
       - "containers/agent/**"
       - ".github/workflows/build-development-agent.yml"
       - ".github/actions/trivy-scan/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "containers/agent/**"
+      - ".github/workflows/build-development-agent.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:
@@ -44,7 +50,8 @@ permissions:
 
 jobs:
   build:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'cancelled' }}
+    name: "Build (development-agent)"
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: "ubuntu-latest"
     timeout-minutes: 30
     permissions:
@@ -75,7 +82,8 @@ jobs:
           context: "containers/agent"
           file: "containers/agent/Dockerfile"
           pull: true
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             BUILD_GIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
@@ -88,6 +96,7 @@ jobs:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       - name: "Summarise"
+        if: ${{ github.event_name != 'pull_request' }}
         shell: "bash"
         run: |
           {
@@ -96,4 +105,14 @@ jobs:
             echo '```'
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (build-only, not pushed)"
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-agent image built (not pushed — pull_request run)"
+            echo ""
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
