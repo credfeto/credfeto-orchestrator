@@ -100,6 +100,20 @@ RUN mkdir -p /workspace/repo /workspace/rules \
     && chown -R developer:developer /workspace \
     && chmod 0755 /workspace /workspace/repo /workspace/rules
 
+# ---- Bake GitHub's SSH host key into the system-wide known_hosts -------------
+# ssh checks /etc/ssh/ssh_known_hosts (GlobalKnownHostsFile) automatically
+# alongside the per-user ~/.ssh/known_hosts, so baking it here removes the
+# runtime ssh-keyscan network call entirely for the normal case (a source of
+# pre-flight hangs — #1099) and the host-key-rotation trap that a fixed,
+# hardcoded key would otherwise create (March 2023 precedent): this scan is
+# taken fresh on every image rebuild, and the build itself runs on GitHub
+# Actions infrastructure, so it is a trustworthy source for the key at the
+# point it's taken. entrypoint.sh's ensure_github_known_hosts keeps a runtime
+# ssh-keyscan fallback for an image built before this change.
+RUN ssh-keyscan -T 10 github.com >> /etc/ssh/ssh_known_hosts; \
+    grep -q 'github.com' /etc/ssh/ssh_known_hosts \
+    || { echo "FATAL: ssh-keyscan for github.com produced no output during image build" >&2; exit 1; }
+
 # ---- Build-time sanity check -------------------------------------------------
 # Fails the build if:
 #   - any of the removed package-management or escalation binaries are still
