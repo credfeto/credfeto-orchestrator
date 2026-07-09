@@ -282,6 +282,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - discover_or_create_workflow_project and fetch_board_approved_items now use per-repo associative array caches instead of single-string sentinels, so repos that appear more than once in a run avoid redundant GraphQL calls
 - oneshot: run one workflow phase per fresh Claude session and remove session resume, so a single run cannot accumulate enough context to hit the model window (Prompt is too long); state carries between phases via GitHub, with per-PR total/idle invocation guards bounding re-invocation (#1051)
 - test-shell-scripts.yml no longer runs on every push to main, only on pull_request — pushes to main were producing occasional noisy CI failures from the intermittent test/entrypoint.bats flake (#1073) without blocking anything, since main is already merged by that point
+- Renamed development build workflow job ids and marked them as required checks for main so branch protection can target them individually
 ### Deprecated
 ### Removed
 - Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting

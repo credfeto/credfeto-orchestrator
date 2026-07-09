@@ -50,7 +50,8 @@ permissions:
   contents: "read"
 
 jobs:
-  build:
+  # @@required: main
+  build-development-node:
     name: "Build (development-node)"
     if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: "ubuntu-latest"
