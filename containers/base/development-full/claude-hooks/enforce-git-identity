@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Blocks git subcommands that create/rewrite commits (or that precede one, like
 # `fetch`) unless git identity and GPG signing are correctly configured.
-# The die()/info() helpers mirror the canonical implementations in
-# shell-scripts.examples.md — keep them in sync if either changes.
+# The die() helper is intentionally minimal (not the shell-scripts.examples.md
+# die()/info() convention) — this script only ever needs a single stderr
+# message plus a non-zero exit, matching its sibling enforce-git-dash-c.
 # Exit 2 = blocked, 0 = allowed.
 
 die() {
@@ -10,21 +11,67 @@ die() {
   exit 2
 }
 
+# Strips heredoc bodies (the part between `<<[-]DELIM` and the closing DELIM
+# line) out of a multi-line command string before it's pattern-matched.
+# Without this, a Bash call that merely *writes* example/doc/test-script text
+# containing a line that starts with "git commit" etc. (e.g. via `cat <<EOF`)
+# is indistinguishable from an actual git invocation, and gets blocked (or
+# identity-checked) for no reason. Only the common, unescaped-delimiter forms
+# (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, ...) are recognised; anything more
+# exotic (backslash-escaped delimiters, delimiters preceded by other
+# redirections on the same line) falls back to the old un-stripped behaviour.
+strip_heredocs() {
+  local line dash delim="" in_heredoc=0 trimmed
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_heredoc" = "1" ]; then
+      if [ "$dash" = "-" ]; then
+        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
+        [ "$trimmed" = "$delim" ] && in_heredoc=0
+      else
+        [ "$line" = "$delim" ] && in_heredoc=0
+      fi
+      continue
+    fi
+    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
+      dash="${BASH_REMATCH[1]}"
+      delim="${BASH_REMATCH[2]}"
+      in_heredoc=1
+    fi
+    printf '%s\n' "$line"
+  done <<< "$1"
+}
+
 # Subcommands that create/rewrite commits, plus `fetch` (checked up front so
 # a broken identity is caught before work starts, not after it's done).
 SUBCMDS='commit|fetch|pull|rebase|merge|cherry-pick|revert|am'
 
+# A single flag value: a "..."/'...'-quoted token (which may contain spaces),
+# or a plain space-free token.
+VALTOKEN="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
+
+# Zero or more `-C <dir>` / `-c <key>=<value>` global option pairs, in any
+# order, before the subcommand — e.g. `git -c core.pager=cat -C /repo commit`.
+FLAGS="((-C|-c)[[:space:]]+${VALTOKEN}[[:space:]]+)*"
+
 input=$(cat)
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+cmd=$(strip_heredocs "$raw_cmd")
 
 # Only run these checks for commands that actually invoke one of $SUBCMDS.
 # Matched against trailing whitespace/end (not \b) so `commit-graph` etc.
 # (unrelated plumbing commands) aren't mistaken for `commit`.
-printf '%s' "$cmd" | grep -qE "(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(${SUBCMDS})([[:space:]]|\$)" || exit 0
+GATE="(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+${FLAGS}(${SUBCMDS})([[:space:]]|\$)"
+printf '%s' "$cmd" | grep -qE "$GATE" || exit 0
 
-# Respect `git -C <dir>` so config is read from the target repo, not the hook's cwd.
+# Re-extract the exact matched invocation (same anchored pattern as the gate,
+# so this can't drift from — or be tricked by unrelated text elsewhere in the
+# command into disagreeing with — what actually triggered the check), then
+# pull the `-C` value (if any) out of *that* scoped text only.
+invocation=$(printf '%s' "$cmd" | grep -oE "$GATE" | head -1)
+
 git_dir_args=()
-repo=$(printf '%s' "$cmd" | grep -oE "git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(${SUBCMDS})([[:space:]]|\$)" | head -1 | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/')
+repo=$(printf '%s' "$invocation" | grep -oE -- "-C[[:space:]]+${VALTOKEN}" | head -1 \
+  | sed -E 's/^-C[[:space:]]+//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')
 [ -n "$repo" ] && git_dir_args=(-C "$repo")
 
 git_cfg() {
@@ -47,10 +94,11 @@ gpg --list-secret-keys "$CURRENT_EMAIL" > /dev/null 2>&1 \
 SIGNING_KEY=$(git_cfg user.signingkey)
 [ -z "$SIGNING_KEY" ] && die "git user.signingkey is not set — run: git config --global user.signingkey <keyid>"
 
-gpg --list-secret-keys "$SIGNING_KEY" > /dev/null 2>&1 \
+signing_key_info=$(gpg --list-secret-keys "$SIGNING_KEY" 2>/dev/null)
+[ -n "$signing_key_info" ] \
     || die "git user.signingkey (${SIGNING_KEY}) not found in GPG keyring"
 
-gpg --list-secret-keys "$SIGNING_KEY" 2>/dev/null | grep -qF "$CURRENT_EMAIL" \
+printf '%s' "$signing_key_info" | grep -qF "$CURRENT_EMAIL" \
     || die "git user.signingkey (${SIGNING_KEY}) is not associated with ${CURRENT_EMAIL}"
 
 exit 0
