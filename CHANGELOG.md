@@ -31,6 +31,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add NoNewPrivileges, PrivateTmp, ProtectSystem, CapabilityBoundingSet, AmbientCapabilities, LockPersonality, and MemoryDenyWriteExecute hardening to systemd service unit
 - Pass GH_ENTERPRISE_TOKEN via Podman secret (gh-enterprise-token) instead of --env flag to hide it from podman inspect
 - stop_ssh_agent used a bare, unscoped 'pkill ssh-agent' that could kill any process named ssh-agent system-wide — including an unrelated interactive login agent belonging to the same user — instead of only the one the orchestrator's own service instance started. It is now scoped by user and by the specific socket path, mirroring the scoping install-timer's own ExecStartPre already uses (#1122)
+- Bake GitHub's SSH host key into the agent image at build time (regenerated fresh on every rebuild) so the container no longer relies on a runtime ssh-keyscan network call, closing the known_hosts host-key-rotation trap
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
@@ -262,6 +263,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Dependency-bump PRs opened under the bot's own account (instead of the usual app/github-actions) with no bot commits yet were misclassified as a human takeover and permanently stood off
 - Harden `enforce-git-identity` and `enforce-git-dash-c` Claude Code hooks against regex false-positives/false-negatives: heredoc/doc-text bodies containing git-command-shaped lines no longer trigger a false block, a `-c <key>=<value>` flag before `-C`/the subcommand no longer bypasses either check, a quoted `-C` path containing spaces is now handled correctly, and `enforce-git-identity`'s repo-directory extraction can no longer be misled by unrelated git-command-shaped text elsewhere in the same command
 - Error-handling hardening: an unvalidated agent timeout, a corrupt-guard-file aliasing bug, a dead SSH agent socket silently passing, repeated closed-issue re-tagging, six silent podman failures with no Discord alert, and a CLAUDE.md tempfile leak window are all fixed
+- entrypoint.sh pre-flight checks (SSH GitHub-auth, gpg-agent, GPG/SSH signing tests) had no timeouts and could hang for hours; the SSH GitHub-auth check also misdiagnosed a network failure as an unauthorized key
+- Review round on the #1099 entrypoint-hardening fix: the GitHub SSH host-key bake step now busts its Docker layer cache daily (GHA layer caching meant it could otherwise silently reuse a stale scan indefinitely), ssh-keyscan's own output is captured directly instead of grepping the destination file, a GitHub too-many-authentication-failures disconnect is now diagnosed separately from an unregistered key, timeout is verified present at build time, and the bats suite no longer silently depends on real network/filesystem state for its known_hosts coverage
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
