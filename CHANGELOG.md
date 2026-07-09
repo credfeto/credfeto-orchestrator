@@ -31,6 +31,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add NoNewPrivileges, PrivateTmp, ProtectSystem, CapabilityBoundingSet, AmbientCapabilities, LockPersonality, and MemoryDenyWriteExecute hardening to systemd service unit
 - Pass GH_ENTERPRISE_TOKEN via Podman secret (gh-enterprise-token) instead of --env flag to hide it from podman inspect
 - stop_ssh_agent used a bare, unscoped 'pkill ssh-agent' that could kill any process named ssh-agent system-wide — including an unrelated interactive login agent belonging to the same user — instead of only the one the orchestrator's own service instance started. It is now scoped by user and by the specific socket path, mirroring the scoping install-timer's own ExecStartPre already uses (#1122)
+- Close git config guardrail bypass via the git -C form the agent hooks force, and harden enforce-git-dash-c against pipe/chained-command/command-substitution bypasses (#1105)
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
