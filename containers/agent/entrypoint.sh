@@ -98,6 +98,13 @@ verify_ssh_signing() {
     # GitHub always responds even on a rejected key (never silence) — the response text
     # itself, not the exit code, is what distinguishes "reached GitHub, key rejected"
     # from "never reached GitHub at all" (both can share ssh's generic exit 255).
+    # Checked separately from "permission denied" below (review finding on #1099): an
+    # agent offering many keys can hit GitHub's max-auth-attempts limit and disconnect
+    # with this message before ever presenting the right key, which is a distinct
+    # problem (too many identities offered) from that key being genuinely unregistered.
+    if printf '%s' "${github_auth}" | grep -qi 'too many authentication failures'; then
+        die "SSH agent offered too many keys to GitHub before trying the right one (exceeds GitHub's auth-attempt limit) — reduce the keys loaded in the agent, or use 'IdentitiesOnly=yes' with an explicit IdentityFile: ${github_auth}"
+    fi
     if printf '%s' "${github_auth}" | grep -qiE 'permission denied|denied \(publickey\)'; then
         die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
     fi
