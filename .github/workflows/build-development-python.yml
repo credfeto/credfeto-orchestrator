@@ -28,6 +28,12 @@ on:
       - "containers/base/development-python/**"
       - ".github/workflows/build-development-python.yml"
       - ".github/actions/trivy-scan/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "containers/base/development-python/**"
+      - ".github/workflows/build-development-python.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:
@@ -43,7 +49,7 @@ permissions:
 
 jobs:
   build:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
@@ -74,7 +80,8 @@ jobs:
           context: "containers/base/development-python"
           file: "containers/base/development-python/Dockerfile"
           pull: true
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             BUILD_GIT_SHA=${{ github.sha }}
@@ -82,11 +89,13 @@ jobs:
           cache-to: "type=gha,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
+        if: ${{ github.event_name != 'pull_request' }}
         uses: ./.github/actions/trivy-scan
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       - name: "Summarise"
+        if: ${{ github.event_name != 'pull_request' }}
         shell: "bash"
         run: |
           {
@@ -95,4 +104,14 @@ jobs:
             echo '```'
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (build-only, not pushed)"
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-python image built (not pushed — pull_request run)"
+            echo ""
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
