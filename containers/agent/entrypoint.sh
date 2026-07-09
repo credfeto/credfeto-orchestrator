@@ -55,13 +55,13 @@ verify_hooks_fresh() {
 }
 
 verify_gpg_signing() {
-    gpg-connect-agent /bye >/dev/null 2>&1 \
-        || die "gpg-agent is not responding — run 'gpgconf --launch gpg-agent' on the host"
+    timeout 30 gpg-connect-agent /bye >/dev/null 2>&1 \
+        || die "gpg-agent is not responding (or timed out after 30s) — run 'gpgconf --launch gpg-agent' on the host"
     gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
         || die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
-    printf 'test' | gpg --batch --no-tty --armor --detach-sign \
+    printf 'test' | timeout 30 gpg --batch --no-tty --armor --detach-sign \
         --default-key "${GIT_SIGNING_KEY}" --output - >/dev/null 2>&1 \
-        || die "GPG signing test failed — ensure key ${GIT_SIGNING_KEY} is unlocked and the agent is accessible"
+        || die "GPG signing test failed (or timed out after 30s) — ensure key ${GIT_SIGNING_KEY} is unlocked and the agent is accessible"
 }
 
 verify_ssh_signing() {
@@ -71,11 +71,11 @@ verify_ssh_signing() {
         || die "SSH agent socket ${SSH_AUTH_SOCK} does not exist — check SSH agent forwarding"
 
     local ssh_status=0
-    ssh-add -l >/dev/null 2>&1 || ssh_status=$?
+    timeout 10 ssh-add -l >/dev/null 2>&1 || ssh_status=$?
     case "${ssh_status}" in
         0) ;;
         1) die "SSH agent has no keys loaded — run 'ssh-add' on the host before starting the container" ;;
-        *) die "SSH agent at ${SSH_AUTH_SOCK} is not responding (ssh-add -l exited ${ssh_status})" ;;
+        *) die "SSH agent at ${SSH_AUTH_SOCK} is not responding (or timed out after 10s; ssh-add -l exited ${ssh_status})" ;;
     esac
 
     local pubkey
@@ -85,20 +85,46 @@ verify_ssh_signing() {
     printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - >/dev/null 2>&1 \
         || die "SSH signing test failed — ensure the loaded SSH key supports signing"
 
-    local github_auth
-    github_auth=$(ssh -nT git@github.com 2>&1) || true
-    printf '%s' "${github_auth}" | grep -q 'successfully authenticated' \
-        || die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
+    # BatchMode=yes disables any interactive prompt (host-key confirmation, password);
+    # ConnectTimeout/ServerAliveInterval/ServerAliveCountMax bound both a dropped SYN
+    # (previously ~127s per retry with no cap) and a stalled established connection
+    # (previously only the ~2h TCP keepalive — longer than AGENT_TIMEOUT, #1099).
+    local github_auth ssh_rc=0
+    github_auth=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
+        -o ServerAliveCountMax=3 -nT git@github.com 2>&1) || ssh_rc=$?
+    if printf '%s' "${github_auth}" | grep -q 'successfully authenticated'; then
+        return 0
+    fi
+    # GitHub always responds even on a rejected key (never silence) — the response text
+    # itself, not the exit code, is what distinguishes "reached GitHub, key rejected"
+    # from "never reached GitHub at all" (both can share ssh's generic exit 255).
+    if printf '%s' "${github_auth}" | grep -qiE 'permission denied|denied \(publickey\)'; then
+        die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
+    fi
+    die "Cannot reach github.com over SSH (network/connectivity failure, ssh exited ${ssh_rc}): ${github_auth}"
 }
 
+# GitHub's host key is baked into the system-wide known_hosts at image build time
+# (containers/agent/Dockerfile), which ssh checks automatically alongside the
+# per-user file — the normal case here is a same-process no-op with no network call.
+# SYSTEM_KNOWN_HOSTS overrides the system-wide path (used by tests).
+# The runtime ssh-keyscan below is only a fallback for an image built before that
+# change, or a system file that has somehow gone missing.
 ensure_github_known_hosts() {
+    local system_known_hosts="${SYSTEM_KNOWN_HOSTS:-/etc/ssh/ssh_known_hosts}"
+    grep -qsF 'github.com' "${system_known_hosts}" && return 0
+
     local known_hosts="${HOME}/.ssh/known_hosts"
     if grep -qsF 'github.com' "${known_hosts}"; then
         return 0
     fi
     mkdir -p "${HOME}/.ssh"
     chmod 700 "${HOME}/.ssh"
-    ssh-keyscan github.com >> "${known_hosts}" 2>/dev/null
+    local scanned
+    scanned=$(timeout 10 ssh-keyscan github.com 2>/dev/null) || true
+    [ -n "${scanned}" ] \
+        || die "ssh-keyscan for github.com returned no output — cannot verify its host key, refusing to proceed with no known_hosts entry (the baked system-wide known_hosts is also missing one — is this an outdated image?)"
+    printf '%s\n' "${scanned}" >> "${known_hosts}"
     chmod 600 "${known_hosts}"
 }
 
