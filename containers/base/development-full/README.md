@@ -72,12 +72,16 @@ retarget entries.
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
 `containers/base/development-full/claude-settings.json`, `claude-policy-limits.json`, and
-`claude-hooks/enforce-git-dash-c` are version-controlled copies of the operator's
-`~/.claude/{settings.json,policy-limits.json,hooks/enforce-git-dash-c}`, copied into the image at
-`/home/developer/.claude/{settings.json,policy-limits.json,hooks/enforce-git-dash-c}` as root:root
-0444 (files) / 0755 (hook script and hooks directory) — read-only for `developer`. The hook path
-referenced from `settings.json`'s `PreToolUse` block is rewritten to the in-container path
-(`/home/developer/.claude/hooks/enforce-git-dash-c`). `oneshot` does not bind-mount over any of these
+`claude-hooks/{enforce-git-dash-c,enforce-git-identity}` are version-controlled copies of the operator's
+`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity}}`, copied into the image at
+`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity}}` as root:root
+0444 (files) / 0755 (hook scripts and hooks directory) — read-only for `developer`. `enforce-git-dash-c`
+blocks git commands that don't use `git -C <dir>`; `enforce-git-identity` blocks `git commit`/`fetch`/`pull`/
+`rebase`/`merge`/`cherry-pick`/`revert`/`am` unless git identity and GPG signing are correctly configured,
+and runs before `enforce-git-dash-c` in the `PreToolUse` hook chain. Both hook paths
+referenced from `settings.json`'s `PreToolUse` block are rewritten to the in-container path
+(`/home/developer/.claude/hooks/enforce-git-dash-c` and `/home/developer/.claude/hooks/enforce-git-identity`).
+`oneshot` does not bind-mount over any of these
 paths at runtime (see `containers/agent/Dockerfile` for the full mount contract) — only `CLAUDE.md` and
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) are
 mounted per invocation.
@@ -132,6 +136,7 @@ The `developer` user is inherited from upstream images in the `development-tools
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/home/developer/.claude/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
 | `/home/developer/.claude/hooks/enforce-git-dash-c` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-dash-c`); read/execute only |
+| `/home/developer/.claude/hooks/enforce-git-identity` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-identity`); read/execute only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 
 ---
@@ -167,8 +172,8 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 - `/opt/git-global-hooks/pre-commit` must be executable.
 
 **Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
-`.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c` must be root:root 0755
-and executable.
+`.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c` and
+`.../hooks/enforce-git-identity` must each be root:root 0755 and executable.
 
 **Claude Code skills wiring** — exactly 100 symlinks must exist directly under
 `/home/developer/.claude/skills/`; a spot-check of representative skill names (one per source repo,

@@ -238,6 +238,7 @@ RUN mkdir -p /home/developer/.claude/skills \
 COPY --chown=root:root --chmod=0444 claude-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /home/developer/.claude/hooks/enforce-git-dash-c
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/developer/.claude/hooks/enforce-git-identity
 RUN chown root:root /home/developer/.claude/hooks \
     && chmod 0755 /home/developer/.claude/hooks
 
@@ -361,6 +362,10 @@ RUN set -e; \
         || { echo "FATAL sanity: enforce-git-dash-c hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/enforce-git-dash-c ] \
         || { echo "FATAL sanity: enforce-git-dash-c hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-git-identity)" = "root:root 755" ] \
+        || { echo "FATAL sanity: enforce-git-identity hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/enforce-git-identity ] \
+        || { echo "FATAL sanity: enforce-git-identity hook is not executable" >&2; exit 1; }; \
     echo "== Claude Code skills wiring =="; \
     skill_count=$(find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l); \
     expected_skill_count=$(cat /opt/.claude-skill-count); \
