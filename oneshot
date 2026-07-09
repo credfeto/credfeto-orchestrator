@@ -722,8 +722,16 @@ find_human_taken_over_pr_for_issue() {
 # label variants like "npm dependencies" (hence a case-insensitive substring match), and must
 # keep flowing to the CI-verify/auto-merge takeover prompt even after a trusted human pushes a
 # conflict fix.
-# Operates entirely on the caller's pr_json — fetch_pr_json already includes author and commits
-# (#1134) — so the only remote failure mode is the identity lookup.
+# The external dependency-bump tooling (credfeto-batch-updates) always pushes to a
+# "depends/..." branch and normally has its PR opened under "app/github-actions", so it never
+# hits the author-check below. It can, rarely, end up opened under the bot's own login instead
+# (observed on credfeto-enum-source-generation#118) — with zero bot commits yet (the bot has
+# never touched it), that would otherwise look identical to a real human takeover. Unlike a
+# label, "depends/" is set once at push time by the bump tooling and is never retroactively
+# applied by label-sync, so checking it ahead of the author check cannot reopen the #1134 hole:
+# human/bot feature branches use "fix/", "feat/", "perf/", etc., never this prefix.
+# Operates entirely on the caller's pr_json — fetch_pr_json already includes author, commits and
+# headRefName (#1134) — so the only remote failure mode is the identity lookup.
 # Returns 0 (human-driven — stand off), 1 (not human-driven — process normally), or 2 when the
 # identity lookup fails (caller should skip the item for this tick).
 pr_is_human_driven() {
@@ -732,6 +740,10 @@ pr_is_human_driven() {
     resolve_gh_me || return 2
 
     if printf '%s' "${pr_json}" | json_has_commit_author_login "${_GH_ME}"; then
+        return 1
+    fi
+
+    if printf '%s' "${pr_json}" | jq -e '(.headRefName // "") | test("^depends/")' > /dev/null 2>&1; then
         return 1
     fi
 

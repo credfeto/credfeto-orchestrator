@@ -2917,6 +2917,24 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_is_human_driven exempts a not-yet-claimed dependency-bump PR opened under the bot's own login (credfeto-enum-source-generation#118)" {
+    _GH_ME="testuser"
+    # The bump tooling's commit is authored by the trusted owner login, and this one rare case
+    # got opened under the bot's own account instead of the usual app/github-actions — with zero
+    # bot commits yet, that would otherwise look identical to a real takeover. The "depends/"
+    # branch — set once at push time, never by label-sync — must win instead.
+    run pr_is_human_driven '{"labels":[],"headRefName":"depends/update-funfair.codeanalysis/7.2.6.2145","author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven still stands off a taken-over bot PR on a non-depends branch (#1134 guard)" {
+    _GH_ME="testuser"
+    # A real feature-branch takeover must not be exempted just because it also carries a
+    # dependencies-ish label — the branch-name exemption above must not widen this hole.
+    run pr_is_human_driven '{"labels":[{"name":"dependencies"}],"headRefName":"fix/123-something","author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_is_human_driven returns 0 when a trusted human authored commits on a non-bot PR" {
     _GH_ME="testuser"
     run pr_is_human_driven '{"labels":[],"author":{"login":"someone-else"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'

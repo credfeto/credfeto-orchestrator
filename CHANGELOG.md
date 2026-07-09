@@ -257,6 +257,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Non-agentic rebase no longer blocks same-repo Issues from being picked up in the same tick
 - development-full image build no longer fails on a skill-name collision — credfeto-ai-skills entries are now installed with the credfeto- prefix, matching that repo's own install.sh convention, instead of colliding with same-named skills from other bundled sources
 - Prune the orphaned `lib/` directory from the credfeto-global-pre-commit clone baked into `containers/base/development-full/Dockerfile` — it was only sourced by `install-deps-arch`/`install-deps-debian`, which were already removed from the image.
+- Dependency-bump PRs opened under the bot's own account (instead of the usual app/github-actions) with no bot commits yet were misclassified as a human takeover and permanently stood off
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
