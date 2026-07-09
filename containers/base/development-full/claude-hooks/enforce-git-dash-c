@@ -42,10 +42,21 @@ input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 cmd=$(strip_heredocs "$raw_cmd")
 
-if printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)[[:space:]]*git\b' \
-   && ! printf '%s' "$cmd" | grep -qE "(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+${DASH_C_FLAGS}-C\\b"; then
-  printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
-  exit 2
-fi
+# Split the command into individual invocations on statement separators
+# (;, &&, ||, a bare |), command-substitution/backtick boundaries ($( ` ),
+# and parentheses (subshells), so each git invocation is checked on its own.
+# A single whole-command check would let one hardened `git -C` earlier in a
+# chain satisfy the check while a later bare `git` slips through, e.g.
+# `git -C . status && git push --force` or `x=$(git rev-parse HEAD)`.
+segments=$(printf '%s' "$cmd" | sed -E 's/(;|&&|\|\|?|\(|\)|`)/\n/g')
+
+while IFS= read -r segment; do
+  trimmed=$(printf '%s' "$segment" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  [[ "$trimmed" =~ ^git([[:space:]]|$) ]] || continue
+  if ! [[ "$trimmed" =~ ^git[[:space:]]+${DASH_C_FLAGS}-C([[:space:]]|$) ]]; then
+    printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
+    exit 2
+  fi
+done <<< "$segments"
 
 exit 0
