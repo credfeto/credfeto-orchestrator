@@ -259,6 +259,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - development-full image build no longer fails on a skill-name collision — credfeto-ai-skills entries are now installed with the credfeto- prefix, matching that repo's own install.sh convention, instead of colliding with same-named skills from other bundled sources
 - Prune the orphaned `lib/` directory from the credfeto-global-pre-commit clone baked into `containers/base/development-full/Dockerfile` — it was only sourced by `install-deps-arch`/`install-deps-debian`, which were already removed from the image.
 - Dependency-bump PRs opened under the bot's own account (instead of the usual app/github-actions) with no bot commits yet were misclassified as a human takeover and permanently stood off
+- Harden `enforce-git-identity` and `enforce-git-dash-c` Claude Code hooks against regex false-positives/false-negatives: heredoc/doc-text bodies containing git-command-shaped lines no longer trigger a false block, a `-c <key>=<value>` flag before `-C`/the subcommand no longer bypasses either check, a quoted `-C` path containing spaces is now handled correctly, and `enforce-git-identity`'s repo-directory extraction can no longer be misled by unrelated git-command-shaped text elsewhere in the same command
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
