@@ -362,7 +362,7 @@ STUBEOF
     [[ "${output}" == *"SSH key is not authorized to access GitHub"* ]]
 }
 
-@test "entrypoint dies with a network-failure message (not a misdiagnosed auth failure) when GitHub is unreachable over SSH (#1099)" {
+@test "entrypoint dies with a generic SSH-failure message (not a misdiagnosed auth failure, and not an assumed cause) when GitHub is unreachable over SSH (#1099 review)" {
     setup_entrypoint_stubs
     cat > "${STUB_BIN}/ssh" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -377,8 +377,10 @@ STUBEOF
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"Cannot reach github.com over SSH"* ]]
+    [[ "${output}" == *"SSH to git@github.com failed"* ]]
+    [[ "${output}" == *"Connection timed out"* ]]
     [[ "${output}" != *"SSH key is not authorized to access GitHub"* ]]
+    [[ "${output}" != *"network"* ]]
 }
 
 # --- verify_gpg_signing -----------------------------------------------------------

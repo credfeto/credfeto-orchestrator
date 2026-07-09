@@ -110,9 +110,14 @@ RUN mkdir -p /workspace/repo /workspace/rules \
 # Actions infrastructure, so it is a trustworthy source for the key at the
 # point it's taken. entrypoint.sh's ensure_github_known_hosts keeps a runtime
 # ssh-keyscan fallback for an image built before this change.
-RUN ssh-keyscan -T 10 github.com >> /etc/ssh/ssh_known_hosts; \
-    grep -q 'github.com' /etc/ssh/ssh_known_hosts \
-    || { echo "FATAL: ssh-keyscan for github.com produced no output during image build" >&2; exit 1; }
+# scanned is captured and checked directly, rather than grepping the destination file
+# afterwards — a stale github.com entry already present from a base layer would let a
+# post-hoc grep pass even when THIS scan produced nothing, silently defeating the
+# fresh-scan-per-rebuild guarantee (review finding on #1099).
+RUN scanned="$(ssh-keyscan -T 10 github.com 2>/dev/null)"; \
+    [ -n "${scanned}" ] \
+        || { echo "FATAL: ssh-keyscan for github.com produced no output during image build" >&2; exit 1; }; \
+    printf '%s\n' "${scanned}" >> /etc/ssh/ssh_known_hosts
 
 # ---- Build-time sanity check -------------------------------------------------
 # Fails the build if:
