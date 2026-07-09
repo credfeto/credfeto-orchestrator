@@ -3698,6 +3698,17 @@ notify_discord_rate_limited() {
         || warn "Discord webhook notification failed"
 }
 
+# Re-arms both one-time closed-issue markers (the pivot path's closed-pr-tagged and the
+# standoff path's closed-takeover-checked) so a future reopen/re-close cycle is tagged again
+# (#1134 review round 3, #1103). Called from both "issue observed open" sites — whichever path
+# runs first on a given tick may be the one to observe a reopen, so both must re-arm both
+# markers rather than only their own.
+rearm_closed_issue_markers() {
+    local item_id="$1"
+    rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+    rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being
 # applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
@@ -3939,12 +3950,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover and closed-pr-tagged
-                # checks so a future reopen/re-close cycle is tagged again (#1134 review round 3,
-                # #1103). Both markers are cleared from both "issue observed open" sites since
-                # either code path may be the one to first observe a reopen.
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
+                # Issue observed open — re-arm the one-time closed-issue checks so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
+                rearm_closed_issue_markers "${item_id}"
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
@@ -4097,12 +4105,9 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover and closed-pr-tagged
-                # checks so a future reopen/re-close cycle is tagged again (#1134 review round 3,
-                # #1103). Both markers are cleared from both "issue observed open" sites since
-                # either code path may be the one to first observe a reopen.
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
-                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
+                # Issue observed open — re-arm the one-time closed-issue checks so a future
+                # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
+                rearm_closed_issue_markers "${item_id}"
 
                 # Stand off if this issue is assigned to someone other than us — prevents
                 # duplicate work when a human owns the item (#1142).
