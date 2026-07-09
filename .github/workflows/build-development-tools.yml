@@ -23,6 +23,12 @@ on:
       - "containers/base/development-tools/**"
       - ".github/workflows/build-development-tools.yml"
       - ".github/actions/trivy-scan/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "containers/base/development-tools/**"
+      - ".github/workflows/build-development-tools.yml"
+      - ".github/actions/trivy-scan/**"
   workflow_dispatch: {}
 
 concurrency:
@@ -75,7 +81,8 @@ jobs:
         with:
           context: "containers/base/development-tools"
           file: "containers/base/development-tools/Dockerfile"
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
@@ -84,11 +91,13 @@ jobs:
           cache-to: "type=gha,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
+        if: ${{ github.event_name != 'pull_request' }}
         uses: ./.github/actions/trivy-scan
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       - name: "Summarise"
+        if: ${{ github.event_name != 'pull_request' }}
         shell: "bash"
         run: |
           {
@@ -99,4 +108,14 @@ jobs:
             echo '```'
             echo ""
             echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (build-only, not pushed)"
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-tools image built (not pushed — pull_request run)"
+            echo ""
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
