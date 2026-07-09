@@ -2,11 +2,48 @@
 # Blocks git commands that don't use `git -C <dir>` format.
 # Exit 2 = blocked, 0 = allowed.
 
-input=$(cat)
-cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+# Strips heredoc bodies out of a multi-line command string before it's
+# pattern-matched. Without this, a Bash call that merely *writes*
+# example/doc/test-script text containing a line that starts with "git ..."
+# (e.g. via `cat <<EOF`) is indistinguishable from an actual git invocation,
+# and gets blocked for no reason. Only the common, unescaped-delimiter forms
+# (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, ...) are recognised; anything more
+# exotic falls back to the old un-stripped behaviour.
+strip_heredocs() {
+  local line dash delim="" in_heredoc=0 trimmed
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_heredoc" = "1" ]; then
+      if [ "$dash" = "-" ]; then
+        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
+        [ "$trimmed" = "$delim" ] && in_heredoc=0
+      else
+        [ "$line" = "$delim" ] && in_heredoc=0
+      fi
+      continue
+    fi
+    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
+      dash="${BASH_REMATCH[1]}"
+      delim="${BASH_REMATCH[2]}"
+      in_heredoc=1
+    fi
+    printf '%s\n' "$line"
+  done <<< "$1"
+}
 
-if printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)\s*git\b' \
-   && ! printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)\s*git\s+-C\b'; then
+# A single flag value: a "..."/'...'-quoted token (which may contain spaces),
+# or a plain space-free token.
+VALTOKEN="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
+
+# Zero or more `-c <key>=<value>` global option pairs that may legitimately
+# appear before `-C` — e.g. `git -c core.pager=cat -C /repo status`.
+DASH_C_FLAGS="(-c[[:space:]]+${VALTOKEN}[[:space:]]+)*"
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+cmd=$(strip_heredocs "$raw_cmd")
+
+if printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)[[:space:]]*git\b' \
+   && ! printf '%s' "$cmd" | grep -qE "(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+${DASH_C_FLAGS}-C\\b"; then
   printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
   exit 2
 fi
