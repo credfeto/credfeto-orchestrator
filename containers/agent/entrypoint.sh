@@ -101,7 +101,10 @@ verify_ssh_signing() {
     if printf '%s' "${github_auth}" | grep -qiE 'permission denied|denied \(publickey\)'; then
         die "SSH key is not authorized to access GitHub — register the public key at https://github.com/settings/keys"
     fi
-    die "Cannot reach github.com over SSH (network/connectivity failure, ssh exited ${ssh_rc}): ${github_auth}"
+    # Deliberately no specific cause claimed here (e.g. "network failure") — this branch
+    # also covers non-network failures such as host-key verification, and the raw ssh
+    # output above already carries whatever detail there is (review finding on #1099).
+    die "SSH to git@github.com failed (exit ${ssh_rc}): ${github_auth}"
 }
 
 # GitHub's host key is baked into the system-wide known_hosts at image build time
