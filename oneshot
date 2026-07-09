@@ -3703,18 +3703,13 @@ notify_discord_rate_limited() {
 # applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
 # (e.g. a total outage) — callers that mark the tagging as done must not do so on total failure,
 # or the anomaly is silently lost forever (#1134 review round 3).
-# Skips re-tagging (returns 0 immediately, no comment/labels) when the PR already carries the
-# Blocked label from a previous call — one call site here has no marker-file dedup of its own,
-# so while the priorities feed stays stale about a closed issue this would otherwise re-post the
-# same investigation comment and re-add labels on every tick (#1103). A failure to fetch the
-# current labels is not conclusive, so falls through to tag as usual rather than risk
-# permanently suppressing a real tagging.
+# Deduplication against repeated calls for the same anomaly is the CALLER's responsibility (a
+# marker file, as both call sites now use — #1103) rather than this function's, because "the PR
+# already carries Blocked" is not a reliable signal here: the PR may be Blocked for a totally
+# unrelated reason (a CI timeout, a human block) and still need the closed-issue investigation
+# comment posted for the first time (#1103 review).
 tag_pr_closed_issue() {
-    local pr_number="$1" issue_id="$2" tagged=1 existing_labels_json
-    if existing_labels_json=$(fetch_pr_fields_json "${pr_number}" labels) \
-        && pr_json_has_blocked_label "${existing_labels_json}"; then
-        return 0
-    fi
+    local pr_number="$1" issue_id="$2" tagged=1
     gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Needs Investigation" 2>/dev/null && tagged=0
     gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null && tagged=0
     gh pr edit "${pr_number}" --repo "${REPO_FULL}" --add-label "On-hold" 2>/dev/null && tagged=0
@@ -3821,7 +3816,7 @@ main() {
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
-    local standoff_pr standoff_rc human_driven_rc closed_takeover_marker
+    local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -3911,8 +3906,24 @@ main() {
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
                 if [ "${issue_state}" != "OPEN" ]; then
-                    info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
-                    tag_pr_closed_issue "${open_pr}" "${item_id}"
+                    # The marker file makes this a one-time tagging per closed issue — without
+                    # it, a feed that retains closed issues would re-post the investigation
+                    # comment and re-add labels on the PR every tick (#1103). Deliberately keyed
+                    # on the Issue, not on the PR's own Blocked label — the PR can be Blocked for
+                    # a totally unrelated reason and still need this tagging done for the first
+                    # time (#1103 review). Best-effort: only a total tagging failure leaves the
+                    # marker unwritten so the check retries.
+                    closed_pr_tagged_marker="${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged"
+                    if [ ! -f "${closed_pr_tagged_marker}" ]; then
+                        info "Issue #${item_id} in ${item_repo} is no longer open — tagging PR #${open_pr} for investigation and skipping"
+                        if tag_pr_closed_issue "${open_pr}" "${item_id}"; then
+                            mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+                            touch "${closed_pr_tagged_marker}" 2>/dev/null \
+                                || warn "Failed to write closed-pr-tagged marker for Issue #${item_id} — the check will repeat next tick"
+                        else
+                            warn "Failed to tag PR #${open_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
+                        fi
+                    fi
                     count_not_open=$((count_not_open + 1))
                     continue
                 fi
@@ -3928,9 +3939,12 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover check so a future
-                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                # Issue observed open — re-arm the one-time closed-takeover and closed-pr-tagged
+                # checks so a future reopen/re-close cycle is tagged again (#1134 review round 3,
+                # #1103). Both markers are cleared from both "issue observed open" sites since
+                # either code path may be the one to first observe a reopen.
                 rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
 
                 info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
 
@@ -4083,9 +4097,12 @@ main() {
                 # (#1093, #1115).
                 clear_blocked_marker "Issue" "${item_id}"
                 reset_issue_invocation_counts_if_capped "${item_id}"
-                # Issue observed open — re-arm the one-time closed-takeover check so a future
-                # reopen/re-close cycle is tagged again (#1134 review round 3).
+                # Issue observed open — re-arm the one-time closed-takeover and closed-pr-tagged
+                # checks so a future reopen/re-close cycle is tagged again (#1134 review round 3,
+                # #1103). Both markers are cleared from both "issue observed open" sites since
+                # either code path may be the one to first observe a reopen.
                 rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-takeover-checked" 2>/dev/null || true
+                rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
 
                 # Stand off if this issue is assigned to someone other than us — prevents
                 # duplicate work when a human owns the item (#1142).
