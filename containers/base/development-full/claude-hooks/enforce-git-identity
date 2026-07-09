@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Blocks git subcommands that create/rewrite commits (or that precede one, like
+# `fetch`) unless git identity and GPG signing are correctly configured.
+# The die()/info() helpers mirror the canonical implementations in
+# shell-scripts.examples.md — keep them in sync if either changes.
+# Exit 2 = blocked, 0 = allowed.
+
+die() {
+  printf 'Blocked: %s\n' "$*" >&2
+  exit 2
+}
+
+# Subcommands that create/rewrite commits, plus `fetch` (checked up front so
+# a broken identity is caught before work starts, not after it's done).
+SUBCMDS='commit|fetch|pull|rebase|merge|cherry-pick|revert|am'
+
+input=$(cat)
+cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+# Only run these checks for commands that actually invoke one of $SUBCMDS.
+# Matched against trailing whitespace/end (not \b) so `commit-graph` etc.
+# (unrelated plumbing commands) aren't mistaken for `commit`.
+printf '%s' "$cmd" | grep -qE "(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?(${SUBCMDS})([[:space:]]|\$)" || exit 0
+
+# Respect `git -C <dir>` so config is read from the target repo, not the hook's cwd.
+git_dir_args=()
+repo=$(printf '%s' "$cmd" | grep -oE "git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(${SUBCMDS})([[:space:]]|\$)" | head -1 | sed -E 's/^git[[:space:]]+-C[[:space:]]+([^[:space:]]+).*/\1/')
+[ -n "$repo" ] && git_dir_args=(-C "$repo")
+
+git_cfg() {
+  git "${git_dir_args[@]}" config "$1" 2>/dev/null
+}
+
+CURRENT_EMAIL=$(git_cfg user.email)
+
+[ -z "$CURRENT_EMAIL" ] && die "git user.email is not set — run: git config --global user.email \"you@example.com\""
+
+[ "$CURRENT_EMAIL" = "andy@nanoclaw.ai" ] && die "git is configured with the wrong identity (${CURRENT_EMAIL}) — aborting"
+
+[ "$(git_cfg commit.gpgsign)" = "true" ] || die "GPG signing is not enabled — run: git config --global commit.gpgsign true"
+
+command -v gpg > /dev/null 2>&1 || die "gpg is not installed — cannot verify signing key"
+
+gpg --list-secret-keys "$CURRENT_EMAIL" > /dev/null 2>&1 \
+    || die "no GPG secret key found for ${CURRENT_EMAIL} — run: gpg --gen-key"
+
+SIGNING_KEY=$(git_cfg user.signingkey)
+[ -z "$SIGNING_KEY" ] && die "git user.signingkey is not set — run: git config --global user.signingkey <keyid>"
+
+gpg --list-secret-keys "$SIGNING_KEY" > /dev/null 2>&1 \
+    || die "git user.signingkey (${SIGNING_KEY}) not found in GPG keyring"
+
+gpg --list-secret-keys "$SIGNING_KEY" 2>/dev/null | grep -qF "$CURRENT_EMAIL" \
+    || die "git user.signingkey (${SIGNING_KEY}) is not associated with ${CURRENT_EMAIL}"
+
+exit 0

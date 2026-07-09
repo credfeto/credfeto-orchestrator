@@ -72,6 +72,10 @@
           },
           {
             "type": "command",
+            "command": "/home/developer/.claude/hooks/enforce-git-identity"
+          },
+          {
+            "type": "command",
             "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
           }
         ]
