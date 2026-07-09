@@ -91,7 +91,6 @@ jobs:
           cache-to: "type=gha,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
-        if: ${{ github.event_name != 'pull_request' }}
         uses: ./.github/actions/trivy-scan
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
