@@ -105,16 +105,22 @@ RUN mkdir -p /workspace/repo /workspace/rules \
 # alongside the per-user ~/.ssh/known_hosts, so baking it here removes the
 # runtime ssh-keyscan network call entirely for the normal case (a source of
 # pre-flight hangs — #1099) and the host-key-rotation trap that a fixed,
-# hardcoded key would otherwise create (March 2023 precedent): this scan is
-# taken fresh on every image rebuild, and the build itself runs on GitHub
-# Actions infrastructure, so it is a trustworthy source for the key at the
-# point it's taken. entrypoint.sh's ensure_github_known_hosts keeps a runtime
-# ssh-keyscan fallback for an image built before this change.
+# hardcoded key would otherwise create (March 2023 precedent). entrypoint.sh's
+# ensure_github_known_hosts keeps a runtime ssh-keyscan fallback for an image
+# built before this change.
+# GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST (the daily date, set by the build workflow)
+# busts this layer daily — without embedding it in the layer's cache key via
+# `: "${ARG}"`, BuildKit's GHA layer cache (cache-from/to: type=gha in
+# build-development-agent.yml) would reuse a stale scan indefinitely whenever
+# the preceding layers are unchanged, silently defeating the "fresh key" claim
+# this comment makes (review finding on #1099).
+ARG GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST
 # scanned is captured and checked directly, rather than grepping the destination file
 # afterwards — a stale github.com entry already present from a base layer would let a
 # post-hoc grep pass even when THIS scan produced nothing, silently defeating the
 # fresh-scan-per-rebuild guarantee (review finding on #1099).
-RUN scanned="$(ssh-keyscan -T 10 github.com 2>/dev/null)"; \
+RUN : "${GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST}"; \
+    scanned="$(ssh-keyscan -T 10 github.com 2>/dev/null)"; \
     [ -n "${scanned}" ] \
         || { echo "FATAL: ssh-keyscan for github.com produced no output during image build" >&2; exit 1; }; \
     printf '%s\n' "${scanned}" >> /etc/ssh/ssh_known_hosts
@@ -142,7 +148,7 @@ RUN set -e; \
     test -x /usr/local/bin/agent-entrypoint \
         || { echo "FATAL sanity: /usr/local/bin/agent-entrypoint is missing or not executable" >&2; exit 1; }; \
     echo "== re-verify inherited binaries (binary presence + version probe) =="; \
-    for cmd in git gh dotnet python3 gpg curl sqlite3 \
+    for cmd in git gh dotnet python3 gpg curl sqlite3 timeout \
                shellcheck bats shfmt checkbashisms uv ruff sqlfluff actionlint markdownlint-cli2 pre-commit \
                trufflehog hadolint dotenv-linter sqlcmd pwsh \
                yamllint ansible-lint flake8 pylint cfn-lint \

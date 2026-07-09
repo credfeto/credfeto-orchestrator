@@ -42,6 +42,18 @@ STUBEOF
     # ssh-keygen stub: always succeeds (simulates successful sign operation).
     make_stub ssh-keygen 'exit 0'
 
+    # SYSTEM_KNOWN_HOSTS: default away from the real /etc/ssh/ssh_known_hosts so no test
+    # depends on (or is silently masked by) the host's real state — individual known_hosts
+    # tests override this explicitly. ssh-keyscan defaults to succeeding harmlessly, matching
+    # every other external command stubbed here, so no test makes a real network call (a host
+    # with real outbound SSH access previously let this fall through silently — #1099 review).
+    export SYSTEM_KNOWN_HOSTS="${TEST_TMP}/default-system-known-hosts-not-present"
+    cat > "${STUB_BIN}/ssh-keyscan" << 'STUBEOF'
+#!/usr/bin/env bash
+printf "github.com ssh-ed25519 FAKEKEYFORTESTING\n"
+STUBEOF
+    chmod +x "${STUB_BIN}/ssh-keyscan"
+
     # ssh stub: simulates a successful GitHub auth check for -T git@github.com.
     # GitHub's real ssh -T exits 1 but prints the success message; || true in the
     # entrypoint suppresses the exit code.
