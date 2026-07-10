@@ -93,6 +93,58 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a bare git backgrounded with a single & is blocked" {
+    run_hook "true & git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git inside a brace group is blocked" {
+    run_hook "{ git push; }"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a command substitution inside double quotes is still checked" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook 'echo "$(git push)"'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a hardened command substitution inside double quotes is allowed" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook 'echo "$(git -C . push)"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hardened invocation with parens inside a quoted grep pattern is not falsely blocked" {
+    run_hook 'git -C . log --grep="(WIP) git stuff"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hardened invocation with a semicolon inside a quoted grep pattern is not falsely blocked" {
+    run_hook 'git -C . log --grep="fix a; git push later"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hardened invocation with an ampersand inside a quoted grep pattern is not falsely blocked" {
+    run_hook 'git -C . log --grep="wip & git gc"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hardened invocation with braces inside a quoted commit message is not falsely blocked" {
+    run_hook 'git -C . commit -m "wip {git}"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a single-quoted commit message containing an ampersand is not falsely blocked" {
+    run_hook "git -C . commit -m 'stuff & things'"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a non-git command containing parens in a quoted argument is not falsely blocked" {
+    run_hook 'echo "(git is great)"'
+    [ "${status}" -eq 0 ]
+}
+
 @test "git -C . config --global is allowed by this hook (settings deny rule covers that layer)" {
     run_hook "git -C . config --global user.email test@example.com"
     [ "${status}" -eq 0 ]
