@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Rejects Bash commands whose command-name token is spelled out in a way
+# that disguises what program actually runs, instead of chasing individual
+# bypass techniques through each downstream hook's own detection logic (see
+# PR #1105/#1159: enforce-git-dash-c needed four separate rounds to close
+# quote-splice, escape, substitution, and separator bypasses one at a time —
+# every round found a new *obfuscation* technique, not a new git-specific
+# case). Runs first, ahead of every other PreToolUse hook, so obfuscation is
+# refused categorically up front.
+#
+# "Obfuscated" here means: the command-name token — the first word of a
+# statement, or the first word after a separator (;, &, &&, |, ||, (, {,
+# backtick), an `IDENT=value` assignment prefix, or a pass-through wrapper
+# (sudo, env, exec, command, time, nice, nohup, doas, stdbuf, builtin, !) —
+# is built from quoted text spliced against bare text (e.g. "g""it", 'g'it,
+# "git" alone), contains a backslash escape (g\it), or is itself a live
+# $()/backtick/$VAR substitution (e.g. $(echo git), `echo git`). `eval` is
+# rejected outright — indirect string execution has no "simple" reading.
+#
+# Deliberately NOT covered: path-qualified binaries (/usr/bin/git, ./git).
+# This container's own mandated workflows invoke hooks via absolute/relative
+# path (e.g. `<hooks-path>/pre-commit`, see ai/global/git.instructions.md) —
+# a blanket ban on "/" in the command-name token would block that legitimate,
+# documented usage. Left to a narrower, path-aware follow-up.
+#
+# This is a categorical, defense-in-depth guard, not a replacement for
+# per-command hooks like enforce-git-dash-c: it says nothing about whether a
+# non-obfuscated command is otherwise *allowed* (e.g. `git push` without -C
+# is plainly spelled out, not obfuscated, and is still blocked downstream by
+# enforce-git-dash-c). Exit 2 = blocked, 0 = allowed.
+
+# Strips heredoc bodies out of a multi-line command string before it's
+# pattern-matched, so example/doc/test-script text written via `cat <<EOF`
+# isn't mistaken for a live command. See enforce-git-dash-c's identical
+# helper for the detailed rationale.
+strip_heredocs() {
+  local line dash delim="" in_heredoc=0 trimmed
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_heredoc" = "1" ]; then
+      if [ "$dash" = "-" ]; then
+        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
+        [ "$trimmed" = "$delim" ] && in_heredoc=0
+      else
+        [ "$line" = "$delim" ] && in_heredoc=0
+      fi
+      continue
+    fi
+    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
+      dash="${BASH_REMATCH[1]}"
+      delim="${BASH_REMATCH[2]}"
+      in_heredoc=1
+    fi
+    printf '%s\n' "$line"
+  done <<< "$1"
+}
+
+# A single non-whitespace, non-newline control character used as a
+# placeholder for every quoted/substituted span neutralize_quotes blanks
+# out. Unlike a literal space, it survives into a segment's first
+# whitespace-delimited word, so check_segment can tell "this token had
+# quoting/substitution spliced into it" apart from an all-bare token —
+# a plain space would make "g""it" indistinguishable from two bare words.
+SENTINEL=$'\x01'
+
+# Walks a command string one character at a time and, into the globals
+# NEUTRALIZED and EXTRA_SEGMENTS:
+#   * blanks out single-quoted text entirely to one SENTINEL char — it is
+#     inert in POSIX/bash, so metacharacters inside it must not be treated
+#     as statement separators, but its presence must still mark the
+#     enclosing word as non-bare;
+#   * blanks out double-quoted text the same way, EXCEPT any `$( ... )` or
+#     `` ` ` `` command substitution nested inside it, which is queued into
+#     EXTRA_SEGMENTS for its own recursive check — that content executes
+#     regardless of the quotes around it, e.g. `echo "$(git push)"`;
+#   * queues top-level (unquoted) `$( ... )` / backtick substitution the
+#     same way, blanking it to one SENTINEL char too — a live substitution
+#     used as a command name (e.g. `$(echo git) push`) must not be mistaken
+#     for a plain word either;
+#   * leaves every other character untouched so the caller's
+#     statement-separator split still applies to real, unquoted operators.
+neutralize_quotes() {
+  local s="$1" c i=0 len
+  NEUTRALIZED=""
+  len=${#s}
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    case "$c" in
+      \')
+        i=$((i + 1))
+        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != "'" ]; do
+          i=$((i + 1))
+        done
+        i=$((i + 1))
+        NEUTRALIZED+="$SENTINEL"
+        ;;
+      \")
+        i=$((i + 1))
+        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != '"' ]; do
+          c="${s:$i:1}"
+          if [ "$c" = $'\\' ] && [ $((i + 1)) -lt "$len" ]; then
+            i=$((i + 2))
+            continue
+          fi
+          if [ "$c" = '$' ] && [ "${s:$((i + 1)):1}" = '(' ]; then
+            extract_substitution "$s" "$i" '(' ')' 2
+            i="$SUBST_NEXT_I"
+            continue
+          fi
+          if [ "$c" = '`' ]; then
+            extract_substitution "$s" "$i" '`' '`' 1
+            i="$SUBST_NEXT_I"
+            continue
+          fi
+          i=$((i + 1))
+        done
+        i=$((i + 1))
+        NEUTRALIZED+="$SENTINEL"
+        ;;
+      '$')
+        if [ "${s:$((i + 1)):1}" = '(' ]; then
+          extract_substitution "$s" "$i" '(' ')' 2
+          i="$SUBST_NEXT_I"
+          NEUTRALIZED+="$SENTINEL"
+        else
+          NEUTRALIZED+="$c"
+          i=$((i + 1))
+        fi
+        ;;
+      '`')
+        extract_substitution "$s" "$i" '`' '`' 1
+        i="$SUBST_NEXT_I"
+        NEUTRALIZED+="$SENTINEL"
+        ;;
+      *)
+        NEUTRALIZED+="$c"
+        i=$((i + 1))
+        ;;
+    esac
+  done
+}
+
+# Extracts the content of a `$( ... )` or `` ` ... ` `` substitution starting
+# at index $2 in string $1, honouring nested "open" characters and skipping
+# over single-/double-quoted spans (with backslash-escapes) while hunting
+# for the matching close character — identical logic to enforce-git-dash-c's
+# helper of the same name; see there for the detailed rationale. Appends the
+# extracted content to EXTRA_SEGMENTS and sets SUBST_NEXT_I to the index
+# just past the closing character.
+extract_substitution() {
+  local s="$1" start="$2" open="$3" close="$4" head_len="$5" depth=1
+  local j=$((start + head_len))
+  local len=${#s}
+  local c
+  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
+    c="${s:$j:1}"
+    case "$c" in
+      \')
+        j=$((j + 1))
+        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != "'" ]; do
+          j=$((j + 1))
+        done
+        ;;
+      \")
+        j=$((j + 1))
+        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != '"' ]; do
+          if [ "${s:$j:1}" = $'\\' ] && [ $((j + 1)) -lt "$len" ]; then
+            j=$((j + 2))
+            continue
+          fi
+          j=$((j + 1))
+        done
+        ;;
+      "$open") [ "$open" = "$close" ] && depth=$((depth - 1)) || depth=$((depth + 1)) ;;
+      "$close") depth=$((depth - 1)) ;;
+    esac
+    j=$((j + 1))
+  done
+  local content_len=$((j - start - head_len - 1))
+  [ "$content_len" -lt 0 ] && content_len=0
+  EXTRA_SEGMENTS+=("${s:$((start + head_len)):${content_len}}")
+  SUBST_NEXT_I=$j
+}
+
+# Recursively collects every candidate "statement" segment from $1 into the
+# global all_segments array: one pass splits the quote-neutralized text on
+# statement separators (;, &, && , a bare |, ||, parentheses/subshells,
+# brace groups, backtick) — then each live substitution queued by
+# neutralize_quotes is checked the same way, recursively.
+collect_segments() {
+  local text="$1" seg sub
+  EXTRA_SEGMENTS=()
+  neutralize_quotes "$text"
+  while IFS= read -r seg; do
+    all_segments+=("$seg")
+  done < <(printf '%s\n' "$NEUTRALIZED" | sed -E 's/(;|&&?|\|\|?|\(|\)|\{|\}|`)/\n/g')
+  for sub in "${EXTRA_SEGMENTS[@]}"; do
+    collect_segments "$sub"
+  done
+}
+
+WRAPPERS=(sudo env exec command time nice nohup doas stdbuf builtin)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+# Walks the leading words of a segment, stripping `IDENT=value` assignment
+# prefixes and pass-through wrappers, until it reaches the actual
+# command-name token — then checks that token is a single bare word: no
+# SENTINEL (quoting/substitution was spliced into it) and no backslash
+# (an escape was spliced into it).
+check_segment() {
+  local trimmed first_word rest
+  trimmed=$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+  while :; do
+    [ -z "$trimmed" ] && return 0
+    read -r first_word rest <<< "$trimmed"
+    if [[ "$first_word" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+      trimmed="$rest"
+      continue
+    fi
+    if [ "$first_word" = "!" ] || is_wrapper "$first_word"; then
+      trimmed="$rest"
+      continue
+    fi
+    if [ "$first_word" = "eval" ]; then
+      printf 'Blocked: eval used for indirect/obfuscated execution\n' >&2
+      exit 2
+    fi
+    case "$first_word" in
+      *"$SENTINEL"* | *\\*)
+        printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
+        exit 2
+        ;;
+    esac
+    return 0
+  done
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+cmd=$(strip_heredocs "$raw_cmd")
+
+all_segments=()
+collect_segments "$cmd"
+
+for segment in "${all_segments[@]}"; do
+  check_segment "$segment"
+done
+
+exit 0
