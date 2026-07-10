@@ -188,8 +188,17 @@ collect_segments "$cmd"
 
 for segment in "${all_segments[@]}"; do
   trimmed=$(printf '%s' "$segment" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  [[ "$trimmed" =~ ^git([[:space:]]|$) ]] || continue
-  if ! [[ "$trimmed" =~ ^git[[:space:]]+${DASH_C_FLAGS}-C([[:space:]]|$) ]]; then
+  # Look for "git" as a standalone word ANYWHERE in the segment, not just at
+  # its start: a shell keyword (`do`, `then`, `else`, ...) or a wrapper
+  # command (`sudo`, `env`, `exec`, `command`, `time`, `!`, ...) can precede
+  # `git` within the same statement segment with no separator character
+  # between them, and none of those can be enumerated exhaustively — so
+  # anchoring the check at the start of the segment let a bare `git` right
+  # after any of them through uncaught. Validating from the first "git" word
+  # onward instead makes the check independent of whatever precedes it.
+  [[ "$trimmed" =~ (^|[[:space:]])(git([[:space:]].*|$)) ]] || continue
+  git_onward="${BASH_REMATCH[2]}"
+  if ! [[ "$git_onward" =~ ^git[[:space:]]+${DASH_C_FLAGS}-C([[:space:]]|$) ]]; then
     printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
     exit 2
   fi
