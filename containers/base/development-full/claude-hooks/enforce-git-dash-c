@@ -113,15 +113,41 @@ neutralize_quotes() {
 
 # Extracts the content of a `$( ... )` or `` ` ... ` `` substitution starting
 # at index $2 in string $1, honouring nested "open" characters (so
-# `$(echo $(git push))` finds the outer, not the inner, close). Appends the
-# extracted content to EXTRA_SEGMENTS and sets SUBST_NEXT_I to the index just
-# past the closing character, for the caller to resume scanning from.
+# `$(echo $(git push))` finds the outer, not the inner, close). Skips over
+# single- and double-quoted spans (honouring backslash-escapes inside double
+# quotes) while hunting for the matching close character, so a quoted paren
+# inside the substitution's own content — e.g. `$(echo ")" && git push)` —
+# isn't mistaken for the real close: without this, the scan would stop early,
+# and the un-consumed remainder (starting with the orphaned matching quote)
+# would then be blanked out by the caller as an "unterminated" quoted string,
+# silently hiding whatever followed (a bare `git push` in that example) from
+# the segment check. Appends the extracted content to EXTRA_SEGMENTS and sets
+# SUBST_NEXT_I to the index just past the closing character, for the caller
+# to resume scanning from.
 extract_substitution() {
   local s="$1" start="$2" open="$3" close="$4" head_len="$5" depth=1
   local j=$((start + head_len))
   local len=${#s}
+  local c
   while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
-    case "${s:$j:1}" in
+    c="${s:$j:1}"
+    case "$c" in
+      \')
+        j=$((j + 1))
+        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != "'" ]; do
+          j=$((j + 1))
+        done
+        ;;
+      \")
+        j=$((j + 1))
+        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != '"' ]; do
+          if [ "${s:$j:1}" = $'\\' ] && [ $((j + 1)) -lt "$len" ]; then
+            j=$((j + 2))
+            continue
+          fi
+          j=$((j + 1))
+        done
+        ;;
       "$open") [ "$open" = "$close" ] && depth=$((depth - 1)) || depth=$((depth + 1)) ;;
       "$close") depth=$((depth - 1)) ;;
     esac
