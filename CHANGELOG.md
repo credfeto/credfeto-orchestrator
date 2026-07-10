@@ -270,6 +270,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: exempt dependency PRs (depends/ branch or dependencies-ish label) from the assignee stand-off gate (#1142), so a human assignee (e.g. dependabot.yml's assignees: config) no longer permanently blocks the CI-verify/auto-merge takeover prompt
 - Fix development-full base image build failing to install PSScriptAnalyzer (PackageManagement's NuGet provider bootstrap fails non-interactively) by installing PowerShell as a local dotnet tool and using Install-PSResource instead of Install-Module
 - enforce-git-dash-c: closed residual bypasses where a bare git command backgrounded with a single &, wrapped in a brace group { }, or reached via a live $()/backtick substitution nested inside double quotes could slip past the -C guardrail — and quote-aware splitting stops the hook from falsely blocking already-hardened commands whose quoted arguments merely contain shell metacharacters (#1105)
+- enforce-git-dash-c: closed a further bypass where a bare git invocation preceded by a shell keyword (do/then/else/!/time) or wrapper command (sudo/env/exec/command) in the same statement segment was never checked for -C at all, since the check only matched segments starting literally with "git" (#1105)
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
