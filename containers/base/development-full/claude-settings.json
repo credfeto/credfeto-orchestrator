@@ -71,6 +71,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "/home/developer/.claude/hooks/reject-obfuscated-commands"
+          },
+          {
+            "type": "command",
             "command": "block-no-verify"
           },
           {
