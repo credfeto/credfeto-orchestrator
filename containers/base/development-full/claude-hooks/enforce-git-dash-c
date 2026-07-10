@@ -38,25 +38,135 @@ VALTOKEN="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
 # appear before `-C` — e.g. `git -c core.pager=cat -C /repo status`.
 DASH_C_FLAGS="(-c[[:space:]]+${VALTOKEN}[[:space:]]+)*"
 
+# Walks a command string one character at a time and, into the globals
+# NEUTRALIZED and EXTRA_SEGMENTS:
+#   * blanks out single-quoted text entirely — it is inert in POSIX/bash,
+#     so metacharacters inside it (e.g. `git -C . log --grep="fix a; git
+#     push later"`) must not be treated as statement separators;
+#   * blanks out double-quoted text too, EXCEPT any `$( ... )` or `` ` ` ``
+#     command substitution nested inside it, which is queued into
+#     EXTRA_SEGMENTS for its own recursive check — that content executes
+#     regardless of the quotes around it, e.g. `echo "$(git push)"`;
+#   * queues top-level (unquoted) `$( ... )` / backtick substitution the
+#     same way, and leaves every other character untouched so the caller's
+#     statement-separator split still applies to real, unquoted operators.
+neutralize_quotes() {
+  local s="$1" c i=0 len
+  NEUTRALIZED=""
+  len=${#s}
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    case "$c" in
+      \')
+        i=$((i + 1))
+        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != "'" ]; do
+          i=$((i + 1))
+        done
+        i=$((i + 1))
+        NEUTRALIZED+=' '
+        ;;
+      \")
+        i=$((i + 1))
+        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != '"' ]; do
+          c="${s:$i:1}"
+          if [ "$c" = $'\\' ] && [ $((i + 1)) -lt "$len" ]; then
+            i=$((i + 2))
+            continue
+          fi
+          if [ "$c" = '$' ] && [ "${s:$((i + 1)):1}" = '(' ]; then
+            extract_substitution "$s" "$i" '(' ')' 2
+            i="$SUBST_NEXT_I"
+            continue
+          fi
+          if [ "$c" = '`' ]; then
+            extract_substitution "$s" "$i" '`' '`' 1
+            i="$SUBST_NEXT_I"
+            continue
+          fi
+          i=$((i + 1))
+        done
+        i=$((i + 1))
+        NEUTRALIZED+=' '
+        ;;
+      '$')
+        if [ "${s:$((i + 1)):1}" = '(' ]; then
+          extract_substitution "$s" "$i" '(' ')' 2
+          i="$SUBST_NEXT_I"
+          NEUTRALIZED+=' '
+        else
+          NEUTRALIZED+="$c"
+          i=$((i + 1))
+        fi
+        ;;
+      '`')
+        extract_substitution "$s" "$i" '`' '`' 1
+        i="$SUBST_NEXT_I"
+        NEUTRALIZED+=' '
+        ;;
+      *)
+        NEUTRALIZED+="$c"
+        i=$((i + 1))
+        ;;
+    esac
+  done
+}
+
+# Extracts the content of a `$( ... )` or `` ` ... ` `` substitution starting
+# at index $2 in string $1, honouring nested "open" characters (so
+# `$(echo $(git push))` finds the outer, not the inner, close). Appends the
+# extracted content to EXTRA_SEGMENTS and sets SUBST_NEXT_I to the index just
+# past the closing character, for the caller to resume scanning from.
+extract_substitution() {
+  local s="$1" start="$2" open="$3" close="$4" head_len="$5" depth=1
+  local j=$((start + head_len))
+  local len=${#s}
+  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
+    case "${s:$j:1}" in
+      "$open") [ "$open" = "$close" ] && depth=$((depth - 1)) || depth=$((depth + 1)) ;;
+      "$close") depth=$((depth - 1)) ;;
+    esac
+    j=$((j + 1))
+  done
+  local content_len=$((j - start - head_len - 1))
+  [ "$content_len" -lt 0 ] && content_len=0
+  EXTRA_SEGMENTS+=("${s:$((start + head_len)):${content_len}}")
+  SUBST_NEXT_I=$j
+}
+
+# Recursively collects every candidate "invocation" segment from $1 into the
+# global all_segments array: one pass splits the quote-neutralized text on
+# statement separators (;, &, && a bare |, ||, parentheses/subshells, brace
+# groups, backtick) so a single whole-command check can't let one hardened
+# `git -C` earlier in a chain satisfy the check while a later bare `git`
+# slips through, e.g. `git -C . status && git push --force`, `true & git
+# push`, or `{ git push; }` — then each live substitution queued by
+# neutralize_quotes is checked the same way, recursively.
+collect_segments() {
+  local text="$1" seg sub
+  EXTRA_SEGMENTS=()
+  neutralize_quotes "$text"
+  while IFS= read -r seg; do
+    all_segments+=("$seg")
+  done < <(printf '%s\n' "$NEUTRALIZED" | sed -E 's/(;|&&?|\|\|?|\(|\)|\{|\}|`)/\n/g')
+  for sub in "${EXTRA_SEGMENTS[@]}"; do
+    collect_segments "$sub"
+  done
+}
+
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 cmd=$(strip_heredocs "$raw_cmd")
 
-# Split the command into individual invocations on statement separators
-# (;, &&, ||, a bare |), command-substitution/backtick boundaries ($( ` ),
-# and parentheses (subshells), so each git invocation is checked on its own.
-# A single whole-command check would let one hardened `git -C` earlier in a
-# chain satisfy the check while a later bare `git` slips through, e.g.
-# `git -C . status && git push --force` or `x=$(git rev-parse HEAD)`.
-segments=$(printf '%s' "$cmd" | sed -E 's/(;|&&|\|\|?|\(|\)|`)/\n/g')
+all_segments=()
+collect_segments "$cmd"
 
-while IFS= read -r segment; do
+for segment in "${all_segments[@]}"; do
   trimmed=$(printf '%s' "$segment" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
   [[ "$trimmed" =~ ^git([[:space:]]|$) ]] || continue
   if ! [[ "$trimmed" =~ ^git[[:space:]]+${DASH_C_FLAGS}-C([[:space:]]|$) ]]; then
     printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
     exit 2
   fi
-done <<< "$segments"
+done
 
 exit 0
