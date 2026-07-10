@@ -58,6 +58,7 @@ the real GitHub PAT never enters the container.
 | `sqlcmd` | `SQLCMD_VERSION` (default `v1.10.0`) | GitHub releases for `microsoft/go-sqlcmd` (`.tar.bz2` archive) |
 | `actionlint` | `ACTIONLINT_VERSION` (default `latest`) | Official `download-actionlint.bash` installer script |
 | `trufflehog` | `TRUFFLEHOG_VERSION` (unset = latest) | Official `install.sh` installer script |
+| `trivy` | `TRIVY_VERSION` (default `0.72.0`) | GitHub releases for `aquasecurity/trivy` (`.tar.gz` archive) |
 | `composite-action-lint` | built from `master` of `bettermarks/composite-action-lint` | Compiled in a throwaway `golang:1.24-bookworm` multi-stage builder; no release binaries are published upstream. The binary lands in `/opt/composite-action-lint/` and is symlinked to `/usr/local/bin/composite-action-lint`. |
 
 ### .NET SDK
@@ -113,7 +114,7 @@ workload execution. The `developer` home directory is referenced in two ways:
 | `/usr/local/bin/composite-action-lint` | symlink owned by root | The symlink target resolves to the root-owned binary above; a non-root user cannot retarget or remove the symlink. |
 
 All other binaries under `/usr/local/bin/` (hadolint, dotenv-linter, sqlcmd,
-actionlint, trufflehog) are placed with `chmod 0755` and default to
+actionlint, trufflehog, trivy) are placed with `chmod 0755` and default to
 `root:root` ownership, making them executable by all but writable only by
 root.
 
@@ -129,7 +130,7 @@ to confirm it exits with status 0. The binaries checked are:
 
 `git`, `gpg`, `curl`, `dotnet`, `shellcheck`, `shfmt`, `bats`, `sqlite3`,
 `gh`, `hadolint`, `dotenv-linter`, `sqlcmd`, `actionlint`, `trufflehog`,
-`composite-action-lint`, `python3`, `ansible-lint`, `flake8`, `pylint`,
+`trivy`, `composite-action-lint`, `python3`, `ansible-lint`, `flake8`, `pylint`,
 `yamllint`, `pre-commit`, `xmllint`
 
 **SSH client version.** `ssh -V` (not `--version`) is called separately

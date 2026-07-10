@@ -73,6 +73,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord work-item and blocked-item notifications now show Priority (from the item's Security/Urgent/High/Medium/Low labels), a coarse Status (To Do/In Progress/Done/Blocked), and the fine-grained Workflow-board Sub-status, replacing the old New/Resume status field that had become meaningless once every session became a single fresh phase - all derived from already-tracked GitHub state at zero additional agentic cost
 - Add an `enforce-git-identity` Claude Code hook to the development-full container, blocking commit/fetch/pull/rebase/merge/cherry-pick/revert/am until git identity and GPG signing are correctly configured
 - Add a build-only (no push) `pull_request` trigger to each of the five `build-development-*.yml` container image workflows, so a broken Dockerfile is caught on a branch/PR before merge; the downstream `workflow_run` chain no longer advances from a pull_request-triggered build, so PR validation builds never cascade into publishing images
+- Install trivy in the development-tools base container image so the trivy dependency-vulnerability pre-commit hook can run
 ### Fixed
 - oneshot: fix duplicate tracking issue creation for unparseable rate limits and missing workflow projects by moving the repo filter into the search query string, bypassing a `gh` bug in some environments
 - oneshot: prevent spam by de-duplicating reports of unparseable rate-limit messages against existing issue bodies and comments

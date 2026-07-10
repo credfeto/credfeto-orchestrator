@@ -67,6 +67,11 @@ ARG ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7
 ARG TRUFFLEHOG_VERSION=3.95.5
 ARG TRUFFLEHOG_SHA256_AMD64=8d151a19465973bec226be5992a2a11b053f4ab92c77861f642089892ae9aa58
 ARG TRUFFLEHOG_SHA256_ARM64=bb876c4e5a84fa4fdbda4fc24143ed2d12eac32cfd3f7e41c79cbd7d33607b4a
+# trivy: pinned to a specific release for reproducible, verifiable builds.
+# Update TRIVY_VERSION and both SHA256 ARGs together when bumping.
+ARG TRIVY_VERSION=0.72.0
+ARG TRIVY_SHA256_AMD64=bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea
+ARG TRIVY_SHA256_ARM64=2ca2c023109c2db6b2b77366b6717291452d4531167377d95c79547f0c8e3467
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
@@ -269,6 +274,25 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod 0755 /usr/local/bin/trufflehog \
     && trufflehog --version
 
+# ---- trivy — dependency vulnerability scanner -------------------------------
+# Static binary; downloaded directly from GitHub releases and verified against
+# the pinned SHA256 checksum. Asset naming uses "64bit"/"ARM64" rather than the
+# amd64/arm64 convention the other tools above use.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) TV_ARCH=64bit; SHA256="${TRIVY_SHA256_AMD64}" ;; \
+         arm64) TV_ARCH=ARM64; SHA256="${TRIVY_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TV_ARCH}.tar.gz" \
+        -o /tmp/trivy.tar.gz \
+    && echo "${SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
+    && rm /tmp/trivy.tar.gz \
+    && chmod 0755 /usr/local/bin/trivy \
+    && trivy --version
+
 # ---- composite-action-lint --------------------------------------------------
 # Built upstream-from-source by the multi-stage Go builder above (no release
 # binaries are published). Lives at /opt/composite-action-lint/ alongside an
@@ -358,7 +382,7 @@ RUN { \
 RUN set -e; \
     echo "== binary presence + version probe =="; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
-               hadolint dotenv-linter sqlcmd actionlint trufflehog \
+               hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
                python3 ansible-lint flake8 pylint \
                yamllint pre-commit xmllint; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
