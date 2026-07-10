@@ -177,3 +177,63 @@ run_hook() {
     run_hook "$(printf 'cat <<EOF\ngit push\nEOF')"
     [ "${status}" -eq 0 ]
 }
+
+@test "a bare git negated with ! is blocked" {
+    run_hook "! git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a hardened git negated with ! is allowed" {
+    run_hook "! git -C . push"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bare git prefixed with sudo is blocked" {
+    run_hook "sudo git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a hardened git prefixed with sudo is allowed" {
+    run_hook "sudo git -C . push"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bare git prefixed with env is blocked" {
+    run_hook "env git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git prefixed with exec is blocked" {
+    run_hook "exec git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git prefixed with command is blocked" {
+    run_hook "command git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git prefixed with time is blocked" {
+    run_hook "time git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git inside a for-loop do body is blocked" {
+    run_hook "for i in 1; do git push; done"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a hardened git inside a for-loop do body is allowed" {
+    run_hook "for i in 1; do git -C . push; done"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bare git inside an if/then body is blocked" {
+    run_hook "if true; then git push; fi"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git inside an if/else body is blocked" {
+    run_hook "if false; then true; else git push; fi"
+    [ "${status}" -eq 2 ]
+}
