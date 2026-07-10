@@ -115,6 +115,24 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a bare git after a quoted close-paren inside a top-level command substitution is blocked" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook '$(echo ")" && git push)'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a bare git after a quoted close-paren inside a top-level backtick substitution is blocked" {
+    # shellcheck disable=SC2016  # literal backticks — must reach the hook unexpanded
+    run_hook 'echo `echo ")" && git push`'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a hardened git after a quoted close-paren inside a top-level command substitution is allowed" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook '$(echo ")" && git -C . push)'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a hardened invocation with parens inside a quoted grep pattern is not falsely blocked" {
     run_hook 'git -C . log --grep="(WIP) git stuff"'
     [ "${status}" -eq 0 ]
