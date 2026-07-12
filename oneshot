@@ -735,6 +735,16 @@ find_human_taken_over_pr_for_issue() {
 # headRefName (#1134) — so the only remote failure mode is the identity lookup.
 # Returns 0 (human-driven — stand off), 1 (not human-driven — process normally), or 2 when the
 # identity lookup fails (caller should skip the item for this tick).
+pr_has_depends_branch() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '(.headRefName // "") | test("^depends/")' > /dev/null 2>&1
+}
+
+pr_has_dependency_label() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(contains("dependencies"))' > /dev/null 2>&1
+}
+
 pr_is_human_driven() {
     local pr_json="$1" trusted_logins="$2"
 
@@ -744,7 +754,7 @@ pr_is_human_driven() {
         return 1
     fi
 
-    if printf '%s' "${pr_json}" | jq -e '(.headRefName // "") | test("^depends/")' > /dev/null 2>&1; then
+    if pr_has_depends_branch "${pr_json}"; then
         return 1
     fi
 
@@ -752,7 +762,7 @@ pr_is_human_driven() {
         return 0
     fi
 
-    if printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(contains("dependencies"))' > /dev/null 2>&1; then
+    if pr_has_dependency_label "${pr_json}"; then
         return 1
     fi
 
@@ -4223,18 +4233,24 @@ main() {
             # Stand off if this PR is assigned to someone other than us — prevents
             # duplicate work when a human owns the item (#1142).  _GH_ME was resolved
             # above by pr_is_human_driven; resolve_gh_me is a no-op if already set.
+            # Dependency PRs are exempt here too, for the same reason pr_is_human_driven
+            # exempts them above: dependabot.yml-style `assignees:` config (or a human
+            # self-assigning to review) must not permanently block the CI-verify/auto-merge
+            # takeover prompt (observed on funfair-server-ethereum#1028).
             if ! resolve_gh_me; then
                 warn "Failed to determine current GitHub user for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
                 skip_repos+=("${item_repo}")
                 continue
             fi
-            if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
-                '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
-                > /dev/null 2>&1; then
-                info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
-                count_human_driven=$((count_human_driven + 1))
-                continue
+            if ! pr_has_depends_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
+                if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
+                    '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
+                    > /dev/null 2>&1; then
+                    info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
+                    count_human_driven=$((count_human_driven + 1))
+                    continue
+                fi
             fi
 
             # Non-blocked, open PR = active work for this repo.
