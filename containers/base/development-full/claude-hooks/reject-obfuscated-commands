@@ -14,8 +14,16 @@
 # (sudo, env, exec, command, time, nice, nohup, doas, stdbuf, builtin, !) —
 # is built from quoted text spliced against bare text (e.g. "g""it", 'g'it,
 # "git" alone), contains a backslash escape (g\it), or is itself a live
-# $()/backtick/$VAR substitution (e.g. $(echo git), `echo git`). `eval` is
-# rejected outright — indirect string execution has no "simple" reading.
+# $()/backtick/$VAR substitution (e.g. $(echo git), `echo git`, $ALIAS) or a
+# brace-expansion group (e.g. {git,push}) — bash reconstructs word
+# boundaries from both of these at runtime the same way it does from $IFS
+# word-splitting, so the resulting words never appear as a literal,
+# whitespace-delimited "git" token for any downstream hook's text-based
+# scanning to find (see the round-5 finding on PR #1159: `git${IFS}push` and
+# `{git,push}` both ran a fully bare `git push` despite passing every
+# text-based check that only looked for quoting, escaping, and $()
+# substitution). `eval` is rejected outright — indirect string execution has
+# no "simple" reading.
 #
 # Deliberately NOT covered: path-qualified binaries (/usr/bin/git, ./git).
 # This container's own mandated workflows invoke hooks via absolute/relative
@@ -76,6 +84,14 @@ SENTINEL=$'\x01'
 #     same way, blanking it to one SENTINEL char too — a live substitution
 #     used as a command name (e.g. `$(echo git) push`) must not be mistaken
 #     for a plain word either;
+#   * blanks a top-level brace-expansion group (`{a,b}`, `{1..5}` — see
+#     extract_brace_expansion) to one SENTINEL char too, for the same
+#     reason: it is only actually dangerous when it lands in the
+#     command-name word (`{git,push}`), and blanking rather than an
+#     outright whole-command reject means it is correctly left alone, like
+#     a quoted argument, when it's just an ordinary argument word (e.g.
+#     `mkdir -p dir/{a,b}` must stay allowed — check_segment only ever
+#     inspects the command-name word, never the rest of the segment);
 #   * leaves every other character untouched so the caller's
 #     statement-separator split still applies to real, unquoted operators.
 neutralize_quotes() {
@@ -131,6 +147,16 @@ neutralize_quotes() {
         i="$SUBST_NEXT_I"
         NEUTRALIZED+="$SENTINEL"
         ;;
+      '{')
+        extract_brace_expansion "$s" "$i"
+        if [ "$IS_BRACE_EXPANSION" = "1" ]; then
+          i="$BRACE_NEXT_I"
+          NEUTRALIZED+="$SENTINEL"
+        else
+          NEUTRALIZED+="$c"
+          i=$((i + 1))
+        fi
+        ;;
       *)
         NEUTRALIZED+="$c"
         i=$((i + 1))
@@ -181,6 +207,47 @@ extract_substitution() {
   SUBST_NEXT_I=$j
 }
 
+# Finds the `}` matching the `{` at index $2 in string $1 (simple depth
+# counting — braces are not valid inside brace-expansion content, so no
+# quote-awareness is needed here, unlike extract_substitution). Sets
+# IS_BRACE_EXPANSION=1 and BRACE_NEXT_I (index just past the closing `}`)
+# when the content between the braces is expansion syntax — comma-separated
+# alternatives or a `..` range, e.g. {a,b}, {a,b,c}, {1..5} — and nothing
+# else (in particular, no whitespace anywhere in the content). That
+# whitespace exclusion is what tells expansion syntax apart from a
+# `{ cmd; }` compound-command group: bash requires whitespace right after
+# `{` and right before `}` to parse the reserved-word group form, so its
+# absence here means this is expansion, not a group — e.g. `{ git push; }`
+# leaves IS_BRACE_EXPANSION=0 so the caller falls through to treating `{`/`}`
+# as plain statement separators, same as before this function existed.
+# Unmatched braces (no closing `}` found) also leave IS_BRACE_EXPANSION=0.
+# Expansion is blanked to a SENTINEL rather than reconstructed and
+# re-checked because, unlike $()/backtick substitution, its output can
+# splice directly into an adjacent bare word with no quoting, escaping, or
+# substitution marker left behind (e.g. {git,push} runtime-expands to the
+# two words "git" "push").
+extract_brace_expansion() {
+  local s="$1" start="$2" depth=1
+  local j=$((start + 1))
+  local len=${#s}
+  IS_BRACE_EXPANSION=0
+  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
+    case "${s:$j:1}" in
+      '{') depth=$((depth + 1)) ;;
+      '}') depth=$((depth - 1)) ;;
+    esac
+    j=$((j + 1))
+  done
+  [ "$depth" -gt 0 ] && return
+  local content_len=$((j - start - 2))
+  [ "$content_len" -lt 0 ] && content_len=0
+  local content="${s:$((start + 1)):${content_len}}"
+  if [[ "$content" =~ ^[^{}[:space:]]*(,|\.\.)[^{}[:space:]]*$ ]]; then
+    IS_BRACE_EXPANSION=1
+    BRACE_NEXT_I=$j
+  fi
+}
+
 # Recursively collects every candidate "statement" segment from $1 into the
 # global all_segments array: one pass splits the quote-neutralized text on
 # statement separators (;, &, && , a bare |, ||, parentheses/subshells,
@@ -211,8 +278,14 @@ is_wrapper() {
 # Walks the leading words of a segment, stripping `IDENT=value` assignment
 # prefixes and pass-through wrappers, until it reaches the actual
 # command-name token — then checks that token is a single bare word: no
-# SENTINEL (quoting/substitution was spliced into it) and no backslash
-# (an escape was spliced into it).
+# SENTINEL (quoting, substitution, or a brace-expansion group was spliced
+# into it — see neutralize_quotes/extract_brace_expansion), no backslash (an
+# escape was spliced into it), and no literal `$` (neutralize_quotes already
+# replaces every $()/backtick substitution with a SENTINEL, so a `$`
+# surviving into a segment can only be a bare $VAR/${VAR} parameter
+# expansion used as, or spliced into, the command name — e.g. $ALIAS push,
+# or the "git$" left behind once brace-splitting isolates git${IFS}push's
+# ${IFS} from its neighbours).
 check_segment() {
   local trimmed first_word rest
   trimmed=$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
@@ -232,7 +305,7 @@ check_segment() {
       exit 2
     fi
     case "$first_word" in
-      *"$SENTINEL"* | *\\*)
+      *"$SENTINEL"* | *\\* | *'$'*)
         printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
         exit 2
         ;;
