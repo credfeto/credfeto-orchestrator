@@ -227,3 +227,66 @@ run_hook() {
     run_hook 'git -C . log --grep="{WIP,TODO}"'
     [ "${status}" -eq 0 ]
 }
+
+@test "a redirection operator preceding a quote-spliced command name is blocked" {
+    run_hook '2>/dev/null "g""it" push --force'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "bash -c with an inline git invocation is blocked" {
+    run_hook 'bash -c "git push"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "sh -c with an inline git invocation is blocked" {
+    run_hook 'sh -c "git push"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "python3 -c with inline code is blocked" {
+    run_hook "python3 -c \"import os; os.system('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "perl -e with inline code is blocked" {
+    run_hook "perl -e \"system('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "an interpreter re-invocation after sudo is blocked" {
+    run_hook 'sudo bash -c "git push"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "running a script file with an interpreter and no inline-code flag is allowed" {
+    run_hook "bash ./scripts/deploy.sh"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an interpreter invoked with unrelated flags is not falsely blocked" {
+    run_hook "python3 -m venv env"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a command containing a non-ASCII byte is blocked" {
+    run_hook $'git -C . commit -m "caf\xc3\xa9"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-printable or non-ASCII'* ]]
+}
+
+@test "a command containing a control byte is blocked" {
+    run_hook $'git -C . commit -m "wip\x01"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-printable or non-ASCII'* ]]
+}
+
+@test "a plain ASCII command is not falsely blocked by the printable check" {
+    run_hook 'git -C . commit -m "plain ascii message"'
+    [ "${status}" -eq 0 ]
+}
