@@ -1,29 +1,40 @@
 #!/usr/bin/env bash
-# Rejects Bash commands whose command-name token is spelled out in a way
-# that disguises what program actually runs, instead of chasing individual
-# bypass techniques through each downstream hook's own detection logic (see
-# PR #1105/#1159: enforce-git-dash-c needed four separate rounds to close
-# quote-splice, escape, substitution, and separator bypasses one at a time —
-# every round found a new *obfuscation* technique, not a new git-specific
-# case). Runs first, ahead of every other PreToolUse hook, so obfuscation is
-# refused categorically up front.
+# Rejects Bash commands whose command-name token isn't a plain, obvious bare
+# word, instead of chasing individual bypass techniques through each
+# downstream hook's own detection logic (see PR #1105/#1159: six review
+# rounds each found a new *obfuscation* technique — quote-splice, escape,
+# substitution, separator, brace-expansion, redirection-prefix — because an
+# enumerated denylist of "bad shapes" is inherently incomplete). Runs first,
+# ahead of every other PreToolUse hook, so obfuscation is refused
+# categorically up front.
 #
-# "Obfuscated" here means: the command-name token — the first word of a
-# statement, or the first word after a separator (;, &, &&, |, ||, (, {,
+# Design (round 6+): a positive allowlist on the command-name token, not an
+# enumeration of bad constructs. The command-name token — the first word of
+# a statement, or the first word after a separator (;, &, &&, |, ||, (, {,
 # backtick), an `IDENT=value` assignment prefix, or a pass-through wrapper
 # (sudo, env, exec, command, time, nice, nohup, doas, stdbuf, builtin, !) —
-# is built from quoted text spliced against bare text (e.g. "g""it", 'g'it,
-# "git" alone), contains a backslash escape (g\it), or is itself a live
-# $()/backtick/$VAR substitution (e.g. $(echo git), `echo git`, $ALIAS) or a
-# brace-expansion group (e.g. {git,push}) — bash reconstructs word
-# boundaries from both of these at runtime the same way it does from $IFS
-# word-splitting, so the resulting words never appear as a literal,
-# whitespace-delimited "git" token for any downstream hook's text-based
-# scanning to find (see the round-5 finding on PR #1159: `git${IFS}push` and
-# `{git,push}` both ran a fully bare `git push` despite passing every
-# text-based check that only looked for quoting, escaping, and $()
-# substitution). `eval` is rejected outright — indirect string execution has
-# no "simple" reading.
+# must match ^[A-Za-z0-9_./-]+$ once quoting/substitution/brace-expansion
+# has been neutralized to a single SENTINEL placeholder char (see
+# neutralize_quotes). Any quote-splice ("g""it"), backslash-escape (g\it),
+# $()/backtick/$VAR substitution, or brace-expansion group ({git,push})
+# leaves a SENTINEL, `$`, or `\` in the token, which the allowlist rejects
+# without needing a dedicated check per technique — it also rejects a
+# leading redirection operator (`2>/dev/null git push`) for free, since `>`
+# isn't in the allowed set. `eval` is rejected outright — indirect string
+# execution has no "simple" reading.
+#
+# Interpreter re-invocation (`bash -c "git push"`, `python3 -c "..."`, ...)
+# is a separate, categorical carve-out: the command name (`bash`, `python3`)
+# is a perfectly plain bare word, and its inline-code argument is ordinary
+# quoted text that neutralize_quotes correctly treats as inert — nothing
+# about the *character shape* is wrong, so the allowlist alone can't catch
+# it. See is_interpreter/has_inline_code_flag below.
+#
+# Also rejects any non-printable or non-ASCII byte anywhere in the command
+# (control bytes, Unicode homoglyphs of shell metacharacters, zero-width/
+# bidi-override characters) — not metacharacters themselves (`;`, `|`, `$`
+# etc. all stay legal; segmentation/hardening downstream is what deals with
+# those).
 #
 # Deliberately NOT covered: path-qualified binaries (/usr/bin/git, ./git).
 # This container's own mandated workflows invoke hooks via absolute/relative
@@ -36,6 +47,12 @@
 # non-obfuscated command is otherwise *allowed* (e.g. `git push` without -C
 # is plainly spelled out, not obfuscated, and is still blocked downstream by
 # enforce-git-dash-c). Exit 2 = blocked, 0 = allowed.
+#
+# Deliberately a first pass, not the final word (per credfeto's direction on
+# PR #1159): the interpreter list and inline-code-flag list below are small
+# and may over-block or under-block at the margins — intended to be relaxed
+# once the categorical shape has proven itself, not enumerated exhaustively
+# now.
 
 # Strips heredoc bodies out of a multi-line command string before it's
 # pattern-matched, so example/doc/test-script text written via `cat <<EOF`
@@ -275,17 +292,49 @@ is_wrapper() {
   return 1
 }
 
+# Interpreters whose inline-code flag lets an arbitrary string be parsed and
+# executed as new code, re-invoking a bare command from inside a command
+# name that is itself perfectly plain (see the module doc comment). Not
+# exhaustive by design — see credfeto's PR #1159 direction to start narrow
+# and relax later.
+INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
+
+# Flags that hand one of the interpreters above a string to parse and run as
+# code, rather than a script file to read. Deliberately excludes flags like
+# ruby's `-E`/node's `-c` that don't execute inline code.
+INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
+
+is_interpreter() {
+  local w
+  for w in "${INTERPRETERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+has_inline_code_flag() {
+  local tok flag
+  # shellcheck disable=SC2086  # intentional word-splitting to tokenize the rest of the segment
+  for tok in $1; do
+    for flag in "${INLINE_CODE_FLAGS[@]}"; do
+      [ "$tok" = "$flag" ] && return 0
+    done
+  done
+  return 1
+}
+
 # Walks the leading words of a segment, stripping `IDENT=value` assignment
 # prefixes and pass-through wrappers, until it reaches the actual
-# command-name token — then checks that token is a single bare word: no
-# SENTINEL (quoting, substitution, or a brace-expansion group was spliced
-# into it — see neutralize_quotes/extract_brace_expansion), no backslash (an
-# escape was spliced into it), and no literal `$` (neutralize_quotes already
-# replaces every $()/backtick substitution with a SENTINEL, so a `$`
-# surviving into a segment can only be a bare $VAR/${VAR} parameter
-# expansion used as, or spliced into, the command name — e.g. $ALIAS push,
-# or the "git$" left behind once brace-splitting isolates git${IFS}push's
-# ${IFS} from its neighbours).
+# command-name token — then checks that token is a single plain bare word
+# via a positive allowlist (^[A-Za-z0-9_./-]+$): anything else (a SENTINEL
+# from quoting/substitution/brace-expansion — see
+# neutralize_quotes/extract_brace_expansion — a backslash escape, a literal
+# `$` from a bare $VAR/${VAR} expansion, a redirection operator, or any
+# other non-alphanumeric character) fails the allowlist and is rejected,
+# with no need for a dedicated check per obfuscation technique. Finally,
+# rejects the segment outright if the (now-validated bare) command name is a
+# known interpreter being handed an inline-code flag — see INTERPRETERS /
+# INLINE_CODE_FLAGS above.
 check_segment() {
   local trimmed first_word rest
   trimmed=$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
@@ -304,19 +353,36 @@ check_segment() {
       printf 'Blocked: eval used for indirect/obfuscated execution\n' >&2
       exit 2
     fi
-    case "$first_word" in
-      *"$SENTINEL"* | *\\* | *'$'*)
-        printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
-        exit 2
-        ;;
-    esac
+    if ! [[ "$first_word" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+      printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
+      exit 2
+    fi
+    if is_interpreter "${first_word##*/}" && has_inline_code_flag "$rest"; then
+      printf 'Blocked: interpreter re-invocation with inline code is not a simple, obvious command\n' >&2
+      exit 2
+    fi
     return 0
   done
+}
+
+# Rejects the whole (heredoc-stripped) command outright if any byte falls
+# outside ordinary printable ASCII (0x20-0x7E) plus tab/newline/CR — see the
+# module doc comment for what this catches that character-shape checks on
+# individual tokens don't.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
+
+reject_non_ascii() {
+  if [[ "$1" =~ $NON_PRINTABLE_RE ]]; then
+    printf 'Blocked: command contains non-printable or non-ASCII characters\n' >&2
+    exit 2
+  fi
 }
 
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 cmd=$(strip_heredocs "$raw_cmd")
+
+reject_non_ascii "$cmd"
 
 all_segments=()
 collect_segments "$cmd"

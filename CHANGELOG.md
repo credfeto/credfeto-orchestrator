@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Bake GitHub's SSH host key into the agent image at build time (regenerated fresh on every rebuild) so the container no longer relies on a runtime ssh-keyscan network call, closing the known_hosts host-key-rotation trap
 - Close git config guardrail bypass via the git -C form the agent hooks force, and harden enforce-git-dash-c against pipe/chained-command/command-substitution bypasses (#1105)
 - Close a bypass in the reject-obfuscated-commands Claude Code hook where ${IFS} word-splitting (e.g. git${IFS}push) and brace-expansion (e.g. {git,push}) could reconstruct a bare git invocation without ever containing a literal whitespace-delimited "git" token, evading detection (#1105)
+- Replace the per-technique bad-construct denylist in the reject-obfuscated-commands hook with a positive allowlist on the command-name token, categorically closing the redirection-prefix and interpreter-re-invocation (bash -c/python3 -c/perl -e/...) bypasses and rejecting any non-printable or non-ASCII byte in the command; close a git-config guardrail bypass where omitting the --local/--global scope flag (which defaults to local) fell through the claude-settings.json deny rules (#1105)
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
