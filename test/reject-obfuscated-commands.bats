@@ -186,3 +186,44 @@ run_hook() {
     run_hook "$(printf 'cat <<EOF\ngit push\nEOF')"
     [ "${status}" -eq 0 ]
 }
+
+@test "IFS word-splitting to reconstruct a bare git invocation is blocked" {
+    # shellcheck disable=SC2016  # literal ${IFS} — must reach the hook unexpanded
+    run_hook 'git${IFS}push'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "brace-expansion to reconstruct a bare git invocation is blocked" {
+    run_hook '{git,push}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "brace-expansion used as the command name after a wrapper is blocked" {
+    run_hook 'sudo {git,push}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "a bare variable used as the command name is blocked" {
+    # shellcheck disable=SC2016  # literal $ALIAS — must reach the hook unexpanded
+    run_hook '$ALIAS push'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "a hardened compound group with no brace expansion is not falsely blocked" {
+    run_hook '{ git -C . push; }'
+    [ "${status}" -eq 0 ]
+}
+
+@test "brace expansion in argument position is not falsely blocked" {
+    run_hook 'mkdir -p project/{src,test,docs}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "brace expansion in argument position after a hardened git invocation is not falsely blocked" {
+    run_hook 'git -C . log --grep="{WIP,TODO}"'
+    [ "${status}" -eq 0 ]
+}

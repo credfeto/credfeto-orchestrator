@@ -33,6 +33,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - stop_ssh_agent used a bare, unscoped 'pkill ssh-agent' that could kill any process named ssh-agent system-wide — including an unrelated interactive login agent belonging to the same user — instead of only the one the orchestrator's own service instance started. It is now scoped by user and by the specific socket path, mirroring the scoping install-timer's own ExecStartPre already uses (#1122)
 - Bake GitHub's SSH host key into the agent image at build time (regenerated fresh on every rebuild) so the container no longer relies on a runtime ssh-keyscan network call, closing the known_hosts host-key-rotation trap
 - Close git config guardrail bypass via the git -C form the agent hooks force, and harden enforce-git-dash-c against pipe/chained-command/command-substitution bypasses (#1105)
+- Close a bypass in the reject-obfuscated-commands Claude Code hook where ${IFS} word-splitting (e.g. git${IFS}push) and brace-expansion (e.g. {git,push}) could reconstruct a bare git invocation without ever containing a literal whitespace-delimited "git" token, evading detection (#1105)
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
