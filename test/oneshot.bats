@@ -5644,6 +5644,36 @@ setup_local_git_remote() {
     [[ "${output}" == *"Found actionable PullRequest #5"* ]]
 }
 
+@test "main processes a depends/-branch dependency PR assigned only to a human (#1142 follow-up)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"auto-pr"}],"headRefName":"depends/update-foo/1.2.3","headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+}
+
+@test "main processes a dependencies-labelled PR assigned only to a human (#1142 follow-up)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"npm dependencies"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"assignees":[{"login":"alice"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"assigned to another user"* ]]
+    [[ "${output}" == *"Found actionable PullRequest #5"* ]]
+}
+
 @test "main marks the repo active when a feed PR's state fetch fails, keeping issues serialized (#1134)" {
     setup_main_mocks
     fetch_all_priorities() {
