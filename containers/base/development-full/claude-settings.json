@@ -54,10 +54,8 @@
       "Bash(bun x *)"
     ],
     "deny": [
-      "Bash(git config --local *)",
-      "Bash(git config --global *)",
-      "Bash(git -C * config --local *)",
-      "Bash(git -C * config --global *)",
+      "Bash(git config *)",
+      "Bash(git -C * config *)",
       "Bash(gh auth setup-git*)",
       "Bash(sudo *)"
     ]
