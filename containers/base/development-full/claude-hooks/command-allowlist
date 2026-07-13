@@ -42,6 +42,11 @@ sqlfluff
 sqlite3
 jq
 
+# Repo-local test/deploy scripts (committed to main, basename-matched
+# across every repo since this allowlist is shared globally)
+testdb
+testdocker
+
 # Core utilities
 ls
 cat

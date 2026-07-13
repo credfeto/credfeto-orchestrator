@@ -276,6 +276,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Added a categorical reject-obfuscated-commands Claude Code hook that runs first in the PreToolUse chain and rejects any Bash command whose command-name token is quote-spliced, backslash-escaped, or built from a live substitution (or is eval) - closing this whole class of hook-bypass obfuscation up front instead of chasing each technique individually through enforce-git-dash-c (#1105)
 - Ban the env/nice/command wrappers outright in reject-obfuscated-commands (their leading flags could be mistaken for the validated command name) and reject a leading dash in the command-name allowlist to close the same bypass class for the remaining pass-through wrappers
 - Allow the pre-commit-check wrapper script through the reject-obfuscated-commands hook allowlist so local pre-commit tooling is not blocked
+- Allow the testdb and testdocker repo-local test scripts through the reject-obfuscated-commands hook allowlist
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
