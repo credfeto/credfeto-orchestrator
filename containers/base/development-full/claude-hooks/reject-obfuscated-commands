@@ -12,16 +12,28 @@
 # enumeration of bad constructs. The command-name token — the first word of
 # a statement, or the first word after a separator (;, &, &&, |, ||, (, {,
 # backtick), an `IDENT=value` assignment prefix, or a pass-through wrapper
-# (sudo, env, exec, command, time, nice, nohup, doas, stdbuf, builtin, !) —
-# must match ^[A-Za-z0-9_./-]+$ once quoting/substitution/brace-expansion
+# (sudo, exec, time, nohup, doas, stdbuf, builtin, !) — must match
+# ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ once quoting/substitution/brace-expansion
 # has been neutralized to a single SENTINEL placeholder char (see
 # neutralize_quotes). Any quote-splice ("g""it"), backslash-escape (g\it),
 # $()/backtick/$VAR substitution, or brace-expansion group ({git,push})
 # leaves a SENTINEL, `$`, or `\` in the token, which the allowlist rejects
 # without needing a dedicated check per technique — it also rejects a
-# leading redirection operator (`2>/dev/null git push`) for free, since `>`
-# isn't in the allowed set. `eval` is rejected outright — indirect string
+# leading redirection operator (`2>/dev/null git push`) or a leading `-`
+# flag (`-i`, `-p`, `-oL`, ...) for free, since neither `>` nor a leading
+# `-` is in the allowed set. `eval` is rejected outright — indirect string
 # execution has no "simple" reading.
+#
+# `env`, `nice`, and `command` are banned outright (round 7 fix, per
+# credfeto's direction on PR #1159) rather than treated as pass-through
+# wrappers: all three commonly take a leading flag before their target
+# command (`env -i`, `nice -n 19`, `command -p`), and that flag token itself
+# satisfies the command-name allowlist, so treating them as pass-through
+# let the flag be mistaken for the (already-validated) command name and the
+# real target — however obfuscated — was never reached. There is no
+# legitimate need for any of the three in this container's mandated
+# workflows, so the simpler fix is to reject them categorically rather than
+# keep chasing wrapper-specific flag grammars.
 #
 # Interpreter re-invocation (`bash -c "git push"`, `python3 -c "..."`, ...)
 # is a separate, categorical carve-out: the command name (`bash`, `python3`)
@@ -282,11 +294,23 @@ collect_segments() {
   done
 }
 
-WRAPPERS=(sudo env exec command time nice nohup doas stdbuf builtin)
+WRAPPERS=(sudo exec time nohup doas stdbuf builtin)
 
 is_wrapper() {
   local w
   for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+# Wrappers banned outright rather than passed through — see the module doc
+# comment for why (leading-flag-as-command-name bypass, no legitimate need).
+BANNED_WRAPPERS=(env nice command)
+
+is_banned_wrapper() {
+  local w
+  for w in "${BANNED_WRAPPERS[@]}"; do
     [ "$1" = "$w" ] && return 0
   done
   return 1
@@ -323,18 +347,19 @@ has_inline_code_flag() {
   return 1
 }
 
-# Walks the leading words of a segment, stripping `IDENT=value` assignment
-# prefixes and pass-through wrappers, until it reaches the actual
+# Walks the leading words of a segment, rejecting outright at any banned
+# wrapper (BANNED_WRAPPERS) and otherwise stripping `IDENT=value` assignment
+# prefixes and pass-through wrappers (WRAPPERS), until it reaches the actual
 # command-name token — then checks that token is a single plain bare word
-# via a positive allowlist (^[A-Za-z0-9_./-]+$): anything else (a SENTINEL
-# from quoting/substitution/brace-expansion — see
-# neutralize_quotes/extract_brace_expansion — a backslash escape, a literal
-# `$` from a bare $VAR/${VAR} expansion, a redirection operator, or any
-# other non-alphanumeric character) fails the allowlist and is rejected,
-# with no need for a dedicated check per obfuscation technique. Finally,
-# rejects the segment outright if the (now-validated bare) command name is a
-# known interpreter being handed an inline-code flag — see INTERPRETERS /
-# INLINE_CODE_FLAGS above.
+# via a positive allowlist (^[A-Za-z0-9_./][A-Za-z0-9_./-]*$, no leading
+# `-`): anything else (a SENTINEL from quoting/substitution/brace-expansion
+# — see neutralize_quotes/extract_brace_expansion — a backslash escape, a
+# literal `$` from a bare $VAR/${VAR} expansion, a redirection operator, a
+# leading-dash flag token, or any other disallowed character) fails the
+# allowlist and is rejected, with no need for a dedicated check per
+# obfuscation technique. Finally, rejects the segment outright if the
+# (now-validated bare) command name is a known interpreter being handed an
+# inline-code flag — see INTERPRETERS / INLINE_CODE_FLAGS above.
 check_segment() {
   local trimmed first_word rest
   trimmed=$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
@@ -345,6 +370,10 @@ check_segment() {
       trimmed="$rest"
       continue
     fi
+    if is_banned_wrapper "$first_word"; then
+      printf 'Blocked: %s is not permitted - no legitimate need for it in this workflow\n' "$first_word" >&2
+      exit 2
+    fi
     if [ "$first_word" = "!" ] || is_wrapper "$first_word"; then
       trimmed="$rest"
       continue
@@ -353,7 +382,7 @@ check_segment() {
       printf 'Blocked: eval used for indirect/obfuscated execution\n' >&2
       exit 2
     fi
-    if ! [[ "$first_word" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+    if ! [[ "$first_word" =~ ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ ]]; then
       printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
       exit 2
     fi

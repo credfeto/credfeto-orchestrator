@@ -97,14 +97,53 @@ run_hook() {
     [ "${status}" -eq 2 ]
 }
 
-@test "a bare command after env is allowed" {
+@test "env is banned outright, even with a bare command after it" {
     run_hook "env FOO=bar git push"
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'env is not permitted'* ]]
 }
 
-@test "a bare command after multiple chained wrappers is allowed" {
+@test "env is banned outright even when it appears after another wrapper" {
     run_hook "sudo env exec command git push"
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'env is not permitted'* ]]
+}
+
+@test "nice is banned outright, even with a bare command after it" {
+    run_hook "nice -n 19 git push"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'nice is not permitted'* ]]
+}
+
+@test "command is banned outright, even with a bare command after it" {
+    run_hook "command -p git push"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command is not permitted'* ]]
+}
+
+@test "env -i quote-spliced target is blocked (round 7 bypass)" {
+    run_hook 'env -i "g""it" push --force'
+    [ "${status}" -eq 2 ]
+}
+
+@test "nice -n quote-spliced target is blocked (round 7 bypass)" {
+    run_hook 'nice -n 19 "g""it" push --force'
+    [ "${status}" -eq 2 ]
+}
+
+@test "command -p quote-spliced target is blocked (round 7 bypass)" {
+    run_hook 'command -p "g""it" push'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a wrapper's own leading flag is not mistaken for the command name (remaining wrappers)" {
+    run_hook 'stdbuf -oL "g""it" push'
+    [ "${status}" -eq 2 ]
+}
+
+@test "sudo with a leading flag before a quote-spliced target is blocked" {
+    run_hook 'sudo -u root "g""it" push'
+    [ "${status}" -eq 2 ]
 }
 
 @test "a negated bare command is allowed" {
