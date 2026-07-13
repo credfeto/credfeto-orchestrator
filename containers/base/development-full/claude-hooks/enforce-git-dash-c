@@ -1,51 +1,114 @@
 #!/usr/bin/env bash
 # Blocks git commands that don't use `git -C <dir>` format.
 # Exit 2 = blocked, 0 = allowed.
+#
+# Like reject-obfuscated-commands (which runs before this hook in the
+# PreToolUse chain), this parses the command with shfmt (mvdan/sh) and walks
+# the resulting AST instead of approximating shell tokenization with text
+# scanning — the previous hand-rolled quote/substitution/segment engine
+# accumulated eight review rounds of bypasses (see PR #1159 / issue #1105)
+# and is gone. The AST walk visits every call expression at any nesting
+# depth ($()/backtick substitutions, loop/if bodies, pipelines, subshells),
+# and heredoc bodies are naturally inert (they are redirect payloads in the
+# AST, not commands), so prose that merely mentions "git push" is never
+# falsely blocked while a live substitution inside a heredoc would still be
+# checked.
+#
+# Rules, per call expression:
+#   * eval/source/. are blocked outright — their string argument is a
+#     second command line whose git hardening this hook cannot verify.
+#   * A plain-literal token spelled `git` (or a path ending in /git) in the
+#     command-name position, or in the position immediately after a known
+#     wrapper name in the command-name position (which covers
+#     wrapper-prefixed forms like `sudo git ...` for defense-in-depth, even
+#     though wrappers are banned upstream), must be followed by `-C` —
+#     optionally preceded by `-c <key>=<value>` global option pairs, e.g.
+#     `git -c core.pager=cat -C /repo status`. Only these two positions are
+#     checked — a `git` token appearing elsewhere is an ordinary argument
+#     (e.g. `grep -r git .`), not a git invocation.
+#
+# Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
+# NOT this hook's job — reject-obfuscated-commands rejects those
+# categorically before this hook ever runs. Anything here that is not a
+# plain literal word is deliberately treated as opaque.
+#
+# Fails closed: shfmt missing or the command not parsing as shell blocks
+# the command.
 
-# Strips heredoc bodies out of a multi-line command string before it's
-# pattern-matched. Without this, a Bash call that merely *writes*
-# example/doc/test-script text containing a line that starts with "git ..."
-# (e.g. via `cat <<EOF`) is indistinguishable from an actual git invocation,
-# and gets blocked for no reason. Only the common, unescaped-delimiter forms
-# (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, ...) are recognised; anything more
-# exotic falls back to the old un-stripped behaviour.
-strip_heredocs() {
-  local line dash delim="" in_heredoc=0 trimmed
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in_heredoc" = "1" ]; then
-      if [ "$dash" = "-" ]; then
-        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
-        [ "$trimmed" = "$delim" ] && in_heredoc=0
-      else
-        [ "$line" = "$delim" ] && in_heredoc=0
-      fi
-      continue
-    fi
-    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
-      dash="${BASH_REMATCH[1]}"
-      delim="${BASH_REMATCH[2]}"
-      in_heredoc=1
-    fi
-    printf '%s\n' "$line"
-  done <<< "$1"
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
 }
 
-# A single flag value: a "..."/'...'-quoted token (which may contain spaces),
-# or a plain space-free token.
-VALTOKEN="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
+# Known wrapper names for the defense-in-depth `sudo git ...` check below —
+# mirrors the "Wrapper commands" section of command-blocklist, which is what
+# actually bans these upstream in the normal PreToolUse chain.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
-# Zero or more `-c <key>=<value>` global option pairs that may legitimately
-# appear before `-C` — e.g. `git -c core.pager=cat -C /repo status`.
-DASH_C_FLAGS="(-c[[:space:]]+${VALTOKEN}[[:space:]]+)*"
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
 
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
-cmd=$(strip_heredocs "$raw_cmd")
 
-if printf '%s' "$cmd" | grep -qE '(^|;|&&|\|\|)[[:space:]]*git\b' \
-   && ! printf '%s' "$cmd" | grep -qE "(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+${DASH_C_FLAGS}-C\\b"; then
-  printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
-  exit 2
-fi
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One line per CallExpr: every word that is a single plain literal is
+# emitted verbatim; anything else (quoted text, substitutions, expansions)
+# is represented as a \x01 marker — layer 0 of reject-obfuscated-commands
+# (which runs before this hook) already guarantees a real \x01 byte can
+# never appear in the input, so the marker is unambiguous, can never equal
+# "git"/"-C"/"-c" and so is opaque to the checks below, and — unlike an
+# empty string — is never dropped by IFS=<tab> word-splitting's collapsing
+# of consecutive whitespace delimiters. Words cannot contain raw
+# whitespace, so tab is a safe separator.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  join("\t")')
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+
+  case "${words[0]}" in
+    eval | source | .)
+      block "git hardening cannot be verified inside ${words[0]} - use a plain git -C <dir> command instead"
+      ;;
+  esac
+
+  # Only the command-name position, and the position immediately after a
+  # known wrapper name in the command-name position, are checked — a `git`
+  # token appearing anywhere else is an ordinary argument, not a git
+  # invocation (e.g. `grep -r git .`, `find . -name git`).
+  positions=(0)
+  is_wrapper "${words[0]}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
+      j=$((i + 1))
+      # skip `-c <key>=<value>` global option pairs before -C
+      while [ "${words[$j]:-}" = "-c" ]; do
+        j=$((j + 2))
+      done
+      if [ "${words[$j]:-}" != "-C" ]; then
+        block 'git commands must use "git -C <dir>" format'
+      fi
+    fi
+  done
+done <<< "$calls"
 
 exit 0

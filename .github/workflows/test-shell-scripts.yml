@@ -39,11 +39,14 @@ jobs:
           clean: true
           fetch-depth: 1
 
-      - name: "Install bats"
+      # shfmt is needed because the Claude Code hook scripts under test parse
+      # commands with it (see containers/base/development-full/claude-hooks/)
+      # and fail closed without it.
+      - name: "Install bats and shfmt"
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bats
+          sudo apt-get install -y --no-install-recommends bats shfmt
 
       - name: "Run shell tests"
         shell: bash

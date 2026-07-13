@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Categorically rejects any Bash command that is not built from plain,
+# obviously-spelled commands, using a real shell parser instead of text
+# scanning.
+#
+# History (PR #1159 / issue #1105): eight code-review rounds each found a new
+# bypass in the previous, hand-rolled regex/character-scanning approach —
+# separators, keyword prefixes, quote-splicing, ${IFS} word-splitting,
+# brace expansion, redirection prefixes, wrapper flags (`env -i`), and
+# eval — because approximating shell tokenization with text scanning is an
+# arms race that never converges. This version delegates parsing to shfmt
+# (mvdan/sh — a complete, battle-tested shell parser, already baked into
+# this image and self-checked by the Dockerfile) and applies policy to the
+# resulting AST instead. A new obfuscation technique needs no change here:
+# anything that does not parse into plain-literal command words is rejected
+# by shape, not by enumerating tricks.
+#
+# Decision layers, in order (all fail closed):
+#   0. Any non-printable or non-ASCII byte anywhere in the command: reject.
+#   1. shfmt missing, or the command does not parse as shell: reject.
+#   2. Structure: function definitions and declare/export/local/readonly
+#      clauses are rejected outright; every environment-variable assignment
+#      (standalone or per-command prefix) must not target a variable on
+#      env-var-blocklist; every command name in the AST — at any nesting
+#      depth, including inside $(...)/backtick substitutions — must be a
+#      single plain literal word matching ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$.
+#      Anything else (quote-splice, escape, substitution, brace expansion,
+#      leading redirection or dash) is obfuscation by definition: reject.
+#   3. Known interpreters handed an inline-code flag (bash -c, python3 -c,
+#      perl -e, ...): reject — the string argument is a second command line
+#      this hook cannot see into.
+#   4. command-blocklist (known-bad names: eval, sub-shells, wrapper
+#      commands like env/nice/sudo that can smuggle another command behind
+#      their own flag grammar): reject with a per-name message.
+#   5. command-allowlist (known-good names): anything not listed is
+#      rejected. Extending policy = adding one line to a data file, not
+#      changing this logic. Path-qualified names (/usr/bin/git, ./git,
+#      <hooks-path>/pre-commit) are matched by basename.
+#
+# Deliberate residual gaps (accepted, ~1%): a listed command doing damage
+# via plain arguments (the claude-settings.json allow/deny layer covers
+# that), and writing a script file then executing it under an allowlisted
+# basename — no command-string filter can close that class.
+#
+# This hook runs first in the PreToolUse chain. Exit 2 = blocked, 0 = allowed.
+
+# Byte-exact pattern semantics regardless of the host locale: under a UTF-8
+# collation locale (e.g. en_GB.UTF-8), the bash range [ -~] does NOT mean
+# "printable ASCII" and misclassifies ordinary letters.
+export LC_ALL=C
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+COMMAND_ALLOWLIST="${HOOK_DIR}/command-allowlist"
+COMMAND_BLOCKLIST="${HOOK_DIR}/command-blocklist"
+ENV_VAR_BLOCKLIST="${HOOK_DIR}/env-var-blocklist"
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
+}
+
+# Interpreters whose inline-code flag hands them a string to parse and run
+# as a brand-new command line this hook cannot see into. Sub-shells are
+# additionally banned outright via command-blocklist; this check exists so
+# an interpreter that IS allowlisted for running script files (python3)
+# still cannot be handed inline code, and so the error message names the
+# actual problem.
+INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh fish python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
+INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
+
+is_interpreter() {
+  local w
+  for w in "${INTERPRETERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+is_inline_code_flag() {
+  local f
+  for f in "${INLINE_CODE_FLAGS[@]}"; do
+    [ "$1" = "$f" ] && return 0
+  done
+  return 1
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+# ---- Layer 0: printable ASCII only -----------------------------------------
+# Control bytes, Unicode homoglyphs of shell metacharacters, zero-width and
+# bidi-override characters have no place in an agent command — including
+# inside heredoc bodies and quoted strings.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
+if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+  block 'command contains non-printable or non-ASCII characters'
+fi
+
+# ---- Layer 1: parse with a real shell parser (fail closed) -----------------
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - not a simple, obvious command'
+
+# ---- Layer 2: structural policy on the AST ----------------------------------
+
+if [ "$(printf '%s' "$ast" | jq '[.. | objects | select(.Type? == "FuncDecl")] | length')" != "0" ]; then
+  block 'defining shell functions is not a simple, obvious command'
+fi
+
+if [ "$(printf '%s' "$ast" | jq '[.. | objects | select(.Type? == "DeclClause")] | length')" != "0" ]; then
+  block 'declare/export/local/readonly clauses are not permitted - not a simple, obvious command'
+fi
+
+# Every assigned variable name (standalone `FOO=bar` statements and
+# per-command `FOO=bar cmd` prefixes alike) is checked against the env-var
+# blocklist: assignments to parser/loader/git-identity variables (IFS, PATH,
+# LD_PRELOAD, GIT_*, ...) change what other commands mean or bypass the git
+# identity guardrails, so they are rejected even though the command itself
+# may be plain. The blocklist is loaded once, not re-read from disk per
+# assignment.
+mapfile -t env_var_patterns < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+
+while IFS= read -r var; do
+  [ -z "$var" ] && continue
+  for pattern in "${env_var_patterns[@]}"; do
+    [ -z "$pattern" ] && continue
+    # shellcheck disable=SC2254  # patterns from the blocklist file are globs by design
+    case "$var" in
+      $pattern)
+        block "assignment to ${var} is not permitted - it changes how other commands are interpreted"
+        ;;
+    esac
+  done
+done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
+
+# Emit one line per CallExpr anywhere in the AST (any nesting depth —
+# $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
+# process substitutions): the command-name word followed by each argument
+# word, tab-separated. A word that is anything other than a single plain
+# literal is represented as a \x01 marker — layer 0 already guarantees a
+# real \x01 byte can never appear in the input, so the marker is
+# unambiguous, and it fails the command-name allowlist regex. Words cannot
+# contain raw whitespace, so tab is a safe separator.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
+  join("\t")')
+
+MARKER=$'\x01'
+NAME_RE='^[A-Za-z0-9_./][A-Za-z0-9_./-]*$'
+
+# Loaded once, not re-read from disk per CallExpr.
+mapfile -t command_blocklist_lines < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
+mapfile -t command_allowlist < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null)
+
+is_allowlisted() {
+  local w
+  for w in "${command_allowlist[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+  name="${words[0]}"
+
+  if ! [[ "$name" =~ $NAME_RE ]]; then
+    block 'command name is quoted, escaped, or dynamically substituted - not a simple, obvious command'
+  fi
+
+  base="${name##*/}"
+
+  # ---- Layer 3: interpreter re-invocation (command name itself) --------
+  if is_interpreter "$base"; then
+    for arg in "${words[@]:1}"; do
+      [ "$arg" = "$MARKER" ] && continue
+      if is_inline_code_flag "$arg"; then
+        block 'interpreter re-invocation with inline code is not a simple, obvious command'
+      fi
+    done
+  fi
+
+  # ---- Layer 4: known-bad names ----------------------------------------
+  blocked_reason=""
+  for entry in "${command_blocklist_lines[@]}"; do
+    bad_name="${entry%%$'\t'*}"
+    [ -z "$bad_name" ] && continue
+    if [ "$base" = "$bad_name" ]; then
+      bad_reason="${entry#*$'\t'}"
+      [ "$bad_reason" = "$entry" ] && bad_reason=""
+      blocked_reason="${bad_reason:-is not permitted - no legitimate need for it in this workflow}"
+      break
+    fi
+  done
+  if [ -n "$blocked_reason" ]; then
+    block "${base} ${blocked_reason}"
+  fi
+
+  # ---- Layer 3b: interpreter re-invocation (nested in an arg) ----------
+  # An allowlisted runner (uv, npx, bun, npm, ...) can itself launch another
+  # interpreter as a plain argument (`uv run python3 -c "..."`); that
+  # nested interpreter's inline-code flag is exactly as dangerous as if it
+  # had been the command name, so scan every argument word (not just
+  # words[0], already covered by Layer 3 above) for a nested interpreter
+  # name and check what follows it too.
+  for idx in "${!words[@]}"; do
+    [ "$idx" -eq 0 ] && continue
+    tok="${words[$idx]}"
+    [ "$tok" = "$MARKER" ] && continue
+    if is_interpreter "${tok##*/}"; then
+      for arg in "${words[@]:$((idx + 1))}"; do
+        [ "$arg" = "$MARKER" ] && continue
+        if is_inline_code_flag "$arg"; then
+          block 'interpreter re-invocation with inline code is not a simple, obvious command'
+        fi
+      done
+    fi
+  done
+
+  # ---- Layer 5: known-good names only ----------------------------------
+  if ! is_allowlisted "$base"; then
+    block "${base} is not on the known-good command allowlist - extend ${COMMAND_ALLOWLIST##*/} if it is legitimately required"
+  fi
+done <<< "$calls"
+
+exit 0

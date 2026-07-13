@@ -1,0 +1,25 @@
+# Environment variables that may not be assigned (standalone FOO=bar
+# statements or per-command FOO=bar prefixes) in agent Bash commands,
+# checked by the reject-obfuscated-commands hook. One glob pattern per
+# line; blank lines and #-comments are ignored.
+#
+# Assigning any of these changes how OTHER commands are located, parsed, or
+# attributed — word-splitting games (IFS), binary/loader hijack (PATH,
+# LD_*), shell re-entry configuration (ENV, BASH_ENV), or git
+# identity/config/transport tampering (GIT_*, the #1105 bypass class).
+
+IFS
+PATH
+ENV
+BASH_ENV
+SHELL
+SHELLOPTS
+CDPATH
+PS4
+LD_PRELOAD
+LD_LIBRARY_PATH
+LD_AUDIT
+PYTHONPATH
+PYTHONSTARTUP
+NODE_OPTIONS
+GIT_*

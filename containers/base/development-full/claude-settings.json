@@ -4,6 +4,7 @@
     "pr": ""
   },
   "permissions": {
+    "defaultMode": "auto",
     "allow": [
       "Read",
       "Edit",
@@ -54,8 +55,9 @@
       "Bash(bun x *)"
     ],
     "deny": [
-      "Bash(git config --local *)",
-      "Bash(git config --global *)",
+      "Bash(git config *)",
+      "Bash(git -C * config *)",
+      "Bash(gh auth setup-git*)",
       "Bash(sudo *)"
     ]
   },
@@ -66,6 +68,10 @@
       {
         "matcher": "Bash",
         "hooks": [
+          {
+            "type": "command",
+            "command": "/home/developer/.claude/hooks/reject-obfuscated-commands"
+          },
           {
             "type": "command",
             "command": "block-no-verify"

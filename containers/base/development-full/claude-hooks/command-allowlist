@@ -1,0 +1,87 @@
+# Known-good command names for the reject-obfuscated-commands hook.
+# One name per line; blank lines and #-comments are ignored.
+# Path-qualified invocations (/usr/bin/git, ./scripts/x, <hooks-path>/pre-commit)
+# are matched by basename. A command that is not on this list (and not on
+# command-blocklist, which wins) is rejected outright — extend this file
+# when a new tool is legitimately required, rather than changing hook logic.
+#
+# NOTE: being listed here only means "not obfuscated and known-good by name".
+# The claude-settings.json permissions allow/deny layer still governs what a
+# listed command may actually do.
+
+# Version control / forge
+git
+gh
+gpg
+pre-commit
+pre-commit-check
+
+# .NET
+dotnet
+
+# Python toolchain (python3 -c inline code is still rejected by the
+# interpreter re-invocation check)
+python3
+uv
+ruff
+
+# JavaScript toolchains
+npm
+npx
+bun
+
+# Linters / test tooling
+shellcheck
+checkbashisms
+shfmt
+bats
+actionlint
+yamllint
+markdownlint-cli2
+sqlfluff
+sqlite3
+jq
+
+# Repo-local test/deploy scripts (committed to main, basename-matched
+# across every repo since this allowlist is shared globally)
+testdb
+testdocker
+
+# Core utilities
+ls
+cat
+grep
+find
+sed
+awk
+head
+tail
+sort
+uniq
+wc
+tr
+cut
+diff
+echo
+printf
+test
+true
+false
+mkdir
+cp
+mv
+rm
+touch
+chmod
+ln
+basename
+dirname
+realpath
+readlink
+pwd
+date
+sleep
+which
+tee
+stat
+file
