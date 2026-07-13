@@ -1,0 +1,50 @@
+# Known-bad command names for the reject-obfuscated-commands hook.
+# Format: name<TAB>message-suffix — the hook prints "Blocked: <name> <suffix>".
+# The suffix is optional; the default is
+# "is not permitted - no legitimate need for it in this workflow".
+# Blank lines and #-comments are ignored. This list wins over command-allowlist.
+#
+# These names are rejected even though they are plain bare words, because
+# each one either executes a string as new code (eval/source), re-enters a
+# shell (sub-shells are banned per PR #1159 direction), or is a wrapper
+# whose own flag grammar can smuggle another command past name-based checks
+# (the round-7 `env -i` bypass class).
+
+# Indirect execution
+eval	used for indirect/obfuscated execution
+source	is not permitted - executes a script in the current shell, hiding its commands from this check
+.	is not permitted - executes a script in the current shell, hiding its commands from this check
+
+# Sub-shells (banned outright; the interpreter re-invocation check also
+# covers inline-code flags for anything later removed from this list)
+bash	is not permitted - sub-shells are banned in this workflow
+sh	is not permitted - sub-shells are banned in this workflow
+dash	is not permitted - sub-shells are banned in this workflow
+zsh	is not permitted - sub-shells are banned in this workflow
+ksh	is not permitted - sub-shells are banned in this workflow
+mksh	is not permitted - sub-shells are banned in this workflow
+csh	is not permitted - sub-shells are banned in this workflow
+tcsh	is not permitted - sub-shells are banned in this workflow
+fish	is not permitted - sub-shells are banned in this workflow
+
+# Wrapper commands that run another command (possibly behind their own
+# leading flags)
+env	is not permitted - no legitimate need for it in this workflow
+nice	is not permitted - no legitimate need for it in this workflow
+command	is not permitted - no legitimate need for it in this workflow
+sudo	is not permitted - no legitimate need for it in this workflow
+doas	is not permitted - no legitimate need for it in this workflow
+exec	is not permitted - no legitimate need for it in this workflow
+nohup	is not permitted - no legitimate need for it in this workflow
+stdbuf	is not permitted - no legitimate need for it in this workflow
+builtin	is not permitted - no legitimate need for it in this workflow
+setsid	is not permitted - no legitimate need for it in this workflow
+timeout	is not permitted - no legitimate need for it in this workflow
+ionice	is not permitted - no legitimate need for it in this workflow
+taskset	is not permitted - no legitimate need for it in this workflow
+chroot	is not permitted - no legitimate need for it in this workflow
+nsenter	is not permitted - no legitimate need for it in this workflow
+flock	is not permitted - no legitimate need for it in this workflow
+watch	is not permitted - no legitimate need for it in this workflow
+xargs	is not permitted - no legitimate need for it in this workflow
+time	is not permitted - no legitimate need for it in this workflow
