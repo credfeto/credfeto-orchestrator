@@ -126,29 +126,22 @@ RUN su developer -c '\
     ln -sf cwm-roslyn-navigator  /home/developer/.dotnet/tools/dotnet-cwm-roslyn-navigator && \
     ln -sf ilspycmd              /home/developer/.dotnet/tools/dotnet-ilspycmd && \
     ln -sf sqlpackage            /home/developer/.dotnet/tools/dotnet-sqlpackage && \
-    ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint'
+    ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint && \
+    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh'
 
-# PowerShell as a *local* dotnet tool in developer's $HOME-scoped manifest,
-# in addition to the global install above. credfeto-global-pre-commit's
-# run-psscriptanalyzer and check-setup scripts detect PowerShell by running
-# `dotnet tool list` (no -g) from $HOME and invoke it via `dotnet pwsh` —
-# they never look at the `pwsh` binary on PATH — so the global install alone
-# is invisible to them; this mirrors lib/common.sh's install_pwsh exactly.
-#
-# PSScriptAnalyzer is then installed via Install-PSResource
-# (Microsoft.PowerShell.PSResourceGet, bundled with pwsh 7.4+) rather than
-# the legacy Install-Module: the latter needs the old PackageManagement
-# "NuGet" provider bootstrapped first, which fails non-interactively here
-# ("No match was found for the specified search criteria for the provider
-# 'NuGet'") even though the PSGallery endpoint itself is reachable.
-# PSResourceGet talks to the gallery directly and needs no such bootstrap.
+# PSScriptAnalyzer PowerShell module — check-setup imports it
+# (`dotnet pwsh -Command "Import-Module PSScriptAnalyzer ..."`) to validate
+# the VALIDATE_POWERSHELL hook, so it must be present for the developer user
+# in addition to the pwsh binary/alias above. Installed via Install-PSResource
+# (Microsoft.PowerShell.PSResourceGet, bundled with pwsh 7.4+) rather than the
+# legacy Install-Module: the latter needs the old PackageManagement "NuGet"
+# provider bootstrapped first, which fails non-interactively here ("No match
+# was found for the specified search criteria for the provider 'NuGet'") even
+# though the PSGallery endpoint itself is reachable. PSResourceGet talks to
+# the gallery directly and needs no such bootstrap.
 # hadolint ignore=DL3059
-RUN su developer -c '\
-    cd /home/developer && \
-    dotnet new tool-manifest && \
-    dotnet tool install PowerShell && \
-    dotnet pwsh -NoProfile -NonInteractive -Command \
-        "Install-PSResource -Name PSScriptAnalyzer -Scope CurrentUser -TrustRepository -ErrorAction Stop"'
+RUN su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command \
+    "Install-PSResource -Name PSScriptAnalyzer -Scope CurrentUser -TrustRepository -ErrorAction Stop"'
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 # Fetches the exact pinned commit directly (not the moving default-branch
