@@ -237,3 +237,45 @@ run_hook() {
     run_hook "if false; then true; else git push; fi"
     [ "${status}" -eq 2 ]
 }
+
+@test "eval with a double-quoted git command is blocked" {
+    run_hook 'eval "git push"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be verified inside eval'* ]]
+}
+
+@test "eval with a single-quoted git command is blocked" {
+    run_hook "eval 'git push'"
+    [ "${status}" -eq 2 ]
+}
+
+@test "source is blocked outright" {
+    run_hook "source ./setup.sh"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a path-qualified bare git invocation is blocked" {
+    run_hook "/usr/bin/git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a path-qualified hardened git invocation is allowed" {
+    run_hook "/usr/bin/git -C . push"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a relative-path bare git invocation is blocked" {
+    run_hook "./git push"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a command that does not parse as shell is blocked (fail closed)" {
+    run_hook "if true; then git push"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed'* ]]
+}
+
+@test "an obfuscated git name is opaque to this hook (reject-obfuscated-commands blocks it upstream)" {
+    run_hook '"g""it" push'
+    [ "${status}" -eq 0 ]
+}

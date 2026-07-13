@@ -76,10 +76,19 @@ retarget entries.
 `~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands}}`, copied into the image at
 `/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands}}` as root:root
 0444 (files) / 0755 (hook scripts and hooks directory) — read-only for `developer`. `reject-obfuscated-commands`
-categorically blocks any Bash command whose command-name token is spelled out via quote-splicing, a
-backslash escape, or a live substitution (or via `eval`), and runs first in the `PreToolUse` hook chain,
-ahead of every other hook — closing whole classes of hook-bypass obfuscation up front instead of chasing
-each one individually. `enforce-git-dash-c` blocks git commands that don't use `git -C <dir>`;
+runs first in the `PreToolUse` hook chain, ahead of every other hook, and parses each Bash command with
+`shfmt` (a real shell parser, baked into this image) rather than text-scanning: any non-printable or
+non-ASCII byte, any command that fails to parse, any command name that is not a single plain literal word
+(quote-splices, escapes, substitutions, brace/`${IFS}` expansion), function definitions,
+`declare`/`export` clauses, and assignments to variables on `claude-hooks/env-var-blocklist` (IFS, PATH,
+LD_*, GIT_*, ...) are all rejected categorically. Surviving command names are then policy-checked against
+two data files baked in alongside the hook: names on `claude-hooks/command-blocklist` (eval, sub-shells,
+wrapper commands like sudo/env/nice/timeout) are rejected with a per-name message, and anything not on
+`claude-hooks/command-allowlist` (known-good tools, matched by basename for path-qualified invocations) is
+rejected too — extending policy is a one-line data-file change, not hook logic. Known interpreters
+(python3, ...) are additionally refused inline-code flags (`-c`/`-e`/...). `enforce-git-dash-c` uses the
+same shfmt-parsed AST and blocks git commands that don't use `git -C <dir>` (plus `eval`/`source`, whose
+arguments it cannot verify); both hooks fail closed if shfmt is missing or the command does not parse.
 `enforce-git-identity` blocks `git commit`/`fetch`/`pull`/`rebase`/`merge`/`cherry-pick`/`revert`/`am` unless
 git identity and GPG signing are correctly configured, and runs before `enforce-git-dash-c` in the chain.
 All hook paths referenced from `settings.json`'s `PreToolUse` block are rewritten to the in-container path
@@ -142,6 +151,9 @@ The `developer` user is inherited from upstream images in the `development-tools
 | `/home/developer/.claude/hooks/enforce-git-dash-c` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-dash-c`); read/execute only |
 | `/home/developer/.claude/hooks/enforce-git-identity` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-identity`); read/execute only |
 | `/home/developer/.claude/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
+| `/home/developer/.claude/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
+| `/home/developer/.claude/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
+| `/home/developer/.claude/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 
 ---
@@ -179,7 +191,8 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 **Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
 `.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c`,
 `.../hooks/enforce-git-identity`, and `.../hooks/reject-obfuscated-commands` must each be root:root 0755
-and executable.
+and executable; the `.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files
+must each be root:root 0444.
 
 **Claude Code skills wiring** — exactly 100 symlinks must exist directly under
 `/home/developer/.claude/skills/`; a spot-check of representative skill names (one per source repo,
