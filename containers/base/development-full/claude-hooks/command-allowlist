@@ -9,6 +9,8 @@
 # The claude-settings.json permissions allow/deny layer still governs what a
 # listed command may actually do.
 
+ssh
+
 # Version control / forge
 git
 gh
