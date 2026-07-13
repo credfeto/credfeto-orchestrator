@@ -267,6 +267,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - entrypoint.sh pre-flight checks (SSH GitHub-auth, gpg-agent, GPG/SSH signing tests) had no timeouts and could hang for hours; the SSH GitHub-auth check also misdiagnosed a network failure as an unauthorized key
 - Review round on the #1099 entrypoint-hardening fix: the GitHub SSH host-key bake step now busts its Docker layer cache daily (GHA layer caching meant it could otherwise silently reuse a stale scan indefinitely), ssh-keyscan's own output is captured directly instead of grepping the destination file, a GitHub too-many-authentication-failures disconnect is now diagnosed separately from an unregistered key, timeout is verified present at build time, and the bats suite no longer silently depends on real network/filesystem state for its known_hosts coverage
 - oneshot: exempt dependency PRs (depends/ branch or dependencies-ish label) from the assignee stand-off gate (#1142), so a human assignee (e.g. dependabot.yml's assignees: config) no longer permanently blocks the CI-verify/auto-merge takeover prompt
+- Fix development-full base image build failing to install PSScriptAnalyzer (PackageManagement's NuGet provider bootstrap fails non-interactively) by installing PowerShell as a local dotnet tool and using Install-PSResource instead of Install-Module
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
