@@ -1,331 +1,72 @@
 #!/usr/bin/env bash
-# Rejects Bash commands whose command-name token isn't a plain, obvious bare
-# word, instead of chasing individual bypass techniques through each
-# downstream hook's own detection logic (see PR #1105/#1159: six review
-# rounds each found a new *obfuscation* technique — quote-splice, escape,
-# substitution, separator, brace-expansion, redirection-prefix — because an
-# enumerated denylist of "bad shapes" is inherently incomplete). Runs first,
-# ahead of every other PreToolUse hook, so obfuscation is refused
-# categorically up front.
+# Categorically rejects any Bash command that is not built from plain,
+# obviously-spelled commands, using a real shell parser instead of text
+# scanning.
 #
-# Design (round 6+): a positive allowlist on the command-name token, not an
-# enumeration of bad constructs. The command-name token — the first word of
-# a statement, or the first word after a separator (;, &, &&, |, ||, (, {,
-# backtick), an `IDENT=value` assignment prefix, or a pass-through wrapper
-# (sudo, exec, time, nohup, doas, stdbuf, builtin, !) — must match
-# ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ once quoting/substitution/brace-expansion
-# has been neutralized to a single SENTINEL placeholder char (see
-# neutralize_quotes). Any quote-splice ("g""it"), backslash-escape (g\it),
-# $()/backtick/$VAR substitution, or brace-expansion group ({git,push})
-# leaves a SENTINEL, `$`, or `\` in the token, which the allowlist rejects
-# without needing a dedicated check per technique — it also rejects a
-# leading redirection operator (`2>/dev/null git push`) or a leading `-`
-# flag (`-i`, `-p`, `-oL`, ...) for free, since neither `>` nor a leading
-# `-` is in the allowed set. `eval` is rejected outright — indirect string
-# execution has no "simple" reading.
+# History (PR #1159 / issue #1105): eight code-review rounds each found a new
+# bypass in the previous, hand-rolled regex/character-scanning approach —
+# separators, keyword prefixes, quote-splicing, ${IFS} word-splitting,
+# brace expansion, redirection prefixes, wrapper flags (`env -i`), and
+# eval — because approximating shell tokenization with text scanning is an
+# arms race that never converges. This version delegates parsing to shfmt
+# (mvdan/sh — a complete, battle-tested shell parser, already baked into
+# this image and self-checked by the Dockerfile) and applies policy to the
+# resulting AST instead. A new obfuscation technique needs no change here:
+# anything that does not parse into plain-literal command words is rejected
+# by shape, not by enumerating tricks.
 #
-# `env`, `nice`, and `command` are banned outright (round 7 fix, per
-# credfeto's direction on PR #1159) rather than treated as pass-through
-# wrappers: all three commonly take a leading flag before their target
-# command (`env -i`, `nice -n 19`, `command -p`), and that flag token itself
-# satisfies the command-name allowlist, so treating them as pass-through
-# let the flag be mistaken for the (already-validated) command name and the
-# real target — however obfuscated — was never reached. There is no
-# legitimate need for any of the three in this container's mandated
-# workflows, so the simpler fix is to reject them categorically rather than
-# keep chasing wrapper-specific flag grammars.
+# Decision layers, in order (all fail closed):
+#   0. Any non-printable or non-ASCII byte anywhere in the command: reject.
+#   1. shfmt missing, or the command does not parse as shell: reject.
+#   2. Structure: function definitions and declare/export/local/readonly
+#      clauses are rejected outright; every environment-variable assignment
+#      (standalone or per-command prefix) must not target a variable on
+#      env-var-blocklist; every command name in the AST — at any nesting
+#      depth, including inside $(...)/backtick substitutions — must be a
+#      single plain literal word matching ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$.
+#      Anything else (quote-splice, escape, substitution, brace expansion,
+#      leading redirection or dash) is obfuscation by definition: reject.
+#   3. Known interpreters handed an inline-code flag (bash -c, python3 -c,
+#      perl -e, ...): reject — the string argument is a second command line
+#      this hook cannot see into.
+#   4. command-blocklist (known-bad names: eval, sub-shells, wrapper
+#      commands like env/nice/sudo that can smuggle another command behind
+#      their own flag grammar): reject with a per-name message.
+#   5. command-allowlist (known-good names): anything not listed is
+#      rejected. Extending policy = adding one line to a data file, not
+#      changing this logic. Path-qualified names (/usr/bin/git, ./git,
+#      <hooks-path>/pre-commit) are matched by basename.
 #
-# Interpreter re-invocation (`bash -c "git push"`, `python3 -c "..."`, ...)
-# is a separate, categorical carve-out: the command name (`bash`, `python3`)
-# is a perfectly plain bare word, and its inline-code argument is ordinary
-# quoted text that neutralize_quotes correctly treats as inert — nothing
-# about the *character shape* is wrong, so the allowlist alone can't catch
-# it. See is_interpreter/has_inline_code_flag below.
+# Deliberate residual gaps (accepted, ~1%): a listed command doing damage
+# via plain arguments (the claude-settings.json allow/deny layer covers
+# that), and writing a script file then executing it under an allowlisted
+# basename — no command-string filter can close that class.
 #
-# Also rejects any non-printable or non-ASCII byte anywhere in the command
-# (control bytes, Unicode homoglyphs of shell metacharacters, zero-width/
-# bidi-override characters) — not metacharacters themselves (`;`, `|`, `$`
-# etc. all stay legal; segmentation/hardening downstream is what deals with
-# those).
-#
-# Deliberately NOT covered: path-qualified binaries (/usr/bin/git, ./git).
-# This container's own mandated workflows invoke hooks via absolute/relative
-# path (e.g. `<hooks-path>/pre-commit`, see ai/global/git.instructions.md) —
-# a blanket ban on "/" in the command-name token would block that legitimate,
-# documented usage. Left to a narrower, path-aware follow-up.
-#
-# This is a categorical, defense-in-depth guard, not a replacement for
-# per-command hooks like enforce-git-dash-c: it says nothing about whether a
-# non-obfuscated command is otherwise *allowed* (e.g. `git push` without -C
-# is plainly spelled out, not obfuscated, and is still blocked downstream by
-# enforce-git-dash-c). Exit 2 = blocked, 0 = allowed.
-#
-# Deliberately a first pass, not the final word (per credfeto's direction on
-# PR #1159): the interpreter list and inline-code-flag list below are small
-# and may over-block or under-block at the margins — intended to be relaxed
-# once the categorical shape has proven itself, not enumerated exhaustively
-# now.
+# This hook runs first in the PreToolUse chain. Exit 2 = blocked, 0 = allowed.
 
-# Strips heredoc bodies out of a multi-line command string before it's
-# pattern-matched, so example/doc/test-script text written via `cat <<EOF`
-# isn't mistaken for a live command. See enforce-git-dash-c's identical
-# helper for the detailed rationale.
-strip_heredocs() {
-  local line dash delim="" in_heredoc=0 trimmed
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in_heredoc" = "1" ]; then
-      if [ "$dash" = "-" ]; then
-        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
-        [ "$trimmed" = "$delim" ] && in_heredoc=0
-      else
-        [ "$line" = "$delim" ] && in_heredoc=0
-      fi
-      continue
-    fi
-    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
-      dash="${BASH_REMATCH[1]}"
-      delim="${BASH_REMATCH[2]}"
-      in_heredoc=1
-    fi
-    printf '%s\n' "$line"
-  done <<< "$1"
+# Byte-exact pattern semantics regardless of the host locale: under a UTF-8
+# collation locale (e.g. en_GB.UTF-8), the bash range [ -~] does NOT mean
+# "printable ASCII" and misclassifies ordinary letters.
+export LC_ALL=C
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+COMMAND_ALLOWLIST="${HOOK_DIR}/command-allowlist"
+COMMAND_BLOCKLIST="${HOOK_DIR}/command-blocklist"
+ENV_VAR_BLOCKLIST="${HOOK_DIR}/env-var-blocklist"
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
 }
 
-# A single non-whitespace, non-newline control character used as a
-# placeholder for every quoted/substituted span neutralize_quotes blanks
-# out. Unlike a literal space, it survives into a segment's first
-# whitespace-delimited word, so check_segment can tell "this token had
-# quoting/substitution spliced into it" apart from an all-bare token —
-# a plain space would make "g""it" indistinguishable from two bare words.
-SENTINEL=$'\x01'
-
-# Walks a command string one character at a time and, into the globals
-# NEUTRALIZED and EXTRA_SEGMENTS:
-#   * blanks out single-quoted text entirely to one SENTINEL char — it is
-#     inert in POSIX/bash, so metacharacters inside it must not be treated
-#     as statement separators, but its presence must still mark the
-#     enclosing word as non-bare;
-#   * blanks out double-quoted text the same way, EXCEPT any `$( ... )` or
-#     `` ` ` `` command substitution nested inside it, which is queued into
-#     EXTRA_SEGMENTS for its own recursive check — that content executes
-#     regardless of the quotes around it, e.g. `echo "$(git push)"`;
-#   * queues top-level (unquoted) `$( ... )` / backtick substitution the
-#     same way, blanking it to one SENTINEL char too — a live substitution
-#     used as a command name (e.g. `$(echo git) push`) must not be mistaken
-#     for a plain word either;
-#   * blanks a top-level brace-expansion group (`{a,b}`, `{1..5}` — see
-#     extract_brace_expansion) to one SENTINEL char too, for the same
-#     reason: it is only actually dangerous when it lands in the
-#     command-name word (`{git,push}`), and blanking rather than an
-#     outright whole-command reject means it is correctly left alone, like
-#     a quoted argument, when it's just an ordinary argument word (e.g.
-#     `mkdir -p dir/{a,b}` must stay allowed — check_segment only ever
-#     inspects the command-name word, never the rest of the segment);
-#   * leaves every other character untouched so the caller's
-#     statement-separator split still applies to real, unquoted operators.
-neutralize_quotes() {
-  local s="$1" c i=0 len
-  NEUTRALIZED=""
-  len=${#s}
-  while [ "$i" -lt "$len" ]; do
-    c="${s:$i:1}"
-    case "$c" in
-      \')
-        i=$((i + 1))
-        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != "'" ]; do
-          i=$((i + 1))
-        done
-        i=$((i + 1))
-        NEUTRALIZED+="$SENTINEL"
-        ;;
-      \")
-        i=$((i + 1))
-        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != '"' ]; do
-          c="${s:$i:1}"
-          if [ "$c" = $'\\' ] && [ $((i + 1)) -lt "$len" ]; then
-            i=$((i + 2))
-            continue
-          fi
-          if [ "$c" = '$' ] && [ "${s:$((i + 1)):1}" = '(' ]; then
-            extract_substitution "$s" "$i" '(' ')' 2
-            i="$SUBST_NEXT_I"
-            continue
-          fi
-          if [ "$c" = '`' ]; then
-            extract_substitution "$s" "$i" '`' '`' 1
-            i="$SUBST_NEXT_I"
-            continue
-          fi
-          i=$((i + 1))
-        done
-        i=$((i + 1))
-        NEUTRALIZED+="$SENTINEL"
-        ;;
-      '$')
-        if [ "${s:$((i + 1)):1}" = '(' ]; then
-          extract_substitution "$s" "$i" '(' ')' 2
-          i="$SUBST_NEXT_I"
-          NEUTRALIZED+="$SENTINEL"
-        else
-          NEUTRALIZED+="$c"
-          i=$((i + 1))
-        fi
-        ;;
-      '`')
-        extract_substitution "$s" "$i" '`' '`' 1
-        i="$SUBST_NEXT_I"
-        NEUTRALIZED+="$SENTINEL"
-        ;;
-      '{')
-        extract_brace_expansion "$s" "$i"
-        if [ "$IS_BRACE_EXPANSION" = "1" ]; then
-          i="$BRACE_NEXT_I"
-          NEUTRALIZED+="$SENTINEL"
-        else
-          NEUTRALIZED+="$c"
-          i=$((i + 1))
-        fi
-        ;;
-      *)
-        NEUTRALIZED+="$c"
-        i=$((i + 1))
-        ;;
-    esac
-  done
-}
-
-# Extracts the content of a `$( ... )` or `` ` ... ` `` substitution starting
-# at index $2 in string $1, honouring nested "open" characters and skipping
-# over single-/double-quoted spans (with backslash-escapes) while hunting
-# for the matching close character — identical logic to enforce-git-dash-c's
-# helper of the same name; see there for the detailed rationale. Appends the
-# extracted content to EXTRA_SEGMENTS and sets SUBST_NEXT_I to the index
-# just past the closing character.
-extract_substitution() {
-  local s="$1" start="$2" open="$3" close="$4" head_len="$5" depth=1
-  local j=$((start + head_len))
-  local len=${#s}
-  local c
-  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
-    c="${s:$j:1}"
-    case "$c" in
-      \')
-        j=$((j + 1))
-        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != "'" ]; do
-          j=$((j + 1))
-        done
-        ;;
-      \")
-        j=$((j + 1))
-        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != '"' ]; do
-          if [ "${s:$j:1}" = $'\\' ] && [ $((j + 1)) -lt "$len" ]; then
-            j=$((j + 2))
-            continue
-          fi
-          j=$((j + 1))
-        done
-        ;;
-      "$open") [ "$open" = "$close" ] && depth=$((depth - 1)) || depth=$((depth + 1)) ;;
-      "$close") depth=$((depth - 1)) ;;
-    esac
-    j=$((j + 1))
-  done
-  local content_len=$((j - start - head_len - 1))
-  [ "$content_len" -lt 0 ] && content_len=0
-  EXTRA_SEGMENTS+=("${s:$((start + head_len)):${content_len}}")
-  SUBST_NEXT_I=$j
-}
-
-# Finds the `}` matching the `{` at index $2 in string $1 (simple depth
-# counting — braces are not valid inside brace-expansion content, so no
-# quote-awareness is needed here, unlike extract_substitution). Sets
-# IS_BRACE_EXPANSION=1 and BRACE_NEXT_I (index just past the closing `}`)
-# when the content between the braces is expansion syntax — comma-separated
-# alternatives or a `..` range, e.g. {a,b}, {a,b,c}, {1..5} — and nothing
-# else (in particular, no whitespace anywhere in the content). That
-# whitespace exclusion is what tells expansion syntax apart from a
-# `{ cmd; }` compound-command group: bash requires whitespace right after
-# `{` and right before `}` to parse the reserved-word group form, so its
-# absence here means this is expansion, not a group — e.g. `{ git push; }`
-# leaves IS_BRACE_EXPANSION=0 so the caller falls through to treating `{`/`}`
-# as plain statement separators, same as before this function existed.
-# Unmatched braces (no closing `}` found) also leave IS_BRACE_EXPANSION=0.
-# Expansion is blanked to a SENTINEL rather than reconstructed and
-# re-checked because, unlike $()/backtick substitution, its output can
-# splice directly into an adjacent bare word with no quoting, escaping, or
-# substitution marker left behind (e.g. {git,push} runtime-expands to the
-# two words "git" "push").
-extract_brace_expansion() {
-  local s="$1" start="$2" depth=1
-  local j=$((start + 1))
-  local len=${#s}
-  IS_BRACE_EXPANSION=0
-  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
-    case "${s:$j:1}" in
-      '{') depth=$((depth + 1)) ;;
-      '}') depth=$((depth - 1)) ;;
-    esac
-    j=$((j + 1))
-  done
-  [ "$depth" -gt 0 ] && return
-  local content_len=$((j - start - 2))
-  [ "$content_len" -lt 0 ] && content_len=0
-  local content="${s:$((start + 1)):${content_len}}"
-  if [[ "$content" =~ ^[^{}[:space:]]*(,|\.\.)[^{}[:space:]]*$ ]]; then
-    IS_BRACE_EXPANSION=1
-    BRACE_NEXT_I=$j
-  fi
-}
-
-# Recursively collects every candidate "statement" segment from $1 into the
-# global all_segments array: one pass splits the quote-neutralized text on
-# statement separators (;, &, && , a bare |, ||, parentheses/subshells,
-# brace groups, backtick) — then each live substitution queued by
-# neutralize_quotes is checked the same way, recursively.
-collect_segments() {
-  local text="$1" seg sub
-  EXTRA_SEGMENTS=()
-  neutralize_quotes "$text"
-  while IFS= read -r seg; do
-    all_segments+=("$seg")
-  done < <(printf '%s\n' "$NEUTRALIZED" | sed -E 's/(;|&&?|\|\|?|\(|\)|\{|\}|`)/\n/g')
-  for sub in "${EXTRA_SEGMENTS[@]}"; do
-    collect_segments "$sub"
-  done
-}
-
-WRAPPERS=(sudo exec time nohup doas stdbuf builtin)
-
-is_wrapper() {
-  local w
-  for w in "${WRAPPERS[@]}"; do
-    [ "$1" = "$w" ] && return 0
-  done
-  return 1
-}
-
-# Wrappers banned outright rather than passed through — see the module doc
-# comment for why (leading-flag-as-command-name bypass, no legitimate need).
-BANNED_WRAPPERS=(env nice command)
-
-is_banned_wrapper() {
-  local w
-  for w in "${BANNED_WRAPPERS[@]}"; do
-    [ "$1" = "$w" ] && return 0
-  done
-  return 1
-}
-
-# Interpreters whose inline-code flag lets an arbitrary string be parsed and
-# executed as new code, re-invoking a bare command from inside a command
-# name that is itself perfectly plain (see the module doc comment). Not
-# exhaustive by design — see credfeto's PR #1159 direction to start narrow
-# and relax later.
-INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
-
-# Flags that hand one of the interpreters above a string to parse and run as
-# code, rather than a script file to read. Deliberately excludes flags like
-# ruby's `-E`/node's `-c` that don't execute inline code.
+# Interpreters whose inline-code flag hands them a string to parse and run
+# as a brand-new command line this hook cannot see into. Sub-shells are
+# additionally banned outright via command-blocklist; this check exists so
+# an interpreter that IS allowlisted for running script files (python3)
+# still cannot be handed inline code, and so the error message names the
+# actual problem.
+INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh fish python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
 INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
 
 is_interpreter() {
@@ -336,88 +77,116 @@ is_interpreter() {
   return 1
 }
 
-has_inline_code_flag() {
-  local tok flag
-  # shellcheck disable=SC2086  # intentional word-splitting to tokenize the rest of the segment
-  for tok in $1; do
-    for flag in "${INLINE_CODE_FLAGS[@]}"; do
-      [ "$tok" = "$flag" ] && return 0
-    done
+is_inline_code_flag() {
+  local f
+  for f in "${INLINE_CODE_FLAGS[@]}"; do
+    [ "$1" = "$f" ] && return 0
   done
   return 1
 }
 
-# Walks the leading words of a segment, rejecting outright at any banned
-# wrapper (BANNED_WRAPPERS) and otherwise stripping `IDENT=value` assignment
-# prefixes and pass-through wrappers (WRAPPERS), until it reaches the actual
-# command-name token — then checks that token is a single plain bare word
-# via a positive allowlist (^[A-Za-z0-9_./][A-Za-z0-9_./-]*$, no leading
-# `-`): anything else (a SENTINEL from quoting/substitution/brace-expansion
-# — see neutralize_quotes/extract_brace_expansion — a backslash escape, a
-# literal `$` from a bare $VAR/${VAR} expansion, a redirection operator, a
-# leading-dash flag token, or any other disallowed character) fails the
-# allowlist and is rejected, with no need for a dedicated check per
-# obfuscation technique. Finally, rejects the segment outright if the
-# (now-validated bare) command name is a known interpreter being handed an
-# inline-code flag — see INTERPRETERS / INLINE_CODE_FLAGS above.
-check_segment() {
-  local trimmed first_word rest
-  trimmed=$(printf '%s' "$1" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  while :; do
-    [ -z "$trimmed" ] && return 0
-    read -r first_word rest <<< "$trimmed"
-    if [[ "$first_word" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
-      trimmed="$rest"
-      continue
-    fi
-    if is_banned_wrapper "$first_word"; then
-      printf 'Blocked: %s is not permitted - no legitimate need for it in this workflow\n' "$first_word" >&2
-      exit 2
-    fi
-    if [ "$first_word" = "!" ] || is_wrapper "$first_word"; then
-      trimmed="$rest"
-      continue
-    fi
-    if [ "$first_word" = "eval" ]; then
-      printf 'Blocked: eval used for indirect/obfuscated execution\n' >&2
-      exit 2
-    fi
-    if ! [[ "$first_word" =~ ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ ]]; then
-      printf 'Blocked: command name is quoted, escaped, or dynamically substituted - not a simple, obvious command\n' >&2
-      exit 2
-    fi
-    if is_interpreter "${first_word##*/}" && has_inline_code_flag "$rest"; then
-      printf 'Blocked: interpreter re-invocation with inline code is not a simple, obvious command\n' >&2
-      exit 2
-    fi
-    return 0
-  done
-}
-
-# Rejects the whole (heredoc-stripped) command outright if any byte falls
-# outside ordinary printable ASCII (0x20-0x7E) plus tab/newline/CR — see the
-# module doc comment for what this catches that character-shape checks on
-# individual tokens don't.
-NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
-
-reject_non_ascii() {
-  if [[ "$1" =~ $NON_PRINTABLE_RE ]]; then
-    printf 'Blocked: command contains non-printable or non-ASCII characters\n' >&2
-    exit 2
-  fi
-}
-
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
-cmd=$(strip_heredocs "$raw_cmd")
 
-reject_non_ascii "$cmd"
+[ -z "$raw_cmd" ] && exit 0
 
-all_segments=()
-collect_segments "$cmd"
+# ---- Layer 0: printable ASCII only -----------------------------------------
+# Control bytes, Unicode homoglyphs of shell metacharacters, zero-width and
+# bidi-override characters have no place in an agent command — including
+# inside heredoc bodies and quoted strings.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
+if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+  block 'command contains non-printable or non-ASCII characters'
+fi
 
-for segment in "${all_segments[@]}"; do
-  check_segment "$segment"
-done
+# ---- Layer 1: parse with a real shell parser (fail closed) -----------------
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - not a simple, obvious command'
+
+# ---- Layer 2: structural policy on the AST ----------------------------------
+
+if [ "$(printf '%s' "$ast" | jq '[.. | objects | select(.Type? == "FuncDecl")] | length')" != "0" ]; then
+  block 'defining shell functions is not a simple, obvious command'
+fi
+
+if [ "$(printf '%s' "$ast" | jq '[.. | objects | select(.Type? == "DeclClause")] | length')" != "0" ]; then
+  block 'declare/export/local/readonly clauses are not permitted - not a simple, obvious command'
+fi
+
+# Every assigned variable name (standalone `FOO=bar` statements and
+# per-command `FOO=bar cmd` prefixes alike) is checked against the env-var
+# blocklist: assignments to parser/loader/git-identity variables (IFS, PATH,
+# LD_PRELOAD, GIT_*, ...) change what other commands mean or bypass the git
+# identity guardrails, so they are rejected even though the command itself
+# may be plain.
+while IFS= read -r var; do
+  [ -z "$var" ] && continue
+  while IFS= read -r pattern; do
+    [ -z "$pattern" ] && continue
+    # shellcheck disable=SC2254  # patterns from the blocklist file are globs by design
+    case "$var" in
+      $pattern)
+        block "assignment to ${var} is not permitted - it changes how other commands are interpreted"
+        ;;
+    esac
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
+
+# Emit one line per CallExpr anywhere in the AST (any nesting depth —
+# $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
+# process substitutions): the command-name word followed by each argument
+# word, tab-separated. A word that is anything other than a single plain
+# literal is represented as a \x01 marker — layer 0 already guarantees a
+# real \x01 byte can never appear in the input, so the marker is
+# unambiguous, and it fails the command-name allowlist regex. Words cannot
+# contain raw whitespace, so tab is a safe separator.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
+  join("\t")')
+
+MARKER=$'\x01'
+NAME_RE='^[A-Za-z0-9_./][A-Za-z0-9_./-]*$'
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+  name="${words[0]}"
+
+  if ! [[ "$name" =~ $NAME_RE ]]; then
+    block 'command name is quoted, escaped, or dynamically substituted - not a simple, obvious command'
+  fi
+
+  base="${name##*/}"
+
+  # ---- Layer 3: interpreter re-invocation ------------------------------
+  if is_interpreter "$base"; then
+    for arg in "${words[@]:1}"; do
+      [ "$arg" = "$MARKER" ] && continue
+      if is_inline_code_flag "$arg"; then
+        block 'interpreter re-invocation with inline code is not a simple, obvious command'
+      fi
+    done
+  fi
+
+  # ---- Layer 4: known-bad names ----------------------------------------
+  blocked_reason=""
+  while IFS=$'\t' read -r bad_name bad_reason; do
+    [ -z "$bad_name" ] && continue
+    if [ "$base" = "$bad_name" ]; then
+      blocked_reason="${bad_reason:-is not permitted - no legitimate need for it in this workflow}"
+      break
+    fi
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
+  if [ -n "$blocked_reason" ]; then
+    block "${base} ${blocked_reason}"
+  fi
+
+  # ---- Layer 5: known-good names only ----------------------------------
+  if ! grep -qxF "$base" <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null); then
+    block "${base} is not on the known-good command allowlist - extend ${COMMAND_ALLOWLIST##*/} if it is legitimately required"
+  fi
+done <<< "$calls"
 
 exit 0

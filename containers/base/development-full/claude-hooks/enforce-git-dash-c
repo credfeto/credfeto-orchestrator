@@ -1,207 +1,88 @@
 #!/usr/bin/env bash
 # Blocks git commands that don't use `git -C <dir>` format.
 # Exit 2 = blocked, 0 = allowed.
+#
+# Like reject-obfuscated-commands (which runs before this hook in the
+# PreToolUse chain), this parses the command with shfmt (mvdan/sh) and walks
+# the resulting AST instead of approximating shell tokenization with text
+# scanning — the previous hand-rolled quote/substitution/segment engine
+# accumulated eight review rounds of bypasses (see PR #1159 / issue #1105)
+# and is gone. The AST walk visits every call expression at any nesting
+# depth ($()/backtick substitutions, loop/if bodies, pipelines, subshells),
+# and heredoc bodies are naturally inert (they are redirect payloads in the
+# AST, not commands), so prose that merely mentions "git push" is never
+# falsely blocked while a live substitution inside a heredoc would still be
+# checked.
+#
+# Rules, per call expression:
+#   * eval/source/. are blocked outright — their string argument is a
+#     second command line whose git hardening this hook cannot verify.
+#   * The first plain-literal token spelled `git` (or a path ending in
+#     /git), whether it is the command name itself or an argument (which
+#     covers wrapper-prefixed forms like `sudo git ...` for
+#     defense-in-depth, even though wrappers are banned upstream), must be
+#     followed by `-C` — optionally preceded by `-c <key>=<value>` global
+#     option pairs, e.g. `git -c core.pager=cat -C /repo status`.
+#
+# Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
+# NOT this hook's job — reject-obfuscated-commands rejects those
+# categorically before this hook ever runs. Anything here that is not a
+# plain literal word is deliberately treated as opaque.
+#
+# Fails closed: shfmt missing or the command not parsing as shell blocks
+# the command.
 
-# Strips heredoc bodies out of a multi-line command string before it's
-# pattern-matched. Without this, a Bash call that merely *writes*
-# example/doc/test-script text containing a line that starts with "git ..."
-# (e.g. via `cat <<EOF`) is indistinguishable from an actual git invocation,
-# and gets blocked for no reason. Only the common, unescaped-delimiter forms
-# (`<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, ...) are recognised; anything more
-# exotic falls back to the old un-stripped behaviour.
-strip_heredocs() {
-  local line dash delim="" in_heredoc=0 trimmed
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in_heredoc" = "1" ]; then
-      if [ "$dash" = "-" ]; then
-        trimmed=$(printf '%s' "$line" | sed -E 's/^\t+//')
-        [ "$trimmed" = "$delim" ] && in_heredoc=0
-      else
-        [ "$line" = "$delim" ] && in_heredoc=0
-      fi
-      continue
-    fi
-    if [[ "$line" =~ \<\<(-)?[[:space:]]*[\"\']?([A-Za-z_][A-Za-z0-9_]*)[\"\']?[[:space:]]*$ ]]; then
-      dash="${BASH_REMATCH[1]}"
-      delim="${BASH_REMATCH[2]}"
-      in_heredoc=1
-    fi
-    printf '%s\n' "$line"
-  done <<< "$1"
-}
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
 
-# A single flag value: a "..."/'...'-quoted token (which may contain spaces),
-# or a plain space-free token.
-VALTOKEN="(\"[^\"]*\"|'[^']*'|[^[:space:]]+)"
-
-# Zero or more `-c <key>=<value>` global option pairs that may legitimately
-# appear before `-C` — e.g. `git -c core.pager=cat -C /repo status`.
-DASH_C_FLAGS="(-c[[:space:]]+${VALTOKEN}[[:space:]]+)*"
-
-# Walks a command string one character at a time and, into the globals
-# NEUTRALIZED and EXTRA_SEGMENTS:
-#   * blanks out single-quoted text entirely — it is inert in POSIX/bash,
-#     so metacharacters inside it (e.g. `git -C . log --grep="fix a; git
-#     push later"`) must not be treated as statement separators;
-#   * blanks out double-quoted text too, EXCEPT any `$( ... )` or `` ` ` ``
-#     command substitution nested inside it, which is queued into
-#     EXTRA_SEGMENTS for its own recursive check — that content executes
-#     regardless of the quotes around it, e.g. `echo "$(git push)"`;
-#   * queues top-level (unquoted) `$( ... )` / backtick substitution the
-#     same way, and leaves every other character untouched so the caller's
-#     statement-separator split still applies to real, unquoted operators.
-neutralize_quotes() {
-  local s="$1" c i=0 len
-  NEUTRALIZED=""
-  len=${#s}
-  while [ "$i" -lt "$len" ]; do
-    c="${s:$i:1}"
-    case "$c" in
-      \')
-        i=$((i + 1))
-        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != "'" ]; do
-          i=$((i + 1))
-        done
-        i=$((i + 1))
-        NEUTRALIZED+=' '
-        ;;
-      \")
-        i=$((i + 1))
-        while [ "$i" -lt "$len" ] && [ "${s:$i:1}" != '"' ]; do
-          c="${s:$i:1}"
-          if [ "$c" = $'\\' ] && [ $((i + 1)) -lt "$len" ]; then
-            i=$((i + 2))
-            continue
-          fi
-          if [ "$c" = '$' ] && [ "${s:$((i + 1)):1}" = '(' ]; then
-            extract_substitution "$s" "$i" '(' ')' 2
-            i="$SUBST_NEXT_I"
-            continue
-          fi
-          if [ "$c" = '`' ]; then
-            extract_substitution "$s" "$i" '`' '`' 1
-            i="$SUBST_NEXT_I"
-            continue
-          fi
-          i=$((i + 1))
-        done
-        i=$((i + 1))
-        NEUTRALIZED+=' '
-        ;;
-      '$')
-        if [ "${s:$((i + 1)):1}" = '(' ]; then
-          extract_substitution "$s" "$i" '(' ')' 2
-          i="$SUBST_NEXT_I"
-          NEUTRALIZED+=' '
-        else
-          NEUTRALIZED+="$c"
-          i=$((i + 1))
-        fi
-        ;;
-      '`')
-        extract_substitution "$s" "$i" '`' '`' 1
-        i="$SUBST_NEXT_I"
-        NEUTRALIZED+=' '
-        ;;
-      *)
-        NEUTRALIZED+="$c"
-        i=$((i + 1))
-        ;;
-    esac
-  done
-}
-
-# Extracts the content of a `$( ... )` or `` ` ... ` `` substitution starting
-# at index $2 in string $1, honouring nested "open" characters (so
-# `$(echo $(git push))` finds the outer, not the inner, close). Skips over
-# single- and double-quoted spans (honouring backslash-escapes inside double
-# quotes) while hunting for the matching close character, so a quoted paren
-# inside the substitution's own content — e.g. `$(echo ")" && git push)` —
-# isn't mistaken for the real close: without this, the scan would stop early,
-# and the un-consumed remainder (starting with the orphaned matching quote)
-# would then be blanked out by the caller as an "unterminated" quoted string,
-# silently hiding whatever followed (a bare `git push` in that example) from
-# the segment check. Appends the extracted content to EXTRA_SEGMENTS and sets
-# SUBST_NEXT_I to the index just past the closing character, for the caller
-# to resume scanning from.
-extract_substitution() {
-  local s="$1" start="$2" open="$3" close="$4" head_len="$5" depth=1
-  local j=$((start + head_len))
-  local len=${#s}
-  local c
-  while [ "$j" -lt "$len" ] && [ "$depth" -gt 0 ]; do
-    c="${s:$j:1}"
-    case "$c" in
-      \')
-        j=$((j + 1))
-        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != "'" ]; do
-          j=$((j + 1))
-        done
-        ;;
-      \")
-        j=$((j + 1))
-        while [ "$j" -lt "$len" ] && [ "${s:$j:1}" != '"' ]; do
-          if [ "${s:$j:1}" = $'\\' ] && [ $((j + 1)) -lt "$len" ]; then
-            j=$((j + 2))
-            continue
-          fi
-          j=$((j + 1))
-        done
-        ;;
-      "$open") [ "$open" = "$close" ] && depth=$((depth - 1)) || depth=$((depth + 1)) ;;
-      "$close") depth=$((depth - 1)) ;;
-    esac
-    j=$((j + 1))
-  done
-  local content_len=$((j - start - head_len - 1))
-  [ "$content_len" -lt 0 ] && content_len=0
-  EXTRA_SEGMENTS+=("${s:$((start + head_len)):${content_len}}")
-  SUBST_NEXT_I=$j
-}
-
-# Recursively collects every candidate "invocation" segment from $1 into the
-# global all_segments array: one pass splits the quote-neutralized text on
-# statement separators (;, &, && a bare |, ||, parentheses/subshells, brace
-# groups, backtick) so a single whole-command check can't let one hardened
-# `git -C` earlier in a chain satisfy the check while a later bare `git`
-# slips through, e.g. `git -C . status && git push --force`, `true & git
-# push`, or `{ git push; }` — then each live substitution queued by
-# neutralize_quotes is checked the same way, recursively.
-collect_segments() {
-  local text="$1" seg sub
-  EXTRA_SEGMENTS=()
-  neutralize_quotes "$text"
-  while IFS= read -r seg; do
-    all_segments+=("$seg")
-  done < <(printf '%s\n' "$NEUTRALIZED" | sed -E 's/(;|&&?|\|\|?|\(|\)|\{|\}|`)/\n/g')
-  for sub in "${EXTRA_SEGMENTS[@]}"; do
-    collect_segments "$sub"
-  done
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
 }
 
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
-cmd=$(strip_heredocs "$raw_cmd")
 
-all_segments=()
-collect_segments "$cmd"
+[ -z "$raw_cmd" ] && exit 0
 
-for segment in "${all_segments[@]}"; do
-  trimmed=$(printf '%s' "$segment" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
-  # Look for "git" as a standalone word ANYWHERE in the segment, not just at
-  # its start: a shell keyword (`do`, `then`, `else`, ...) or a wrapper
-  # command (`sudo`, `env`, `exec`, `command`, `time`, `!`, ...) can precede
-  # `git` within the same statement segment with no separator character
-  # between them, and none of those can be enumerated exhaustively — so
-  # anchoring the check at the start of the segment let a bare `git` right
-  # after any of them through uncaught. Validating from the first "git" word
-  # onward instead makes the check independent of whatever precedes it.
-  [[ "$trimmed" =~ (^|[[:space:]])(git([[:space:]].*|$)) ]] || continue
-  git_onward="${BASH_REMATCH[2]}"
-  if ! [[ "$git_onward" =~ ^git[[:space:]]+${DASH_C_FLAGS}-C([[:space:]]|$) ]]; then
-    printf 'Blocked: git commands must use "git -C <dir>" format\n' >&2
-    exit 2
-  fi
-done
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One line per CallExpr: every word that is a single plain literal is
+# emitted verbatim; anything else (quoted text, substitutions, expansions)
+# becomes an empty field, which can never equal "git"/"-C" and so is
+# opaque to the checks below. Words cannot contain raw whitespace, so tab
+# is a safe separator.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  join("\t")')
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+
+  case "${words[0]}" in
+    eval | source | .)
+      block "git hardening cannot be verified inside ${words[0]} - use a plain git -C <dir> command instead"
+      ;;
+  esac
+
+  for i in "${!words[@]}"; do
+    tok="${words[$i]}"
+    if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
+      j=$((i + 1))
+      # skip `-c <key>=<value>` global option pairs before -C
+      while [ "${words[$j]:-}" = "-c" ]; do
+        j=$((j + 2))
+      done
+      if [ "${words[$j]:-}" != "-C" ]; then
+        block 'git commands must use "git -C <dir>" format'
+      fi
+      break
+    fi
+  done
+done <<< "$calls"
 
 exit 0

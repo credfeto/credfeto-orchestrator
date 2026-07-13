@@ -87,9 +87,10 @@ run_hook() {
     [[ "${output}" == *'eval used for indirect'* ]]
 }
 
-@test "a bare command after sudo is allowed" {
+@test "sudo is banned outright, even with a bare command after it" {
     run_hook "sudo git push"
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sudo is not permitted'* ]]
 }
 
 @test "a quote-spliced command name after sudo is blocked" {
@@ -103,10 +104,10 @@ run_hook() {
     [[ "${output}" == *'env is not permitted'* ]]
 }
 
-@test "env is banned outright even when it appears after another wrapper" {
+@test "chained banned wrappers are blocked at the first banned name" {
     run_hook "sudo env exec command git push"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'env is not permitted'* ]]
+    [[ "${output}" == *'sudo is not permitted'* ]]
 }
 
 @test "nice is banned outright, even with a bare command after it" {
@@ -179,14 +180,20 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "path-qualified binaries are deliberately not rejected by this hook" {
+@test "a path-qualified binary is matched by basename against the allowlist" {
     run_hook "/usr/bin/git push"
     [ "${status}" -eq 0 ]
 }
 
-@test "a relative-path binary is deliberately not rejected by this hook" {
+@test "a relative-path binary is matched by basename against the allowlist" {
     run_hook "./git push"
     [ "${status}" -eq 0 ]
+}
+
+@test "a path-qualified binary with an unknown basename is blocked" {
+    run_hook "/tmp/mystery-tool --run"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
 }
 
 @test "a quoted argument containing metacharacters is not falsely blocked" {
@@ -211,7 +218,7 @@ run_hook() {
 
 @test "the standard heredoc commit-message idiom is not falsely blocked" {
     # shellcheck disable=SC2016  # literal $(...) in the printf format — must reach the hook unexpanded
-    run_hook "$(printf 'git commit -m "$(cat <<%s\nCommit message here.\n%s\n)"' "'\''EOF'\''" "EOF")"
+    run_hook "$(printf 'git commit -m "$(cat <<%s\nCommit message here.\n%s\n)"' "'EOF'" "EOF")"
     [ "${status}" -eq 0 ]
 }
 
@@ -242,7 +249,7 @@ run_hook() {
 @test "brace-expansion used as the command name after a wrapper is blocked" {
     run_hook 'sudo {git,push}'
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'not a simple, obvious command'* ]]
+    [[ "${output}" == *'sudo is not permitted'* ]]
 }
 
 @test "a bare variable used as the command name is blocked" {
@@ -297,14 +304,20 @@ run_hook() {
     [[ "${output}" == *'interpreter re-invocation'* ]]
 }
 
-@test "an interpreter re-invocation after sudo is blocked" {
+@test "an interpreter re-invocation after sudo is blocked (sudo ban fires first)" {
     run_hook 'sudo bash -c "git push"'
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'interpreter re-invocation'* ]]
+    [[ "${output}" == *'sudo is not permitted'* ]]
 }
 
-@test "running a script file with an interpreter and no inline-code flag is allowed" {
+@test "sub-shells are banned outright even without an inline-code flag" {
     run_hook "bash ./scripts/deploy.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+}
+
+@test "running a script file with an allowlisted interpreter and no inline-code flag is allowed" {
+    run_hook "python3 script.py"
     [ "${status}" -eq 0 ]
 }
 
@@ -328,4 +341,135 @@ run_hook() {
 @test "a plain ASCII command is not falsely blocked by the printable check" {
     run_hook 'git -C . commit -m "plain ascii message"'
     [ "${status}" -eq 0 ]
+}
+
+@test "a non-ASCII byte inside a heredoc body is blocked (whole-command check)" {
+    run_hook "$(printf 'cat <<EOF\ncaf\xc3\xa9\nEOF')"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-printable or non-ASCII'* ]]
+}
+
+# ---- strict allowlist (unknown commands are rejected) -----------------------
+
+@test "an unknown command name is blocked by the allowlist" {
+    run_hook "somerandomtool --help"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "an unknown command inside a command substitution is blocked" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook 'x=$(mystery-tool)'
+    [ "${status}" -eq 2 ]
+}
+
+# ---- additional banned wrappers ---------------------------------------------
+
+@test "timeout is banned outright" {
+    run_hook "timeout 5 git -C . push"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'timeout is not permitted'* ]]
+}
+
+@test "xargs is banned outright" {
+    run_hook "echo x | xargs rm"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'xargs is not permitted'* ]]
+}
+
+@test "source is banned outright" {
+    run_hook "source ./setup.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'executes a script in the current shell'* ]]
+}
+
+@test "dot-sourcing is banned outright" {
+    run_hook ". ./setup.sh"
+    [ "${status}" -eq 2 ]
+}
+
+# ---- structural rejections ---------------------------------------------------
+
+@test "export of a variable is blocked (DeclClause)" {
+    run_hook "export PATH=/tmp/evil"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'declare/export/local/readonly'* ]]
+}
+
+@test "declare is blocked (DeclClause)" {
+    run_hook "declare -x FOO=bar"
+    [ "${status}" -eq 2 ]
+}
+
+@test "defining a shell function is blocked" {
+    run_hook 'f() { git push; }'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'defining shell functions'* ]]
+}
+
+@test "a command that does not parse as shell is blocked (fail closed)" {
+    run_hook "if true; then git push"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed'* ]]
+}
+
+@test "missing shfmt fails closed" {
+    mkdir -p "${STUB_BIN}/noshfmt"
+    ln -s "$(command -v jq)" "${STUB_BIN}/noshfmt/jq"
+    ln -s "$(command -v bash)" "${STUB_BIN}/noshfmt/bash"
+    ln -s "$(command -v cat)" "${STUB_BIN}/noshfmt/cat"
+    local payload
+    payload=$(jq -n --arg cmd 'ls' '{tool_input: {command: $cmd}}')
+    run bash -c 'printf "%s" "$1" | PATH="$2" "$3"' _ "$payload" "${STUB_BIN}/noshfmt" "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'failing closed'* ]]
+}
+
+# ---- environment-variable assignment blocklist -------------------------------
+
+@test "a benign per-command assignment prefix is allowed" {
+    run_hook "GH_PAGER= gh pr view 1"
+    [ "${status}" -eq 0 ]
+}
+
+@test "assigning PATH as a per-command prefix is blocked" {
+    run_hook "PATH=/tmp/evil ls"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to PATH is not permitted'* ]]
+}
+
+@test "assigning IFS standalone is blocked" {
+    run_hook "IFS=,"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to IFS is not permitted'* ]]
+}
+
+@test "assigning a GIT_* identity variable is blocked" {
+    run_hook 'GIT_AUTHOR_NAME=evil git -C . commit -m x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to GIT_AUTHOR_NAME is not permitted'* ]]
+}
+
+@test "assigning GIT_CONFIG_GLOBAL is blocked" {
+    run_hook 'GIT_CONFIG_GLOBAL=/tmp/cfg git -C . push'
+    [ "${status}" -eq 2 ]
+}
+
+# ---- round-8 bypass classes (keyword prefix + obfuscation/eval) ---------------
+
+@test "a quote-spliced command inside an if/then body is blocked (round 8)" {
+    run_hook 'if true; then "g""it" push; fi'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "a quote-spliced command inside a for-loop body is blocked (round 8)" {
+    run_hook 'for i in 1; do "g""it" push; done'
+    [ "${status}" -eq 2 ]
+}
+
+@test "eval inside a while-loop body is blocked (round 8)" {
+    run_hook 'while true; do eval "git push"; break; done'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'eval used for indirect'* ]]
 }
