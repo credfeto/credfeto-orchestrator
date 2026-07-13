@@ -119,10 +119,13 @@ fi
 # blocklist: assignments to parser/loader/git-identity variables (IFS, PATH,
 # LD_PRELOAD, GIT_*, ...) change what other commands mean or bypass the git
 # identity guardrails, so they are rejected even though the command itself
-# may be plain.
+# may be plain. The blocklist is loaded once, not re-read from disk per
+# assignment.
+mapfile -t env_var_patterns < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+
 while IFS= read -r var; do
   [ -z "$var" ] && continue
-  while IFS= read -r pattern; do
+  for pattern in "${env_var_patterns[@]}"; do
     [ -z "$pattern" ] && continue
     # shellcheck disable=SC2254  # patterns from the blocklist file are globs by design
     case "$var" in
@@ -130,7 +133,7 @@ while IFS= read -r var; do
         block "assignment to ${var} is not permitted - it changes how other commands are interpreted"
         ;;
     esac
-  done < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+  done
 done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
 
 # Emit one line per CallExpr anywhere in the AST (any nesting depth —
@@ -149,6 +152,18 @@ calls=$(printf '%s' "$ast" | jq -r '
 MARKER=$'\x01'
 NAME_RE='^[A-Za-z0-9_./][A-Za-z0-9_./-]*$'
 
+# Loaded once, not re-read from disk per CallExpr.
+mapfile -t command_blocklist_lines < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
+mapfile -t command_allowlist < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null)
+
+is_allowlisted() {
+  local w
+  for w in "${command_allowlist[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
   IFS=$'\t' read -ra words <<< "$call_line"
@@ -160,7 +175,7 @@ while IFS= read -r call_line; do
 
   base="${name##*/}"
 
-  # ---- Layer 3: interpreter re-invocation ------------------------------
+  # ---- Layer 3: interpreter re-invocation (command name itself) --------
   if is_interpreter "$base"; then
     for arg in "${words[@]:1}"; do
       [ "$arg" = "$MARKER" ] && continue
@@ -172,19 +187,43 @@ while IFS= read -r call_line; do
 
   # ---- Layer 4: known-bad names ----------------------------------------
   blocked_reason=""
-  while IFS=$'\t' read -r bad_name bad_reason; do
+  for entry in "${command_blocklist_lines[@]}"; do
+    bad_name="${entry%%$'\t'*}"
     [ -z "$bad_name" ] && continue
     if [ "$base" = "$bad_name" ]; then
+      bad_reason="${entry#*$'\t'}"
+      [ "$bad_reason" = "$entry" ] && bad_reason=""
       blocked_reason="${bad_reason:-is not permitted - no legitimate need for it in this workflow}"
       break
     fi
-  done < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
+  done
   if [ -n "$blocked_reason" ]; then
     block "${base} ${blocked_reason}"
   fi
 
+  # ---- Layer 3b: interpreter re-invocation (nested in an arg) ----------
+  # An allowlisted runner (uv, npx, bun, npm, ...) can itself launch another
+  # interpreter as a plain argument (`uv run python3 -c "..."`); that
+  # nested interpreter's inline-code flag is exactly as dangerous as if it
+  # had been the command name, so scan every argument word (not just
+  # words[0], already covered by Layer 3 above) for a nested interpreter
+  # name and check what follows it too.
+  for idx in "${!words[@]}"; do
+    [ "$idx" -eq 0 ] && continue
+    tok="${words[$idx]}"
+    [ "$tok" = "$MARKER" ] && continue
+    if is_interpreter "${tok##*/}"; then
+      for arg in "${words[@]:$((idx + 1))}"; do
+        [ "$arg" = "$MARKER" ] && continue
+        if is_inline_code_flag "$arg"; then
+          block 'interpreter re-invocation with inline code is not a simple, obvious command'
+        fi
+      done
+    fi
+  done
+
   # ---- Layer 5: known-good names only ----------------------------------
-  if ! grep -qxF "$base" <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null); then
+  if ! is_allowlisted "$base"; then
     block "${base} is not on the known-good command allowlist - extend ${COMMAND_ALLOWLIST##*/} if it is legitimately required"
   fi
 done <<< "$calls"
