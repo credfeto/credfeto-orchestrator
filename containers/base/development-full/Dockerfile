@@ -116,6 +116,12 @@ RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet
 # the dotnet CLI look for `dotnet-<name>` on PATH. Without the alias the
 # call fails with "Could not execute because the specified command or
 # file was not found". Bake them into the image. Idempotent: ln -sf overwrites.
+#
+# dotnet-pwsh in particular is required by credfeto-global-pre-commit's
+# check-setup, which probes PowerShell via `dotnet pwsh ...` (the same
+# `dotnet <name>` subcommand convention) rather than calling the `pwsh`
+# binary directly — without this alias check-setup reports PowerShell as
+# not installed even though the global tool is present on PATH.
 # hadolint ignore=DL3059
 RUN su developer -c '\
     ln -sf cscleanup             /home/developer/.dotnet/tools/dotnet-cscleanup && \
@@ -126,7 +132,16 @@ RUN su developer -c '\
     ln -sf cwm-roslyn-navigator  /home/developer/.dotnet/tools/dotnet-cwm-roslyn-navigator && \
     ln -sf ilspycmd              /home/developer/.dotnet/tools/dotnet-ilspycmd && \
     ln -sf sqlpackage            /home/developer/.dotnet/tools/dotnet-sqlpackage && \
-    ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint'
+    ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint && \
+    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh'
+
+# PSScriptAnalyzer PowerShell module — check-setup imports it
+# (`dotnet pwsh -Command "Import-Module PSScriptAnalyzer ..."`) to validate
+# the VALIDATE_POWERSHELL hook, so it must be present for the developer user
+# in addition to the pwsh binary/alias above.
+# hadolint ignore=DL3059
+RUN su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command \
+    "Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -ErrorAction Stop"'
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 # Fetches the exact pinned commit directly (not the moving default-branch
