@@ -282,6 +282,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Ban the env/nice/command wrappers outright in reject-obfuscated-commands (their leading flags could be mistaken for the validated command name) and reject a leading dash in the command-name allowlist to close the same bypass class for the remaining pass-through wrappers
 - Allow the pre-commit-check wrapper script through the reject-obfuscated-commands hook allowlist so local pre-commit tooling is not blocked
 - Allow the testdb and testdocker repo-local test scripts through the reject-obfuscated-commands hook allowlist
+- PR fingerprint now includes trusted comment and review bodies so edits are detected (#1095)
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
