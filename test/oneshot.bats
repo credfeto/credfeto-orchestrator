@@ -1532,6 +1532,47 @@ teardown() {
     [ "${fp_v1}" != "${fp_v2}" ]
 }
 
+@test "fingerprint_pr_json with trusted logins: trusted comment body edit changes fingerprint even with updatedAt null (#1095)" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"owner"},"body":"original","updatedAt":null}],"reviews":[],"statusCheckRollup":[]}'
+    local pr_edited='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"owner"},"body":"edited","updatedAt":null}],"reviews":[],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_edited
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_edited=$(fingerprint_pr_json "${pr_edited}" "${trusted}")
+    [ "${fp_base}" != "${fp_edited}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: trusted review body edit changes fingerprint with same state/submittedAt (#1095)" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[{"author":{"login":"owner"},"state":"CHANGES_REQUESTED","submittedAt":"2024-01-01T00:00:00Z","body":"terse"}],"statusCheckRollup":[]}'
+    local pr_edited='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[{"author":{"login":"owner"},"state":"CHANGES_REQUESTED","submittedAt":"2024-01-01T00:00:00Z","body":"full required-changes list"}],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_edited
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_edited=$(fingerprint_pr_json "${pr_edited}" "${trusted}")
+    [ "${fp_base}" != "${fp_edited}" ]
+}
+
+@test "fingerprint_pr_json with trusted logins: untrusted comment and review body edits do not change fingerprint (#1095)" {
+    local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"randomer"},"body":"original","updatedAt":null}],"reviews":[{"author":{"login":"randomer"},"state":"COMMENTED","submittedAt":"2024-01-01T00:00:00Z","body":"terse"}],"statusCheckRollup":[]}'
+    local pr_edited='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"randomer"},"body":"edited","updatedAt":null}],"reviews":[{"author":{"login":"randomer"},"state":"COMMENTED","submittedAt":"2024-01-01T00:00:00Z","body":"edited too"}],"statusCheckRollup":[]}'
+    local trusted='["owner"]'
+    local fp_base fp_edited
+    fp_base=$(fingerprint_pr_json "${pr_base}" "${trusted}")
+    fp_edited=$(fingerprint_pr_json "${pr_edited}" "${trusted}")
+    [ "${fp_base}" = "${fp_edited}" ]
+}
+
+@test "fingerprint_pr_json is stable across runs for identical JSON regardless of comment/review array order (#1095)" {
+    local pr_order_a='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"a"},"body":"first","updatedAt":null},{"author":{"login":"b"},"body":"second","updatedAt":null}],"reviews":[{"author":{"login":"a"},"state":"APPROVED","submittedAt":"2024-01-01T00:00:00Z","body":"lgtm"},{"author":{"login":"b"},"state":"COMMENTED","submittedAt":"2024-01-02T00:00:00Z","body":"nit"}],"statusCheckRollup":[]}'
+    local pr_order_b='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"b"},"body":"second","updatedAt":null},{"author":{"login":"a"},"body":"first","updatedAt":null}],"reviews":[{"author":{"login":"b"},"state":"COMMENTED","submittedAt":"2024-01-02T00:00:00Z","body":"nit"},{"author":{"login":"a"},"state":"APPROVED","submittedAt":"2024-01-01T00:00:00Z","body":"lgtm"}],"statusCheckRollup":[]}'
+    local fp_a fp_b fp_a_again
+    fp_a=$(fingerprint_pr_json "${pr_order_a}")
+    fp_b=$(fingerprint_pr_json "${pr_order_b}")
+    fp_a_again=$(fingerprint_pr_json "${pr_order_a}")
+    [ "${fp_a}" = "${fp_b}" ]
+    [ "${fp_a}" = "${fp_a_again}" ]
+}
+
 @test "fetch_pr_json requests baseRefName, reviewDecision, reviewRequests, assignees, and milestone fields (#1096)" {
     make_stub gh 'printf "%s" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "{}"'
     fetch_pr_json 42 > /dev/null
