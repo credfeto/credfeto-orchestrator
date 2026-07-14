@@ -37,6 +37,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Replace the per-technique bad-construct denylist in the reject-obfuscated-commands hook with a positive allowlist on the command-name token, categorically closing the redirection-prefix and interpreter-re-invocation (bash -c/python3 -c/perl -e/...) bypasses and rejecting any non-printable or non-ASCII byte in the command; close a git-config guardrail bypass where omitting the --local/--global scope flag (which defaults to local) fell through the claude-settings.json deny rules (#1105)
 - Allow podman, docker and sqlcmd through the reject-obfuscated-commands hook allowlist
 - Allow curl, wget and ping through the reject-obfuscated-commands hook allowlist
+- Allow the querydb repo-local script through the reject-obfuscated-commands hook allowlist
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment

@@ -58,6 +58,7 @@ jq
 # across every repo since this allowlist is shared globally)
 testdb
 testdocker
+querydb
 
 # Core utilities
 ls
