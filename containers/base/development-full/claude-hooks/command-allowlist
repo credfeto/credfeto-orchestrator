@@ -32,6 +32,10 @@ npm
 npx
 bun
 
+# Containers
+podman
+docker
+
 # Linters / test tooling
 shellcheck
 checkbashisms
@@ -42,6 +46,7 @@ yamllint
 markdownlint-cli2
 sqlfluff
 sqlite3
+sqlcmd
 jq
 
 # Repo-local test/deploy scripts (committed to main, basename-matched
