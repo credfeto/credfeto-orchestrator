@@ -285,6 +285,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Allow the testdb and testdocker repo-local test scripts through the reject-obfuscated-commands hook allowlist
 - PR fingerprint now includes trusted comment and review bodies so edits are detected (#1095)
 - create-project: non-destructively add missing Workflow Status options (e.g. AI Simplify) to boards created before that option existed, preserving every existing option's id/color/description so item statuses and appearance are unaffected
+- oneshot never backfilled the new "AI Simplify" Workflow Status board option onto pre-existing boards (only create-project did), so PHASE D's board-status update silently no-op'd; oneshot's live discovery path now mirrors create-project's migration and self-heals pre-existing boards
+- create-project's board-status migration for a missing option (e.g. "AI Simplify") always appended the new option to the end of the list instead of inserting it at its schema position, so a migrated board's column order diverged from a freshly created board's; it now inserts after the correct predecessor option, with a safe fallback to the original field if the mutation returns no usable data
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions

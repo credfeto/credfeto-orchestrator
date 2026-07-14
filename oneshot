@@ -1405,6 +1405,62 @@ _build_wf_section() {
     printf '  WF_COMPLETE=%s\n'              "${_WF_OPTION_IDS[Complete]:-}"
 }
 
+# Adds a single option to an existing "Workflow Status" field if it is not already present,
+# used to migrate boards discovered live that were provisioned before that option existed
+# (e.g. "AI Simplify", #1169) — mirrors create-project's ensure_status_field_option so a
+# pre-existing board self-heals here too, without needing a human to re-run create-project.
+# Inserts the new option immediately after ${after_name} (falling back to appending at the
+# end if ${after_name} is not found). Re-sends every existing option WITH its id, per
+# GitHub's documented contract for ProjectV2SingleSelectFieldOptionInput.id (preserves each
+# option's identity so items already set to it keep their value), and round-trips existing
+# options' color/description unchanged. Best-effort: any failure (GraphQL error, or a
+# mutation that succeeds but returns no usable field data) warns and returns the original
+# field_node unchanged rather than dying, since board-status updates are always best-effort
+# in oneshot. No-op if the option is already present or the field has no id. Prints the
+# (possibly updated) field JSON.
+_wf_ensure_status_field_option() {
+    local field_node="$1" option_name="$2" option_color="$3" after_name="$4"
+    local field_id has_option
+    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
+        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
+    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
+        printf '%s' "${field_node}"
+        return 0
+    fi
+
+    local options_json
+    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" --arg after "${after_name}" '
+        (.options // []) as $opts
+        | ($opts | map(.name) | index($after)) as $idx
+        | [$opts[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}] as $existing
+        | if $idx == null then $existing + [{name: $n, color: $c, description: ""}]
+          else $existing[0:($idx+1)] + [{name: $n, color: $c, description: ""}] + $existing[($idx+1):]
+          end
+    ')
+    local resp resp_err resp_err_content
+    resp_err=$(mktemp --suffix=.stderr) || resp_err=/dev/null
+    if ! resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
+            '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
+            | gh api graphql --input - 2>"${resp_err}"); then
+        resp_err_content=$(head -3 "${resp_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${resp_err}"
+        warn "Workflow project: could not add \"${option_name}\" option to \"Workflow Status\"${resp_err_content:+ — ${resp_err_content}}"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    rm -f "${resp_err}"
+
+    local updated
+    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field' 2>/dev/null)
+    if [ -z "${updated}" ] || [ "${updated}" = "null" ]; then
+        warn "Workflow project: mutation to add \"${option_name}\" option to \"Workflow Status\" returned no field data — leaving field unchanged"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    info "Workflow project: added missing \"${option_name}\" option to \"Workflow Status\"" >&2
+    printf '%s' "${updated}"
+}
+
 # Discovers or creates a GitHub Projects (v2) board named "Workflow" linked to
 # the current repo (OWNER/REPO).  Populates _WF_PROJECT_ID, _WF_STATUS_FIELD_ID,
 # and _WF_OPTION_IDS on success.  On any failure, leaves _WF_PROJECT_ID empty so
@@ -1461,7 +1517,7 @@ discover_or_create_workflow_project() {
             || warn "Workflow project: could not enable Projects on ${REPO_FULL} — discovery may fail"
     fi
 
-    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}pageInfo{endCursor hasNextPage}}}}"
+    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}pageInfo{endCursor hasNextPage}}}}"
     local project_json="" cursor="" has_next_page="true" graphql_stderr graphql_err_content page_json
     local -a cursor_args
     while true; do
@@ -1510,8 +1566,21 @@ discover_or_create_workflow_project() {
         return 0
     }
 
-    _WF_STATUS_FIELD_ID=$(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .id // empty' 2>/dev/null | head -1)
+    local status_field_node
+    status_field_node=$(printf '%s' "${project_json}" | \
+        jq -c '.fields.nodes[] | select(.name == "Workflow Status")' 2>/dev/null | head -1)
+    [ -n "${status_field_node}" ] || {
+        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        _WF_PROJECT_ID=""
+        return 0
+    }
+
+    # Backfills the "AI Simplify" option onto boards provisioned before that option existed
+    # (#1169), mirroring create-project's own migration so oneshot self-heals a pre-existing
+    # board without needing a human to re-run create-project by hand.
+    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Simplify" PURPLE "Development")
+
+    _WF_STATUS_FIELD_ID=$(printf '%s' "${status_field_node}" | jq -r '.id // empty')
     [ -n "${_WF_STATUS_FIELD_ID}" ] || {
         warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
         _WF_PROJECT_ID=""
@@ -1522,8 +1591,8 @@ discover_or_create_workflow_project() {
     while IFS='|' read -r opt_name opt_id; do
         if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
-    done < <(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
+    done < <(printf '%s' "${status_field_node}" | \
+        jq -r '.options[] | "\(.name)|\(.id)"' 2>/dev/null)
 
     local cached_opts="" k
     for k in "${!_WF_OPTION_IDS[@]}"; do

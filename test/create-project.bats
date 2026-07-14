@@ -155,7 +155,7 @@ teardown() {
     install_gh_stub
     local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
 
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
     [ "${status}" -eq 0 ]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
@@ -166,7 +166,7 @@ teardown() {
     install_gh_stub
     local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""}]}'
 
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
     [ "${status}" -eq 0 ]
     [[ "${output}" == "${field_node}" ]]
 
@@ -178,7 +178,7 @@ teardown() {
     install_gh_stub
     local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":"start here"},{"id":"O2","name":"Development","color":"PURPLE","description":""}]}'
 
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
     [ "${status}" -eq 0 ]
 
     run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
@@ -187,6 +187,39 @@ teardown() {
     [[ "${output}" == *'"color":"GRAY"'* ]]
     [[ "${output}" == *'"description":"start here"'* ]]
     [[ "${output}" == *'"name":"AI Simplify"'* ]]
+}
+
+@test "ensure_status_field_option inserts the new option immediately after after_name instead of appending at the end" {
+    install_gh_stub
+    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"Development","color":"PURPLE","description":""},{"id":"O3","name":"AI Review","color":"ORANGE","description":""}]}'
+
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
+    [ "${status}" -eq 0 ]
+
+    run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
+    [[ "${output}" == *'"name":"Development"'*'"name":"AI Simplify"'*'"name":"AI Review"'* ]]
+}
+
+@test "ensure_status_field_option falls back to appending when after_name is not found among the existing options" {
+    install_gh_stub
+    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
+
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
+    [ "${status}" -eq 0 ]
+
+    run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
+    [[ "${output}" == *'"name":"Not Started"'*'"name":"AI Simplify"'* ]]
+}
+
+@test "ensure_status_field_option falls back to the original field_node when the mutation returns no field data" {
+    install_gh_stub
+    export FIELD_OPTION_UPDATE_RESULT='{"data":{"updateProjectV2Field":{"projectV2Field":null}}}'
+    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
+
+    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"returned no field data"* ]]
+    [[ "${output}" == *"${field_node}" ]]
 }
 
 @test "provision_project adds the AI Simplify option to an existing field that lacks it" {

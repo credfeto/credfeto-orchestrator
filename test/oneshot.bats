@@ -7756,6 +7756,51 @@ STUBEOF
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
 }
 
+@test "discover_or_create_workflow_project backfills the missing AI Simplify option onto a pre-existing board (#1169)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""}]}]}}]'
+    local updated_field='{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid_new","name":"AI Simplify","color":"PURPLE","description":""}]}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+if [[ "\$*" == *"--input"* ]]; then
+    cat >/dev/null
+    printf '{"data":{"updateProjectV2Field":{"projectV2Field":%s}}}\n' '${updated_field}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_found" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid_new" ]
+}
+
+@test "discover_or_create_workflow_project does not call the field-option mutation when AI Simplify is already present" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+if [[ "\$*" == *"--input"* ]]; then
+    echo "unexpected mutation call" >> "${TEST_TMP}/unexpected.log"
+    cat >/dev/null
+    printf '{}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid2" ]
+    [ ! -f "${TEST_TMP}/unexpected.log" ]
+}
+
 @test "discover_or_create_workflow_project persists a disk cache file after live discovery" {
     local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
