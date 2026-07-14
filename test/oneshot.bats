@@ -7400,7 +7400,7 @@ STUBEOF
 }
 
 @test "coarse_status_for_substatus maps the active phases to In Progress" {
-    for phase in Approved Development "AI Review" "AI Security Review" "Human Review"; do
+    for phase in Approved Development "AI Simplify" "AI Review" "AI Security Review" "Human Review"; do
         run coarse_status_for_substatus "${phase}"
         [ "${output}" = "In Progress" ]
     done
@@ -7490,6 +7490,42 @@ STUBEOF
     [[ "${output}" == *"already run 5 code-review rounds"* ]]
 }
 
+@test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE D — Simplify"* ]]
+    [[ "${output}" == *"Run /simplify against the diff"* ]]
+    [[ "${output}" == *"Do NOT proceed to code review in this same session"* ]]
+}
+
+@test "build_pr_claude_md PHASE D has an iteration cap and Blocked escape valve like its siblings" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"have already run 3 simplify rounds"* ]]
+    [[ "${output}" == *"simplify is not converging"* ]]
+}
+
+@test "build_pr_claude_md PHASE D triggers on any pre-AI-Review board state, not just Development" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'the board is not yet at "AI Review" or later'* ]]
+    [[ "${output}" != *'the board is at "Development"'* ]]
+}
+
+@test "build_pr_claude_md PHASE E (code review) only fires once the board is at AI Review" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE E — Code review"* ]]
+    [[ "${output}" == *'the board is at "AI Review"'* ]]
+}
+
+@test "build_pr_claude_md renumbers security review and finalize to PHASE F and PHASE G" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE F — Security review"* ]]
+    [[ "${output}" == *"PHASE G — Finalize"* ]]
+}
+
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
     _WF_PROJECT_ID=""
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
@@ -7527,13 +7563,14 @@ STUBEOF
     [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_def456"* ]]
 }
 
-@test "_build_wf_section outputs all eight status option keys" {
+@test "_build_wf_section outputs all nine status option keys" {
     _WF_PROJECT_ID="PVT_test"
     _WF_STATUS_FIELD_ID="PVTSSF_test"
     _WF_OPTION_IDS["Not Started"]="opt1"
     _WF_OPTION_IDS[Planning]="opt2"
     _WF_OPTION_IDS[Approved]="opt3"
     _WF_OPTION_IDS[Development]="opt4"
+    _WF_OPTION_IDS["AI Simplify"]="opt4b"
     _WF_OPTION_IDS["AI Review"]="opt5"
     _WF_OPTION_IDS["AI Security Review"]="opt6"
     _WF_OPTION_IDS["Human Review"]="opt7"
@@ -7544,6 +7581,7 @@ STUBEOF
     [[ "${output}" == *"WF_PLANNING=opt2"* ]]
     [[ "${output}" == *"WF_APPROVED=opt3"* ]]
     [[ "${output}" == *"WF_DEVELOPMENT=opt4"* ]]
+    [[ "${output}" == *"WF_AI_SIMPLIFY=opt4b"* ]]
     [[ "${output}" == *"WF_AI_REVIEW=opt5"* ]]
     [[ "${output}" == *"WF_AI_SECURITY_REVIEW=opt6"* ]]
     [[ "${output}" == *"WF_HUMAN_REVIEW=opt7"* ]]

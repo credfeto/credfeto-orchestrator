@@ -126,7 +126,7 @@ ensure_projects_enabled() {
 # projects.  Prints the project JSON (id + fields) on stdout, or nothing when absent.
 discover_linked_project() {
     local owner="$1" repo="$2"
-    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}}}}"
+    local query="query(\$owner:String!,\$repo:String!){repository(owner:\$owner,name:\$repo){projectsV2(first:20){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}}}}"
     PT="${PROJECT_TITLE}" gh_graphql -f query="${query}" -f owner="${owner}" -f repo="${repo}" \
         --jq '(.data.repository.projectsV2.nodes // []) | map(select(.title==env.PT)) | first // empty'
 }
@@ -176,10 +176,11 @@ ensure_status_field() {
     field_node=$(printf '%s' "${project_json}" | \
         jq -c --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n)' 2>/dev/null | head -1)
     if [ -n "${field_node}" ]; then
-        info "Status field \"${STATUS_FIELD_NAME}\" already present — skipping"
+        info "Status field \"${STATUS_FIELD_NAME}\" already present — checking its options are up to date"
+        field_node=$(ensure_status_field_option "${field_node}" "AI Simplify" PURPLE)
     else
-        info "Adding \"${STATUS_FIELD_NAME}\" field with its eight options..."
-        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+        info "Adding \"${STATUS_FIELD_NAME}\" field with its nine options..."
+        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
         local resp
         resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}")
         field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)
@@ -189,6 +190,40 @@ ensure_status_field() {
     WF_FIELD_ID=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
     WF_NOT_STARTED_OPT=$(printf '%s' "${field_node}" | \
         jq -r '(.options // [])[] | select(.name=="Not Started") | .id' 2>/dev/null | head -1)
+}
+
+# Adds a single option to an existing "Workflow Status" field if it is not already present,
+# used to migrate boards created before that option existed (e.g. "AI Simplify", #1169).
+# Re-sends every existing option WITH its id, per GitHub's documented contract for
+# ProjectV2SingleSelectFieldOptionInput.id ("include this to preserve the option's identity
+# during updates, preventing item field values from being cleared") - so items already set to
+# an existing option keep their value, and only the new option is actually created. Existing
+# options' color/description are round-tripped unchanged (the discovery query fetches both) so
+# this never alters how a board already looks. No-op (prints field_node unchanged) if the
+# option is already present or the field has no id. Prints the (possibly updated) field JSON.
+ensure_status_field_option() {
+    local field_node="$1" option_name="$2" option_color="$3"
+    local field_id has_option
+    field_id=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
+    has_option=$(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" '(.options // [])[] | select(.name==$n) | .name' 2>/dev/null)
+    if [ -n "${has_option}" ] || [ -z "${field_id}" ]; then
+        printf '%s' "${field_node}"
+        return 0
+    fi
+
+    info "Adding missing \"${option_name}\" option to \"${STATUS_FIELD_NAME}\"..." >&2
+    local options_json
+    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" '
+        [(.options // [])[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}]
+        + [{name: $n, color: $c, description: ""}]
+    ')
+    local resp
+    resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
+        '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
+        | gh_graphql --input -) \
+        || die "Failed to add \"${option_name}\" option to \"${STATUS_FIELD_NAME}\""
+    success "Option \"${option_name}\" added" >&2
+    printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field'
 }
 
 # Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
