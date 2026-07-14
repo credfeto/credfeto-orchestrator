@@ -1398,10 +1398,67 @@ _build_wf_section() {
     printf '  WF_PLANNING=%s\n'              "${_WF_OPTION_IDS[Planning]:-}"
     printf '  WF_APPROVED=%s\n'              "${_WF_OPTION_IDS[Approved]:-}"
     printf '  WF_DEVELOPMENT=%s\n'           "${_WF_OPTION_IDS[Development]:-}"
+    printf '  WF_AI_SIMPLIFY=%s\n'           "${_WF_OPTION_IDS["AI Simplify"]:-}"
     printf '  WF_AI_REVIEW=%s\n'             "${_WF_OPTION_IDS["AI Review"]:-}"
     printf '  WF_AI_SECURITY_REVIEW=%s\n'   "${_WF_OPTION_IDS["AI Security Review"]:-}"
     printf '  WF_HUMAN_REVIEW=%s\n'          "${_WF_OPTION_IDS["Human Review"]:-}"
     printf '  WF_COMPLETE=%s\n'              "${_WF_OPTION_IDS[Complete]:-}"
+}
+
+# Adds a single option to an existing "Workflow Status" field if it is not already present,
+# used to migrate boards discovered live that were provisioned before that option existed
+# (e.g. "AI Simplify", #1169) — mirrors create-project's ensure_status_field_option so a
+# pre-existing board self-heals here too, without needing a human to re-run create-project.
+# Inserts the new option immediately after ${after_name} (falling back to appending at the
+# end if ${after_name} is not found). Re-sends every existing option WITH its id, per
+# GitHub's documented contract for ProjectV2SingleSelectFieldOptionInput.id (preserves each
+# option's identity so items already set to it keep their value), and round-trips existing
+# options' color/description unchanged. Best-effort: any failure (GraphQL error, or a
+# mutation that succeeds but returns no usable field data) warns and returns the original
+# field_node unchanged rather than dying, since board-status updates are always best-effort
+# in oneshot. No-op if the option is already present or the field has no id. Prints the
+# (possibly updated) field JSON.
+_wf_ensure_status_field_option() {
+    local field_node="$1" option_name="$2" option_color="$3" after_name="$4"
+    local field_id has_option
+    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
+        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
+    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
+        printf '%s' "${field_node}"
+        return 0
+    fi
+
+    local options_json
+    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" --arg after "${after_name}" '
+        (.options // []) as $opts
+        | ($opts | map(.name) | index($after)) as $idx
+        | [$opts[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}] as $existing
+        | if $idx == null then $existing + [{name: $n, color: $c, description: ""}]
+          else $existing[0:($idx+1)] + [{name: $n, color: $c, description: ""}] + $existing[($idx+1):]
+          end
+    ')
+    local resp resp_err resp_err_content
+    resp_err=$(mktemp --suffix=.stderr) || resp_err=/dev/null
+    if ! resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
+            '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
+            | gh api graphql --input - 2>"${resp_err}"); then
+        resp_err_content=$(head -3 "${resp_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${resp_err}"
+        warn "Workflow project: could not add \"${option_name}\" option to \"Workflow Status\"${resp_err_content:+ — ${resp_err_content}}"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    rm -f "${resp_err}"
+
+    local updated
+    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field' 2>/dev/null)
+    if [ -z "${updated}" ] || [ "${updated}" = "null" ]; then
+        warn "Workflow project: mutation to add \"${option_name}\" option to \"Workflow Status\" returned no field data — leaving field unchanged"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    info "Workflow project: added missing \"${option_name}\" option to \"Workflow Status\"" >&2
+    printf '%s' "${updated}"
 }
 
 # Discovers or creates a GitHub Projects (v2) board named "Workflow" linked to
@@ -1460,7 +1517,7 @@ discover_or_create_workflow_project() {
             || warn "Workflow project: could not enable Projects on ${REPO_FULL} — discovery may fail"
     fi
 
-    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name}}}}}pageInfo{endCursor hasNextPage}}}}"
+    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}pageInfo{endCursor hasNextPage}}}}"
     local project_json="" cursor="" has_next_page="true" graphql_stderr graphql_err_content page_json
     local -a cursor_args
     while true; do
@@ -1509,8 +1566,21 @@ discover_or_create_workflow_project() {
         return 0
     }
 
-    _WF_STATUS_FIELD_ID=$(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .id // empty' 2>/dev/null | head -1)
+    local status_field_node
+    status_field_node=$(printf '%s' "${project_json}" | \
+        jq -c '.fields.nodes[] | select(.name == "Workflow Status")' 2>/dev/null | head -1)
+    [ -n "${status_field_node}" ] || {
+        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        _WF_PROJECT_ID=""
+        return 0
+    }
+
+    # Backfills the "AI Simplify" option onto boards provisioned before that option existed
+    # (#1169), mirroring create-project's own migration so oneshot self-heals a pre-existing
+    # board without needing a human to re-run create-project by hand.
+    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Simplify" PURPLE "Development")
+
+    _WF_STATUS_FIELD_ID=$(printf '%s' "${status_field_node}" | jq -r '.id // empty')
     [ -n "${_WF_STATUS_FIELD_ID}" ] || {
         warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
         _WF_PROJECT_ID=""
@@ -1521,8 +1591,8 @@ discover_or_create_workflow_project() {
     while IFS='|' read -r opt_name opt_id; do
         if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
-    done < <(printf '%s' "${project_json}" | \
-        jq -r '.fields.nodes[] | select(.name == "Workflow Status") | .options[] | "\(.name)|\(.id)"' 2>/dev/null)
+    done < <(printf '%s' "${status_field_node}" | \
+        jq -r '.options[] | "\(.name)|\(.id)"' 2>/dev/null)
 
     local cached_opts="" k
     for k in "${!_WF_OPTION_IDS[@]}"; do
@@ -1706,7 +1776,7 @@ _wf_create_project() {
     }
     rm -f "${project_err}"
 
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
     local field_json field_err field_err_content
     field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
     field_json=$(gh api graphql \
@@ -1902,7 +1972,7 @@ coarse_status_for_substatus() {
     case "${substatus}" in
         "Not Started"|Planning)
             printf 'To Do' ;;
-        Approved|Development|"AI Review"|"AI Security Review"|"Human Review")
+        Approved|Development|"AI Simplify"|"AI Review"|"AI Security Review"|"Human Review")
             printf 'In Progress' ;;
         Complete)
             printf 'Done' ;;
@@ -2159,20 +2229,26 @@ PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddre
   - Set the board status to "Development".
   - Commit and push your fix in the foreground, then STOP. (CI will run; the next cycle continues.)
 
-PHASE D — Code review (do this ONLY when CI is fully green and there is no outstanding work, and the board is not yet past "AI Review"):
-  - Set the board status to "AI Review".
+PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
+  - Set the board status to "AI Simplify" (if not already set).
+  - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
+  - If it changed any files: commit and push them in the foreground, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
+  - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
+  - If you have already run ${MAX_REVIEW_ITERATIONS} simplify rounds on this PR without it converging to no changes (judge from the PR's commit history): post a PR comment explaining that simplify is not converging, add the Blocked label, and STOP.
+
+PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
   - If findings were posted: fix EACH in its own commit, push in the foreground, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} code-review rounds on this PR (judge from the PR's history of code-review comments) and findings remain: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
 
-PHASE E — Security review (do this ONLY when the board is at "AI Security Review"):
+PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
   - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit, push in the foreground, post a one-line status comment, then STOP.
   - If NO findings: advance the board to "Human Review", post a one-line status comment ("Security review clean — advancing to finalize"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
 
-PHASE F — Finalize (do this ONLY when both reviews have passed / board is at "Human Review" and auto-merge is not yet enabled):
+PHASE G — Finalize (do this ONLY when both reviews have passed / board is at "Human Review" and auto-merge is not yet enabled):
   - Enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
     If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
   - Post a one-line status comment confirming the PR is ready, then STOP.

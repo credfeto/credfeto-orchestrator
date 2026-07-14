@@ -5265,6 +5265,27 @@ STUBEOF
 
 # --- recover_orphaned_branch unit tests ----------------------------------------
 
+# Regression guard for the tests below (#1169 incident): they exercise real git
+# plumbing (clone/commit/push/rebase) against a local bare "remote" fixture using the
+# real git binary rather than a stub. If REPO_WORK_DIR or a remote URL were ever
+# misresolved for any reason, the only acceptable failure mode is the git command
+# failing fast — never a real network call reaching a real remote. Confirms
+# setup_isolated_env's GIT_ALLOW_PROTOCOL=file guard actually blocks a non-file
+# transport before any test below is trusted to run "push origin" for real.
+@test "setup_isolated_env blocks git push over ssh/https (fail-closed network guard)" {
+    local scratch_repo="${TEST_TMP}/scratch-repo"
+    git init -q "${scratch_repo}"
+    git -C "${scratch_repo}" config core.hooksPath /dev/null
+    git -C "${scratch_repo}" remote add origin "git@github.com:credfeto/credfeto-orchestrator.git"
+    printf 'x\n' > "${scratch_repo}/f"
+    git -C "${scratch_repo}" add f
+    git -C "${scratch_repo}" -c commit.gpgsign=false -c user.email=t@example.com -c user.name=Test commit -q -m init
+
+    run git -C "${scratch_repo}" push origin HEAD:refs/heads/should-never-reach-a-real-remote
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"transport 'ssh' not allowed"* ]]
+}
+
 # Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
 # recover_orphaned_branch can perform real git operations without network calls.
 setup_local_git_remote() {
@@ -7400,7 +7421,7 @@ STUBEOF
 }
 
 @test "coarse_status_for_substatus maps the active phases to In Progress" {
-    for phase in Approved Development "AI Review" "AI Security Review" "Human Review"; do
+    for phase in Approved Development "AI Simplify" "AI Review" "AI Security Review" "Human Review"; do
         run coarse_status_for_substatus "${phase}"
         [ "${output}" = "In Progress" ]
     done
@@ -7490,6 +7511,42 @@ STUBEOF
     [[ "${output}" == *"already run 5 code-review rounds"* ]]
 }
 
+@test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE D — Simplify"* ]]
+    [[ "${output}" == *"Run /simplify against the diff"* ]]
+    [[ "${output}" == *"Do NOT proceed to code review in this same session"* ]]
+}
+
+@test "build_pr_claude_md PHASE D has an iteration cap and Blocked escape valve like its siblings" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"have already run 3 simplify rounds"* ]]
+    [[ "${output}" == *"simplify is not converging"* ]]
+}
+
+@test "build_pr_claude_md PHASE D triggers on any pre-AI-Review board state, not just Development" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'the board is not yet at "AI Review" or later'* ]]
+    [[ "${output}" != *'the board is at "Development"'* ]]
+}
+
+@test "build_pr_claude_md PHASE E (code review) only fires once the board is at AI Review" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE E — Code review"* ]]
+    [[ "${output}" == *'the board is at "AI Review"'* ]]
+}
+
+@test "build_pr_claude_md renumbers security review and finalize to PHASE F and PHASE G" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PHASE F — Security review"* ]]
+    [[ "${output}" == *"PHASE G — Finalize"* ]]
+}
+
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
     _WF_PROJECT_ID=""
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
@@ -7527,13 +7584,14 @@ STUBEOF
     [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_def456"* ]]
 }
 
-@test "_build_wf_section outputs all eight status option keys" {
+@test "_build_wf_section outputs all nine status option keys" {
     _WF_PROJECT_ID="PVT_test"
     _WF_STATUS_FIELD_ID="PVTSSF_test"
     _WF_OPTION_IDS["Not Started"]="opt1"
     _WF_OPTION_IDS[Planning]="opt2"
     _WF_OPTION_IDS[Approved]="opt3"
     _WF_OPTION_IDS[Development]="opt4"
+    _WF_OPTION_IDS["AI Simplify"]="opt4b"
     _WF_OPTION_IDS["AI Review"]="opt5"
     _WF_OPTION_IDS["AI Security Review"]="opt6"
     _WF_OPTION_IDS["Human Review"]="opt7"
@@ -7544,6 +7602,7 @@ STUBEOF
     [[ "${output}" == *"WF_PLANNING=opt2"* ]]
     [[ "${output}" == *"WF_APPROVED=opt3"* ]]
     [[ "${output}" == *"WF_DEVELOPMENT=opt4"* ]]
+    [[ "${output}" == *"WF_AI_SIMPLIFY=opt4b"* ]]
     [[ "${output}" == *"WF_AI_REVIEW=opt5"* ]]
     [[ "${output}" == *"WF_AI_SECURITY_REVIEW=opt6"* ]]
     [[ "${output}" == *"WF_HUMAN_REVIEW=opt7"* ]]
@@ -7695,6 +7754,51 @@ STUBEOF
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_f1" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+}
+
+@test "discover_or_create_workflow_project backfills the missing AI Simplify option onto a pre-existing board (#1169)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""}]}]}}]'
+    local updated_field='{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid_new","name":"AI Simplify","color":"PURPLE","description":""}]}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+if [[ "\$*" == *"--input"* ]]; then
+    cat >/dev/null
+    printf '{"data":{"updateProjectV2Field":{"projectV2Field":%s}}}\n' '${updated_field}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_found" ]
+    [ "${_WF_OPTION_IDS[Development]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid_new" ]
+}
+
+@test "discover_or_create_workflow_project does not call the field-option mutation when AI Simplify is already present" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+if [[ "\$*" == *"--input"* ]]; then
+    echo "unexpected mutation call" >> "${TEST_TMP}/unexpected.log"
+    cat >/dev/null
+    printf '{}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid2" ]
+    [ ! -f "${TEST_TMP}/unexpected.log" ]
 }
 
 @test "discover_or_create_workflow_project persists a disk cache file after live discovery" {
