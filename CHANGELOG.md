@@ -283,6 +283,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Ban the env/nice/command wrappers outright in reject-obfuscated-commands (their leading flags could be mistaken for the validated command name) and reject a leading dash in the command-name allowlist to close the same bypass class for the remaining pass-through wrappers
 - Allow the pre-commit-check wrapper script through the reject-obfuscated-commands hook allowlist so local pre-commit tooling is not blocked
 - Allow the testdb and testdocker repo-local test scripts through the reject-obfuscated-commands hook allowlist
+- create-project: non-destructively add missing Workflow Status options (e.g. AI Simplify) to boards created before that option existed, preserving every existing option's id/color/description so item statuses and appearance are unaffected
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
@@ -302,6 +303,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - test-shell-scripts.yml no longer runs on every push to main, only on pull_request — pushes to main were producing occasional noisy CI failures from the intermittent test/entrypoint.bats flake (#1073) without blocking anything, since main is already merged by that point
 - Renamed development build workflow job ids and marked them as required checks for main so branch protection can target them individually
 - Rewrote the reject-obfuscated-commands and enforce-git-dash-c Claude Code hooks to parse commands with shfmt (a real shell parser) instead of regex/text scanning, ending the per-technique bypass arms race (8 review rounds on PR #1159): obfuscated command names, unparseable commands, function/declare clauses, and assignments to IFS/PATH/LD_*/GIT_* are rejected categorically, and command names are then checked against extendable known-bad (command-blocklist: eval, sub-shells, sudo/env/nice/timeout wrappers) and known-good (command-allowlist, strict default-reject) data files baked into the image (#1105)
+- oneshot: add a new PHASE D (Simplify) that runs /simplify against the diff, commits/pushes any resulting changes, and STOPs so a fresh session re-verifies CI before code review runs in the renumbered PHASE E
+- Add a dedicated AI Simplify Workflow Status option (create-project and oneshot's board schema); PHASE D now sets the board to it explicitly instead of leaving Simplify's in-progress state implicit
 ### Deprecated
 ### Removed
 - Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting
