@@ -41,6 +41,9 @@ curl
 wget
 ping
 
+# Crypto / TLS
+openssl
+
 # Linters / test tooling
 shellcheck
 checkbashisms
