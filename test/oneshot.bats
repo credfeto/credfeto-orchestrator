@@ -5224,6 +5224,27 @@ STUBEOF
 
 # --- recover_orphaned_branch unit tests ----------------------------------------
 
+# Regression guard for the tests below (#1169 incident): they exercise real git
+# plumbing (clone/commit/push/rebase) against a local bare "remote" fixture using the
+# real git binary rather than a stub. If REPO_WORK_DIR or a remote URL were ever
+# misresolved for any reason, the only acceptable failure mode is the git command
+# failing fast — never a real network call reaching a real remote. Confirms
+# setup_isolated_env's GIT_ALLOW_PROTOCOL=file guard actually blocks a non-file
+# transport before any test below is trusted to run "push origin" for real.
+@test "setup_isolated_env blocks git push over ssh/https (fail-closed network guard)" {
+    local scratch_repo="${TEST_TMP}/scratch-repo"
+    git init -q "${scratch_repo}"
+    git -C "${scratch_repo}" config core.hooksPath /dev/null
+    git -C "${scratch_repo}" remote add origin "git@github.com:credfeto/credfeto-orchestrator.git"
+    printf 'x\n' > "${scratch_repo}/f"
+    git -C "${scratch_repo}" add f
+    git -C "${scratch_repo}" -c commit.gpgsign=false -c user.email=t@example.com -c user.name=Test commit -q -m init
+
+    run git -C "${scratch_repo}" push origin HEAD:refs/heads/should-never-reach-a-real-remote
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"transport 'ssh' not allowed"* ]]
+}
+
 # Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
 # recover_orphaned_branch can perform real git operations without network calls.
 setup_local_git_remote() {

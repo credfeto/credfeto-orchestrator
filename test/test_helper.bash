@@ -37,6 +37,17 @@ setup_isolated_env() {
     # Put the stub directory first so any stubs we create take precedence.
     export PATH="${STUB_BIN}:${PATH}"
 
+    # Fail-closed network guard: several tests exercise real git plumbing (clone/fetch/
+    # push/rebase) against a local bare "remote" fixture under TEST_TMP, using the real
+    # git binary rather than a stub, because the behaviour under test is git's own
+    # plumbing rather than oneshot's use of it. If a test's isolation of REPO_WORK_DIR
+    # or a remote URL is ever wrong for any reason (a bug in the test itself, environment
+    # leakage between tests, etc.), the only thing that should happen is the git command
+    # failing fast - never a real network call reaching a real remote. Restricting the
+    # allowed transport to "file" makes every ssh://, https://, or git:// operation fail
+    # immediately at the transport layer, regardless of what host or URL was requested.
+    export GIT_ALLOW_PROTOCOL=file
+
     # Unset host-level env vars that leak from the container/agent environment
     # and change script behaviour in ways the tests do not expect.
     unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY
