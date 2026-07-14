@@ -2161,6 +2161,7 @@ PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddre
 
 PHASE D — Code review (do this ONLY when CI is fully green and there is no outstanding work, and the board is not yet past "AI Review"):
   - Set the board status to "AI Review".
+  - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them. If it changed any files, commit and push them in the foreground before continuing.
   - Run ONE round: /code-review --comment
   - If findings were posted: fix EACH in its own commit, push in the foreground, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
