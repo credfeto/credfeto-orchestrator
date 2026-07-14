@@ -39,6 +39,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Allow curl, wget and ping through the reject-obfuscated-commands hook allowlist
 - Allow the querydb repo-local script through the reject-obfuscated-commands hook allowlist
 - Allow openssl through the reject-obfuscated-commands hook allowlist
+- Allow ps through the reject-obfuscated-commands hook allowlist
 ### Added
 - ai/local/docker-images.instructions.md: documented agent container image hierarchy, build contexts, and the SSH rewriting strategy
 - oneshot: include Git transport information in agent prompts to provide context on how git is configured in the environment
