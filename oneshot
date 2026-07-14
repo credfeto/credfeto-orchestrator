@@ -1398,6 +1398,7 @@ _build_wf_section() {
     printf '  WF_PLANNING=%s\n'              "${_WF_OPTION_IDS[Planning]:-}"
     printf '  WF_APPROVED=%s\n'              "${_WF_OPTION_IDS[Approved]:-}"
     printf '  WF_DEVELOPMENT=%s\n'           "${_WF_OPTION_IDS[Development]:-}"
+    printf '  WF_AI_SIMPLIFY=%s\n'           "${_WF_OPTION_IDS["AI Simplify"]:-}"
     printf '  WF_AI_REVIEW=%s\n'             "${_WF_OPTION_IDS["AI Review"]:-}"
     printf '  WF_AI_SECURITY_REVIEW=%s\n'   "${_WF_OPTION_IDS["AI Security Review"]:-}"
     printf '  WF_HUMAN_REVIEW=%s\n'          "${_WF_OPTION_IDS["Human Review"]:-}"
@@ -1706,7 +1707,7 @@ _wf_create_project() {
     }
     rm -f "${project_err}"
 
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
     local field_json field_err field_err_content
     field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
     field_json=$(gh api graphql \
@@ -1902,7 +1903,7 @@ coarse_status_for_substatus() {
     case "${substatus}" in
         "Not Started"|Planning)
             printf 'To Do' ;;
-        Approved|Development|"AI Review"|"AI Security Review"|"Human Review")
+        Approved|Development|"AI Simplify"|"AI Review"|"AI Security Review"|"Human Review")
             printf 'In Progress' ;;
         Complete)
             printf 'Done' ;;
@@ -2159,10 +2160,12 @@ PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddre
   - Set the board status to "Development".
   - Commit and push your fix in the foreground, then STOP. (CI will run; the next cycle continues.)
 
-PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "Development"):
+PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
+  - Set the board status to "AI Simplify" (if not already set).
   - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
   - If it changed any files: commit and push them in the foreground, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
   - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
+  - If you have already run ${MAX_REVIEW_ITERATIONS} simplify rounds on this PR without it converging to no changes (judge from the PR's commit history): post a PR comment explaining that simplify is not converging, add the Blocked label, and STOP.
 
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
