@@ -36,6 +36,11 @@ bun
 podman
 docker
 
+# Network
+curl
+wget
+ping
+
 # Linters / test tooling
 shellcheck
 checkbashisms
