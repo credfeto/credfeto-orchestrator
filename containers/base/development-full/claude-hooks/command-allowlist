@@ -142,3 +142,5 @@ file
 ps
 xargs
 mktemp
+df
+du
