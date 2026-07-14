@@ -204,9 +204,9 @@ ensure_status_field() {
 ensure_status_field_option() {
     local field_node="$1" option_name="$2" option_color="$3"
     local field_id has_option
-    field_id=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
-    has_option=$(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" '(.options // [])[] | select(.name==$n) | .name' 2>/dev/null)
-    if [ -n "${has_option}" ] || [ -z "${field_id}" ]; then
+    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
+        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
+    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
         printf '%s' "${field_node}"
         return 0
     fi
