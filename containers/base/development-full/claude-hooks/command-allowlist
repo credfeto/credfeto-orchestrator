@@ -57,11 +57,49 @@ sqlite3
 sqlcmd
 jq
 
+# credfeto-global-pre-commit: pre-commit-hooks (pip package) console scripts,
+# language linters, and misc tools its .pre-commit-config.yaml/hooks/pre-commit
+# invoke by bare name
+check-merge-conflict
+check-case-conflict
+check-added-large-files
+end-of-file-fixer
+trailing-whitespace-fixer
+mixed-line-ending
+check-toml
+detect-private-key
+trufflehog
+check-executables-have-shebangs
+check-shebang-scripts-are-executable
+check-json
+check-xml
+check-yaml
+flake8
+markdownlint
+ansible-lint
+hadolint
+composite-action-lint
+pylint
+stylelint
+eslint
+xmllint
+dotenv-linter
+trivy
+cfn-lint
+
 # Repo-local test/deploy scripts (committed to main, basename-matched
 # across every repo since this allowlist is shared globally)
 testdb
 testdocker
 querydb
+
+# credfeto-global-pre-commit: repo-bundled wrapper scripts, invoked by
+# basename via a PATH prepend from src/hooks/pre-commit
+run-eslint
+run-stylelint
+run-psscriptanalyzer
+run-bats
+run-formatter
 
 # Core utilities
 ls
@@ -102,3 +140,5 @@ tee
 stat
 file
 ps
+xargs
+mktemp
