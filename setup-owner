@@ -144,7 +144,12 @@ copy_dotdir() {
     fi
 
     info "Refreshing ${name}..."
-    sudo rm -rf "${dst}" || die "Failed to remove existing ${dst}"
+    if ! sudo rm -rf "${dst}"; then
+        if [ -n "${known_hosts_backup}" ]; then
+            die "Failed to remove existing ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
+        fi
+        die "Failed to remove existing ${dst}"
+    fi
     if ! sudo cp -r "${src}" "${dst}"; then
         if [ -n "${known_hosts_backup}" ]; then
             die "Failed to copy ${src} to ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
@@ -153,7 +158,8 @@ copy_dotdir() {
     fi
 
     if [ -n "${known_hosts_backup}" ]; then
-        sudo mv "${known_hosts_backup}" "${dst}/known_hosts" || die "Failed to restore known_hosts in ${dst}"
+        sudo mv "${known_hosts_backup}" "${dst}/known_hosts" \
+            || die "Failed to restore known_hosts in ${dst} - backup still at ${known_hosts_backup}, restore it manually"
     fi
 
     sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
