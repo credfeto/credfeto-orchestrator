@@ -485,6 +485,40 @@ stub_sudo_for_copy_dotdir() {
     [[ "${output}" == "new-key-material" ]]
 }
 
+@test "copy_dotdir reports a recoverable known_hosts backup path when the refresh cp fails" {
+    local src_ssh="${HOME}/.ssh"
+    local dst_home="${TEST_TMP}/owner_home"
+    local dst_ssh="${dst_home}/.ssh"
+    mkdir -p "${src_ssh}" "${dst_ssh}"
+    printf 'new-key-material\n' > "${src_ssh}/id_ed25519"
+    printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
+    # Source does not ship its own known_hosts.
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            rm)   shift; /bin/rm "$@" ;;
+            cp)   return 1 ;;
+            mv)   shift; /bin/mv "$@" ;;
+            find) shift; /usr/bin/find "$@" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to copy"* ]]
+    [[ "${output}" == *"known_hosts backup preserved at"* ]]
+
+    local backup_path
+    backup_path=$(printf '%s\n' "${output}" | sed -n 's/.*preserved at \([^,]*\),.*/\1/p')
+    [ -f "${backup_path}" ]
+    run cat "${backup_path}"
+    [[ "${output}" == "accumulated-host-key" ]]
+}
+
 @test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"

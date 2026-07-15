@@ -145,7 +145,12 @@ copy_dotdir() {
 
     info "Refreshing ${name}..."
     sudo rm -rf "${dst}" || die "Failed to remove existing ${dst}"
-    sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    if ! sudo cp -r "${src}" "${dst}"; then
+        if [ -n "${known_hosts_backup}" ]; then
+            die "Failed to copy ${src} to ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
+        fi
+        die "Failed to copy ${src} to ${dst}"
+    fi
 
     if [ -n "${known_hosts_backup}" ]; then
         sudo mv "${known_hosts_backup}" "${dst}/known_hosts" || die "Failed to restore known_hosts in ${dst}"
