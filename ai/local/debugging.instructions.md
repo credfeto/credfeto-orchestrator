@@ -21,6 +21,34 @@ ssh markr@nanoclaw.lan
 
 Run the relevant commands from the State Inventory below, interpret the output, and report your findings.  Only after you have done this should you propose a fix or ask the user a question.
 
+## Real Deployment Layout (verified against `setup-owner`/`install-timer`, #1185 review)
+
+Production runs each configured owner (e.g. `credfeto`, `funfair-tech`) as its **own separate
+Linux user account** with its own home directory, its own checkout, and its own systemd
+service/timer pair — there is no single shared orchestrator checkout or service. `markr`'s own
+home directory is a personal interactive-dev checkout only; it is **not** one of the live
+service accounts, and its checkout being behind `origin/main` is expected (nothing auto-updates
+it) rather than a symptom of anything broken.
+
+- **Checkout path**: `/home/<owner>/credfeto-orchestrator` (from `setup-owner`'s
+  `clone_or_pull_repo`: `clone_dir="${owner_home}/credfeto-orchestrator"`) — **not**
+  `~/work/personal/credfeto-orchestrator`.
+- **State/config paths**: `/home/<owner>/.orchestrator/...` and `/home/<owner>/.config/orchestrator/...`,
+  matching every `~/.orchestrator`/`~/.config/orchestrator` path below — but read as "the owner's
+  home", not `markr`'s.
+- **Systemd unit names**: `credfeto-orchestrator-<owner>-<owner>.service` and `.timer` (from
+  `install-timer`'s `SERVICE_NAME="credfeto-orchestrator-${CURRENT_USER}-${owner_filter}"`, and
+  `CURRENT_USER` is normally the owner account itself, hence the doubled name) — **not**
+  `orchestrator-loop.service`. These are system-level units (`sudo systemctl status <name>`, no
+  `--user`), not user units.
+- **Inspecting another owner's checkout as `markr`**: their home directory is typically only
+  readable via `sudo`, and `git` will refuse with "detected dubious ownership" if you `sudo git -C`
+  a directory owned by a different user. Use a scoped override rather than a persistent global
+  config change: `sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status`.
+  Prefer this over `sudo -u <owner> git ...` — some sessions have a permission rule that denies
+  `sudo -u` specifically (routing a sudo invocation through a different effective user is treated
+  as more sensitive than running a read-only command as root).
+
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
 
 When investigating any Issue or PR, pull its full timeline — not just its current labels/state via `gh pr view`/`gh issue view`:
@@ -35,22 +63,23 @@ Current state alone is a snapshot and hides *when* things happened and *what did
 
 ### 1 — Orchestrator version
 
-```bash
-git -C ~/work/personal/credfeto-orchestrator rev-parse --short HEAD
-git -C ~/work/personal/credfeto-orchestrator status
-```
-
-Confirms which version of `oneshot`/`loop` is deployed. A dirty tree or a commit behind `origin/main` is often the root cause of unexpected behaviour because `loop` pulls before every iteration.
-
-### 2 — Loop service
+Run per owner (see Real Deployment Layout above for why the path/sudo form is needed):
 
 ```bash
-systemctl --user status orchestrator-loop.service 2>/dev/null \
-    || systemctl status orchestrator-loop.service 2>/dev/null \
-    || ps aux | grep '[l]oop'
+sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator rev-parse --short HEAD
+sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status
 ```
 
-Determines whether the loop is running, stopped, or failed. Check `journalctl --user -u orchestrator-loop.service -n 50` (or without `--user`) for recent output.
+Confirms which version of `oneshot`/`lib/*` is deployed for that owner. This checkout self-updates via the systemd unit's own `ExecStartPre` (`git fetch` + `merge --ff-only origin/main`) immediately before every run, not via `loop`'s self-update path — a dirty tree or a commit behind `origin/main` right after a service run means that `ExecStartPre` step itself failed; check the service's own log (Section 2) for the exact fetch/merge error.
+
+### 2 — Orchestrator service
+
+```bash
+sudo systemctl status "credfeto-orchestrator-<owner>-<owner>.service" --no-pager -l
+sudo systemctl list-timers "credfeto-orchestrator-<owner>-*" --no-pager
+```
+
+Determines whether the service is running (`activating` for the duration of one `oneshot` cycle — normal, not stuck, if the cgroup process tree is still actively computing), idle between ticks (`inactive (dead)`, exited 0), or failed. Check `sudo journalctl -u "credfeto-orchestrator-<owner>-<owner>.service" -n 100 --no-pager` for recent output, including the `ExecStartPre` fetch/merge/agent-setup steps.
 
 ### 3 — Lock files
 
@@ -119,23 +148,27 @@ rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.fingerprint
 rm ~/.orchestrator/<owner>/<repo>/Issue_<n>.fingerprint
 ```
 
-### 7 — Docker containers
+### 7 — Podman containers
+
+Containers run as **rootless Podman** under the owner's own user namespace (Docker was replaced
+with rootless Podman; `docker` is not installed on the host at all, so `sudo docker ...` fails
+with "command not found", not a permission error). `sudo podman ps` from `markr` shows root's own
+(empty) rootless namespace, not the owner's — it does **not** reveal the owner's containers. The
+practical way to confirm a container is genuinely running (vs. hung) as `markr` is to read the
+process tree directly, which doesn't require entering the owner's podman namespace:
 
 ```bash
-sudo docker ps -a --filter 'name=orchestrator'
+sudo systemctl status "credfeto-orchestrator-<owner>-<owner>.service" --no-pager -l
 ```
 
-A container named `orchestrator-<owner>` left running (or in exited state with `--rm` not honoured) will cause the next `invoke_claude` call to die with "Container already exists". Remove it manually:
-
-```bash
-sudo docker rm -f orchestrator-<owner>
-```
-
-Also check for containers stuck in an unexpected state:
-
-```bash
-sudo docker ps -a
-```
+The `CGroup:` section lists the live process tree, including the `podman run --name
+orchestrator-<owner> ...` invocation and, once started, the container's own `claude` process and
+any build/test tooling it spawned — if those PIDs are actively accumulating CPU time across
+repeated checks, the container is working, not stuck. A container named `orchestrator-<owner>`
+left running (or in exited state with `--rm` not honoured) will cause the next `invoke_claude`
+call to die with "Container already exists"; if the service log confirms this, become that owner
+to remove it (`sudo -iu <owner>` if your session allows `sudo -u`-style commands, otherwise ask a
+human with owner access) with `podman rm -f orchestrator-<owner>`.
 
 ### 8 — Working directories
 
