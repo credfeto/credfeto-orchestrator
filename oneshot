@@ -16,47 +16,8 @@
 ONESHOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/globals disable=SC1091
 source "${ONESHOT_DIR}/lib/globals"
-
-die() {
-    if [ -t 2 ]; then
-        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
-    else
-        printf '\n✗ %s\n' "$*" >&2
-    fi
-    exit 1
-}
-
-success() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m✓\033[0m %s\n' "$*"
-    else
-        printf '\n✓ %s\n' "$*"
-    fi
-}
-
-info() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m→\033[0m %s\n' "$*"
-    else
-        printf '\n→ %s\n' "$*"
-    fi
-}
-
-warn() {
-    if [ -t 2 ]; then
-        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
-    else
-        printf '\n! %s\n' "$*" >&2
-    fi
-}
-
-# Returns true (0) when running inside a Claude Code Bash-tool session.
-# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
-# that value is inherited by subprocesses (e.g. git hooks).
-# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
-is_ai_agent() {
-    [ "${CLAUDECODE}" = "1" ]
-}
+# shellcheck source=lib/core disable=SC1091
+source "${ONESHOT_DIR}/lib/core"
 
 # Checks that token_file exists, has safe permissions, and outputs its contents (whitespace stripped).
 # Outputs nothing and returns silently if the file is absent or has unsafe permissions.
@@ -347,25 +308,7 @@ try_nonagentic_rebase() {
     return 0
 }
 
-check_required_tools() {
-    local tool
-    for tool in curl jq podman gh git awk grep flock timeout; do
-        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
-    done
-
-    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
-        die "Required tool not found: sha256sum or shasum"
-    fi
-}
-
-# Reads stdin and writes a SHA-256 digest to stdout.
-hash_sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum | awk '{ print $1 }'
-    else
-        shasum -a 256 | awk '{ print $1 }'
-    fi
-}
+# check_required_tools and hash_sha256 are declared in lib/core.
 
 # Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
 # Retries transient fetch failures a few times before giving up. Returns 1 (does NOT die,

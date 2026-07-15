@@ -1,0 +1,64 @@
+# shellcheck shell=bash
+# Shared low-level helpers used by every other lib/* file and by oneshot itself: coloured
+# status output, the AI-agent-session detector, and the startup tool-availability check.
+
+die() {
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
+    exit 1
+}
+
+success() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
+}
+
+info() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
+}
+
+warn() {
+    if [ -t 2 ]; then
+        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+    else
+        printf '\n! %s\n' "$*" >&2
+    fi
+}
+
+# Returns true (0) when running inside a Claude Code Bash-tool session.
+# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
+# that value is inherited by subprocesses (e.g. git hooks).
+# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+check_required_tools() {
+    local tool
+    for tool in curl jq podman gh git awk grep flock timeout; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+
+    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+        die "Required tool not found: sha256sum or shasum"
+    fi
+}
+
+# Reads stdin and writes a SHA-256 digest to stdout.
+hash_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{ print $1 }'
+    else
+        shasum -a 256 | awk '{ print $1 }'
+    fi
+}
