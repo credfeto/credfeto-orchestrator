@@ -29,6 +29,8 @@ source "${ONESHOT_DIR}/lib/git"
 source "${ONESHOT_DIR}/lib/github"
 # shellcheck source=lib/github-status disable=SC1091
 source "${ONESHOT_DIR}/lib/github-status"
+# shellcheck source=lib/fingerprints disable=SC1091
+source "${ONESHOT_DIR}/lib/fingerprints"
 
 # read_token_if_safe and load_token_for_owner are declared in lib/core.
 # host_to_container_path and set_repo_context are declared in lib/git.
@@ -1994,201 +1996,12 @@ parse_reset_time() {
     printf '%s' "${reset_unix}"
 }
 
-# Returns the path to the fingerprint file for a given PR ID.
-pr_fingerprint_file_path() {
-    local item_id="$1"
-    printf '%s/PullRequest_%s.fingerprint' "${SESSION_BASE_DIR}" "${item_id}"
-}
-
-# Fetches the PR state JSON used for fingerprinting. Retries transient gh failures a few times;
-# returns 1 (does not die) once retries are exhausted, so a single blip on this frequently-called
-# fetch skips just the current item rather than killing the whole run (#1090).
-fetch_pr_json() {
-    fetch_pr_fields_json "$1" state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits
-}
-
-# Fetches inline (diff-level) PR review comments via the REST comments endpoint — a separate
-# GitHub object model from `gh pr view`'s `reviews`/`comments` fields. A reviewer can submit a
-# CHANGES_REQUESTED review with an empty top-level body and put their actual feedback only in an
-# inline diff comment; that feedback was previously invisible to both the fingerprint and the
-# re-invoked agent (confirmed against credfeto-global-pre-commit#163: the review body was blank,
-# the real question ("Why this change?") was an inline comment, and the PR idled out to a Blocked
-# label instead of being answered — see #1127). Same retry treatment as fetch_pr_json (#1090).
-# `--paginate` alone prints each page's JSON array back-to-back (e.g. `[...][...]` for a PR with
-# enough inline comments to span two pages), which is not valid JSON on its own and breaks the
-# downstream `jq --argjson`. `--slurp` wraps the pages into one outer array of page-arrays
-# instead, so a separate `flatten(1)` un-wraps that one level of page-nesting into a single flat
-# array of comment objects — done as its own command substitution (not piped) so a `gh` failure
-# is detected via its own exit code rather than being masked by jq's (no `pipefail` in this file).
-fetch_pr_review_comments() {
-    local item_id="$1" attempt=1 result flattened
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh api "repos/${REPO_FULL}/pulls/${item_id}/comments" --paginate --slurp 2>/dev/null); then
-            flattened=$(printf '%s' "${result}" | jq -c 'flatten(1)') || return 1
-            printf '%s' "${flattened}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 1
-}
-
-# Computes a deterministic fingerprint from pre-fetched PR state JSON.
-# Optional second argument: JSON array of trusted logins; when provided, only comments,
-# reviews, and inline review comments from those users are included so untrusted activity does
-# not trigger re-runs.
-# Optional third argument: JSON array of inline review comments from fetch_pr_review_comments
-# (REST shape — author under `.user.login`, timestamp under `.updated_at`), defaulting to an
-# empty array for callers that predate #1127.
-# Outputs the hash on stdout; returns non-zero if jq fails.
-fingerprint_pr_json() {
-    local pr_json="$1"
-    local trusted_logins="${2:-null}"
-    local review_comments_json="${3:-[]}"
-    local canonical
-
-    canonical=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --argjson reviewComments "${review_comments_json}" '
-        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
-        def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
-        .title,
-        (.body // ""),
-        (.isDraft | tostring),
-        ([((.labels // [])[] | .name)] | sort | .[]),
-        .headRefOid,
-        (.baseRefName // "none"),
-        (tc(.comments // []) | length | tostring),
-        ([tc(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
-        ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
-        ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
-        ([tc(.reviews // [])[] | [((.submittedAt // .updatedAt) // "none"), (.body // "")] | @tsv] | sort | join("\n")),
-        (.reviewDecision // "none"),
-        ([((.reviewRequests // [])[] | (.login // .slug // .name // "unknown"))] | sort | join(",")),
-        ([((.assignees // [])[] | .login)] | sort | join(",")),
-        (.milestone.title // "none"),
-        (trc($reviewComments) | length | tostring),
-        ((trc($reviewComments) | sort_by(.updated_at) | last | .updated_at) // "none"),
-        ([((.statusCheckRollup // [])[]
-            | (.name // "unknown") as $n
-            | (.conclusion // .status // "none") as $c
-            | "\($c):\($n)"
-        )] | sort | join(",")),
-        (.mergeable // "UNKNOWN"),
-        (.mergeStateStatus // "UNKNOWN"),
-        (.autoMergeRequest != null | tostring)
-    ') || return 1
-
-    printf '%s' "${canonical}" | hash_sha256
-}
-
-# Computes a deterministic hash of the PR's current state, folding in inline review comments
-# (#1127) alongside the gh pr view fields. Outputs the hash on stdout; returns non-zero if any
-# gh call or jq fails — fails closed rather than fingerprinting against stale/empty inline
-# comment data (mirrors the get_trusted_logins fail-closed rule, #1094).
-compute_pr_fingerprint() {
-    local item_id="$1"
-    local pr_json trusted review_comments
-    pr_json=$(fetch_pr_json "${item_id}") || return 1
-    trusted=$(get_trusted_logins) || return 1
-    review_comments=$(fetch_pr_review_comments "${item_id}") || return 1
-    fingerprint_pr_json "${pr_json}" "${trusted}" "${review_comments}"
-}
-
-# Writes the fingerprint to the fingerprint file for a given PR ID.
-save_pr_fingerprint() {
-    local item_id="$1" fingerprint="$2"
-    local fingerprint_file
-
-    fingerprint_file=$(pr_fingerprint_file_path "${item_id}")
-    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s\n' "${fingerprint}" \
-        > "${fingerprint_file}" \
-        || die "Failed to write fingerprint file: ${fingerprint_file}"
-}
-
-# Reads and outputs the saved fingerprint for a given PR ID, or empty string if none exists.
-load_pr_fingerprint() {
-    local item_id="$1"
-    local fingerprint_file
-
-    fingerprint_file=$(pr_fingerprint_file_path "${item_id}")
-    if [ -f "${fingerprint_file}" ]; then
-        cat "${fingerprint_file}"
-    fi
-}
-
-# pr_json_has_pending_ci_checks is declared in lib/github-status.
-
-# Returns the path to the per-PR CI pending state file.
-pr_head_oid_file_path() {
-    local item_id="$1"
-    printf '%s/PullRequest_%s.pending_ci' "${SESSION_BASE_DIR}" "${item_id}"
-}
-
-# Writes the current head OID and observation timestamp to the CI pending state file.
-save_pr_head_oid() {
-    local item_id="$1" oid="$2" timestamp="$3"
-    local state_file
-    state_file=$(pr_head_oid_file_path "${item_id}")
-    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s %s\n' "${oid}" "${timestamp}" \
-        > "${state_file}" \
-        || die "Failed to write CI state file: ${state_file}"
-}
-
-# Reads and outputs the saved "<oid> <timestamp>" for a given PR, or empty string if absent.
-load_pr_head_oid() {
-    local item_id="$1"
-    local state_file
-    state_file=$(pr_head_oid_file_path "${item_id}")
-    if [ -f "${state_file}" ]; then
-        cat "${state_file}"
-    fi
-}
-
-# Returns 0 (true) if CI checks for the current head OID have been pending longer than
-# CI_CHECK_TIMEOUT_MINUTES.  Resets the clock (returns 1) whenever a new OID is observed.
-ci_checks_timed_out() {
-    local item_id="$1" pr_json="$2"
-    local current_oid current_time
-    current_oid=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty')
-    [ -z "${current_oid}" ] && return 1
-    current_time=$(date +%s)
-
-    local saved_state saved_oid saved_timestamp
-    saved_state=$(load_pr_head_oid "${item_id}")
-    if [ -n "${saved_state}" ]; then
-        saved_oid="${saved_state%% *}"
-        saved_timestamp="${saved_state##* }"
-    fi
-
-    if [ -z "${saved_state}" ] || [ "${current_oid}" != "${saved_oid}" ]; then
-        save_pr_head_oid "${item_id}" "${current_oid}" "${current_time}"
-        return 1
-    fi
-
-    if ! [[ "${saved_timestamp}" =~ ^[0-9]+$ ]]; then
-        save_pr_head_oid "${item_id}" "${current_oid}" "${current_time}"
-        return 1
-    fi
-
-    local elapsed_minutes
-    elapsed_minutes=$(( (current_time - saved_timestamp) / 60 ))
-    [ "${elapsed_minutes}" -ge "${CI_CHECK_TIMEOUT_MINUTES}" ]
-}
-
-# Removes the CI pending state file for a PR, resetting the timeout clock.
-# Call after confirming CI checks are all complete so that any future re-trigger starts fresh.
-clear_pr_ci_pending_state() {
-    local item_id="$1"
-    local state_file
-    state_file=$(pr_head_oid_file_path "${item_id}")
-    rm -f "${state_file}" 2>/dev/null || true
-}
-
-# block_pr_for_ci_timeout, pr_json_has_blocked_label, and pr_json_env_block_image_sha are
-# declared in lib/github-status.
+# pr_fingerprint_file_path, fetch_pr_json, fetch_pr_review_comments, fingerprint_pr_json,
+# compute_pr_fingerprint, save_pr_fingerprint, load_pr_fingerprint, pr_head_oid_file_path,
+# save_pr_head_oid, load_pr_head_oid, ci_checks_timed_out, and clear_pr_ci_pending_state are
+# declared in lib/fingerprints.
+# pr_json_has_pending_ci_checks, block_pr_for_ci_timeout, pr_json_has_blocked_label, and
+# pr_json_env_block_image_sha are declared in lib/github-status.
 
 # Reads the git SHA baked into the agent image's IMAGE_SHA_DEVELOPMENT_AGENT env var (set at build
 # time — see containers/agent/Dockerfile) directly off the image config, without running a
@@ -2205,83 +2018,9 @@ current_agent_image_sha() {
 
 # sync_pr_labels_from_linked_issues is declared in lib/github.
 
-# Returns the path to the fingerprint file for a given Issue ID.
-issue_fingerprint_file_path() {
-    local item_id="$1"
-    printf '%s/Issue_%s.fingerprint' "${SESSION_BASE_DIR}" "${item_id}"
-}
-
-# Fetches the Issue state JSON used for fingerprinting. Retries transient gh failures a few
-# times; returns 1 (does not die) once retries are exhausted, so a single blip on this
-# frequently-called fetch skips just the current item rather than killing the whole run (#1090).
-fetch_issue_json() {
-    local item_id="$1" attempt=1 result
-    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
-        if result=$(gh issue view "${item_id}" \
-            --repo "${REPO_FULL}" \
-            --json title,body,state,labels,comments,assignees,milestone 2>/dev/null); then
-            printf '%s' "${result}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
-            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
-        attempt=$((attempt + 1))
-    done
-    return 1
-}
-
-# Computes a deterministic fingerprint from pre-fetched Issue state JSON.
-# Optional second argument: JSON array of trusted logins; when provided, only comments
-# from those users are included in the fingerprint so untrusted commenters do not trigger re-runs.
-# Outputs the hash on stdout; returns non-zero if jq fails.
-fingerprint_issue_json() {
-    local issue_json="$1"
-    local trusted_logins="${2:-null}"
-    printf '%s' "${issue_json}" | jq -r --argjson trusted "${trusted_logins}" '
-        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
-        .title,
-        (.body // ""),
-        .state,
-        ([((.labels // [])[] | .name)] | sort | .[]),
-        (tc(.comments // []) | length | tostring),
-        ([tc(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
-        ([((.assignees // [])[] | .login)] | sort | join(",")),
-        (.milestone.title // "none")
-    ' | hash_sha256
-}
-
-# Computes a deterministic hash of the Issue's current state using a single gh issue view call.
-# Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
-compute_issue_fingerprint() {
-    local item_id="$1"
-    local issue_json trusted
-    issue_json=$(fetch_issue_json "${item_id}") || return 1
-    trusted=$(get_trusted_logins) || return 1
-    fingerprint_issue_json "${issue_json}" "${trusted}"
-}
-
-# Writes the fingerprint to the fingerprint file for a given Issue ID.
-save_issue_fingerprint() {
-    local item_id="$1" fingerprint="$2"
-    local fingerprint_file
-
-    fingerprint_file=$(issue_fingerprint_file_path "${item_id}")
-    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s\n' "${fingerprint}" \
-        > "${fingerprint_file}" \
-        || die "Failed to write fingerprint file: ${fingerprint_file}"
-}
-
-# Reads and outputs the saved fingerprint for a given Issue ID, or empty string if none exists.
-load_issue_fingerprint() {
-    local item_id="$1"
-    local fingerprint_file
-
-    fingerprint_file=$(issue_fingerprint_file_path "${item_id}")
-    if [ -f "${fingerprint_file}" ]; then
-        cat "${fingerprint_file}"
-    fi
-}
+# issue_fingerprint_file_path, fetch_issue_json, fingerprint_issue_json,
+# compute_issue_fingerprint, save_issue_fingerprint, and load_issue_fingerprint are declared in
+# lib/fingerprints.
 
 # issue_json_has_blocked_label is declared in lib/github-status.
 
