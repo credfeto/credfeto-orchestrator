@@ -429,6 +429,23 @@ teardown() {
     [ ! -f "${gitconfig}" ]
 }
 
+# shellcheck disable=SC2329
+stub_sudo_for_copy_dotdir() {
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            rm)   shift; /bin/rm "$@" ;;
+            cp)   shift; /bin/cp "$@" ;;
+            mv)   shift; /bin/mv "$@" ;;
+            cat)  shift; /bin/cat "$@" ;;
+            tee)  shift; tee "$@" ;;
+            find) shift; /usr/bin/find "$@" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+}
+
 @test "copy_dotdir refreshes an existing .ssh directory instead of skipping it" {
     local src_ssh="${HOME}/.ssh"
     local dst_home="${TEST_TMP}/owner_home"
@@ -437,19 +454,7 @@ teardown() {
     printf 'new-key-material\n' > "${src_ssh}/id_ed25519"
     printf 'old-key-material\n' > "${dst_ssh}/id_ed25519"
 
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   shift; /bin/rm "$@" ;;
-            cp)   shift; /bin/cp "$@" ;;
-            cat)  shift; /bin/cat "$@" ;;
-            tee)  shift; tee "$@" ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
+    stub_sudo_for_copy_dotdir
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
     [ "${status}" -eq 0 ]
@@ -469,19 +474,7 @@ teardown() {
     printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
     # Source does not ship its own known_hosts.
 
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   shift; /bin/rm "$@" ;;
-            cp)   shift; /bin/cp "$@" ;;
-            cat)  shift; /bin/cat "$@" ;;
-            tee)  shift; tee "$@" ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
+    stub_sudo_for_copy_dotdir
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
     [ "${status}" -eq 0 ]

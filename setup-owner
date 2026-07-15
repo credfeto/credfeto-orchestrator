@@ -140,7 +140,7 @@ copy_dotdir() {
     local known_hosts_backup=""
     if [ "${name}" = ".ssh" ] && [ ! -f "${src}/known_hosts" ] && [ -f "${dst}/known_hosts" ]; then
         known_hosts_backup=$(mktemp) || die "Failed to create temp file for ${dst}/known_hosts backup"
-        sudo cp "${dst}/known_hosts" "${known_hosts_backup}" || die "Failed to back up ${dst}/known_hosts"
+        sudo mv "${dst}/known_hosts" "${known_hosts_backup}" || die "Failed to back up ${dst}/known_hosts"
     fi
 
     info "Refreshing ${name}..."
@@ -148,8 +148,7 @@ copy_dotdir() {
     sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
 
     if [ -n "${known_hosts_backup}" ]; then
-        sudo cp "${known_hosts_backup}" "${dst}/known_hosts" || die "Failed to restore known_hosts in ${dst}"
-        rm -f "${known_hosts_backup}"
+        sudo mv "${known_hosts_backup}" "${dst}/known_hosts" || die "Failed to restore known_hosts in ${dst}"
     fi
 
     sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
