@@ -1,0 +1,710 @@
+# shellcheck shell=bash
+# GitHub Projects v2 "Workflow" board management: discovery/creation, the disk-persisted
+# project cache, status updates, and substatus/coarse-status/priority lookups.
+
+# Returns the path to the disk-persisted Workflow-project discovery cache for the current
+# repo. Unlike _WF_CACHE (in-memory, lost at process exit), this file survives across
+# oneshot invocations so an already-discovered project/field/option IDs are not re-fetched
+# via GraphQL on every run. SESSION_BASE_DIR is already scoped per-repo by set_repo_context.
+project_cache_file_path() {
+    printf '%s/project-cache.json' "${SESSION_BASE_DIR}"
+}
+
+# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS, and
+# _WF_CACHED_REPO from the on-disk project cache for the current repo, without making any
+# network call. Returns 0 (hit) when a fresh (within PROJECT_CACHE_TTL seconds) cache entry
+# was found and loaded; returns 1 (miss) when the file is absent, unparseable, incomplete,
+# or stale, leaving the caller to perform a live discovery.
+load_project_cache() {
+    local cache_file cached_json cached_at now_unix
+    cache_file=$(project_cache_file_path)
+    [ -f "${cache_file}" ] || return 1
+
+    cached_json=$(cat "${cache_file}" 2>/dev/null) || return 1
+    [ -n "${cached_json}" ] || return 1
+
+    cached_at=$(printf '%s' "${cached_json}" | jq -r '.cached_at // empty' 2>/dev/null)
+    [[ "${cached_at}" =~ ^[0-9]+$ ]] || return 1
+
+    # Defensive check: SESSION_BASE_DIR is expected to already be repo-scoped (set by
+    # set_repo_context), so this should always match, but validating the stored repo
+    # guards against ever serving one repo's cached IDs for another if that assumption
+    # is ever violated (e.g. a future change to SESSION_BASE_DIR's derivation).
+    local cached_repo
+    cached_repo=$(printf '%s' "${cached_json}" | jq -r '.repo // empty' 2>/dev/null)
+    [ "${cached_repo}" = "${REPO_FULL}" ] || return 1
+
+    now_unix=$(date +%s)
+    (( now_unix - cached_at <= PROJECT_CACHE_TTL )) || return 1
+
+    local project_id status_field_id
+    project_id=$(printf '%s' "${cached_json}" | jq -r '.project_id // empty' 2>/dev/null)
+    [ -n "${project_id}" ] || return 1
+    status_field_id=$(printf '%s' "${cached_json}" | jq -r '.status_field_id // empty' 2>/dev/null)
+    [ -n "${status_field_id}" ] || return 1
+
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+    local opt_name opt_id
+    while IFS=$'\t' read -r opt_name opt_id; do
+        [ -z "${opt_name}" ] && continue
+        _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
+    done < <(printf '%s' "${cached_json}" | jq -r '.option_ids // {} | to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
+
+    _WF_PROJECT_ID="${project_id}"
+    _WF_STATUS_FIELD_ID="${status_field_id}"
+    _WF_CACHED_REPO="${REPO_FULL}"
+    _WF_CREATION_FAILED=""
+    return 0
+}
+
+# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS for the current
+# repo to disk so subsequent oneshot invocations can skip live discovery until
+# PROJECT_CACHE_TTL elapses. Best-effort: a failure to write just means every run
+# re-discovers, which is the pre-existing behaviour, so it only warns rather than dying.
+save_project_cache() {
+    local cache_file option_ids_json k
+    cache_file=$(project_cache_file_path)
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || {
+        warn "Workflow project: failed to create ${SESSION_BASE_DIR} for disk cache"
+        return 0
+    }
+
+    option_ids_json='{}'
+    if [ "${#_WF_OPTION_IDS[@]}" -gt 0 ]; then
+        option_ids_json=$(
+            for k in "${!_WF_OPTION_IDS[@]}"; do
+                jq -n --arg k "${k}" --arg v "${_WF_OPTION_IDS[${k}]}" '{($k): $v}'
+            done | jq -s 'add // {}'
+        ) || option_ids_json='{}'
+    fi
+
+    jq -n \
+        --arg repo "${REPO_FULL}" \
+        --arg project_id "${_WF_PROJECT_ID}" \
+        --arg status_field_id "${_WF_STATUS_FIELD_ID}" \
+        --argjson option_ids "${option_ids_json}" \
+        --argjson cached_at "$(date +%s)" \
+        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, cached_at: $cached_at}' \
+        > "${cache_file}" 2>/dev/null \
+        || warn "Workflow project: failed to write disk cache ${cache_file}"
+}
+
+# Deletes the on-disk project cache for the current repo and clears the in-memory caches
+# (_WF_CACHE entry, and the live globals if they belong to this repo) so both this run and
+# the next fully re-discover from the API. Called when a board mutation is rejected in a
+# way that suggests the cached project/field IDs are stale (e.g. a deleted/recreated
+# project) — leaving stale IDs in memory would otherwise keep failing for the rest of this run.
+invalidate_project_cache() {
+    rm -f "$(project_cache_file_path)" 2>/dev/null || true
+
+    unset "_WF_CACHE[${REPO_FULL}:discovered]" "_WF_CACHE[${REPO_FULL}:project_id]" \
+        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]"
+    local k
+    for k in "${!_WF_OPTION_IDS[@]}"; do
+        unset "_WF_CACHE[${REPO_FULL}:opt:${k}]"
+    done
+
+    if [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]; then
+        _WF_CACHED_REPO=""
+        _WF_PROJECT_ID=""
+        _WF_STATUS_FIELD_ID=""
+        unset _WF_OPTION_IDS
+        declare -gA _WF_OPTION_IDS
+    fi
+}
+
+# _build_wf_section is declared in lib/prompts.
+
+# Adds a single option to an existing "Workflow Status" field if it is not already present,
+# used to migrate boards discovered live that were provisioned before that option existed
+# (e.g. "AI Simplify", #1169) — mirrors create-project's ensure_status_field_option so a
+# pre-existing board self-heals here too, without needing a human to re-run create-project.
+# Inserts the new option immediately after ${after_name} (falling back to appending at the
+# end if ${after_name} is not found). Re-sends every existing option WITH its id, per
+# GitHub's documented contract for ProjectV2SingleSelectFieldOptionInput.id (preserves each
+# option's identity so items already set to it keep their value), and round-trips existing
+# options' color/description unchanged. Best-effort: any failure (GraphQL error, or a
+# mutation that succeeds but returns no usable field data) warns and returns the original
+# field_node unchanged rather than dying, since board-status updates are always best-effort
+# in oneshot. No-op if the option is already present or the field has no id. Prints the
+# (possibly updated) field JSON.
+_wf_ensure_status_field_option() {
+    local field_node="$1" option_name="$2" option_color="$3" after_name="$4"
+    local field_id has_option
+    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
+        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
+    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
+        printf '%s' "${field_node}"
+        return 0
+    fi
+
+    local options_json
+    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" --arg after "${after_name}" '
+        (.options // []) as $opts
+        | ($opts | map(.name) | index($after)) as $idx
+        | [$opts[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}] as $existing
+        | if $idx == null then $existing + [{name: $n, color: $c, description: ""}]
+          else $existing[0:($idx+1)] + [{name: $n, color: $c, description: ""}] + $existing[($idx+1):]
+          end
+    ')
+    local resp resp_err resp_err_content
+    resp_err=$(mktemp --suffix=.stderr) || resp_err=/dev/null
+    if ! resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
+            '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
+            | gh api graphql --input - 2>"${resp_err}"); then
+        resp_err_content=$(head -3 "${resp_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${resp_err}"
+        warn "Workflow project: could not add \"${option_name}\" option to \"Workflow Status\"${resp_err_content:+ — ${resp_err_content}}"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    rm -f "${resp_err}"
+
+    local updated
+    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field' 2>/dev/null)
+    if [ -z "${updated}" ] || [ "${updated}" = "null" ]; then
+        warn "Workflow project: mutation to add \"${option_name}\" option to \"Workflow Status\" returned no field data — leaving field unchanged"
+        printf '%s' "${field_node}"
+        return 0
+    fi
+    info "Workflow project: added missing \"${option_name}\" option to \"Workflow Status\"" >&2
+    printf '%s' "${updated}"
+}
+
+# Discovers or creates a GitHub Projects (v2) board named "Workflow" linked to
+# the current repo (OWNER/REPO).  Populates _WF_PROJECT_ID, _WF_STATUS_FIELD_ID,
+# and _WF_OPTION_IDS on success.  On any failure, leaves _WF_PROJECT_ID empty so
+# all subsequent update_workflow_status calls are silent no-ops.
+# Safe to call multiple times — returns immediately when the cache is valid for REPO_FULL.
+discover_or_create_workflow_project() {
+    [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ] && return 0
+
+    if [ "${_WF_CACHE["${REPO_FULL}:discovered"]:-}" = "1" ]; then
+        _WF_PROJECT_ID="${_WF_CACHE["${REPO_FULL}:project_id"]}"
+        _WF_STATUS_FIELD_ID="${_WF_CACHE["${REPO_FULL}:field_id"]}"
+        unset _WF_OPTION_IDS
+        declare -gA _WF_OPTION_IDS
+        local opt_name
+        while IFS= read -r opt_name; do
+            [ -z "${opt_name}" ] && continue
+            _WF_OPTION_IDS["${opt_name}"]="${_WF_CACHE["${REPO_FULL}:opt:${opt_name}"]}"
+        done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opt_names"]}")
+        _WF_CACHED_REPO="${REPO_FULL}"
+        _WF_CREATION_FAILED=""
+        return 0
+    fi
+
+    # Disk cache hit: promote it into the in-memory per-run cache too, so a later call
+    # this run takes the cheaper in-memory fast path above instead of re-parsing the
+    # cache file, then return without making any network calls.
+    if load_project_cache; then
+        local k
+        for k in "${!_WF_OPTION_IDS[@]}"; do
+            _WF_CACHE["${REPO_FULL}:opt:${k}"]="${_WF_OPTION_IDS[${k}]}"
+        done
+        _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
+        _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
+        _WF_CACHE["${REPO_FULL}:opt_names"]=$(printf '%s\n' "${!_WF_OPTION_IDS[@]}")
+        _WF_CACHE["${REPO_FULL}:discovered"]="1"
+        return 0
+    fi
+
+    _WF_PROJECT_ID=""
+    _WF_STATUS_FIELD_ID=""
+    _WF_CREATION_FAILED=""
+    _WF_CACHED_REPO=""
+    unset _WF_OPTION_IDS
+    declare -gA _WF_OPTION_IDS
+
+    # If Projects is disabled on the repo, repository.projectsV2 always returns empty, so
+    # we would loop trying to create a project every run.  Enable it silently when needed.
+    local projects_enabled
+    projects_enabled=$(gh repo view "${REPO_FULL}" --json hasProjectsEnabled \
+        --jq '.hasProjectsEnabled' 2>/dev/null) || true
+    if [ "${projects_enabled}" = "false" ]; then
+        info "Workflow project: Projects disabled on ${REPO_FULL} — enabling"
+        gh repo edit "${REPO_FULL}" --enable-projects > /dev/null 2>&1 \
+            || warn "Workflow project: could not enable Projects on ${REPO_FULL} — discovery may fail"
+    fi
+
+    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}pageInfo{endCursor hasNextPage}}}}"
+    local project_json="" cursor="" has_next_page="true" graphql_stderr graphql_err_content page_json
+    local -a cursor_args
+    while true; do
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        graphql_stderr=$(mktemp --suffix=.stderr) || graphql_stderr=/dev/null
+        if ! page_json=$(gh api graphql \
+                -f query="${query}" \
+                -f owner="${OWNER}" \
+                -f repo="${REPO}" \
+                "${cursor_args[@]}" \
+                --jq '.data.repository.projectsV2' 2>"${graphql_stderr}"); then
+            graphql_err_content=$(head -3 "${graphql_stderr}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            rm -f "${graphql_stderr}"
+            if printf '%s' "${graphql_err_content}" | grep -qiE 'scope|permission|authoriz'; then
+                warn "Workflow project: GraphQL auth failed for ${REPO_FULL} — run 'gh auth refresh -s project' on the host to enable Projects API access"
+            else
+                warn "Workflow project: GraphQL query failed for ${REPO_FULL}${graphql_err_content:+ — ${graphql_err_content}} — status updates disabled"
+            fi
+            return 0
+        fi
+        rm -f "${graphql_stderr}"
+
+        project_json=$(printf '%s' "${page_json}" | \
+            jq -c '.nodes | map(select(.title == "Workflow")) | first // empty' 2>/dev/null)
+        [ -n "${project_json}" ] && break
+
+        has_next_page=$(printf '%s' "${page_json}" | jq -r '.pageInfo.hasNextPage // "false"' 2>/dev/null)
+        cursor=$(printf '%s' "${page_json}" | jq -r '.pageInfo.endCursor // ""' 2>/dev/null)
+        [ "${has_next_page}" = "true" ] || break
+        [ -n "${cursor}" ] || break
+    done
+
+    if [ -z "${project_json}" ]; then
+        info "Workflow project: no 'Workflow' project found for ${REPO_FULL} — creating one"
+        project_json=$(_wf_create_project) || {
+            warn "Workflow project: creation failed for ${REPO_FULL} — status updates disabled"
+            _WF_CREATION_FAILED="1"
+            return 0
+        }
+    fi
+
+    _WF_PROJECT_ID=$(printf '%s' "${project_json}" | jq -r '.id // empty')
+    [ -n "${_WF_PROJECT_ID}" ] || {
+        warn "Workflow project: could not read project ID — status updates disabled"
+        return 0
+    }
+
+    local status_field_node
+    status_field_node=$(printf '%s' "${project_json}" | \
+        jq -c '.fields.nodes[] | select(.name == "Workflow Status")' 2>/dev/null | head -1)
+    [ -n "${status_field_node}" ] || {
+        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        _WF_PROJECT_ID=""
+        return 0
+    }
+
+    # Backfills the "AI Simplify" option onto boards provisioned before that option existed
+    # (#1169), mirroring create-project's own migration so oneshot self-heals a pre-existing
+    # board without needing a human to re-run create-project by hand.
+    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Simplify" PURPLE "Development")
+
+    _WF_STATUS_FIELD_ID=$(printf '%s' "${status_field_node}" | jq -r '.id // empty')
+    [ -n "${_WF_STATUS_FIELD_ID}" ] || {
+        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        _WF_PROJECT_ID=""
+        return 0
+    }
+
+    local opt_name opt_id
+    while IFS='|' read -r opt_name opt_id; do
+        if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
+        _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
+    done < <(printf '%s' "${status_field_node}" | \
+        jq -r '.options[] | "\(.name)|\(.id)"' 2>/dev/null)
+
+    local cached_opts="" k
+    for k in "${!_WF_OPTION_IDS[@]}"; do
+        _WF_CACHE["${REPO_FULL}:opt:${k}"]="${_WF_OPTION_IDS[${k}]}"
+        cached_opts+="${k}"$'\n'
+    done
+    _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
+    _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
+    _WF_CACHE["${REPO_FULL}:opt_names"]="${cached_opts}"
+    _WF_CACHE["${REPO_FULL}:discovered"]="1"
+    save_project_cache
+
+    _WF_CACHED_REPO="${REPO_FULL}"
+    info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
+}
+
+# Files an issue in the affected repo asking the owner to run create-project, used when
+# discover_or_create_workflow_project could not obtain a usable "Workflow" project (the bot
+# cannot create projects under a personal account).  De-duplicates two ways: an in-process
+# guard (_WF_REPORTED_REPOS) avoids re-filing per item within one run, and an existing OPEN
+# issue with the same title is left untouched.  All gh failures are non-fatal (warn only).
+report_missing_workflow_project() {
+    case " ${_WF_REPORTED_REPOS} " in
+        *" ${REPO_FULL} "*) return 0 ;;
+    esac
+
+    local existing
+    # Skip filing if the issue list check itself fails (transient error) — conservative to
+    # avoid duplicates on the next successful run.
+    # We use repo: in the search query because --repo + --search is known to fail with
+    # "malformed version" in some environments.
+    if ! existing=$(WF_TITLE="${WF_SETUP_ISSUE_TITLE}" gh issue list \
+        --state open \
+        --search "repo:${REPO_FULL} ${WF_SETUP_ISSUE_TITLE} in:title" \
+        --limit 100 \
+        --json number,title \
+        --jq 'map(select(.title==env.WF_TITLE)) | .[0].number // empty' 2>/dev/null); then
+        return 0
+    fi
+    if [ -n "${existing}" ]; then
+        _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"
+        return 0
+    fi
+
+    local body
+    # shellcheck disable=SC2016
+    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
+        "${REPO_FULL}")
+
+    if gh issue create --repo "${REPO_FULL}" \
+        --title "${WF_SETUP_ISSUE_TITLE}" --label "AI-Work" --body "${body}" 2>/dev/null; then
+        _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"
+    else
+        warn "Failed to create Workflow-project setup issue for ${REPO_FULL}"
+    fi
+}
+
+# Invites all trusted logins (excluding the copilot bot) as WRITER collaborators
+# on the given GitHub Project V2. Non-fatal: warns and returns 0 on any failure.
+# Collapses N+1 sequential GraphQL calls into 2 calls via batched alias lookup.
+_wf_invite_trusted_collaborators() {
+    local project_id="$1"
+    local -a logins=()
+    local login
+
+    # Phase 1 — collect logins, skipping the copilot bot (no gh calls yet)
+    local trusted_json
+    trusted_json=$(get_trusted_logins) || {
+        warn "Workflow project: failed to fetch trusted collaborators for ${REPO_FULL} — skipping collaborator invites"
+        return 0
+    }
+    while IFS= read -r login; do
+        [ -z "${login}" ] && continue
+        [ "${login}" = "copilot-pull-request-reviewer" ] && continue
+        logins+=("${login}")
+    done < <(printf '%s' "${trusted_json}" | jq -r '.[]' 2>/dev/null)
+    [ "${#logins[@]}" -eq 0 ] && return 0
+
+    # Phase 2 — single batched GraphQL user-node lookup using field aliases
+    local query="query{" i
+    for (( i=0; i<${#logins[@]}; i++ )); do
+        query="${query}u${i}:user(login:\"${logins[i]}\"){id}"
+    done
+    query="${query}}"
+
+    local lookup_result lookup_err
+    lookup_err=$(mktemp --suffix=.stderr) || lookup_err=/dev/null
+    lookup_result=$(gh api graphql -f query="${query}" 2>"${lookup_err}") || {
+        local err_content
+        err_content=$(head -3 "${lookup_err}" 2>/dev/null | tr '\n' ' ')
+        rm -f "${lookup_err}"
+        warn "Workflow project: user-node lookup failed${err_content:+ — ${err_content}}"
+        return 0
+    }
+    rm -f "${lookup_err}"
+
+    # Build collaborators array from resolved IDs
+    local collaborators='[]' user_id
+    for (( i=0; i<${#logins[@]}; i++ )); do
+        user_id=$(printf '%s' "${lookup_result}" | jq -r ".data.u${i}.id" 2>/dev/null) || true
+        [ -z "${user_id}" ] || [ "${user_id}" = "null" ] || [[ "${user_id}" == \{* ]] && continue
+        collaborators=$(printf '%s' "${collaborators}" | \
+            jq -c --arg id "${user_id}" '. + [{"userId":$id,"role":"WRITER"}]')
+    done
+    [ "${collaborators}" = '[]' ] && return 0
+
+    # shellcheck disable=SC2016
+    local mut='mutation($p:ID!,$c:[ProjectV2Collaborator!]!){updateProjectV2Collaborators(input:{projectId:$p,collaborators:$c}){collaborators(first:5){nodes{...on User{login}}}}}'
+    local mut_err
+    mut_err=$(mktemp --suffix=.stderr) || mut_err=/dev/null
+    if ! printf '%s' "${collaborators}" | \
+            jq -c --arg p "${project_id}" --arg q "${mut}" \
+            '{query:$q,variables:{p:$p,c:.}}' | \
+            gh api graphql --input - >/dev/null 2>"${mut_err}"; then
+        local err_content
+        err_content=$(head -3 "${mut_err}" 2>/dev/null | tr '\n' ' ')
+        warn "Workflow project: updateProjectV2Collaborators failed${err_content:+ — ${err_content}} — add collaborators manually at github.com"
+    fi
+    rm -f "${mut_err}"
+}
+
+# Creates a new "Workflow" GitHub Project (v2), adds the Status single-select
+# field with all eight options, and links it to the current repo.
+# Outputs project JSON (same shape as the discovery query) on stdout.
+_wf_create_project() {
+    local owner_node_id org_err user_err
+    org_err=$(mktemp --suffix=.stderr) || org_err=/dev/null
+    user_err=$(mktemp --suffix=.stderr) || user_err=/dev/null
+    owner_node_id=$(gh api graphql \
+        -f query="query(\$l:String!){organization(login:\$l){id}}" \
+        -f l="${OWNER}" \
+        --jq '.data.organization.id' 2>"${org_err}") || true
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ] || [[ "${owner_node_id}" == \{* ]]; then
+        owner_node_id=$(gh api graphql \
+            -f query="query(\$l:String!){user(login:\$l){id}}" \
+            -f l="${OWNER}" \
+            --jq '.data.user.id' 2>"${user_err}") || true
+    fi
+    if [ -z "${owner_node_id}" ] || [ "${owner_node_id}" = "null" ] || [[ "${owner_node_id}" == \{* ]]; then
+        local owner_err_content
+        owner_err_content=$(head -3 "${org_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        local user_err_content
+        user_err_content=$(head -3 "${user_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${org_err}" "${user_err}"
+        warn "Workflow project: cannot resolve owner node ID for ${OWNER}${owner_err_content:+ — org: ${owner_err_content}}${user_err_content:+ — user: ${user_err_content}}"
+        return 1
+    fi
+    rm -f "${org_err}" "${user_err}"
+
+    # Resolve the repo node ID first so we can pass repositoryId to createProjectV2.
+    # This creates a repo-scoped project (sets the default repository and auto-links it)
+    # without a separate linkProjectV2ToRepository call — and ensures the project appears
+    # in repository.projectsV2 so the next discover run finds it immediately.
+    local repo_node_id repo_err repo_err_content
+    repo_err=$(mktemp --suffix=.stderr) || repo_err=/dev/null
+    repo_node_id=$(gh api graphql \
+        -f query="query(\$o:String!,\$r:String!){repository(owner:\$o,name:\$r){id}}" \
+        -f o="${OWNER}" -f r="${REPO}" \
+        --jq '.data.repository.id' 2>"${repo_err}") || {
+        repo_err_content=$(head -3 "${repo_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${repo_err}"
+        warn "Workflow project: cannot resolve repo node ID for ${REPO_FULL}${repo_err_content:+ — ${repo_err_content}}"
+        return 1
+    }
+    rm -f "${repo_err}"
+
+    local project_id project_err
+    project_err=$(mktemp --suffix=.stderr) || project_err=/dev/null
+    project_id=$(gh api graphql \
+        -f query="mutation(\$ownerId:ID!,\$title:String!,\$repoId:ID!){createProjectV2(input:{ownerId:\$ownerId,title:\$title,repositoryId:\$repoId}){projectV2{id}}}" \
+        -f ownerId="${owner_node_id}" \
+        -f title="Workflow" \
+        -f repoId="${repo_node_id}" \
+        --jq '.data.createProjectV2.projectV2.id' 2>"${project_err}") \
+    || {
+        local project_err_content
+        project_err_content=$(head -3 "${project_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${project_err}"
+        warn "Workflow project: createProjectV2 failed${project_err_content:+ — ${project_err_content}}"
+        return 1
+    }
+    rm -f "${project_err}"
+
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local field_json field_err field_err_content
+    field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
+    field_json=$(gh api graphql \
+        -f query="${create_field_query}" \
+        -f p="${project_id}" 2>"${field_err}") || {
+        field_err_content=$(head -3 "${field_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${field_err}"
+        warn "Workflow project: createProjectV2Field failed for project ${project_id}${field_err_content:+ — ${field_err_content}}"
+        return 1
+    }
+    rm -f "${field_err}"
+
+    _wf_invite_trusted_collaborators "${project_id}"
+
+    local status_field_nodes
+    status_field_nodes=$(printf '%s' "${field_json}" | \
+        jq -c '{nodes: [.data.createProjectV2Field.projectV2Field | {id, name, options}]}' 2>/dev/null)
+    printf '{"id":"%s","title":"Workflow","fields":%s}\n' "${project_id}" "${status_field_nodes}"
+}
+
+# Updates the Workflow board status for an issue or PR.
+# Arguments: item_type ("Issue" or "PullRequest"), item_number, status_name
+# No-op when _WF_PROJECT_ID is empty (project disabled or discovery failed).
+update_workflow_status() {
+    local item_type="$1" item_number="$2" status_name="$3"
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+
+    info "Workflow: adding ${item_type} #${item_number} to board with status '${status_name}'"
+
+    local opt_id="${_WF_OPTION_IDS["${status_name}"]:-}"
+    if [ -z "${opt_id}" ]; then
+        warn "Workflow: unknown status '${status_name}' — skipping update for ${item_type} #${item_number}"
+        return 0
+    fi
+
+    local api_path item_node_id
+    if [ "${item_type}" = "Issue" ]; then
+        api_path="repos/${REPO_FULL}/issues/${item_number}"
+    else
+        api_path="repos/${REPO_FULL}/pulls/${item_number}"
+    fi
+    item_node_id=$(gh api "${api_path}" --jq '.node_id' 2>/dev/null) || {
+        warn "Workflow: failed to get node ID for ${item_type} #${item_number} — skipping board update"
+        return 0
+    }
+
+    local project_item_id add_err add_err_content
+    add_err=$(mktemp --suffix=.stderr) || add_err=/dev/null
+    project_item_id=$(gh api graphql \
+        -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
+        -f p="${_WF_PROJECT_ID}" -f c="${item_node_id}" \
+        --jq '.data.addProjectV2ItemById.item.id' 2>"${add_err}") || {
+        add_err_content=$(head -3 "${add_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+        rm -f "${add_err}"
+        warn "Workflow: failed to add ${item_type} #${item_number} to project${add_err_content:+ — ${add_err_content}} — skipping board update"
+        # The mutation may be failing because the cached project ID refers to a
+        # deleted/recreated project — invalidate so the next run (and any later item this
+        # run) re-discovers from the API instead of repeating the same failure silently.
+        invalidate_project_cache
+        return 0
+    }
+    rm -f "${add_err}"
+
+    gh api graphql \
+        -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
+        -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" \
+        -f f="${_WF_STATUS_FIELD_ID}" -f v="${opt_id}" \
+        > /dev/null 2>&1 \
+    || warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
+
+    info "Workflow: ${item_type} #${item_number} added to board with status '${status_name}'"
+}
+
+# Populate _WF_APPROVED_ITEMS with issue keys ("owner/repo/number") whose
+# Workflow board status is "Approved". Results are cached per repo; a no-op
+# when the board is not configured or the Approved option ID is unknown.
+fetch_board_approved_items() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    [ "${_WF_APPROVED_FETCHED["${REPO_FULL}"]:-}" = "1" ] && return 0
+    _WF_APPROVED_FETCHED["${REPO_FULL}"]="1"
+    local approved_opt_id="${_WF_OPTION_IDS[Approved]:-}"
+    [ -n "${approved_opt_id}" ] || return 0
+    local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}"
+    local cursor="" has_next_page="true" entry page_json pagination
+    local -a cursor_args
+    while true; do
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        if ! page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" "${cursor_args[@]}" 2>/dev/null); then
+            warn "fetch_board_approved_items: GraphQL request failed for ${REPO_FULL}"
+            break
+        fi
+        while IFS= read -r entry; do
+            [ -n "${entry}" ] && _WF_APPROVED_ITEMS["${entry}"]=1
+        done < <(printf '%s' "${page_json}" | \
+            jq -r --arg opt "${approved_opt_id}" \
+            '.data.node.items.nodes[] | select((.content | type) == "object") | select(.content.number? != null) | select(.fieldValues.nodes | map(.optionId? // "") | any(. == $opt)) | "\(.content.repository.nameWithOwner)/\(.content.number)"' \
+            2>/dev/null)
+        pagination=$(printf '%s' "${page_json}" | \
+            jq -r '(.data.node.items.pageInfo.hasNextPage // "false"), (.data.node.items.pageInfo.endCursor // "")' 2>/dev/null)
+        has_next_page=$(printf '%s' "${pagination}" | head -1)
+        cursor=$(printf '%s' "${pagination}" | tail -1)
+        [ "${has_next_page}" = "true" ] || break
+        [ -n "${cursor}" ] || break
+    done
+}
+
+# Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Workflow Status field
+# option ID, keyed "owner/repo/number" — covers BOTH Issues and PRs (unlike
+# fetch_board_approved_items, which only ever needs Issues for the plan-approval flow).
+# Results are cached per repo per tick; a no-op when the board is not configured. Used to show
+# the fine-grained workflow phase in Discord notifications at zero agentic cost — a pure GitHub
+# API read, no Claude invocation (#1136).
+fetch_board_item_statuses() {
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    [ "${_WF_ITEM_STATUS_FETCHED["${REPO_FULL}"]:-}" = "1" ] && return 0
+    _WF_ITEM_STATUS_FETCHED["${REPO_FULL}"]="1"
+    local query="query(\$p:ID!,\$cursor:String){node(id:\$p){...on ProjectV2{items(first:100,after:\$cursor){pageInfo{endCursor hasNextPage}nodes{content{...on Issue{number repository{nameWithOwner}}...on PullRequest{number repository{nameWithOwner}}}fieldValues(first:50){nodes{...on ProjectV2ItemFieldSingleSelectValue{optionId field{...on ProjectV2SingleSelectField{name}}}}}}}}}}"
+    local cursor="" has_next_page="true" entry_key entry_opt page_json pagination
+    local -a cursor_args
+    while true; do
+        cursor_args=()
+        [ -n "${cursor}" ] && cursor_args=(-f "cursor=${cursor}")
+        if ! page_json=$(gh api graphql -f query="${query}" -f p="${_WF_PROJECT_ID}" "${cursor_args[@]}" 2>/dev/null); then
+            warn "fetch_board_item_statuses: GraphQL request failed for ${REPO_FULL}"
+            break
+        fi
+        while IFS=$'\t' read -r entry_key entry_opt; do
+            [ -n "${entry_key}" ] && _WF_ITEM_STATUS_OPTION_ID["${entry_key}"]="${entry_opt}"
+        done < <(printf '%s' "${page_json}" | \
+            jq -r '
+                .data.node.items.nodes[]
+                | select((.content | type) == "object") | select(.content.number? != null)
+                | . as $item
+                | ($item.fieldValues.nodes[] | select(.field.name? == "Workflow Status") | .optionId) as $opt
+                | "\($item.content.repository.nameWithOwner)/\($item.content.number)\t\($opt)"
+            ' 2>/dev/null)
+        pagination=$(printf '%s' "${page_json}" | \
+            jq -r '(.data.node.items.pageInfo.hasNextPage // "false"), (.data.node.items.pageInfo.endCursor // "")' 2>/dev/null)
+        has_next_page=$(printf '%s' "${pagination}" | head -1)
+        cursor=$(printf '%s' "${pagination}" | tail -1)
+        [ "${has_next_page}" = "true" ] || break
+        [ -n "${cursor}" ] || break
+    done
+}
+
+# Reverse-looks-up a Workflow-status option ID against _WF_OPTION_IDS (name→id) to find its
+# status name. Outputs nothing (empty) if the ID is empty or unrecognised.
+workflow_status_name_for_option_id() {
+    local opt_id="$1" name
+    [ -n "${opt_id}" ] || return 0
+    for name in "${!_WF_OPTION_IDS[@]}"; do
+        if [ "${_WF_OPTION_IDS[${name}]}" = "${opt_id}" ]; then
+            printf '%s' "${name}"
+            return 0
+        fi
+    done
+}
+
+# Returns the current fine-grained Workflow-board sub-status name for an item — "Unknown" when
+# the board is not configured, the item isn't on the board yet, or its status can't be
+# resolved. Triggers fetch_board_item_statuses (a per-repo-per-tick cached GraphQL read, not a
+# Claude invocation — #1136).
+board_substatus_for_item() {
+    local item_id="$1" opt_id substatus
+    # Ensures _WF_PROJECT_ID is resolved for the CURRENT REPO_FULL before fetch_board_item_
+    # statuses checks it — most callers of this function (notify_discord_blocked_item's ~12
+    # call sites) fire from scan/skip branches that `continue` long before the per-item work
+    # block's own discover_or_create_workflow_project call, so without this every one of them
+    # would see an empty _WF_PROJECT_ID and report "Unknown" regardless of whether a board is
+    # actually configured (#1136 review). discover_or_create_workflow_project's own
+    # _WF_CACHED_REPO guard makes this a cheap no-op when already resolved for this repo, and
+    # correctly RE-resolves when REPO_FULL has changed since the last call — which also closes
+    # the multi-repo staleness gap (a stale _WF_PROJECT_ID from a previously processed repo
+    # silently poisoning this repo's lookup and permanently caching "Unknown" against it).
+    discover_or_create_workflow_project
+    fetch_board_item_statuses
+    opt_id="${_WF_ITEM_STATUS_OPTION_ID["${REPO_FULL}/${item_id}"]:-}"
+    substatus=$(workflow_status_name_for_option_id "${opt_id}")
+    if [ -n "${substatus}" ]; then
+        printf '%s' "${substatus}"
+    else
+        printf 'Unknown'
+    fi
+}
+
+# Maps a fine-grained Workflow-board sub-status to the coarse Discord status shown alongside
+# it: "Not Started"/"Planning" haven't begun real work yet; "Approved" through "Human Review"
+# are all actively in progress; "Complete" is done. An unrecognised/empty sub-status (no board
+# configured, custom status name) falls back to "Unknown" rather than guessing (#1136).
+coarse_status_for_substatus() {
+    local substatus="$1"
+    case "${substatus}" in
+        "Not Started"|Planning)
+            printf 'To Do' ;;
+        Approved|Development|"AI Simplify"|"AI Review"|"AI Security Review"|"Human Review")
+            printf 'In Progress' ;;
+        Complete)
+            printf 'Done' ;;
+        *)
+            printf 'Unknown' ;;
+    esac
+}
+
+# Maps an item's labels (a JSON array of {name,...} objects) to its priority, matching
+# Security > Urgent > High > Medium > Low (first match wins, case-insensitive label name),
+# else "Undefined". Pure function — no I/O (#1136).
+priority_for_labels() {
+    local labels_json="$1"
+    printf '%s' "${labels_json}" | jq -r '
+        ([.[]?.name // empty | ascii_downcase]) as $names
+        | if ($names | index("security")) then "Security"
+          elif ($names | index("urgent")) then "Urgent"
+          elif ($names | index("high")) then "High"
+          elif ($names | index("medium")) then "Medium"
+          elif ($names | index("low")) then "Low"
+          else "Undefined"
+          end
+    ' 2>/dev/null || printf 'Undefined'
+}
