@@ -1,4 +1,9 @@
 #!/bin/bash
+# shellcheck disable=SC2153
+# SC2153 ("possible misspelling") false-positives once repo-context globals (OWNER, REPO,
+# REPO_FULL, RULES_DIR, REPO_WORK_DIR, ...) are assigned only in the unfollowed lib/git
+# source below: shellcheck can no longer see the assignment and flags every use against a
+# same-named local parameter (e.g. `local repo_full="$1"`) elsewhere in this file as a typo.
 
 # Orchestrator oneshot script.
 # Fetches all open work items from the priorities API and drives a Claude Code session
@@ -18,49 +23,11 @@ ONESHOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${ONESHOT_DIR}/lib/globals"
 # shellcheck source=lib/core disable=SC1091
 source "${ONESHOT_DIR}/lib/core"
+# shellcheck source=lib/git disable=SC1091
+source "${ONESHOT_DIR}/lib/git"
 
 # read_token_if_safe and load_token_for_owner are declared in lib/core.
-
-# Maps a host file path to its container-internal equivalent.
-# Paths under REPO_WORK_DIR map to CONTAINER_REPO_PATH; paths under RULES_DIR
-# map to CONTAINER_RULES_PATH.  Unrecognised paths are returned unchanged.
-host_to_container_path() {
-    local host_path="$1"
-    local rel
-    if [ -n "${REPO_WORK_DIR}" ]; then
-        rel="${host_path#"${REPO_WORK_DIR}"}"
-        if [ "${rel}" != "${host_path}" ]; then
-            printf '%s%s' "${CONTAINER_REPO_PATH}" "${rel}"
-            return
-        fi
-    fi
-    if [ -n "${RULES_DIR}" ]; then
-        rel="${host_path#"${RULES_DIR}"}"
-        if [ "${rel}" != "${host_path}" ]; then
-            printf '%s%s' "${CONTAINER_RULES_PATH}" "${rel}"
-            return
-        fi
-    fi
-    printf '%s' "${host_path}"
-}
-
-# Sets the per-repo globals used by all sub-functions.
-# Call once for each repository before invoking any function that reads these globals.
-set_repo_context() {
-    local repo_full="$1"
-    OWNER="${repo_full%%/*}"
-    REPO="${repo_full##*/}"
-    REPO_FULL="${repo_full}"
-    RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
-    REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
-    SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
-    # Host-side persistent store for the parts of the container's ~/.claude that
-    # must survive across invocations (sessions, session-env, plans, cache,
-    # backups). Nested under SESSION_BASE_DIR so state stays scoped per-repo,
-    # matching how fingerprint/resume-session bookkeeping already works above.
-    CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
-    _TRUSTED_LOGINS_JSON=""
-}
+# host_to_container_path and set_repo_context are declared in lib/git.
 
 # Fetches the current repo's collaborator logins (paginated), retrying on transient gh
 # failures. Outputs one login per line on success; returns non-zero after
@@ -129,152 +96,8 @@ require_trusted_logins() {
     return 1
 }
 
-# Returns 0 on success, 1 on failure (a transient network blip on the rules repo — unrelated to
-# any individual work item — must not die the whole run and throw away every other priority item
-# in the cycle, #1090). A stale or absent rules checkout is handled gracefully downstream by
-# find_ai_instructions, which already has its own "no .ai-instructions found" fallback.
-ensure_rules_current() {
-    if [ -d "${RULES_DIR}/.git" ]; then
-        info "Updating rules (cs-template) at ${RULES_DIR}..."
-        if ! git -C "${RULES_DIR}" checkout main; then
-            warn "Failed to switch cs-template to main at ${RULES_DIR}"
-            return 1
-        fi
-        if ! git -C "${RULES_DIR}" pull --ff-only; then
-            warn "Failed to update cs-template at ${RULES_DIR}"
-            return 1
-        fi
-    else
-        info "Cloning rules (cs-template) to ${RULES_DIR}..."
-        if ! mkdir -p "$(dirname "${RULES_DIR}")"; then
-            warn "Failed to create parent directory for ${RULES_DIR}"
-            return 1
-        fi
-        if ! git clone git@github.com:credfeto/cs-template.git "${RULES_DIR}"; then
-            warn "Failed to clone cs-template to ${RULES_DIR}"
-            return 1
-        fi
-    fi
-}
-
-# Remove any url.*.insteadOf / url.*.pushInsteadOf rules from the local .git/config.
-# The agent running inside the container may write these (e.g. via `gh auth setup-git`)
-# and they persist across sessions through the bind mount.  The container entrypoint
-# rejects them on startup because they are only allowed in the system /etc/gitconfig.
-clean_local_git_url_rewrites() {
-    local repo_dir="${1:-${REPO_WORK_DIR}}"
-    [ -d "${repo_dir}/.git" ] || return 0
-    local key
-    while IFS= read -r key; do
-        [ -z "${key}" ] && continue
-        git -C "${repo_dir}" config --local --unset-all "${key}" 2>/dev/null || true
-    done < <(git -C "${repo_dir}" config --local --name-only --list 2>/dev/null \
-        | grep -iE '\.(insteadof|pushinsteadof)$' || true)
-}
-
-# Returns 0 on success. Returns 1 for a dirty/orphaned working tree — the existing "hand off to
-# agent to recover" signal. Returns 2 for a transient git-fetch failure specifically: unlike a
-# dirty tree, there is nothing for the agent to recover from a network blip, so the caller must
-# skip the item entirely rather than burning an agent invocation on stale local state (#1090).
-ensure_repo_current() {
-    if [ -d "${REPO_WORK_DIR}/.git" ]; then
-        # Reset the remote URL to SSH on every iteration. The agent running inside
-        # the container may have changed the URL or added extra fetch/push URLs.
-        # --unset-all removes every entry (--unset silently fails when multiple
-        # values exist), then we write exactly one correct URL for each slot.
-        clean_local_git_url_rewrites "${REPO_WORK_DIR}"
-        git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
-        git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
-        git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
-        info "Fetching latest changes for ${REPO_FULL}..."
-        if ! git -C "${REPO_WORK_DIR}" fetch --prune origin; then
-            warn "Failed to fetch from origin for ${REPO_FULL}"
-            return 2
-        fi
-
-        local current_branch
-        current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
-        if ! git -C "${REPO_WORK_DIR}" diff --quiet || ! git -C "${REPO_WORK_DIR}" diff --cached --quiet; then
-            DIRTY_BRANCH="${current_branch}"
-            warn "Working tree has uncommitted changes on '${current_branch}' for ${REPO_FULL} — handing off to agent to recover"
-            return 1
-        fi
-        if [ "${current_branch}" != "main" ] \
-                && ! git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1; then
-            warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
-            git -C "${REPO_WORK_DIR}" checkout main \
-                || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
-            current_branch="main"
-        fi
-        if [ "${current_branch}" = "main" ]; then
-            info "Rebasing main with origin/main..."
-            git -C "${REPO_WORK_DIR}" rebase origin/main || die "Failed to rebase main with origin/main"
-        fi
-    else
-        info "Cloning ${REPO_FULL} to ${REPO_WORK_DIR}..."
-        mkdir -p "$(dirname "${REPO_WORK_DIR}")" || die "Failed to create parent directory for ${REPO_WORK_DIR}"
-        git clone "git@github.com:${OWNER}/${REPO}.git" "${REPO_WORK_DIR}" || die "Failed to clone ${REPO_FULL} to ${REPO_WORK_DIR}"
-    fi
-}
-
-# Returns 0 if the repo was on a branch that no longer exists on origin AND has been
-# reset to main; returns 1 in all other cases (repo absent, already on main, branch still
-# live on remote, or any git failure).  Performs its own fetch --prune because it is
-# called before ensure_repo_current in the fingerprint-skip path.
-recover_orphaned_branch() {
-    [ -d "${REPO_WORK_DIR}/.git" ] || return 1
-
-    local current_branch
-    current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current 2>/dev/null) || return 1
-    [ "${current_branch}" = "main" ] && return 1
-
-    git -C "${REPO_WORK_DIR}" fetch --prune origin 2>/dev/null || return 1
-
-    git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1 \
-        && return 1
-
-    warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
-    git -C "${REPO_WORK_DIR}" checkout -f main \
-        || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
-    git -C "${REPO_WORK_DIR}" rebase origin/main \
-        || die "Failed to rebase origin/main after orphaned branch recovery for ${REPO_FULL}"
-    return 0
-}
-
-# Attempts a non-agentic rebase of branch_name onto origin/main.
-# Returns 0 if the rebase succeeded and changes were force-pushed; 1 if any
-# conflict was encountered or if the push failed. Always leaves the working
-# tree on main.
-try_nonagentic_rebase() {
-    local branch_name="$1"
-
-    [ -n "${branch_name}" ] || return 1
-
-    clean_local_git_url_rewrites "${REPO_WORK_DIR}"
-    git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.url 2>/dev/null || true
-    git -C "${REPO_WORK_DIR}" config remote.origin.url "git@github.com:${OWNER}/${REPO}.git"
-    git -C "${REPO_WORK_DIR}" config --unset-all remote.origin.pushurl 2>/dev/null || true
-
-    if ! git -C "${REPO_WORK_DIR}" checkout "${branch_name}"; then
-        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
-        return 1
-    fi
-
-    if ! git -C "${REPO_WORK_DIR}" rebase origin/main; then
-        git -C "${REPO_WORK_DIR}" rebase --abort 2>/dev/null || true
-        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
-        return 1
-    fi
-
-    if ! git -C "${REPO_WORK_DIR}" push --force-with-lease; then
-        git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
-        return 1
-    fi
-
-    git -C "${REPO_WORK_DIR}" checkout main 2>/dev/null || true
-    return 0
-}
-
+# ensure_rules_current, clean_local_git_url_rewrites, ensure_repo_current,
+# recover_orphaned_branch, and try_nonagentic_rebase are declared in lib/git.
 # check_required_tools and hash_sha256 are declared in lib/core.
 
 # Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
@@ -989,18 +812,7 @@ pr_should_advance_unchanged() {
     [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
 }
 
-# Outputs the path to the .ai-instructions file for the current repo context.
-# Returns 1 (with a warning) if neither the repo work dir nor the rules dir has the file.
-find_ai_instructions() {
-    if [ -f "${REPO_WORK_DIR}/.ai-instructions" ]; then
-        printf '%s/.ai-instructions' "${REPO_WORK_DIR}"
-    elif [ -f "${RULES_DIR}/.ai-instructions" ]; then
-        printf '%s/.ai-instructions' "${RULES_DIR}"
-    else
-        warn "No .ai-instructions found at ${REPO_WORK_DIR}/.ai-instructions or ${RULES_DIR}/.ai-instructions"
-        return 1
-    fi
-}
+# find_ai_instructions is declared in lib/git.
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
 # _WF_CACHED_REPO, _WF_CACHE, _WF_REPORTED_REPOS, _WF_CREATION_FAILED, _WF_APPROVED_ITEMS,
