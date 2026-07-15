@@ -309,6 +309,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Rewrote the reject-obfuscated-commands and enforce-git-dash-c Claude Code hooks to parse commands with shfmt (a real shell parser) instead of regex/text scanning, ending the per-technique bypass arms race (8 review rounds on PR #1159): obfuscated command names, unparseable commands, function/declare clauses, and assignments to IFS/PATH/LD_*/GIT_* are rejected categorically, and command names are then checked against extendable known-bad (command-blocklist: eval, sub-shells, sudo/env/nice/timeout wrappers) and known-good (command-allowlist, strict default-reject) data files baked into the image (#1105)
 - oneshot: add a new PHASE D (Simplify) that runs /simplify against the diff, commits/pushes any resulting changes, and STOPs so a fresh session re-verifies CI before code review runs in the renumbered PHASE E
 - Add a dedicated AI Simplify Workflow Status option (create-project and oneshot's board schema); PHASE D now sets the board to it explicitly instead of leaving Simplify's in-progress state implicit
+- SDK - Updated DotNet SDK to 10.0.302
 ### Deprecated
 ### Removed
 - Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting
