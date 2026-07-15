@@ -18,29 +18,48 @@
 # directly and when a test harness `source`s it ($0 would then be the test runner, not
 # oneshot). lib/globals must be sourced first: it declares every associative array and
 # config default the other libraries and main() read or write.
+#
+# Each source is followed by a dependency-free `|| exit 1` fallback (not `die`, which is
+# itself only defined once lib/core sources successfully): a failed source must stop the
+# script immediately rather than leaving its functions silently undefined, which previously
+# degraded every call site to a "command not found" no-op instead of the loud failure it
+# depends on (confirmed incident: a stripped-down test fixture missing lib/ let a `loop`
+# session fall through into its main loop instead of dying at the oneshot-not-executable
+# check, repeatedly running real git commands against the enclosing repo, #1185 review).
 ONESHOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/globals disable=SC1091
-source "${ONESHOT_DIR}/lib/globals"
+source "${ONESHOT_DIR}/lib/globals" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/globals\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/core disable=SC1091
-source "${ONESHOT_DIR}/lib/core"
+source "${ONESHOT_DIR}/lib/core" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/core\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/git disable=SC1091
-source "${ONESHOT_DIR}/lib/git"
+source "${ONESHOT_DIR}/lib/git" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/git\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/github disable=SC1091
-source "${ONESHOT_DIR}/lib/github"
+source "${ONESHOT_DIR}/lib/github" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/github\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/github-status disable=SC1091
-source "${ONESHOT_DIR}/lib/github-status"
+source "${ONESHOT_DIR}/lib/github-status" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/github-status\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/fingerprints disable=SC1091
-source "${ONESHOT_DIR}/lib/fingerprints"
+source "${ONESHOT_DIR}/lib/fingerprints" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/fingerprints\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/state disable=SC1091
-source "${ONESHOT_DIR}/lib/state"
+source "${ONESHOT_DIR}/lib/state" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/state\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/prompts disable=SC1091
-source "${ONESHOT_DIR}/lib/prompts"
+source "${ONESHOT_DIR}/lib/prompts" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/prompts\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/workflow-board disable=SC1091
-source "${ONESHOT_DIR}/lib/workflow-board"
+source "${ONESHOT_DIR}/lib/workflow-board" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/workflow-board\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/discord disable=SC1091
-source "${ONESHOT_DIR}/lib/discord"
+source "${ONESHOT_DIR}/lib/discord" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/discord\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/podman disable=SC1091
-source "${ONESHOT_DIR}/lib/podman"
+source "${ONESHOT_DIR}/lib/podman" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/podman\n' "${ONESHOT_DIR}" >&2; exit 1; }
 
 # read_token_if_safe and load_token_for_owner are declared in lib/core.
 # host_to_container_path and set_repo_context are declared in lib/git.

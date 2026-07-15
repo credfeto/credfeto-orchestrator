@@ -2,49 +2,19 @@
 
 # Continuous loop wrapper: runs ./oneshot then waits 300 seconds, indefinitely.
 
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# Resolve this script's own directory via BASH_SOURCE (not $0), so it works both when run
+# directly and when a test harness `source`s it ($0 would then be the test runner, not loop).
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SLEEP_SECONDS=300
 
-die() {
-    if [ -t 2 ]; then
-        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
-    else
-        printf '\n✗ %s\n' "$*" >&2
-    fi
-    exit 1
-}
-
-success() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m✓\033[0m %s\n' "$*"
-    else
-        printf '\n✓ %s\n' "$*"
-    fi
-}
-
-info() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m→\033[0m %s\n' "$*"
-    else
-        printf '\n→ %s\n' "$*"
-    fi
-}
-
-warn() {
-    if [ -t 2 ]; then
-        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
-    else
-        printf '\n! %s\n' "$*" >&2
-    fi
-}
-
-# Returns true (0) when running inside a Claude Code Bash-tool session.
-# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
-# that value is inherited by subprocesses (e.g. git hooks).
-# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
-is_ai_agent() {
-    [ "${CLAUDECODE}" = "1" ]
-}
+# A failed source must stop the script immediately rather than leaving die/success/info/warn/
+# is_ai_agent silently undefined — without this fallback, every call site below degrades to a
+# "command not found" no-op instead of the loud failure it depends on (confirmed incident: this
+# let a stripped-down test fixture missing lib/ fall through into the real while-loop body
+# instead of dying at the oneshot-not-executable check, #1185 review).
+# shellcheck source=lib/core disable=SC1091
+source "${SCRIPT_DIR}/lib/core" \
+    || { printf 'loop: FATAL: failed to source %s/lib/core\n' "${SCRIPT_DIR}" >&2; exit 1; }
 
 # Switches the local checkout to main and pulls the latest commits. A failed switch means the
 # checkout is in an unexpected state (dirty tree, detached HEAD, wrong repo), so it dies loudly

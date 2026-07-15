@@ -22,38 +22,12 @@ BOT_LOGIN="dnyw4l3n13"
 PROJECT_TITLE="Workflow"
 STATUS_FIELD_NAME="Workflow Status"
 
-die() {
-    if [ -t 2 ]; then
-        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
-    else
-        printf '\n✗ %s\n' "$*" >&2
-    fi
-    exit 1
-}
-
-success() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m✓\033[0m %s\n' "$*"
-    else
-        printf '\n✓ %s\n' "$*"
-    fi
-}
-
-info() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m→\033[0m %s\n' "$*"
-    else
-        printf '\n→ %s\n' "$*"
-    fi
-}
-
-warn() {
-    if [ -t 2 ]; then
-        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
-    else
-        printf '\n! %s\n' "$*" >&2
-    fi
-}
+# Resolve this script's own directory via BASH_SOURCE (not $0), so it works both when run
+# directly and when a test harness `source`s it.
+CREATE_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/core disable=SC1091
+source "${CREATE_PROJECT_DIR}/lib/core" \
+    || { printf 'create-project: FATAL: failed to source %s/lib/core\n' "${CREATE_PROJECT_DIR}" >&2; exit 1; }
 
 check_required_tools() {
     local tool
