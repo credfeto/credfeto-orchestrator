@@ -67,3 +67,39 @@ run_loop_in() {
     CLAUDECODE=0 run is_ai_agent
     [ "${status}" -ne 0 ]
 }
+
+@test "update_scripts dies loudly when git switch fails" {
+    make_stub git '
+        case "$*" in
+            *switch*) exit 1 ;;
+            *)        exit 0 ;;
+        esac
+    '
+    source_loop
+    run update_scripts
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to switch to main branch"* ]]
+}
+
+@test "update_scripts warns and continues when git pull fails" {
+    make_stub git '
+        case "$*" in
+            *switch*) exit 0 ;;
+            *pull*)   exit 1 ;;
+            *)        exit 0 ;;
+        esac
+    '
+    source_loop
+    run update_scripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"git pull failed or timed out"* ]]
+}
+
+@test "update_scripts warns and continues when the pull times out" {
+    make_stub git 'exit 0'
+    make_stub timeout 'exit 124'
+    source_loop
+    run update_scripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"git pull failed or timed out"* ]]
+}

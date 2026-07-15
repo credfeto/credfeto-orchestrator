@@ -118,6 +118,13 @@ revoke_sudoers() {
     success "Sudoers entry revoked for ${owner}"
 }
 
+# Copies SOURCE_HOME/<name> into the owner's home directory, always refreshing (removing and
+# re-copying) rather than skipping when the destination already exists, so a rotated credential
+# (e.g. a new SSH key registered with GitHub) is picked up on every run like the other
+# credentials copy_config_file/copy_config_dir already refresh (#1104). For ".ssh", a
+# destination-only known_hosts (one the source does not ship its own copy of) is backed up
+# before the refresh and restored afterwards, since it accumulates independently as the owner
+# connects to new git hosts and is not itself rotatable credential material.
 copy_dotdir() {
     local owner="$1"
     local owner_home="$2"
@@ -125,16 +132,36 @@ copy_dotdir() {
     local src="${SOURCE_HOME}/${name}"
     local dst="${owner_home}/${name}"
 
-    if [ -d "${dst}" ]; then
-        info "${name} already present for ${owner} — skipping"
-        return 0
-    fi
     if [ ! -d "${src}" ]; then
         info "No ${name} in ${SOURCE_HOME} — skipping"
         return 0
     fi
-    info "Copying ${name}..."
-    sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+
+    local known_hosts_backup=""
+    if [ "${name}" = ".ssh" ] && [ ! -f "${src}/known_hosts" ] && [ -f "${dst}/known_hosts" ]; then
+        known_hosts_backup=$(mktemp) || die "Failed to create temp file for ${dst}/known_hosts backup"
+        sudo mv "${dst}/known_hosts" "${known_hosts_backup}" || die "Failed to back up ${dst}/known_hosts"
+    fi
+
+    info "Refreshing ${name}..."
+    if ! sudo rm -rf "${dst}"; then
+        if [ -n "${known_hosts_backup}" ]; then
+            die "Failed to remove existing ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
+        fi
+        die "Failed to remove existing ${dst}"
+    fi
+    if ! sudo cp -r "${src}" "${dst}"; then
+        if [ -n "${known_hosts_backup}" ]; then
+            die "Failed to copy ${src} to ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
+        fi
+        die "Failed to copy ${src} to ${dst}"
+    fi
+
+    if [ -n "${known_hosts_backup}" ]; then
+        sudo mv "${known_hosts_backup}" "${dst}/known_hosts" \
+            || die "Failed to restore known_hosts in ${dst} - backup still at ${known_hosts_backup}, restore it manually"
+    fi
+
     sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
     sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
     sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
@@ -142,7 +169,7 @@ copy_dotdir() {
         sudo find "${dst}" -type f -name "*.pub" -exec chmod 644 {} + \
             || die "Failed to set .pub permissions in ${dst}"
     fi
-    success "Copied ${name}"
+    success "Refreshed ${name}"
 }
 
 copy_dotfile() {
