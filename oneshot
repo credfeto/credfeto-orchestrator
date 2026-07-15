@@ -9,150 +9,13 @@
 # is what keeps runs from hitting the model context window ("Prompt is too long").
 # The orchestrator re-invokes the item on the next tick to advance to the next phase.
 
-PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
-WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
-CONTAINER_REPO_PATH="/workspace/repo"
-CONTAINER_RULES_PATH="/workspace/rules"
-
-# Conservative pre-send guard against grossly oversized prompts.
-# The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
-# substance lives in the generated CLAUDE.md — so this cap is only a sanity backstop and
-# is NOT the mechanism that prevents "Prompt is too long".  That failure comes from
-# accumulated conversation over many turns exceeding the model context window; the
-# phase-per-invocation design (fresh session, one phase, then stop) is what bounds it.
-MAX_PROMPT_CHARS=100000
-
-# Extra buffer added to the token-reset time before resuming agentic work.
-# Avoids hitting the limit again immediately after it lifts.
-RATE_LIMIT_RESUME_BUFFER_SECS=3600
-
-# Where unparseable 429 rate-limit messages are reported so parse_reset_time can be extended.
-RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"
-RATE_LIMIT_ISSUE_TITLE="Unparseable Claude rate-limit reset time"
-
-# Title of the issue filed in an affected repo when the orchestrator cannot obtain a
-# usable "Workflow" project for it (see report_missing_workflow_project).  A bot account
-# cannot create a project under a personal account, so the owner must run create-project.
-WF_SETUP_ISSUE_TITLE="Workflow project setup required"
-
-# Hard limit on how long a single agent container may run. Prevents a stuck
-# Monitor loop from holding resources indefinitely.
-# Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
-AGENT_TIMEOUT_MINUTES="${AGENT_TIMEOUT_MINUTES:-90}"
-[[ "${AGENT_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || AGENT_TIMEOUT_MINUTES=90
-AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
-
-# Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
-PODMAN_CGROUP_PARENT=""
-
-# Minimum free disk space in kilobytes required to launch a container (10 GB).
-MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
-
-# Maximum number of review rounds the agent runs per PR.  Each round is now its own
-# fresh invocation (one /code-review or /security-review round, then stop), so this cap is
-# advisory guidance passed into the prompt rather than an in-session loop counter.
-# Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
-MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
-
-# Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
-# a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
-# (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
-# means the agent is churning without converging.  Override with MAX_PR_TOTAL_INVOCATIONS.
-MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-30}"
-[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=30
-
-# Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
-# Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked
-# without producing a PR (agent keeps planning/erroring and posting comments) re-fires every
-# tick with no cap (#1093). Default is lower than the PR cap — the Issue-only phase count
-# (plan → produce PR) should be small; once a PR exists the PR backstop takes over.
-MAX_ISSUE_TOTAL_INVOCATIONS="${MAX_ISSUE_TOTAL_INVOCATIONS:-15}"
-[[ "${MAX_ISSUE_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_ISSUE_TOTAL_INVOCATIONS=15
-
-# How many consecutive "in-progress" re-invocations to allow on an unchanged PR fingerprint
-# before parking it.  Phases that advance the board without pushing (a clean code/security
-# review, or the finalize step on a repo where auto-merge cannot be enabled) do not change the
-# fingerprint, so the orchestrator re-invokes an unchanged non-terminal PR to let the next phase
-# run — but only up to this many times, so a PR that is genuinely done just goes quiet.
-# Override with MAX_PR_IDLE_INVOCATIONS in the environment before calling oneshot.
-MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
-[[ "${MAX_PR_IDLE_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_IDLE_INVOCATIONS=5
-
-# How many times oneshot will auto-clear the Blocked label on a PR the agent itself diagnosed as
-# blocked by an environment/infrastructure failure (#1118) once a newer agent image has been
-# built. Bounds the (rare, low-frequency) case where the "environment" diagnosis was actually
-# wrong — a real code bug mistaken for one — which would otherwise auto-clear and immediately
-# re-block every time the image happens to rebuild, forever, with no human ever notified.
-# Override with MAX_PR_ENV_AUTO_UNBLOCKS.
-MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
-[[ "${MAX_PR_ENV_AUTO_UNBLOCKS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_ENV_AUTO_UNBLOCKS=3
-
-# How many CONSECUTIVE agent-container failures before Claude ever starts (invoke_claude
-# returning 2 — see run_claude_fresh, #1133) an item tolerates before being marked Blocked for
-# a human. This budget is separate from MAX_PR_TOTAL_INVOCATIONS/MAX_ISSUE_TOTAL_INVOCATIONS,
-# which a pre-flight failure never touches: without a SEPARATE escalation path, a persistently
-# broken container (bad image, always-failing pre-flight check) would retry silently forever —
-# previously any such failure called die(), killing the whole oneshot run and giving an
-# operator an immediate, visible signal; #1133's fix to stop killing the run for a genuinely
-# transient failure must not also remove the only escalation path for a non-transient one
-# (#1133 review). Resets to 0 the moment a real Claude session runs, however that session ends.
-# Override with MAX_CONSECUTIVE_INFRA_FAILURES.
-MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
-[[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
-
-# How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
-# Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
-CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
-[[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=120
-
-# How many times to retry the `gh api user` identity lookup, and how long to wait between
-# attempts, before giving up. The lookup is cheap and cached for the rest of the run once it
-# succeeds, so a transient blip should not sacrifice a whole cycle (#1085). Overridable from the
-# environment (tests set the delay to 0 to keep the suite fast).
-GH_USER_RETRY_ATTEMPTS="${GH_USER_RETRY_ATTEMPTS:-3}"
-[[ "${GH_USER_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_USER_RETRY_ATTEMPTS=3
-GH_USER_RETRY_DELAY_SECS="${GH_USER_RETRY_DELAY_SECS:-2}"
-[[ "${GH_USER_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_USER_RETRY_DELAY_SECS=2
-
-# How many times to retry fetching the priorities feed, and how long to wait between attempts,
-# before giving up. This is the single most load-bearing network call in the script — a transient
-# blip here must not be reported to the operator as a healthy "no work" run (#1089). Overridable
-# from the environment (tests set the delay to 0 to keep the suite fast).
-PRIORITIES_FETCH_RETRY_ATTEMPTS="${PRIORITIES_FETCH_RETRY_ATTEMPTS:-3}"
-[[ "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PRIORITIES_FETCH_RETRY_ATTEMPTS=3
-PRIORITIES_FETCH_RETRY_DELAY_SECS="${PRIORITIES_FETCH_RETRY_DELAY_SECS:-2}"
-[[ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || PRIORITIES_FETCH_RETRY_DELAY_SECS=2
-
-# Same retry treatment for the per-item gh fetches (fetch_pr_json/fetch_issue_json) called
-# throughout the main loop — a transient blip on any one of these previously died the whole run
-# and threw away every other priority item in the cycle (#1090). Overridable from the environment
-# (tests set the delay to 0 to keep the suite fast).
-GH_ITEM_FETCH_RETRY_ATTEMPTS="${GH_ITEM_FETCH_RETRY_ATTEMPTS:-3}"
-[[ "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_ITEM_FETCH_RETRY_ATTEMPTS=3
-GH_ITEM_FETCH_RETRY_DELAY_SECS="${GH_ITEM_FETCH_RETRY_DELAY_SECS:-2}"
-[[ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_ITEM_FETCH_RETRY_DELAY_SECS=2
-
-# Same retry treatment for the repo-collaborators fetch inside get_trusted_logins — a transient
-# blip here previously got swallowed and cached as a silently shrunken (but valid-looking) trust
-# list for the rest of the item's processing (#1094). Overridable from the environment (tests
-# set the delay to 0 to keep the suite fast).
-GH_COLLABORATORS_RETRY_ATTEMPTS="${GH_COLLABORATORS_RETRY_ATTEMPTS:-3}"
-[[ "${GH_COLLABORATORS_RETRY_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || GH_COLLABORATORS_RETRY_ATTEMPTS=3
-GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
-[[ "${GH_COLLABORATORS_RETRY_DELAY_SECS}" =~ ^[0-9]+$ ]] || GH_COLLABORATORS_RETRY_DELAY_SECS=2
-
-# Token window at which the agent's own Claude Code session should auto-compact its context
-# rather than run until it hits the "Prompt is too long" wall (#1051/#1070). Passed into the
-# container as CLAUDE_CODE_AUTO_COMPACT_WINDOW, which Claude Code documents as taking precedence
-# over any settings.json value. Override with CLAUDE_CODE_AUTO_COMPACT_WINDOW in the environment.
-CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
-[[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000
-
-# Comma-separated list of additional trusted GitHub users, loaded from .env.
-WHITELISTED_USERS=""
-# Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
-_TRUSTED_LOGINS_JSON=""
+# Resolve this script's own directory via BASH_SOURCE (not $0), so it works both when run
+# directly and when a test harness `source`s it ($0 would then be the test runner, not
+# oneshot). lib/globals must be sourced first: it declares every associative array and
+# config default the other libraries and main() read or write.
+ONESHOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/globals disable=SC1091
+source "${ONESHOT_DIR}/lib/globals"
 
 die() {
     if [ -t 2 ]; then
@@ -797,8 +660,7 @@ infra_failure_guard_file_path() {
 }
 
 # Reads the saved consecutive-infra-failure count, defaulting a missing/corrupt value to 0.
-# Sets global INFRA_FAILURE_COUNT.
-INFRA_FAILURE_COUNT=0
+# Sets global INFRA_FAILURE_COUNT (declared in lib/globals).
 load_infra_failure_count() {
     local item_type="$1" item_id="$2" guard_file value
     INFRA_FAILURE_COUNT=0
@@ -843,9 +705,7 @@ pr_invocation_guard_file_path() {
 }
 
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
-# Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE.
-PR_INVOCATION_TOTAL=0
-PR_INVOCATION_IDLE=0
+# Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE (declared in lib/globals).
 load_pr_invocation_counts() {
     local item_id="$1" guard_file line
     PR_INVOCATION_TOTAL=0
@@ -948,8 +808,8 @@ env_unblock_cap_notice_marker_file_path() {
 }
 
 # Reads how many times oneshot has already auto-cleared Blocked on this PR for an environment
-# diagnosis. Sets global ENV_UNBLOCK_ATTEMPTS, defaulting to 0 for a missing/corrupt guard file.
-ENV_UNBLOCK_ATTEMPTS=0
+# diagnosis. Sets global ENV_UNBLOCK_ATTEMPTS (declared in lib/globals), defaulting to 0 for a
+# missing/corrupt guard file.
 load_env_unblock_attempts() {
     local item_id="$1" guard_file total
     ENV_UNBLOCK_ATTEMPTS=0
@@ -1035,8 +895,7 @@ issue_invocation_guard_file_path() {
 }
 
 # Reads the saved total invocation count for an Issue, defaulting missing/corrupt values to 0.
-# Sets global ISSUE_INVOCATION_TOTAL.
-ISSUE_INVOCATION_TOTAL=0
+# Sets global ISSUE_INVOCATION_TOTAL (declared in lib/globals).
 load_issue_invocation_counts() {
     local item_id="$1" guard_file total
     ISSUE_INVOCATION_TOTAL=0
@@ -1233,47 +1092,10 @@ find_ai_instructions() {
     fi
 }
 
-# Workflow project cache — populated by discover_or_create_workflow_project.
-# Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode).
-_WF_PROJECT_ID=""
-_WF_STATUS_FIELD_ID=""
-declare -gA _WF_OPTION_IDS
-_WF_CACHED_REPO=""
-# Per-repo discovery cache: keys are "REPO_FULL:discovered", "REPO_FULL:project_id",
-# "REPO_FULL:field_id", "REPO_FULL:opt_names" (newline-delimited option names), and
-# "REPO_FULL:opt:<name>" (one entry per status-field option, avoiding any separator
-# character that could collide with characters in option names).
-declare -gA _WF_CACHE
-
-# Space-delimited list of repos already issued a Workflow-project setup request this run.
-# Prevents report_missing_workflow_project re-filing/re-querying once per item in the same
-# failing repo; cross-run de-duplication relies on the open issue itself.
-_WF_REPORTED_REPOS=""
-
-# Set to "1" by discover_or_create_workflow_project when _wf_create_project returns non-zero,
-# so the call site can distinguish a genuine "cannot create project" failure from other reasons
-# _WF_PROJECT_ID might be empty (missing status field, GraphQL auth error, etc.).
-_WF_CREATION_FAILED=""
-
-# Board-approved items cache — populated by fetch_board_approved_items.
-# Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
-declare -gA _WF_APPROVED_ITEMS
-# Per-repo fetch guard: value "1" means fetch_board_approved_items has already run for that repo.
-declare -gA _WF_APPROVED_FETCHED
-
-# Board item-status cache — populated by fetch_board_item_statuses (#1136).
-# Keys are "owner/repo/number"; value is the Workflow Status field's current option ID for
-# that item. Covers BOTH Issues and PRs (unlike _WF_APPROVED_ITEMS, which only ever needs
-# Issues for the plan-approval flow).
-declare -gA _WF_ITEM_STATUS_OPTION_ID
-# Per-repo fetch guard: value "1" means fetch_board_item_statuses has already run for that repo.
-declare -gA _WF_ITEM_STATUS_FETCHED
-
-# How long (seconds) a disk-persisted project cache entry stays valid before
-# discover_or_create_workflow_project falls back to a live re-discovery. Override in the
-# environment; the project/field/option IDs are effectively permanent once set up, so the
-# default of 1 hour is conservative rather than tightly load-bearing.
-PROJECT_CACHE_TTL="${PROJECT_CACHE_TTL:-3600}"
+# Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
+# _WF_CACHED_REPO, _WF_CACHE, _WF_REPORTED_REPOS, _WF_CREATION_FAILED, _WF_APPROVED_ITEMS,
+# _WF_APPROVED_FETCHED, _WF_ITEM_STATUS_OPTION_ID, _WF_ITEM_STATUS_FETCHED, PROJECT_CACHE_TTL)
+# are declared in lib/globals — populated by discover_or_create_workflow_project below.
 
 # Returns the path to the disk-persisted Workflow-project discovery cache for the current
 # repo. Unlike _WF_CACHE (in-memory, lost at process exit), this file survives across
