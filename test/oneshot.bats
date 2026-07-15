@@ -5286,6 +5286,22 @@ STUBEOF
     [[ "${output}" == *"transport 'ssh' not allowed"* ]]
 }
 
+# Regression guard (#1185 incident): a git command run with -C (or cwd) pointed at a directory
+# nested inside this real repo but WITHOUT its own .git (e.g. make_repo_fixture_dir's
+# test/.fixture.XXXXXX) must never silently discover and operate on this repo's real .git by
+# walking up parent directories — that let a stripped-down test session run real
+# `git switch main` against the enclosing repo on every loop iteration for hours. Confirms
+# setup_isolated_env's GIT_CEILING_DIRECTORIES=REPO_ROOT guard actually stops the walk.
+@test "setup_isolated_env blocks git repo-discovery from escaping a fixture into the real repo" {
+    local fixture_dir="${REPO_ROOT}/test/.fixture.ceiling-guard-$$"
+    mkdir -p "${fixture_dir}"
+    REPO_FIXTURE_DIRS+=("${fixture_dir}")
+
+    run git -C "${fixture_dir}" rev-parse --show-toplevel
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not a git repository"* ]]
+}
+
 # Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
 # recover_orphaned_branch can perform real git operations without network calls.
 setup_local_git_remote() {

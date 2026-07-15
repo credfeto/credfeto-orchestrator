@@ -50,6 +50,25 @@ run_loop_in() {
     [[ "${output}" == *"must not be run inside a Claude Code session"* ]]
 }
 
+@test "loop dies loudly when lib/core cannot be sourced" {
+    local dir
+    make_repo_fixture_dir
+    dir="${REPO_FIXTURE_DIR}"
+    cp "${REPO_ROOT}/loop" "${dir}/loop"
+    chmod +x "${dir}/loop"
+    # make_repo_fixture_dir copies lib/ alongside; remove it to simulate a partially-synced
+    # checkout. Without the FATAL-and-exit guard on the source line, this used to leave
+    # die/success/info/warn/is_ai_agent silently undefined and fall through into the real
+    # while-loop body instead of stopping here (confirmed incident, #1185 review: that let a
+    # test session run real `git switch main`/`git pull` against the enclosing repo on every
+    # 300-second iteration for hours).
+    rm -rf "${dir:?}/lib"
+
+    run_loop_in "${dir}" -u CLAUDECODE
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"FATAL: failed to source"*"lib/core"* ]]
+}
+
 @test "sourcing loop defines main without executing it" {
     source_loop
     # main is defined as a function.

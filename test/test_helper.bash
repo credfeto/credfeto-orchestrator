@@ -48,6 +48,21 @@ setup_isolated_env() {
     # immediately at the transport layer, regardless of what host or URL was requested.
     export GIT_ALLOW_PROTOCOL=file
 
+    # Fail-closed local-escape guard: make_repo_fixture_dir creates fixtures nested INSIDE
+    # this real repo's working tree (under test/.fixture.XXXXXX), with no .git of their own.
+    # Without this, a git command run with -C pointed at such a fixture (or with cwd inside
+    # one) doesn't fail — git's normal repository-discovery walks up parent directories until
+    # it finds a .git, silently escapes the fixture, and finds THIS repo's real .git, so the
+    # command operates on the real repo instead of erroring "not a git repository" as intended
+    # (confirmed incident, #1185 review: a test-only script bug left a loop iteration running
+    # `git switch main` against this exact fixture pattern, which silently checked out this
+    # real repo's main branch every 5 minutes for hours). GIT_CEILING_DIRECTORIES stops git's
+    # upward search AT (and excluding) REPO_ROOT, so any git command inside a fixture that
+    # lacks its own .git fails fast instead of discovering the enclosing real repo. Does not
+    # affect fixtures that `git init`/`git clone` their own nested repo (e.g.
+    # setup_local_git_remote) — git finds their own .git before ever reaching the ceiling.
+    export GIT_CEILING_DIRECTORIES="${REPO_ROOT}"
+
     # Unset host-level env vars that leak from the container/agent environment
     # and change script behaviour in ways the tests do not expect.
     unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY
@@ -110,9 +125,13 @@ source_create_project() {
 # directory, so loop subprocess fixtures must live inside the repo tree. The directory
 # is registered for teardown removal. It assigns rather than prints so the registration
 # is not lost to a command-substitution subshell.
+# Also copies lib/ alongside, since any top-level script staged into the fixture (loop,
+# create-project, setup-owner) sources it and must find it at the same relative path it
+# uses in the real repo (resolved via BASH_SOURCE/$0, not a fixed path).
 make_repo_fixture_dir() {
     REPO_FIXTURE_DIR="$(mktemp -d "${REPO_ROOT}/test/.fixture.XXXXXX")"
     REPO_FIXTURE_DIRS+=("${REPO_FIXTURE_DIR}")
+    cp -r "${REPO_ROOT}/lib" "${REPO_FIXTURE_DIR}/lib"
 }
 
 # Removes any repo-tree fixture directories created during the test.
