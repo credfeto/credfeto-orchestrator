@@ -1,0 +1,238 @@
+# shellcheck shell=bash
+# Pure predicates over pre-fetched PR/Issue JSON (terminal state, failed/pending required
+# checks, blocked-label detection) and the Blocked-label application/escalation machinery built
+# on top of them.
+
+# Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
+# auto-merge is enabled and no required check has hard-failed (it will merge once the remaining
+# checks/approvals land).  Merged/closed PRs never reach here (filtered earlier as non-OPEN);
+# Blocked PRs are filtered by their label.  Auto-merge alone is not enough — it can be enabled
+# long before a later push breaks a required check, at which point GitHub will never complete
+# the merge and the orchestrator needs to step back in and fix it rather than walk away.  Uses
+# the same CheckRun-vs-legacy-StatusContext classification as pr_json_has_pending_ci_checks.
+pr_json_is_terminal() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '
+        .autoMergeRequest != null
+        and .reviewDecision != "CHANGES_REQUESTED"
+        and (
+            (.statusCheckRollup // [])
+            | all(.[];
+                .isRequired == false
+                or (
+                    if (.status != null)
+                    then .conclusion != "FAILURE"
+                    else ((.state // "") | . != "FAILURE" and . != "ERROR")
+                    end
+                )
+            )
+        )
+    ' > /dev/null 2>&1
+}
+
+# Returns 0 (true) if any required check has definitively failed (CheckRun conclusion FAILURE, or
+# legacy StatusContext state FAILURE/ERROR).  Used to distinguish a PR that has legitimately
+# settled (idle-parked while waiting on a human, e.g. for review/approval) from one that is
+# idle-parked *despite* an active failure nobody is fixing — the idle-invocation budget alone
+# cannot tell these apart.  Uses the same CheckRun-vs-legacy-StatusContext classification as
+# pr_json_has_pending_ci_checks / pr_json_is_terminal.
+pr_json_has_failed_required_check() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '
+        (.statusCheckRollup // [])
+        | any(.[];
+            .isRequired != false
+            and (
+                if (.status != null)
+                then .conclusion == "FAILURE"
+                else ((.state // "") | . == "FAILURE" or . == "ERROR")
+                end
+            )
+        )
+    ' > /dev/null 2>&1
+}
+
+# Maps an item_type ("Issue"|"PullRequest") to the gh CLI noun ("issue"|"pr") used in `gh pr
+# ...`/`gh issue ...` subcommands. Single definition shared by every call site that needs this
+# mapping so a future item type can't be updated in only some of them (#1136 review).
+gh_noun_for_item_type() {
+    local item_type="$1"
+    if [ "${item_type}" = "Issue" ]; then
+        printf 'issue'
+    else
+        printf 'pr'
+    fi
+}
+
+# Applies the Blocked label to an Issue or PullRequest and VERIFIES it actually landed —
+# `gh ... edit --add-label` can fail silently (e.g. the repo has no "Blocked" label yet), and an
+# unverified label-add is how every escalation path in this file used to lose its escalation:
+# the label never lands, so the next tick's pr_json_has_blocked_label check never catches it, the
+# item falls back into the work queue, and (because the bot's own comment is trusted) gets
+# re-invoked and re-blocked every tick forever (#1092). Retries once, self-healing by creating
+# the label if it doesn't exist in the repo. Returns 0 only once the label is CONFIRMED present.
+apply_blocked_label() {
+    local item_type="$1" item_id="$2" item_repo="$3"
+    local gh_noun
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
+
+    local attempt
+    for attempt in 1 2; do
+        gh "${gh_noun}" edit "${item_id}" --repo "${item_repo}" --add-label Blocked >/dev/null 2>&1
+        if gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
+            --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null | grep -q '^true$'; then
+            return 0
+        fi
+        [ "${attempt}" -eq 1 ] \
+            && gh label create Blocked --repo "${item_repo}" --color "d73a4a" --description "Needs human attention" >/dev/null 2>&1
+    done
+    warn "Failed to verify Blocked label on ${item_type} #${item_id} in ${item_repo} after retry"
+    return 1
+}
+
+# Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —
+# see apply_blocked_label), and sends the Discord blocked notification with the same reason —
+# the sequence every automatic blocking path in this file needs, previously copy-pasted at
+# every call site (#1140 review). Returns apply_blocked_label's own exit status so callers can
+# still do their own extra bookkeeping (a runaway marker file, clearing a pending-CI state
+# file) conditionally on success, exactly as before this was extracted.
+apply_blocked_label_with_reason() {
+    local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
+    local rc=0
+    apply_blocked_label "${item_type}" "${item_id}" "${item_repo}" || rc=$?
+    if [ "${rc}" -eq 0 ]; then
+        gh "$(gh_noun_for_item_type "${item_type}")" comment "${item_id}" --repo "${item_repo}" \
+            --body "${reason}" 2>/dev/null || true
+    fi
+    notify_discord_blocked_item "${item_type}" "${item_id}" "${reason}"
+    return "${rc}"
+}
+
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been
+# exhausted while a required check is still definitively failed, so a human is pulled in instead
+# of the PR silently rotting forever — the idle budget alone has no way to escalate. The label is
+# applied and VERIFIED first; the comment is only posted once the label is confirmed, so a label
+# failure never produces a comment-without-a-label (which would otherwise re-trigger this same
+# escalation every tick forever, see apply_blocked_label). notify_discord_blocked_item is called
+# directly (it is idempotent per blocked spell) rather than relying on the next tick's
+# pr_json_has_blocked_label check, since that indirection is exactly what a label failure breaks.
+block_pr_for_idle_exhausted_failure() {
+    local item_id="$1" item_repo="$2"
+    local reason="This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
+}
+
+# Returns 0 (true) if GitHub's own review-decision aggregate is CHANGES_REQUESTED — a reviewer
+# has asked for changes and not yet re-approved or dismissed. GitHub does not clear this on a new
+# push, so it stays true until a human is satisfied — exactly the signal needed to keep driving a
+# PR that already has auto-merge enabled (which otherwise makes pr_json_is_terminal stop early).
+pr_json_has_unaddressed_review_request() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.reviewDecision == "CHANGES_REQUESTED"' > /dev/null 2>&1
+}
+
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
+# while a reviewer's requested changes are still outstanding, so a human is pulled in instead of
+# the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
+block_pr_for_idle_exhausted_review() {
+    local item_id="$1" item_repo="$2"
+    local reason="This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
+}
+
+# Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
+# can run (phases that only advance the board — e.g. a clean review — leave the fingerprint
+# unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the
+# PR is non-terminal and still within the idle budget; 1 (park) otherwise.  Read-only: the idle
+# counter is persisted at invocation time via save_pr_invocation_counts.
+pr_should_advance_unchanged() {
+    local item_id="$1" pr_json="$2"
+    pr_json_is_terminal "${pr_json}" && return 1
+    load_pr_invocation_counts "${item_id}"
+    [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
+}
+
+# Posts a comment on the current GitHub work item and adds the Blocked label.
+# Silent when item_type or item_id is unset.
+notify_github_blocked() {
+    local item_type="$1" item_id="$2" message="$3"
+    [ -n "${item_type}" ] && [ -n "${item_id}" ] || return 0
+    case "${item_type}" in
+        Issue)
+            gh issue comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
+            gh issue edit   "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
+            ;;
+        PullRequest)
+            gh pr comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
+            gh pr edit    "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
+            ;;
+    esac
+}
+
+# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that is not yet COMPLETED.
+# Returns 1 (false) when statusCheckRollup is absent, null, or every required entry has status "COMPLETED".
+# Non-required (optional) checks are ignored so they cannot gate agent invocation.
+pr_json_has_pending_ci_checks() {
+    local pr_json="$1"
+    # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
+    # checks, has .status) and StatusContext (legacy commit statuses, has only .state
+    # and no .status at all). Treating a StatusContext's absent .status as "not
+    # COMPLETED" makes it look pending forever, even once its .state is a terminal
+    # SUCCESS/FAILURE/ERROR — so each entry is classified by which field it actually has.
+    printf '%s' "${pr_json}" | jq -e '
+        (.statusCheckRollup // [])
+        | (length > 0) and any(.[];
+            .isRequired != false
+            and (
+                if (.status != null)
+                then .status != "COMPLETED"
+                else ((.state // "") | . == "PENDING" or . == "EXPECTED")
+                end
+            )
+        )
+    ' > /dev/null
+}
+
+# Posts a Blocked-marking comment and label when a PR's CI checks have been pending past the
+# configured timeout, so a human is pulled in. The label is applied and VERIFIED first (see
+# apply_blocked_label); the pending-CI state file is only cleared once the label is confirmed —
+# otherwise the timeout clock is left alone so the NEXT tick re-attempts the escalation, rather
+# than silently re-arming a fresh full-length wait every tick forever (#1092).
+block_pr_for_ci_timeout() {
+    local item_id="$1" item_repo="$2"
+    local reason="CI checks have been pending for over ${CI_CHECK_TIMEOUT_MINUTES} minutes. Blocking this PR until a human investigates."
+    info "PR #${item_id} in ${item_repo}: CI checks pending past ${CI_CHECK_TIMEOUT_MINUTES}-minute timeout — blocking"
+    if ! apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"; then
+        return 1
+    fi
+    clear_pr_ci_pending_state "${item_id}"
+}
+
+# Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
+pr_json_has_blocked_label() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+}
+
+# Extracts the image SHA an agent recorded when it self-diagnosed a Blocked-ing failure as an
+# environment/infrastructure problem (#1118) — e.g. a missing tool in the container, not a bug in
+# the PR's own code. The agent leaves a machine-readable trailer alongside its human-facing
+# diagnosis comment:
+#   <!-- orchestrator:env-block image-sha=<sha> -->
+# Uses the LAST matching comment (not the first) so a later re-diagnosis on the same PR always
+# wins over a stale one. Outputs the SHA on stdout; empty output (and non-zero status) if no PR
+# comment carries the marker — the normal case for every other kind of Blocked.
+pr_json_env_block_image_sha() {
+    local pr_json="$1" sha
+    sha=$(printf '%s' "${pr_json}" | jq -r '
+        [.comments[]?.body // "" | capture("<!--\\s*orchestrator:env-block\\s+image-sha=(?<sha>[0-9a-f]+)\\s*-->").sha] | last // empty
+    ' 2>/dev/null)
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
+
+# Returns 0 (true) if the pre-fetched Issue JSON contains a label named 'blocked' (case-insensitive).
+issue_json_has_blocked_label() {
+    local issue_json="$1"
+    printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+}

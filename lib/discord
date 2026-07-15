@@ -1,0 +1,334 @@
+# shellcheck shell=bash
+# Discord webhook notifications: work-item start/resume, no-work, low-disk-space, blocked-item,
+# Claude container error, and rate-limited notices. Also the shared item-URL builder they use.
+
+# Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
+# item_id. Falls back to the bare repo URL for an unrecognised/empty item_type.
+build_item_url() {
+    local item_type="$1" item_id="$2"
+    case "${item_type}" in
+        Issue)       printf '%s' "https://github.com/${REPO_FULL}/issues/${item_id}" ;;
+        PullRequest) printf '%s' "https://github.com/${REPO_FULL}/pull/${item_id}" ;;
+        *)           printf '%s' "https://github.com/${REPO_FULL}" ;;
+    esac
+}
+
+# Sends a Discord embed notification when starting or resuming work on an item.
+# Arguments: msg_type (start|resume), item_type, item_id, item_title, labels_json (JSON array
+# of {name,...} — the item's current labels, used for the Priority field)
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Status/Sub-status/Priority are derived entirely from already-tracked GitHub state (labels,
+# the Workflow board) — no Claude invocation, zero extra agentic cost (#1136). Every session
+# is a fresh single-phase run, so "New vs. Resume" (the old Status field) was never actually
+# meaningful; this replaces it with the coarse board lifecycle stage instead.
+notify_discord_work_item() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" labels_json="${5:-[]}"
+    local url color payload substatus status priority
+
+    case "${msg_type}" in
+        start|resume) ;;
+        *) warn "Discord: unknown notification type '${msg_type}'"; return 0 ;;
+    esac
+
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    if [ "${msg_type}" = "start" ]; then
+        color=3066993    # green  (#2ECC71)
+    else
+        color=15844367   # gold   (#F1C40F)
+    fi
+
+    substatus=$(board_substatus_for_item "${item_id}")
+    status=$(coarse_status_for_substatus "${substatus}")
+    priority=$(priority_for_labels "${labels_json}")
+
+    payload=$(jq --null-input \
+        --argjson color "${color}" \
+        --arg title "${item_title}" \
+        --arg url "${url}" \
+        --arg repo "${REPO_FULL}" \
+        --arg type "${item_type}" \
+        --arg status "${status}" \
+        --arg substatus "${substatus}" \
+        --arg priority "${priority}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Repository",value:$repo,inline:true},
+            {name:"Type",value:$type,inline:true},
+            {name:"Priority",value:$priority,inline:true},
+            {name:"Status",value:$status,inline:true},
+            {name:"Sub-status",value:$substatus,inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build payload for ${item_type} #${item_id}"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord notification when no actionable work items are found.
+# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open, count_error, count_human_driven
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Suppresses duplicate messages: if the same message was sent within the last hour, it is
+# silently dropped.  A changed message is always sent immediately.  At most one send per hour
+# per owner even when the message is identical.
+notify_discord_no_work() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}"
+    local count_blocked="${2:-0}"
+    local count_unchanged="${3:-0}"
+    local count_active_repo="${4:-0}"
+    local count_not_open="${5:-0}"
+    local count_error="${6:-0}"
+    local count_human_driven="${7:-0}"
+    local prefix message detail payload
+    if [ -n "${owner}" ]; then
+        prefix="[${owner}] "
+    else
+        prefix=""
+    fi
+    message="${prefix}No actionable work items found."
+    detail=""
+    [ "${count_blocked}" -gt 0 ]     && detail="${detail:+${detail}, }blocked: ${count_blocked}"
+    [ "${count_unchanged}" -gt 0 ]   && detail="${detail:+${detail}, }unchanged: ${count_unchanged}"
+    [ "${count_active_repo}" -gt 0 ] && detail="${detail:+${detail}, }repo-active: ${count_active_repo}"
+    [ "${count_not_open}" -gt 0 ]    && detail="${detail:+${detail}, }not-open: ${count_not_open}"
+    [ "${count_error}" -gt 0 ]       && detail="${detail:+${detail}, }errors: ${count_error}"
+    [ "${count_human_driven}" -gt 0 ] && detail="${detail:+${detail}, }human-driven: ${count_human_driven}"
+    [ -n "${detail}" ] && message="${message} (${detail})"
+
+    # Dedup: suppress if the same message was sent within the last hour.
+    local owner_slug state_file now last_message last_sent elapsed
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    state_file="${HOME}/.orchestrator/.no_work_${owner_slug}.state"
+    now=$(date +%s)
+    if [ -f "${state_file}" ]; then
+        last_message=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
+        last_sent=$(sed -n '2p' "${state_file}" 2>/dev/null || true)
+        if [ "${last_message}" = "${message}" ] && \
+           printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
+            elapsed=$(( now - last_sent ))
+            [ "${elapsed}" -lt 3600 ] && return 0
+        fi
+    fi
+
+    payload=$(jq --null-input --arg msg "${message}" '{"content":$msg}') \
+        || { warn "Discord: failed to build no-work payload"; return 0; }
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n%s\n' "${message}" "${now}" > "${state_file}"
+}
+
+# disk_space_available_kb and check_disk_space are declared in lib/core.
+
+# Sends a Discord embed notification when disk space is below MIN_DISK_SPACE_KB.
+# Deduplicates: at most one notification per hour per owner.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_low_disk_space() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}"
+
+    local available_kb available_gb threshold_gb
+    available_kb=$(disk_space_available_kb)
+    available_gb=$(( ${available_kb:-0} / 1024 / 1024 ))
+    threshold_gb=$(( MIN_DISK_SPACE_KB / 1024 / 1024 ))
+
+    local owner_slug state_file now last_sent elapsed
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    state_file="${HOME}/.orchestrator/.low_disk_space_${owner_slug}.state"
+    now=$(date +%s)
+    if [ -f "${state_file}" ]; then
+        last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
+        if printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
+            elapsed=$(( now - last_sent ))
+            [ "${elapsed}" -lt 3600 ] && return 0
+        fi
+    fi
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Low Disk Space${owner:+ [${owner}]}" \
+        --argjson available_gb "${available_gb}" \
+        --argjson threshold_gb "${threshold_gb}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"Available",value:("\($available_gb) GB"),inline:true},
+            {name:"Minimum Required",value:("\($threshold_gb) GB"),inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build low disk space payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n' "${now}" > "${state_file}"
+}
+
+# blocked_marker_file_path and clear_blocked_marker are declared in lib/state.
+
+# Sends a Discord embed notification when an item is found to be blocked.
+# Arguments: item_type (Issue|PullRequest), item_id, reason (optional)
+# Notifies only on the transition into the blocked state: a per-item marker file
+# suppresses repeat notifications while the item stays blocked. clear_blocked_marker
+# re-arms it once the item is observed un-blocked.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Priority/Sub-status are derived from already-tracked GitHub state, not a Claude invocation
+# (#1136). Unlike notify_discord_work_item, this function's ~12 call sites mostly don't have
+# the item's labels/title JSON already in scope, so it fetches them itself — the marker-file
+# early-return above means that fetch only ever happens once per NEW blocked spell, not every
+# tick a blocked item is (re-)observed.
+# The title uses the item's actual title text, not just "Issue #67" — a bare number tells a
+# human nothing without clicking through (#1140). The embed also carries a Reason field:
+# callers that already know why (oneshot's own blocking paths) pass it explicitly; callers that
+# only OBSERVE a label already applied (e.g. by the agent's own session on a prior tick) fall
+# back to the item's most recent comment as a best-effort excerpt — reliable so long as the
+# agent follows the "always explain a block in the same turn" mandatory rule in build_issue_
+# claude_md/build_pr_claude_md, since that comment is then the last thing posted before the
+# label landed (#1140).
+notify_discord_blocked_item() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="$1" item_id="$2" reason="${3:-}"
+    local url payload marker_file gh_noun item_json item_title labels_json substatus priority truncated_reason
+
+    marker_file=$(blocked_marker_file_path "${item_type}" "${item_id}")
+    # Already notified for this blocked spell — stay silent until re-armed.
+    [ -f "${marker_file}" ] && return 0
+
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
+    item_json=$(gh "${gh_noun}" view "${item_id}" --repo "${REPO_FULL}" --json title,labels,comments 2>/dev/null)
+    item_title=$(printf '%s' "${item_json}" | jq -r '.title // empty' 2>/dev/null)
+    [ -n "${item_title}" ] || item_title="${item_type} #${item_id}"
+    # Discord embed titles are capped at 256 characters; "Blocked: " adds 9, so keep the raw
+    # title itself well under that (240) — a GitHub issue/PR title can run close to GitHub's
+    # own ~256-char limit, and without this curl --fail would reject the whole payload with a
+    # 4xx, yet the blocked-marker file is still written unconditionally afterward, permanently
+    # suppressing any notification for this blocked spell (#1140 review). Sliced via jq (codepoint-
+    # aware) rather than bash's byte-offset ${var:0:N}, which can split a multi-byte UTF-8
+    # character in half under a non-UTF-8 locale and corrupt the title (#1140 review).
+    item_title=$(printf '%s' "${item_title}" | jq -Rsr '.[0:240]' 2>/dev/null)
+    labels_json=$(printf '%s' "${item_json}" | jq -c '.labels // []' 2>/dev/null)
+    [ -n "${labels_json}" ] || labels_json="[]"
+    priority=$(priority_for_labels "${labels_json}")
+    substatus=$(board_substatus_for_item "${item_id}")
+
+    if [ -z "${reason}" ]; then
+        reason=$(printf '%s' "${item_json}" | jq -r '(.comments // []) | last | .body // empty' 2>/dev/null)
+        [ -n "${reason}" ] || reason="No reason found in the automation's own comments — check the item's labels and comment history on GitHub."
+    fi
+    # Same codepoint-aware slicing as item_title above, and for the same reason (#1140 review).
+    truncated_reason=$(printf '%s' "${reason}" | jq -Rsr '.[0:900]' 2>/dev/null)
+
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Blocked: ${item_title}" \
+        --arg url "${url}" \
+        --arg repo "${REPO_FULL}" \
+        --arg type "${item_type}" \
+        --arg priority "${priority}" \
+        --arg substatus "${substatus}" \
+        --arg reason "${truncated_reason}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Repository",value:$repo,inline:true},
+            {name:"Type",value:$type,inline:true},
+            {name:"Priority",value:$priority,inline:true},
+            {name:"Status",value:"Blocked",inline:true},
+            {name:"Sub-status",value:$substatus,inline:true},
+            {name:"Reason",value:$reason,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build blocked payload for ${item_type} #${item_id}"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    # Record that this blocked spell has been notified, so the next run is silent.
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || true
+    printf '%s\n' "blocked" > "${marker_file}" 2>/dev/null || true
+}
+
+# Sends a Discord embed notification when Claude returns an application-level error.
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty), error_message
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_claude_error() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" error_message="$3"
+    local url payload
+
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    # Truncate to stay within Discord's 1024-character field limit.
+    local truncated_error="${error_message:0:900}"
+
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Claude Error: ${REPO_FULL}" \
+        --arg url "${url}" \
+        --arg error "${truncated_error}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Error",value:$error,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build claude error payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord embed notification when Claude returns a rate-limit error (HTTP 429).
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty),
+#            error_message, reset_unix (unix timestamp, may be empty)
+# When reset_unix is provided, includes a Discord timestamp field showing when
+# the limit resets in the user's local timezone.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_rate_limited() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" error_message="$3" reset_unix="${4:-}"
+    local url payload reset_display truncated_error
+
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    truncated_error="${error_message:0:900}"
+
+    # Discord timestamp markup: <t:UNIX:t> = local time, <t:UNIX:R> = relative
+    if [ -n "${reset_unix}" ]; then
+        reset_display="<t:${reset_unix}:t> (<t:${reset_unix}:R>)"
+    else
+        reset_display=""
+    fi
+
+    payload=$(jq --null-input \
+        --argjson color 16776960 \
+        --arg title "Rate Limited: ${REPO_FULL}" \
+        --arg url "${url}" \
+        --arg error "${truncated_error}" \
+        --arg reset "${reset_display}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:(
+            [{name:"Error",value:$error,inline:false}] +
+            (if $reset != "" then [{name:"Resets",value:$reset,inline:true}] else [] end)
+        )}]}') \
+        || { warn "Discord: failed to build rate-limit payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}

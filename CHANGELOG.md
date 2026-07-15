@@ -288,6 +288,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot never backfilled the new "AI Simplify" Workflow Status board option onto pre-existing boards (only create-project did), so PHASE D's board-status update silently no-op'd; oneshot's live discovery path now mirrors create-project's migration and self-heals pre-existing boards
 - create-project's board-status migration for a missing option (e.g. "AI Simplify") always appended the new option to the end of the list instead of inserting it at its schema position, so a migrated board's column order diverged from a freshly created board's; it now inserts after the correct predecessor option, with a safe fallback to the original field if the mutation returns no usable data
 - Auxiliary scripts reliability: loop now bounds and tolerates a failed git self-update pull, setup-owner refreshes rotated SSH keys on re-run, and create-project board seeding fails loudly instead of reporting false success on a gh API error
+- Every lib/* source line in oneshot, loop, create-project, and setup-owner now dies loudly with a FATAL message when the source fails, instead of silently leaving die/success/info/warn/is_ai_agent undefined; a missing lib/ previously let a script fall through an intended die-guard into its normal execution path with every subsequent call to those functions silently becoming a no-op
+- Test fixtures created by make_repo_fixture_dir are nested inside this repo's own working tree with no .git of their own; a git command run against one previously escaped upward via git's normal repository-discovery and silently operated on this real repo instead of failing (confirmed incident: a test bug left a loop iteration running git switch main against this repo's checkout every 5 minutes for hours). setup_isolated_env now sets GIT_CEILING_DIRECTORIES to stop the walk at the repo root
 ### Changed
 - Always pull the latest container image before starting each run
 - Increase agent container resource limits from 2 CPU/4 GB RAM to 4 CPU/12 GB RAM to support longer-running agent sessions
@@ -310,6 +312,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - oneshot: add a new PHASE D (Simplify) that runs /simplify against the diff, commits/pushes any resulting changes, and STOPs so a fresh session re-verifies CI before code review runs in the renumbered PHASE E
 - Add a dedicated AI Simplify Workflow Status option (create-project and oneshot's board schema); PHASE D now sets the board to it explicitly instead of leaving Simplify's in-progress state implicit
 - SDK - Updated DotNet SDK to 10.0.302
+- Split oneshot from a single 4650-line script into a thin entrypoint plus 10 lib/* function libraries (globals, core, git, github, github-status, fingerprints, state, prompts, workflow-board, discord, podman); loop, create-project, and setup-owner now source lib/core for their shared output helpers instead of each keeping a duplicated copy
 ### Deprecated
 ### Removed
 - Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting

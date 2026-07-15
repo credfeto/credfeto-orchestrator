@@ -4,38 +4,12 @@
 # Idempotent: already-done steps are skipped.
 # Usage: setup-owner --owner <name>
 
-die() {
-    if [ -t 2 ]; then
-        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
-    else
-        printf '\n✗ %s\n' "$*" >&2
-    fi
-    exit 1
-}
-
-success() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m✓\033[0m %s\n' "$*"
-    else
-        printf '\n✓ %s\n' "$*"
-    fi
-}
-
-info() {
-    if [ -t 1 ]; then
-        printf '\n\033[32m→\033[0m %s\n' "$*"
-    else
-        printf '\n→ %s\n' "$*"
-    fi
-}
-
-# Returns true (0) when running inside a Claude Code Bash-tool session.
-# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
-# that value is inherited by subprocesses (e.g. git hooks).
-# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
-is_ai_agent() {
-    [ "${CLAUDECODE}" = "1" ]
-}
+# Resolve this script's own directory via BASH_SOURCE (not $0), so it works both when run
+# directly and when a test harness `source`s it.
+SETUP_OWNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/core disable=SC1091
+source "${SETUP_OWNER_DIR}/lib/core" \
+    || { printf 'setup-owner: FATAL: failed to source %s/lib/core\n' "${SETUP_OWNER_DIR}" >&2; exit 1; }
 
 REPO_URL="git@github.com:credfeto/credfeto-orchestrator.git"
 SOURCE_HOME="${HOME}"

@@ -14,7 +14,7 @@ This is an index of local instructions that apply to just this project.
 
 ## Instruction Files
 <!-- Locally Maintained -->
-* [Shell Testing](shell-testing.instructions.md) — bats-core test framework, the source-guard convention, test isolation, and external-command mocking for the `oneshot`, `loop`, and `create-project` scripts. Load when working on those scripts or `test/*.bats`.
+* [Shell Testing](shell-testing.instructions.md) — bats-core test framework, oneshot's `lib/*` function-library layout and sourcing convention, the source-guard convention, test isolation, and external-command mocking for the `oneshot`, `loop`, `create-project`, `setup-owner`, and `install-timer` scripts. Load when working on those scripts, any `lib/*` file, or `test/*.bats`.
 * [Docker Base Images](docker-images.instructions.md) — lock-down requirements, self-check mandates, ARG cache-busting pattern, workflow chain rules, and file placement conventions for `containers/base/` Dockerfiles.
 * [Oneshot Prompts](oneshot-prompts.instructions.md) — prompt size limits, the `MAX_PROMPT_CHARS` guard, blocking-limit session-reset behaviour, and the rule that new agent guidance belongs in `cs-template` instruction files rather than in the bootstrap prompt. Load when working on `oneshot` or considering adding rules to `build_issue_prompt`/`build_pr_prompt`.
 * [Debugging](debugging.instructions.md) — Headless-operation principle (any manual recovery = bug), mandatory SSH to `markr@nanoclaw.lan` for all diagnosis, state inventory (locks, fingerprints, sessions, containers, rate-limits, working dirs), and symptom-to-cause lookup table. Load when investigating orchestrator misbehaviour or a stalled/skipped work item.

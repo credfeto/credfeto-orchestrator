@@ -1,0 +1,217 @@
+# shellcheck shell=bash
+# Shared low-level helpers used by every other lib/* file and by oneshot itself: coloured
+# status output, the AI-agent-session detector, and the startup tool-availability check.
+
+die() {
+    if [ -t 2 ]; then
+        printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    else
+        printf '\n✗ %s\n' "$*" >&2
+    fi
+    exit 1
+}
+
+success() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m✓\033[0m %s\n' "$*"
+    else
+        printf '\n✓ %s\n' "$*"
+    fi
+}
+
+info() {
+    if [ -t 1 ]; then
+        printf '\n\033[32m→\033[0m %s\n' "$*"
+    else
+        printf '\n→ %s\n' "$*"
+    fi
+}
+
+warn() {
+    if [ -t 2 ]; then
+        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+    else
+        printf '\n! %s\n' "$*" >&2
+    fi
+}
+
+# Returns true (0) when running inside a Claude Code Bash-tool session.
+# Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
+# that value is inherited by subprocesses (e.g. git hooks).
+# Source: https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+check_required_tools() {
+    local tool
+    for tool in curl jq podman gh git awk grep flock timeout; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+
+    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+        die "Required tool not found: sha256sum or shasum"
+    fi
+}
+
+# Reads stdin and writes a SHA-256 digest to stdout.
+hash_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{ print $1 }'
+    else
+        shasum -a 256 | awk '{ print $1 }'
+    fi
+}
+
+# Checks that token_file exists, has safe permissions, and outputs its contents (whitespace stripped).
+# Outputs nothing and returns silently if the file is absent or has unsafe permissions.
+read_token_if_safe() {
+    local token_file="$1"
+    local perms
+    [ -f "${token_file}" ] || return
+    perms=$(stat -c '%a' "${token_file}" 2>/dev/null || stat -f '%Lp' "${token_file}" 2>/dev/null)
+    case "${perms}" in
+        600|400) ;;
+        *) warn "Token file ${token_file} has permissions ${perms} — expected 600; skipping"
+           return
+           ;;
+    esac
+    tr -d '[:space:]' < "${token_file}"
+}
+
+# Outputs the OAuth token for the given owner, or empty string if not configured.
+# Lookup order:
+#   1. $XDG_CONFIG_HOME/orchestrator/tokens/<owner>  (preferred XDG location, defaults to ~/.config)
+#   2. Empty string — caller falls back to CLAUDE_CODE_OAUTH_TOKEN from the environment.
+# Token files must be readable only by the owner (chmod 600).
+load_token_for_owner() {
+    local owner="$1"
+    local token
+
+    case "${owner}" in
+        *[!a-zA-Z0-9_-]*) return ;;
+    esac
+
+    token=$(read_token_if_safe "${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens/${owner}")
+    if [ -n "${token}" ]; then
+        printf '%s' "${token}"
+    fi
+}
+
+# Reads DISCORD_WEBHOOK, GH_TOKEN, GH_HOST, GIT_USER_NAME, GIT_USER_EMAIL, and
+# GIT_SIGNING_KEY from orchestrator/.env.
+# Sets DISCORD_WEBHOOK_URL; exports GH_HOST and GH_ENTERPRISE_TOKEN when both are
+# present so host-side gh CLI calls use the same proxy as the agent container.
+# GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
+# Silent when the file is absent or a key is missing.
+load_env_config() {
+    DISCORD_WEBHOOK_URL=""
+    GIT_USER_NAME=""
+    GIT_USER_EMAIL=""
+    GIT_SIGNING_KEY=""
+    WHITELISTED_USERS=""
+    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+    [ -f "${env_file}" ] || return 0
+    local line val gh_token="" gh_host=""
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in
+            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*)
+                val="${line#*=}"
+                val="${val%$'\r'}"
+                case "${val}" in
+                    '"'*'"') val="${val#?}"; val="${val%?}" ;;
+                    "'"*"'") val="${val#?}"; val="${val%?}" ;;
+                esac
+                case "${line}" in
+                    DISCORD_WEBHOOK=*)          DISCORD_WEBHOOK_URL="${val}" ;;
+                    GH_TOKEN=*)                 gh_token="${val}" ;;
+                    GH_HOST=*)                  gh_host="${val}" ;;
+                    GIT_USER_NAME=*)            GIT_USER_NAME="${val}" ;;
+                    GIT_USER_EMAIL=*)           GIT_USER_EMAIL="${val}" ;;
+                    GIT_SIGNING_KEY=*)          GIT_SIGNING_KEY="${val}" ;;
+                    WHITELISTED_USERS=*)        WHITELISTED_USERS="${val}" ;;
+                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
+                esac
+                ;;
+        esac
+    done < "${env_file}"
+    if [ -n "${gh_host}" ] && [ -n "${gh_token}" ]; then
+        export GH_HOST="${gh_host}"
+        export GH_ENTERPRISE_TOKEN="${gh_token}"
+    fi
+}
+
+# Validates that all required config files exist and are populated correctly.
+# Collects all errors and dies once at the end so every problem is visible at once.
+# Must be called after load_env_config so GIT_* variables are already populated.
+validate_config() {
+    local owner_filter="$1"
+    local config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}"
+    local errors=0
+
+    if [ ! -f "${config_dir}/orchestrator/.env" ]; then
+        printf '\n✗ %s\n' "${config_dir}/orchestrator/.env is missing" >&2
+        printf '  Create it with: GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY, DISCORD_WEBHOOK\n' >&2
+        errors=$((errors + 1))
+    else
+        [ -n "${GIT_USER_NAME}" ] || {
+            printf '\n✗ %s\n' "GIT_USER_NAME is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+        [ -n "${GIT_USER_EMAIL}" ] || {
+            printf '\n✗ %s\n' "GIT_USER_EMAIL is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+        [ -n "${GIT_SIGNING_KEY}" ] || {
+            printf '\n✗ %s\n' "GIT_SIGNING_KEY is not set in ${config_dir}/orchestrator/.env" >&2
+            errors=$((errors + 1))
+        }
+    fi
+
+    # gh needs either the local credential store or a proxy token from .env.
+    if [ -z "${GH_HOST:-}" ] || [ -z "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        if [ ! -f "${config_dir}/gh/hosts.yml" ]; then
+            printf '\n✗ %s\n' "${config_dir}/gh/hosts.yml is missing — run 'gh auth login' first" >&2
+            errors=$((errors + 1))
+        fi
+    fi
+
+    if [ -n "${owner_filter}" ]; then
+        local token_file="${config_dir}/orchestrator/tokens/${owner_filter}"
+        if [ ! -f "${token_file}" ]; then
+            printf '\n✗ %s\n' "${token_file} is missing — create it with the Claude OAuth token (chmod 600)" >&2
+            errors=$((errors + 1))
+        else
+            local perms
+            perms=$(stat -c '%a' "${token_file}" 2>/dev/null)
+            case "${perms}" in
+                600|400) ;;
+                *) printf '\n✗ %s\n' "${token_file} has permissions ${perms} — must be 600 (run: chmod 600 ${token_file})" >&2
+                   errors=$((errors + 1)) ;;
+            esac
+        fi
+    fi
+
+    [ "${errors}" -eq 0 ] || die "Config validation failed — fix the above and re-run"
+}
+
+# Outputs available disk space in kilobytes for the filesystem containing WORK (or HOME).
+# Outputs nothing when df output cannot be parsed.
+disk_space_available_kb() {
+    local check_path="${WORK:-${HOME}}"
+    [ -d "${check_path}" ] || check_path="${HOME}"
+    df -k "${check_path}" 2>/dev/null | awk 'NR==2{print $4}'
+}
+
+# Returns 0 when sufficient disk space is available (>= MIN_DISK_SPACE_KB).
+# Returns 1 when space is below the threshold.
+# Warns and returns 0 when available space cannot be determined.
+check_disk_space() {
+    local available_kb
+    available_kb=$(disk_space_available_kb)
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]]; then
+        warn "Could not determine available disk space — proceeding"
+        return 0
+    fi
+    [ "${available_kb}" -ge "${MIN_DISK_SPACE_KB}" ]
+}
