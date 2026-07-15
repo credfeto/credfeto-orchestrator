@@ -429,6 +429,69 @@ teardown() {
     [ ! -f "${gitconfig}" ]
 }
 
+@test "copy_dotdir refreshes an existing .ssh directory instead of skipping it" {
+    local src_ssh="${HOME}/.ssh"
+    local dst_home="${TEST_TMP}/owner_home"
+    local dst_ssh="${dst_home}/.ssh"
+    mkdir -p "${src_ssh}" "${dst_ssh}"
+    printf 'new-key-material\n' > "${src_ssh}/id_ed25519"
+    printf 'old-key-material\n' > "${dst_ssh}/id_ed25519"
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            rm)   shift; /bin/rm "$@" ;;
+            cp)   shift; /bin/cp "$@" ;;
+            cat)  shift; /bin/cat "$@" ;;
+            tee)  shift; tee "$@" ;;
+            find) shift; /usr/bin/find "$@" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Refreshed .ssh"* ]]
+
+    run cat "${dst_ssh}/id_ed25519"
+    [[ "${output}" == "new-key-material" ]]
+}
+
+@test "copy_dotdir preserves a destination-only known_hosts across the refresh" {
+    local src_ssh="${HOME}/.ssh"
+    local dst_home="${TEST_TMP}/owner_home"
+    local dst_ssh="${dst_home}/.ssh"
+    mkdir -p "${src_ssh}" "${dst_ssh}"
+    printf 'new-key-material\n' > "${src_ssh}/id_ed25519"
+    printf 'old-key-material\n' > "${dst_ssh}/id_ed25519"
+    printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
+    # Source does not ship its own known_hosts.
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            rm)   shift; /bin/rm "$@" ;;
+            cp)   shift; /bin/cp "$@" ;;
+            cat)  shift; /bin/cat "$@" ;;
+            tee)  shift; tee "$@" ;;
+            find) shift; /usr/bin/find "$@" ;;
+            chown|chmod) true ;;
+        esac
+    }
+    export -f sudo
+
+    run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    [ "${status}" -eq 0 ]
+
+    run cat "${dst_ssh}/known_hosts"
+    [[ "${output}" == "accumulated-host-key" ]]
+    run cat "${dst_ssh}/id_ed25519"
+    [[ "${output}" == "new-key-material" ]]
+}
+
 @test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"

@@ -289,6 +289,31 @@ teardown() {
     [ "${output}" -eq 3 ]
 }
 
+@test "bootstrap_board_items dies when gh issue list fails" {
+    make_stub gh '
+        case "$*" in
+            *"issue list"*) exit 1 ;;
+            *)              exit 0 ;;
+        esac
+    '
+    run bootstrap_board_items credfeto scripts P_TEST F_TEST O_TEST
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to list open issues"* ]]
+}
+
+@test "bootstrap_board_items dies when gh pr list fails" {
+    make_stub gh '
+        case "$*" in
+            *"issue list"*) exit 0 ;;
+            *"pr list"*)    exit 1 ;;
+            *)              exit 0 ;;
+        esac
+    '
+    run bootstrap_board_items credfeto scripts P_TEST F_TEST O_TEST
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to list open PRs"* ]]
+}
+
 @test "ensure_bot_collaborator warns and continues when bot user cannot be resolved" {
     make_stub gh 'exit 1'
     run ensure_bot_collaborator "P_TEST"

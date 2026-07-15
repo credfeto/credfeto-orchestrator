@@ -279,8 +279,10 @@ bootstrap_board_items() {
     fi
 
     local issue_ids pr_ids n_issues n_prs
-    issue_ids=$(gh issue list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
-    pr_ids=$(gh pr list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id' 2>/dev/null)
+    issue_ids=$(gh issue list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id') \
+        || die "Failed to list open issues for ${repo_full} — board seeding aborted"
+    pr_ids=$(gh pr list --repo "${repo_full}" --state open --limit 1001 --json id --jq '.[].id') \
+        || die "Failed to list open PRs for ${repo_full} — board seeding aborted"
     n_issues=$(printf '%s\n' "${issue_ids}" | awk 'NF' | wc -l | tr -d ' ')
     n_prs=$(printf '%s\n' "${pr_ids}" | awk 'NF' | wc -l | tr -d ' ')
     [ "${n_issues}" -gt 1000 ] && { warn "More than 1000 open issues — board seed limited to first 1000"; issue_ids=$(printf '%s\n' "${issue_ids}" | head -1000); }

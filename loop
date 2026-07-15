@@ -38,6 +38,20 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
+# Switches the local checkout to main and pulls the latest commits. A failed switch means the
+# checkout is in an unexpected state (dirty tree, detached HEAD, wrong repo), so it dies loudly
+# rather than risk running stale or wrong-branch code. A failed or hung pull only warns and
+# keeps the existing checkout: a transient network stall must not block the loop indefinitely,
+# and unlike the systemd path there is no timer to recover it (#1104).
+update_scripts() {
+    git -C "${SCRIPT_DIR}" switch main \
+        || die "Failed to switch to main branch in ${SCRIPT_DIR} — stopping rather than running stale or wrong-branch code"
+
+    if ! timeout 60 git -C "${SCRIPT_DIR}" pull; then
+        info "git pull failed or timed out in ${SCRIPT_DIR} — continuing with the existing checkout"
+    fi
+}
+
 main() {
     [ -x "${SCRIPT_DIR}/oneshot" ] || die "oneshot script not found or not executable at ${SCRIPT_DIR}/oneshot"
 
@@ -47,8 +61,7 @@ main() {
     while true; do
         iteration=$((iteration + 1))
         info "Iteration ${iteration} — updating scripts..."
-        git -C "${SCRIPT_DIR}" switch main
-        git -C "${SCRIPT_DIR}" pull
+        update_scripts
         info "Iteration ${iteration} — running oneshot..."
         "${SCRIPT_DIR}/oneshot"
         success "Iteration ${iteration} complete — sleeping ${SLEEP_SECONDS}s"
