@@ -1,0 +1,558 @@
+# shellcheck shell=bash
+# Container/Podman invocation: launching a fresh Claude Code session in a locked-down agent
+# container, cgroup/SSH/GPG setup around it, bind-mount validation, and cleanup. Also the
+# agent-image SHA lookup used by the environment-block auto-unblock feature.
+
+# Runs a single podman-based claude invocation, writing JSON output to tmpfile.
+# On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
+# Returns 0 on success (including a valid is_error=true result — the caller inspects that).
+# Returns 2 when the container exited before Claude ever produced a result at all — most
+# commonly an entrypoint.sh pre-flight check dying before `exec claude` runs (e.g. #1133's
+# workspace-trust guard). Claude never started, so this is an infra/pre-flight failure, not a
+# Claude-level one; the caller must not count it against the item's invocation budget and must
+# not die the whole run over it — return a distinguishable code instead so main() can skip just
+# this item and retry it next tick (#1133).
+run_claude_fresh() {
+    local tmpfile="$1" item_type="${2:-}" item_id="${3:-}"
+    local stderrfile podman_exit=0
+    stderrfile=$(mktemp --suffix=.stderr) || die "Failed to create temp file for podman stderr"
+    [ -n "${CLAUDE_PROMPT}" ] || die "Prompt is empty — refusing to start container"
+    validate_bind_mounts
+    info "Starting new Claude session in container ${PODMAN_CONTAINER_NAME}..." >&2
+    # The prompt is passed as a positional argument in PODMAN_CLAUDE_ARGS, not via
+    # stdin, so stdin is redirected from /dev/null explicitly rather than left to
+    # inherit whatever this process happens to have — closing off the host<->
+    # container stdin-attach race that caused #281, #288, and #1062.
+    # tmpfile and stderrfile are created by current user via mktemp, so both redirects are
+    # intentionally unprivileged.
+    # shellcheck disable=SC2024
+    timeout --kill-after=60s "${AGENT_TIMEOUT_SECS}" \
+        podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" \
+        < /dev/null > "${tmpfile}" 2>"${stderrfile}" \
+    || podman_exit=$?
+    if [ "${podman_exit}" -ne 0 ]; then
+        if [ "${podman_exit}" -eq 124 ]; then
+            cat "${stderrfile}" >&2
+            rm -f "${stderrfile}"
+            podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+            die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
+        fi
+        if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
+            cat "${stderrfile}" >&2
+            rm -f "${stderrfile}"
+            die "Container ${PODMAN_CONTAINER_NAME} is already in use — another invocation may be running"
+        fi
+        cat "${stderrfile}" >&2
+        rm -f "${stderrfile}"
+        # Claude CLI exits non-zero for API-level errors (e.g. 429 rate-limit) even
+        # when it has written a valid result JSON to stdout.  Return 0 whenever a valid
+        # result object exists AT ALL — not only when is_error is true — so invoke_claude's
+        # own is_error inspection (which already handles both true and false correctly) does
+        # the classification. Requiring is_error==true here would misclassify the narrow but
+        # real case of podman exiting non-zero (e.g. an OOM-kill racing a clean exit) AFTER
+        # Claude had already written a genuinely successful (is_error:false) result: that
+        # completed work would be treated as a pre-flight infra failure — not counted, and
+        # silently re-invoked next tick, risking duplicated agent actions (#1133 review).
+        if [ -s "${tmpfile}" ] \
+                && jq -e '.type == "result"' "${tmpfile}" >/dev/null 2>&1; then
+            return 0
+        fi
+        jq -r '.result // ""' "${tmpfile}" 2>/dev/null >&2 || true
+        rm -f "${tmpfile}"
+        return 2
+    fi
+    cat "${stderrfile}" >&2
+    rm -f "${stderrfile}"
+}
+
+# Invocation-scoped globals shared with the podman helpers below and cleaned up on EXIT.
+CLAUDE_MD_TMPFILE=""
+CLAUDE_PROMPT=""
+GPG_PUBKEY_TMPDIR=""
+PODMAN_SECRET_NAME=""
+GH_ENTERPRISE_SECRET_NAME=""
+
+# Handles is_error=true in the Claude JSON response.
+# On blocking_limit: every run is already a fresh single-phase session, so there is nothing
+#   to retry by dropping history — surface it as a hard error for a human to look at.
+# On 429: persists rate limit, notifies Discord, dies.
+# On anything else: notifies Discord, dies.
+handle_claude_is_error() {
+    local tmpfile="$1" item_type="$2" item_id="$3"
+    local terminal_reason api_error_status result_text
+
+    terminal_reason=$(jq -r '.terminal_reason // ""' "${tmpfile}" 2>/dev/null || printf '')
+    api_error_status=$(jq -r '.api_error_status // ""' "${tmpfile}" 2>/dev/null || printf '')
+    result_text=$(jq -r '.result // "Unknown error"' "${tmpfile}" 2>/dev/null || printf 'Unknown error')
+    info "Claude error: ${result_text}" >&2
+
+    if [ "${terminal_reason}" = "blocking_limit" ]; then
+        warn "Fresh single-phase session still exceeded the context window for ${REPO_FULL} — a single phase is too large to fit; a human should split the work" >&2
+    fi
+
+    if [ "${api_error_status}" = "429" ]; then
+        local reset_unix resume_unix
+        reset_unix=$(parse_reset_time "${result_text}")
+        resume_unix=""
+        if [ -n "${reset_unix}" ]; then
+            resume_unix=$((reset_unix + RATE_LIMIT_RESUME_BUFFER_SECS))
+            save_rate_limit "${resume_unix}"
+        else
+            report_unparseable_rate_limit "${item_type}" "${item_id}" "${result_text}"
+        fi
+        notify_discord_rate_limited "${item_type}" "${item_id}" "${result_text}" "${resume_unix}"
+        rm -f "${tmpfile}"
+        die "Claude rate limited: ${result_text}"
+    fi
+
+    notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
+    rm -f "${tmpfile}"
+    die "Claude invocation failed: ${result_text}"
+}
+
+# In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
+# directly contains processes from having child cgroups with domain controllers
+# (memory, cpu, pids).  For Type=oneshot services the process lands directly
+# in the service cgroup.  Delegate=cpu memory pids io grants permission to
+# write subtree_control but does NOT write it automatically (verified on
+# systemd 260); the process must do it itself — but only after moving to a
+# leaf, because writing subtree_control while tasks are present fails with EBUSY.
+#
+# This function handles both cases:
+# - If systemd already placed us in a leaf (e.g. on some Type=simple configs),
+#   strip the leaf component to get the service cgroup as parent.
+# - If we are directly in the service cgroup (Type=oneshot), move ourselves
+#   into a leaf sub-cgroup named "init", then write the domain controllers to
+#   the service cgroup's subtree_control so container child cgroups get
+#   pids.max, memory.max, cpu.max etc.
+#
+# Sets PODMAN_CGROUP_PARENT so invoke_claude passes --cgroup-parent to every
+# podman run call.  No-op when not running from a system service.
+setup_cgroup_leaf() {
+    local svcgroup leaf_dir cgroupfs_path controller
+    svcgroup=$(cut -d: -f3 /proc/self/cgroup 2>/dev/null) || return 0
+
+    case "${svcgroup}" in
+        /system.slice/*/*)
+            # systemd placed us in a leaf sub-cgroup like
+            # /system.slice/<service>.service/0 — strip the last component
+            # to get the service cgroup itself as the container parent.
+            svcgroup="${svcgroup%/*}"
+            ;;
+        /system.slice/*)
+            # Process is directly in the service cgroup.
+            # Step 1: move ALL processes to a leaf so the service cgroup has no
+            # direct tasks.  Moving only $$ is insufficient: any left-over
+            # processes from an unclean previous run (e.g. ssh-agent) remain in
+            # the service cgroup and cause the subtree_control write to fail
+            # with EBUSY (cannot enable domain controllers while tasks exist).
+            cgroupfs_path="/sys/fs/cgroup${svcgroup}"
+            leaf_dir="${cgroupfs_path}/init"
+            mkdir -p "${leaf_dir}" 2>/dev/null \
+                || { warn "Cannot create leaf cgroup ${leaf_dir} — container resource limits may not apply"; return 0; }
+            local pids pid
+            pids=$(cat "${cgroupfs_path}/cgroup.procs" 2>/dev/null) || pids=""
+            for pid in ${pids}; do
+                printf '%s\n' "${pid}" > "${leaf_dir}/cgroup.procs" 2>/dev/null || true
+            done
+            # Step 2: now that the service cgroup has no direct tasks, enable
+            # domain controllers so container child cgroups have pids.max etc.
+            for controller in cpu memory pids io; do
+                printf '+%s\n' "${controller}" > "${cgroupfs_path}/cgroup.subtree_control" 2>/dev/null \
+                    || warn "Cannot enable ${controller} controller in ${svcgroup} — container resource limits may not apply"
+            done
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    PODMAN_CGROUP_PARENT="${svcgroup}"
+}
+
+# Removes dangling (untagged) container images to free disk space.
+# Only untagged images are pruned — the current ORCHESTRATOR_IMAGE is always
+# tagged and is never removed.  Suppresses errors so that a failure to prune
+# (e.g. no images to prune, podman storage not initialised) is never fatal.
+cleanup_dangling_images() {
+    podman image prune --force > /dev/null 2>&1 || true
+}
+
+# Kills the ssh-agent started by the service unit's ExecStartPre so the service
+# cgroup is clean when the next timer fires and systemd does not warn about
+# left-over processes.  Registered as an EXIT trap by main so it runs on any
+# exit — success, die, or signal — regardless of whether invoke_claude was called.
+# Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring install-timer's
+# ExecStartPre pkill) — an unscoped 'pkill ssh-agent' matches any process with that
+# name system-wide, including an unrelated interactive login agent (#1122).
+stop_ssh_agent() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] || return 0
+    pkill -u "$(id -un)" -f "ssh-agent -a ${SSH_AUTH_SOCK}" 2>/dev/null || true
+}
+
+# Loads default SSH keys into the agent if SSH_AUTH_SOCK is set and the agent
+# currently holds no keys.  Silent when keys are already loaded (avoids
+# redundant re-adds across timer firings) or when SSH_AUTH_SOCK is entirely
+# absent.  Dies (host-health path, same as the gpg-agent check beside it in
+# main) when the socket exists but nothing answers on it — a dead/stale agent
+# would otherwise pass silently, get mounted into every agent container, and
+# fail every push inside it instead of failing fast here (#1103).
+preload_ssh_keys() {
+    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] || return 0
+    local ssh_keys_status=0
+    ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
+    case "${ssh_keys_status}" in
+        0) return 0 ;;  # already loaded
+        1) ;;           # agent reachable but empty — fall through to load keys
+        2) die "ssh-add: cannot connect to the agent at ${SSH_AUTH_SOCK} — the socket exists but nothing is listening on it" ;;
+        *) return 0 ;;
+    esac
+    ssh-add -q 2>/dev/null \
+        || die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
+}
+
+# notify_github_blocked is declared in lib/github-status.
+
+# Fast-fails if GIT_SIGNING_KEY is set but gpg-agent is not running or the key
+# is absent from the keyring.  Posts a GitHub comment and adds Blocked before dying.
+verify_gpg_signing_ready() {
+    local item_type="$1" item_id="$2"
+    [ -n "${GIT_SIGNING_KEY}" ] || return 0
+
+    if ! gpg-connect-agent /bye >/dev/null 2>&1; then
+        notify_github_blocked "${item_type}" "${item_id}" \
+            "Cannot start agent session: \`gpg-agent\` is not running on the host. Run \`gpgconf --launch gpg-agent\` and retry."
+        die "gpg-agent is not running — run 'gpgconf --launch gpg-agent' to start it"
+    fi
+
+    if ! gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1; then
+        notify_github_blocked "${item_type}" "${item_id}" \
+            "Cannot start agent session: signing key \`${GIT_SIGNING_KEY}\` is not in the GPG keyring. Import it with \`gpg --import <key-file>\` on the host."
+        die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
+    fi
+}
+
+# Appends GPG volume/socket args to PODMAN_RUN_ARGS.
+# Creates a tmpdir containing only the signing public key and forwards the
+# gpg-agent extra socket into it — no private key material is exposed to the
+# container.  Dies if GIT_SIGNING_KEY is set but the secure path is not available,
+# because there is no safe fallback (mounting ~/.gnupg exposes private keys).
+add_gpg_podman_args() {
+    local extra_socket
+    extra_socket=$(gpgconf --list-dirs agent-extra-socket 2>/dev/null) || extra_socket=""
+
+    # When the service runs with XDG_RUNTIME_DIR set, gpg-agent creates its sockets
+    # in $XDG_RUNTIME_DIR/gnupg/ rather than ~/.gnupg/.  gpgconf --list-dirs may
+    # still return the ~/.gnupg path, which could be a stale socket file left behind
+    # when a previous gpg-agent was killed with SIGKILL.  Prefer the live runtime-dir
+    # socket when it exists.
+    if [ -n "${XDG_RUNTIME_DIR}" ]; then
+        local runtime_extra="${XDG_RUNTIME_DIR}/gnupg/S.gpg-agent.extra"
+        [ -S "${runtime_extra}" ] && extra_socket="${runtime_extra}"
+    fi
+
+    [ -n "${GIT_SIGNING_KEY}" ] || return 0
+
+    [ -S "${extra_socket}" ] \
+        || die "GPG agent extra socket not available — run 'gpgconf --launch gpg-agent' and ensure it creates an extra socket"
+
+    GPG_PUBKEY_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.gnupghome) \
+        || die "Failed to create tmpdir for GPG pubkey gnupghome"
+    chmod 0700 "${GPG_PUBKEY_TMPDIR}"
+    gpg --batch --no-tty --export "${GIT_SIGNING_KEY}" 2>/dev/null \
+            | GNUPGHOME="${GPG_PUBKEY_TMPDIR}" gpg --batch --no-tty --import --quiet 2>/dev/null \
+        || die "GPG public key export/import failed for ${GIT_SIGNING_KEY} — ensure the key is in the local keyring"
+    PODMAN_RUN_ARGS+=( --volume "${GPG_PUBKEY_TMPDIR}:/home/developer/.gnupg:rw" )
+    PODMAN_RUN_ARGS+=( --volume "${extra_socket}:/home/developer/.gnupg/S.gpg-agent:ro" )
+}
+
+# Verify all --volume source paths in PODMAN_RUN_ARGS exist with the expected
+# type before calling podman run.  Podman auto-creates any missing bind-mount
+# source as a directory; if that path is later expected to be a socket, the
+# directory blocks ssh-agent from binding there on the next run.
+validate_bind_mounts() {
+    local i=0 take_next=0 src
+    local n=${#PODMAN_RUN_ARGS[@]}
+    while [ "${i}" -lt "${n}" ]; do
+        local arg="${PODMAN_RUN_ARGS[$i]}"
+        if [ "${take_next}" = "1" ]; then
+            take_next=0
+            src="${arg%%:*}"
+            case "${src}" in
+                *.sock|*/S.gpg-agent|*/S.gpg-agent.extra)
+                    [ -S "${src}" ] \
+                        || die "Bind-mount source must be a socket but is missing or wrong type: ${src}"
+                    ;;
+                *)
+                    [ -e "${src}" ] \
+                        || die "Bind-mount source does not exist: ${src}"
+                    ;;
+            esac
+        elif [ "${arg}" = "--volume" ]; then
+            take_next=1
+        fi
+        i=$(( i + 1 ))
+    done
+}
+
+# Removes the per-invocation CLAUDE.md tempfile and GPG pubkey tempdir and resets their
+# globals. Shared by every invoke_claude exit path (success, infra-failure early-return, and
+# the "no result object" die) so cleanup cannot drift between them (#1133).
+# Removes the per-invocation CLAUDE.md tempfile, GPG pubkey tempdir, and any podman secrets
+# created for this invocation (Claude OAuth / GH Enterprise tokens), resetting their globals.
+# Shared by every invoke_claude exit path (success, infra-failure early-return, and the "no
+# result object" die) so cleanup cannot drift between them, AND by the EXIT trap — which used
+# to be the ONLY thing that removed the podman secrets, firing only when the whole oneshot
+# process exits. That was fine while every invocation was followed by an immediate process
+# exit, but the #1133 infra-failure path uses `continue` to keep the main loop scanning other
+# items in the same run, so a secret created for a failed item could sit in the podman secret
+# store — readable by anything else with local podman access — for the rest of the run instead
+# of being removed immediately (#1133 review). Calling this explicitly on every path closes
+# that gap regardless of how long the caller's process keeps running afterwards.
+cleanup_claude_invocation_tmpfiles() {
+    if [ -n "${CLAUDE_MD_TMPFILE}" ]; then
+        rm -f "${CLAUDE_MD_TMPFILE}"
+        CLAUDE_MD_TMPFILE=""
+    fi
+    if [ -n "${GPG_PUBKEY_TMPDIR}" ]; then
+        rm -rf "${GPG_PUBKEY_TMPDIR}"
+        GPG_PUBKEY_TMPDIR=""
+    fi
+    if [ -n "${PODMAN_SECRET_NAME}" ]; then
+        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
+        PODMAN_SECRET_NAME=""
+    fi
+    if [ -n "${GH_ENTERPRISE_SECRET_NAME}" ]; then
+        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
+        GH_ENTERPRISE_SECRET_NAME=""
+    fi
+}
+
+# Runs a single FRESH claude session for one workflow phase and returns 0 on success.
+# All user-visible messages and Claude's text response go to stderr so the caller can
+# review what was done.  No session is persisted — every invocation starts clean.
+# Runs claude inside a rootless Podman container named orchestrator-<OWNER>.
+# Returns 2 when the container failed before Claude ever ran (see run_claude_fresh) — the
+# caller (main) must skip this item without counting it against the invocation budget (#1133).
+invoke_claude() {
+    local prompt="$1" item_type="${2:-}" item_id="${3:-}" claude_md_content="${4:-}"
+    local tmpfile owner_token container_name
+
+    local prompt_len=${#prompt}
+    if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" \
+            "Prompt is too long: ${prompt_len} characters (max ${MAX_PROMPT_CHARS})"
+        die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"
+    fi
+
+    owner_token=$(load_token_for_owner "${OWNER}")
+    container_name="orchestrator-${OWNER}"
+
+    if podman inspect "${container_name}" >/dev/null 2>&1; then
+        # A container left behind by a hard host crash (despite --rm) previously made every
+        # subsequent run die permanently until a human removed it manually (#1090). If it is not
+        # actively running, it is safe to assume it is such a leftover and remove it ourselves;
+        # only die if it is genuinely running, which means something else is actively using it.
+        if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${container_name} already exists and is running — remove it manually before running"
+            die "Container ${container_name} already exists and is running — remove it manually before running"
+        fi
+        warn "Removing leftover (non-running) container ${container_name} from a previous run"
+        podman rm -f "${container_name}" >&2 \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to remove leftover container ${container_name}"; die "Failed to remove leftover container ${container_name}"; }
+    fi
+
+    cleanup_dangling_images
+    info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
+    if ! podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
+        # A registry hiccup should not fail the run when a usable cached image already exists
+        # locally — fall back to it instead of dying outright (#1090). Only die if there is truly
+        # no image to run at all.
+        if podman image exists "${ORCHESTRATOR_IMAGE}"; then
+            warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
+        else
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
+            die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
+        fi
+    fi
+
+    # CLAUDE.md content is mandatory — every invocation must supply it.
+    if [ -z "${claude_md_content}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" "claude_md_content is required but was not provided"
+        die "claude_md_content is required but was not provided"
+    fi
+
+    # Bake settings.json/policy-limits.json/hooks/skills into the image (see
+    # containers/base/development-full/Dockerfile) and mount only the pieces of
+    # ~/.claude that must vary per invocation or persist across invocations:
+    #   - CLAUDE.md: single read-only file mount. Safe now that the image already
+    #     creates /home/developer/.claude with correct ownership — the old
+    #     whole-directory mount trick existed only to work around Podman creating
+    #     an unmounted parent directory with wrong ownership when bind-mounting a
+    #     single file into a path whose parent didn't exist yet in the image.
+    #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
+    #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
+    #     they persist across invocations instead of being wiped every run.
+    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
+    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+    PODMAN_SECRET_NAME=""
+    GH_ENTERPRISE_SECRET_NAME=""
+    # Registered immediately after CLAUDE_MD_TMPFILE is populated — not after the mkdir loop
+    # below — so a die() from that loop (or anything else between here and the container run)
+    # cannot leak the tmpfile before anything is tracking it (#1103). Backstop only: every
+    # normal exit path below now calls cleanup_claude_invocation_tmpfiles itself (#1133
+    # review), so by the time this trap fires those globals are usually already empty and its
+    # cleanup calls are no-ops — it only does real work if invoke_claude is interrupted
+    # somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
+    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
+    # The prompt travels as a trailing positional argument to claude (see
+    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
+    # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
+    # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
+    # under any argv-length limit.
+    CLAUDE_PROMPT="${prompt}"
+    for d in sessions session-env plans cache backups; do
+        mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
+    done
+
+    # Export invocation-scoped globals so helper functions can read them.
+    CLAUDE_PROMPT="${prompt}"
+    PODMAN_CONTAINER_NAME="${container_name}"
+    PODMAN_RUN_ARGS=(
+        run
+        --name "${container_name}"
+        --rm
+        --interactive
+        # keep-id:uid=1000,gid=1000 maps container developer (UID/GID 1000) to the
+        # host user running this service so that bind-mounted sockets and directories
+        # owned by the host user appear as owned by the container's developer user,
+        # giving it full owner-level access without world-writable permissions.
+        "--userns=keep-id:uid=1000,gid=1000"
+        --cpus="4"
+        --memory="12g"
+        --memory-swap="12g"
+        --pids-limit=4096
+        --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
+        --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
+    )
+    [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+        PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
+        PODMAN_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
+    else
+        warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
+    fi
+    verify_gpg_signing_ready "${item_type}" "${item_id}"
+    add_gpg_podman_args
+    if [ -f "${HOME}/.database" ]; then
+        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
+    else
+        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
+    fi
+    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
+    for d in sessions session-env plans cache backups; do
+        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
+    done
+
+    [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
+    [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
+    [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
+
+    # Lets the agent container announce what it's working on at startup. Only
+    # set when both are known — most callers (tests, ad-hoc invocations) pass
+    # empty item_type/item_id and simply won't get this env var.
+    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
+        PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
+    fi
+
+    if [ -n "${owner_token}" ]; then
+        PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
+        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
+        PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
+    fi
+    if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token"
+        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
+        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
+    fi
+    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
+    PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
+
+    PODMAN_CLAUDE_ARGS=(
+        --model opusplan
+        --print
+        --output-format json
+        --dangerously-skip-permissions
+        --add-dir "${CONTAINER_REPO_PATH}"
+        # -- terminates option/variadic parsing before the positional prompt.
+        # --add-dir takes <directories...> (variadic) — without this separator the
+        # CLI parser greedily swallows the prompt as an extra --add-dir value
+        # instead of recognizing it as the [prompt] argument, which then dies with
+        # "Input must be provided either through stdin or as a prompt argument"
+        # despite a real prompt being passed (#1062 recurrence after #1077).
+        --
+        "${CLAUDE_PROMPT}"
+    )
+
+    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
+
+    run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
+    local run_claude_exit=$?
+    if [ "${run_claude_exit}" -eq 2 ]; then
+        # Infra/pre-flight failure — Claude never started (#1133). run_claude_fresh already
+        # removed tmpfile; propagate the distinguishable code so main() skips just this item
+        # instead of dying the whole run and counting it against the invocation budget.
+        cleanup_claude_invocation_tmpfiles
+        cleanup_dangling_images
+        return 2
+    fi
+
+    local is_error
+    is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
+    if [ "${is_error}" = "true" ]; then
+        handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
+    fi
+
+    jq -r '.result // ""' "${tmpfile}" >&2
+
+    # Sanity check that Claude actually produced a JSON result object rather than empty output
+    # or a stream fragment — a fresh run that dies before the final result would otherwise be
+    # treated as a silent success.
+    jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
+        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
+    rm -f "${tmpfile}"
+
+    cleanup_claude_invocation_tmpfiles
+    cleanup_dangling_images
+}
+
+# owner_rate_limit_file, save_rate_limit, is_owner_rate_limited, report_unparseable_rate_limit,
+# and parse_reset_time are declared in lib/state.
+
+# pr_fingerprint_file_path, fetch_pr_json, fetch_pr_review_comments, fingerprint_pr_json,
+# compute_pr_fingerprint, save_pr_fingerprint, load_pr_fingerprint, pr_head_oid_file_path,
+# save_pr_head_oid, load_pr_head_oid, ci_checks_timed_out, and clear_pr_ci_pending_state are
+# declared in lib/fingerprints.
+# pr_json_has_pending_ci_checks, block_pr_for_ci_timeout, pr_json_has_blocked_label, and
+# pr_json_env_block_image_sha are declared in lib/github-status.
+
+# Reads the git SHA baked into the agent image's IMAGE_SHA_DEVELOPMENT_AGENT env var (set at build
+# time — see containers/agent/Dockerfile) directly off the image config, without running a
+# container (#1118). Assumes invoke_claude has already pulled the current ${ORCHESTRATOR_IMAGE}
+# tag. Best-effort: prints nothing and returns non-zero on any inspect failure — a failure here
+# only means the auto-unblock check below is skipped for this tick, never that anything breaks.
+current_agent_image_sha() {
+    local sha
+    sha=$(podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${ORCHESTRATOR_IMAGE}" 2>/dev/null \
+        | sed -n 's/^IMAGE_SHA_DEVELOPMENT_AGENT=//p')
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
