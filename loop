@@ -30,6 +30,14 @@ info() {
     fi
 }
 
+warn() {
+    if [ -t 2 ]; then
+        printf '\n\033[33m!\033[0m %s\n' "$*" >&2
+    else
+        printf '\n! %s\n' "$*" >&2
+    fi
+}
+
 # Returns true (0) when running inside a Claude Code Bash-tool session.
 # Claude Code sets CLAUDECODE=1 in every shell it spawns via the Bash tool;
 # that value is inherited by subprocesses (e.g. git hooks).
@@ -48,7 +56,7 @@ update_scripts() {
         || die "Failed to switch to main branch in ${SCRIPT_DIR} — stopping rather than running stale or wrong-branch code"
 
     if ! timeout 60 git -C "${SCRIPT_DIR}" pull; then
-        info "git pull failed or timed out in ${SCRIPT_DIR} — continuing with the existing checkout"
+        warn "git pull failed or timed out in ${SCRIPT_DIR} — continuing with the existing checkout"
     fi
 }
 
