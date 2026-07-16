@@ -130,6 +130,41 @@ notify_discord_no_work() {
 
 # disk_space_available_kb and check_disk_space are declared in lib/core.
 
+# Builds the per-owner dedup state-file path for a notification key (e.g. "low_disk_space",
+# "priorities_unreachable"). Falls back to a shared "_global" file when no owner is given;
+# slashes in the owner name are flattened so it can't create subdirectories.
+_discord_dedup_state_file() {
+    local key="$1" owner="${2:-}" owner_slug
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    printf '%s' "${HOME}/.orchestrator/.${key}_${owner_slug}.state"
+}
+
+# Returns success (allowed to send) unless state_file records a send within the last hour.
+_discord_dedup_allowed() {
+    local state_file="$1" last_sent elapsed
+    [ -f "${state_file}" ] || return 0
+    last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
+    printf '%s' "${last_sent}" | grep -qE '^[0-9]+$' || return 0
+    elapsed=$(( $(date +%s) - last_sent ))
+    [ "${elapsed}" -lt 3600 ] && return 1
+    return 0
+}
+
+# Posts payload to DISCORD_WEBHOOK_URL and records the send time in state_file so a later
+# _discord_dedup_allowed call suppresses repeats within the hour.
+_discord_send_and_record() {
+    local payload="$1" state_file="$2"
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n' "$(date +%s)" > "${state_file}"
+}
+
 # Sends a Discord embed notification when disk space is below MIN_DISK_SPACE_KB.
 # Deduplicates: at most one notification per hour per owner.
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
@@ -142,18 +177,9 @@ notify_discord_low_disk_space() {
     available_gb=$(( ${available_kb:-0} / 1024 / 1024 ))
     threshold_gb=$(( MIN_DISK_SPACE_KB / 1024 / 1024 ))
 
-    local owner_slug state_file now last_sent elapsed
-    owner_slug="${owner:-_global}"
-    owner_slug="${owner_slug//\//_}"
-    state_file="${HOME}/.orchestrator/.low_disk_space_${owner_slug}.state"
-    now=$(date +%s)
-    if [ -f "${state_file}" ]; then
-        last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
-        if printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
-            elapsed=$(( now - last_sent ))
-            [ "${elapsed}" -lt 3600 ] && return 0
-        fi
-    fi
+    local state_file
+    state_file=$(_discord_dedup_state_file low_disk_space "${owner}")
+    _discord_dedup_allowed "${state_file}" || return 0
 
     local payload
     payload=$(jq --null-input \
@@ -167,14 +193,7 @@ notify_discord_low_disk_space() {
         ]}]}') \
         || { warn "Discord: failed to build low disk space payload"; return 0; }
 
-    curl --silent --fail --max-time 5 \
-        -H "Content-Type: application/json" \
-        -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
-        || warn "Discord webhook notification failed"
-
-    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-    printf '%s\n' "${now}" > "${state_file}"
+    _discord_send_and_record "${payload}" "${state_file}"
 }
 
 # Sends a Discord embed notification when fetch_all_priorities exhausts all retry attempts,
@@ -189,18 +208,9 @@ notify_discord_priorities_unreachable() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
 
-    local owner_slug state_file now last_sent elapsed
-    owner_slug="${owner:-_global}"
-    owner_slug="${owner_slug//\//_}"
-    state_file="${HOME}/.orchestrator/.priorities_unreachable_${owner_slug}.state"
-    now=$(date +%s)
-    if [ -f "${state_file}" ]; then
-        last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
-        if printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
-            elapsed=$(( now - last_sent ))
-            [ "${elapsed}" -lt 3600 ] && return 0
-        fi
-    fi
+    local state_file
+    state_file=$(_discord_dedup_state_file priorities_unreachable "${owner}")
+    _discord_dedup_allowed "${state_file}" || return 0
 
     local payload
     payload=$(jq --null-input \
@@ -214,14 +224,7 @@ notify_discord_priorities_unreachable() {
         ]}]}') \
         || { warn "Discord: failed to build priorities-unreachable payload"; return 0; }
 
-    curl --silent --fail --max-time 5 \
-        -H "Content-Type: application/json" \
-        -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
-        || warn "Discord webhook notification failed"
-
-    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-    printf '%s\n' "${now}" > "${state_file}"
+    _discord_send_and_record "${payload}" "${state_file}"
 }
 
 # blocked_marker_file_path and clear_blocked_marker are declared in lib/state.
