@@ -1,0 +1,59 @@
+--- # Resolve the latest published version of a set of NuGet packages into one hash
+name: "Resolve latest NuGet package versions"
+description: "Resolves the latest published version of each given NuGet package and outputs a hash of them, changing only when one actually ships a release"
+inputs:
+  package-ids:
+    description: "Newline-separated list of NuGet package IDs to check"
+    required: true
+
+outputs:
+  version-hash:
+    description: "SHA-256 hash of the concatenated package-id/latest-version pairs"
+    value: "${{steps.resolve.outputs.version-hash}}"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Resolve latest versions"
+      id: "resolve"
+      uses: actions/github-script@v9.0.0
+      env:
+        PACKAGE_IDS: "${{inputs.package-ids}}"
+      with:
+        script: |
+          const crypto = require("crypto");
+
+          const packageIds = process.env.PACKAGE_IDS
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+
+          if (packageIds.length === 0) {
+            core.setFailed("❌ package-ids input resolved to an empty list");
+            return;
+          }
+
+          const pairs = [];
+          for (const id of packageIds) {
+            const lowerId = id.toLowerCase();
+            const url = "https://api.nuget.org/v3-flatcontainer/" + lowerId + "/index.json";
+            const response = await fetch(url);
+            if (!response.ok) {
+              core.setFailed("❌ NuGet lookup failed for " + id + ": HTTP " + response.status);
+              return;
+            }
+            const body = await response.json();
+            const versions = body.versions || [];
+            if (versions.length === 0) {
+              core.setFailed("❌ NuGet returned no versions for " + id);
+              return;
+            }
+            const latest = versions[versions.length - 1];
+            core.info("✅ " + id + ": " + latest);
+            pairs.push(lowerId + "=" + latest);
+          }
+
+          const combined = pairs.sort().join(",");
+          const hash = crypto.createHash("sha256").update(combined).digest("hex");
+          core.notice("NuGet version hash: " + hash);
+          core.setOutput("version-hash", hash);
