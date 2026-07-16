@@ -104,6 +104,13 @@ paths at runtime (see `containers/agent/Dockerfile` for the full mount contract)
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) are
 mounted per invocation.
 
+The repo-root `install-claude-hooks` script installs this same settings.json and hook set into the
+current host user's `~/.claude`, so the hooks can be exercised directly outside the container: hook/data
+files are symlinked straight back into this repo, and settings.json is regenerated from the container's
+copy with every `/home/developer/.claude` path rewritten to the host's own `$HOME/.claude`. It refuses to
+run inside a live Claude Code session (it would be rewriting the very hooks/settings governing that
+session mid-run) — run it from a plain host shell.
+
 ### credfeto-global-pre-commit clone
 
 The upstream hook orchestrator is cloned from `$PRECOMMIT_UPSTREAM` (default: `https://github.com/credfeto/credfeto-global-pre-commit.git`) into `/opt/pre-commit`. After cloning:
