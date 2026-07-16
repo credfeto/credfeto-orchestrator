@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add a development-dotnet-tools base image (stable third-party .NET global tools + claude-code) between development-python and development-full, cache-busted via a NuGet freshness check instead of a blind daily reinstall
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
+- Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
 ### Changed
 ### Deprecated
 ### Removed
