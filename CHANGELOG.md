@@ -10,6 +10,17 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+## [0.0.2] - 2026-07-16
+### Security
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
 - Replace ~/.gitconfig volume mount with git identity env vars (GIT_USER_NAME, GIT_USER_EMAIL, GIT_SIGNING_KEY) passed into the container; entrypoint.sh now configures git from those vars and dies if any required value is absent
 - Replace ~/.gnupg read-write volume mount with GPG agent extra-socket forwarding; a public-key-only gnupghome tmpdir is created per invocation so no private key material enters the container
@@ -313,13 +324,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add a dedicated AI Simplify Workflow Status option (create-project and oneshot's board schema); PHASE D now sets the board to it explicitly instead of leaving Simplify's in-progress state implicit
 - SDK - Updated DotNet SDK to 10.0.302
 - Split oneshot from a single 4650-line script into a thin entrypoint plus 10 lib/* function libraries (globals, core, git, github, github-status, fingerprints, state, prompts, workflow-board, discord, podman); loop, create-project, and setup-owner now source lib/core for their shared output helpers instead of each keeping a duplicated copy
-### Deprecated
 ### Removed
 - Pruned the pre-commit install, install-deps-arch, and install-deps-debian scripts from the baked development-full image — they describe a ~/.local/bin symlink setup this image doesn't use (PATH is wired directly via ENV) and were misleading troubleshooting
-### Deployment Changes
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
+
 ## [0.0.1] - 2026-06-11
 ### Added
 - oneshot script to fetch the top-priority work item from the priorities API and drive a Claude Code session to work on it
