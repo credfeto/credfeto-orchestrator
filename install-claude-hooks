@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# Installs the development-full container's baked-in Claude Code settings and
+# hooks into the current host user's ~/.claude, so the hooks can be exercised
+# outside the container. Hook/data files are symlinked straight back into this
+# repo (edit here, re-run nothing, the symlink already points at the change);
+# settings.json is generated from the container's copy with every
+# /home/developer/.claude path rewritten to this host's own $HOME/.claude,
+# since the container's hardcoded developer-user path would not resolve here.
+
+die() {
+    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+success() {
+    printf '\n\033[32m✓\033[0m %s\n' "$*"
+}
+
+info() {
+    printf '\n\033[32m→\033[0m %s\n' "$*"
+}
+
+is_ai_agent() {
+    [ "${CLAUDECODE}" = "1" ]
+}
+
+REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+case "${REPO_DIR}" in
+    *$'\n'*) die "install-claude-hooks: REPO_DIR contains a newline; aborting." ;;
+esac
+
+SOURCE_DIR="${REPO_DIR}/containers/base/development-full"
+SOURCE_SETTINGS="${SOURCE_DIR}/claude-settings.json"
+SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
+
+check_required_tools() {
+    local tool
+    for tool in jq sed; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+# Symlinks every file directly under SOURCE_HOOKS_DIR into TARGET_HOOKS_DIR,
+# discovered via find rather than a hardcoded name list -- matches the same
+# convention already used for skill-symlinking in this image's Dockerfile, so
+# a newly added hook/data file is picked up automatically on the next run.
+install_hook_symlinks() {
+    local target_hooks_dir="$1"
+    local src name
+    mkdir -p "${target_hooks_dir}" || die "Failed to create ${target_hooks_dir}"
+    while IFS= read -r src; do
+        name=$(basename "${src}")
+        ln -sf "${src}" "${target_hooks_dir}/${name}" \
+            || die "Failed to symlink ${name}"
+        info "Symlinked hooks/${name}"
+    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f | sort)
+}
+
+# Generates target_settings from SOURCE_SETTINGS with every
+# /home/developer/.claude path rewritten to target_claude_dir, validating the
+# result is well-formed JSON before it is written into place. Backs up any
+# pre-existing settings.json first (single fixed name, overwritten each run).
+install_settings() {
+    local target_claude_dir="$1"
+    local target_settings="${target_claude_dir}/settings.json"
+    local tmp_settings
+    tmp_settings=$(mktemp) || die "Failed to create a temp file for settings.json"
+
+    sed "s|/home/developer/\.claude|${target_claude_dir}|g" "${SOURCE_SETTINGS}" > "${tmp_settings}" \
+        || die "Failed to rewrite paths in settings.json"
+    jq empty "${tmp_settings}" 2>/dev/null || die "Generated settings.json is not valid JSON"
+
+    if [ -f "${target_settings}" ]; then
+        cp -f "${target_settings}" "${target_claude_dir}/settings.json.bak" \
+            || die "Failed to back up existing settings.json"
+        info "Backed up existing settings.json to settings.json.bak"
+    fi
+
+    mv "${tmp_settings}" "${target_settings}" || die "Failed to install settings.json"
+    info "Installed settings.json (hook paths rewritten to ${target_claude_dir})"
+}
+
+main() {
+    is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
+
+    [ -f "${SOURCE_SETTINGS}" ] || die "Source settings not found: ${SOURCE_SETTINGS}"
+    [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
+
+    check_required_tools
+
+    [ -n "${HOME}" ] || die "\$HOME is not set"
+    local target_claude_dir="${HOME}/.claude"
+    local target_hooks_dir="${target_claude_dir}/hooks"
+
+    info "Installing Claude Code settings/hooks into ${target_claude_dir} from ${REPO_DIR}..."
+
+    mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
+    install_hook_symlinks "${target_hooks_dir}"
+    install_settings "${target_claude_dir}"
+
+    success "Claude Code settings/hooks installed for local testing outside the container"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

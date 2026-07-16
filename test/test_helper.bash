@@ -107,6 +107,12 @@ source_uninstall_timer() {
     source "${REPO_ROOT}/uninstall-timer"
 }
 
+# Sources the install-claude-hooks script so its functions are defined without running main.
+source_install_claude_hooks() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/install-claude-hooks"
+}
+
 # Sources the setup-owner script so its functions are defined without running main.
 source_setup_owner() {
     # shellcheck source=/dev/null
