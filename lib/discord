@@ -140,20 +140,22 @@ _discord_dedup_state_file() {
 }
 
 # Returns success (allowed to send) unless state_file records a send within the last hour.
+# Arguments: state_file, now (unix timestamp — shared with _discord_send_and_record so both
+# calls in a single notify_discord_* invocation agree on "now" without forking `date` twice).
 _discord_dedup_allowed() {
-    local state_file="$1" last_sent elapsed
+    local state_file="$1" now="$2" last_sent elapsed
     [ -f "${state_file}" ] || return 0
     last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
     printf '%s' "${last_sent}" | grep -qE '^[0-9]+$' || return 0
-    elapsed=$(( $(date +%s) - last_sent ))
+    elapsed=$(( now - last_sent ))
     [ "${elapsed}" -lt 3600 ] && return 1
     return 0
 }
 
-# Posts payload to DISCORD_WEBHOOK_URL and records the send time in state_file so a later
-# _discord_dedup_allowed call suppresses repeats within the hour.
+# Posts payload to DISCORD_WEBHOOK_URL and records now (unix timestamp, from the caller's
+# _discord_dedup_allowed check) in state_file so a later call suppresses repeats within the hour.
 _discord_send_and_record() {
-    local payload="$1" state_file="$2"
+    local payload="$1" state_file="$2" now="$3"
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
         -d "${payload}" \
@@ -161,7 +163,7 @@ _discord_send_and_record() {
         || warn "Discord webhook notification failed"
 
     mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-    printf '%s\n' "$(date +%s)" > "${state_file}"
+    printf '%s\n' "${now}" > "${state_file}"
 }
 
 # Sends a Discord embed notification when disk space is below MIN_DISK_SPACE_KB.
@@ -176,9 +178,10 @@ notify_discord_low_disk_space() {
     available_gb=$(( ${available_kb:-0} / 1024 / 1024 ))
     threshold_gb=$(( MIN_DISK_SPACE_KB / 1024 / 1024 ))
 
-    local state_file
+    local state_file now
     state_file=$(_discord_dedup_state_file low_disk_space "${owner}")
-    _discord_dedup_allowed "${state_file}" || return 0
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
 
     local payload
     payload=$(jq --null-input \
@@ -192,7 +195,7 @@ notify_discord_low_disk_space() {
         ]}]}') \
         || { warn "Discord: failed to build low disk space payload"; return 0; }
 
-    _discord_send_and_record "${payload}" "${state_file}"
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
 # Sends a Discord embed notification when fetch_all_priorities exhausts all retry attempts,
@@ -207,9 +210,10 @@ notify_discord_priorities_unreachable() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
 
-    local state_file
+    local state_file now
     state_file=$(_discord_dedup_state_file priorities_unreachable "${owner}")
-    _discord_dedup_allowed "${state_file}" || return 0
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
 
     local payload
     payload=$(jq --null-input \
@@ -223,7 +227,7 @@ notify_discord_priorities_unreachable() {
         ]}]}') \
         || { warn "Discord: failed to build priorities-unreachable payload"; return 0; }
 
-    _discord_send_and_record "${payload}" "${state_file}"
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
 # blocked_marker_file_path and clear_blocked_marker are declared in lib/state.
