@@ -1,0 +1,56 @@
+--- # Cheaply decide whether a PR touches any path a required build workflow cares about
+name: "Check whether a PR touches given paths"
+description: "Reports true for non-pull_request events; for pull_request events, true only if a changed file starts with one of the given path prefixes"
+inputs:
+  path-prefixes:
+    description: "Newline-separated list of path prefixes to check for"
+    required: true
+  github-token:
+    description: "GitHub token with read access to the pull request's file list"
+    required: true
+
+outputs:
+  relevant:
+    description: "'true' if this run should do real work, 'false' if it can trivially succeed"
+    value: "${{steps.check.outputs.relevant}}"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Check relevance"
+      id: "check"
+      uses: actions/github-script@v9.0.0
+      env:
+        PATH_PREFIXES: "${{inputs.path-prefixes}}"
+      with:
+        github-token: "${{inputs.github-token}}"
+        script: |
+          if (context.eventName !== "pull_request") {
+            core.info("Non-pull_request event (" + context.eventName + ") - always relevant");
+            core.setOutput("relevant", "true");
+            return;
+          }
+
+          const prefixes = process.env.PATH_PREFIXES
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+
+          const files = await github.paginate(github.rest.pulls.listFiles, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.payload.pull_request.number,
+            per_page: 100,
+          });
+
+          const touched = files.find((f) =>
+            prefixes.some((prefix) => f.filename === prefix || f.filename.startsWith(prefix))
+          );
+
+          if (touched) {
+            core.info("✅ " + touched.filename + " matches a watched prefix - relevant");
+            core.setOutput("relevant", "true");
+          } else {
+            core.info("No changed file matches a watched prefix - not relevant, skipping build");
+            core.setOutput("relevant", "false");
+          }

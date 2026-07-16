@@ -1,31 +1,22 @@
 ---
-name: "Build development-full base image"
+name: "Build development-dotnet-tools base image"
 
-# Build and push the development-full base image — .NET SDK, global .NET tools,
-# skill repos, and the credfeto global pre-commit hook chain layered on top of
-# development-python.
+# Build and push the development-dotnet-tools base image — claude-code and the
+# stable, third-party (non-credfeto/funfair) .NET global tools — layered on
+# top of development-python.
 #
 # Tags pushed:
 #   :latest       what consumers resolve by default
 #
 # Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
 # built-in GITHUB_TOKEN — no extra secrets to manage.
-#
-# Build context is containers/base/development-full because system-gitconfig
-# now lives inside that folder alongside the Dockerfile.
 
 on:
   schedule:
-    # Hourly — keeps .NET tool versions up to date and picks up new commits
-    # from credfeto-global-pre-commit; unchanged hours hit the GHA cache
-    # fully (only a layer-validation / tag-push noop runs).
-    - cron: "45 * * * *"
-  repository_dispatch:
-    # Fired by credfeto-global-pre-commit on every push to main so the image
-    # is rebuilt immediately when the pre-commit hook config is updated rather
-    # than waiting up to an hour for the scheduled run.
-    types:
-      - pre-commit-updated
+    # Hourly — the nuget-latest-versions check below decides whether anything
+    # actually needs to rebuild; unchanged hours hit the GHA cache fully (only
+    # a layer-validation / tag-push noop runs).
+    - cron: "35 * * * *"
   workflow_run:
     workflows: ["Build development-python base image"]
     types:
@@ -35,8 +26,9 @@ on:
   push:
     branches: ["main"]
     paths:
-      - "containers/base/development-full/**"
-      - ".github/workflows/build-development-full.yml"
+      - "containers/base/development-dotnet-tools/**"
+      - ".github/workflows/build-development-dotnet-tools.yml"
+      - ".github/actions/nuget-latest-versions/**"
       - ".github/actions/trivy-scan/**"
   pull_request:
     # No paths: filter here (unlike push above) — this workflow must always
@@ -47,22 +39,22 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: "build-development-full-${{ github.ref }}"
+  group: "build-development-dotnet-tools-${{ github.ref }}"
   cancel-in-progress: true
 
 env:
   REGISTRY: "ghcr.io"
-  IMAGE_NAME: "${{ github.repository_owner }}/development-full"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-dotnet-tools"
 
 permissions:
   contents: "read"
 
 jobs:
   # @@required: main
-  build-development-full:
+  build-development-dotnet-tools:
     if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: "ubuntu-latest"
-    timeout-minutes: 90
+    timeout-minutes: 60
     permissions:
       contents: "read"
       packages: "write"
@@ -80,8 +72,9 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
           path-prefixes: |
-            containers/base/development-full/
-            .github/workflows/build-development-full.yml
+            containers/base/development-dotnet-tools/
+            .github/workflows/build-development-dotnet-tools.yml
+            .github/actions/nuget-latest-versions/
             .github/actions/trivy-scan/
 
       # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
@@ -98,32 +91,32 @@ jobs:
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: docker/setup-buildx-action@v4.2.0
 
-      - name: "Resolve cache-bust values"
+      - name: "Resolve cache-bust value"
         id: "cb"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        shell: "bash"
-        run: |
-          {
-            echo "date=$(date -u +%%Y-%%m-%%d)"
-            echo "credfeto_sha=$(git ls-remote https://github.com/credfeto/credfeto-global-pre-commit.git HEAD | cut -f1)"
-            echo "credfeto_ai_skills_sha=$(git ls-remote https://github.com/credfeto/credfeto-ai-skills.git HEAD | cut -f1)"
-          } >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/nuget-latest-versions
+        with:
+          package-ids: |
+            TSQLLint
+            CWM.RoslynNavigator
+            dotnet-ef
+            ilspycmd
+            Microsoft.SqlPackage
+            PowerShell
+            dotnet-script
 
       - name: "Build and push"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: docker/build-push-action@v7.3.0
         with:
-          context: "containers/base/development-full"
-          file: "containers/base/development-full/Dockerfile"
+          context: "containers/base/development-dotnet-tools"
+          file: "containers/base/development-dotnet-tools/Dockerfile"
           pull: true
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
-            DOTNET_TOOLS_CACHE_BUST=${{ steps.cb.outputs.date }}
-            CREDFETO_PRECOMMIT_CACHE_BUST=${{ steps.cb.outputs.credfeto_sha }}
-            CREDFETO_AI_SKILLS_CACHE_BUST=${{ steps.cb.outputs.credfeto_ai_skills_sha }}
-            BUILD_GIT_SHA=${{ github.sha }}
+            STABLE_TOOLS_CACHE_BUST=${{ steps.cb.outputs.version-hash }}
           cache-from: "type=gha"
           cache-to: "type=gha,mode=max,ignore-error=true"
 
@@ -138,14 +131,13 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "## development-full image pushed"
+            echo "## development-dotnet-tools image pushed"
             echo ""
             echo '```'
             echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             echo '```'
             echo ""
-            echo "credfeto/credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
-            echo "credfeto/credfeto-ai-skills @ \`${{ steps.cb.outputs.credfeto_ai_skills_sha }}\`"
+            echo "NuGet version hash: \`${{ steps.cb.outputs.version-hash }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
@@ -153,7 +145,7 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "## development-full image built (not pushed — pull_request run)"
+            echo "## development-dotnet-tools image built (not pushed — pull_request run)"
             echo ""
             echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -163,7 +155,7 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "## development-full build skipped"
+            echo "## development-dotnet-tools build skipped"
             echo ""
             echo "No changed file touched a watched path — nothing to rebuild."
           } >> "$GITHUB_STEP_SUMMARY"
