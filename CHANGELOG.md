@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- Send a Discord alert when the priorities API is unreachable after exhausting all retry attempts, instead of failing silently in the orchestrator's journal
 ### Changed
 ### Deprecated
 ### Removed
