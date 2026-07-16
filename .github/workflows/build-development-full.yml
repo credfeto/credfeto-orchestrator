@@ -1,9 +1,9 @@
 ---
 name: "Build development-full base image"
 
-# Build and push the development-full base image — .NET SDK, global .NET tools,
-# skill repos, and the credfeto global pre-commit hook chain layered on top of
-# development-python.
+# Build and push the development-full base image — skill repos, Claude Code
+# settings/hooks, and the credfeto global pre-commit hook chain layered on
+# top of development-credfeto-tools.
 #
 # Tags pushed:
 #   :latest       what consumers resolve by default
@@ -16,9 +16,9 @@ name: "Build development-full base image"
 
 on:
   schedule:
-    # Hourly — keeps .NET tool versions up to date and picks up new commits
-    # from credfeto-global-pre-commit; unchanged hours hit the GHA cache
-    # fully (only a layer-validation / tag-push noop runs).
+    # Hourly — picks up new commits from credfeto-global-pre-commit and
+    # credfeto-ai-skills; unchanged hours hit the GHA cache fully (only a
+    # layer-validation / tag-push noop runs).
     - cron: "45 * * * *"
   repository_dispatch:
     # Fired by credfeto-global-pre-commit on every push to main so the image
@@ -27,7 +27,7 @@ on:
     types:
       - pre-commit-updated
   workflow_run:
-    workflows: ["Build development-python base image"]
+    workflows: ["Build development-credfeto-tools base image"]
     types:
       - completed
     branches:
@@ -104,7 +104,6 @@ jobs:
         shell: "bash"
         run: |
           {
-            echo "date=$(date -u +%%Y-%%m-%%d)"
             echo "credfeto_sha=$(git ls-remote https://github.com/credfeto/credfeto-global-pre-commit.git HEAD | cut -f1)"
             echo "credfeto_ai_skills_sha=$(git ls-remote https://github.com/credfeto/credfeto-ai-skills.git HEAD | cut -f1)"
           } >> "$GITHUB_OUTPUT"
@@ -120,7 +119,6 @@ jobs:
           load: ${{ github.event_name == 'pull_request' }}
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
-            DOTNET_TOOLS_CACHE_BUST=${{ steps.cb.outputs.date }}
             CREDFETO_PRECOMMIT_CACHE_BUST=${{ steps.cb.outputs.credfeto_sha }}
             CREDFETO_AI_SKILLS_CACHE_BUST=${{ steps.cb.outputs.credfeto_ai_skills_sha }}
             BUILD_GIT_SHA=${{ github.sha }}
