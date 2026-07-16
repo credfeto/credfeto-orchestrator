@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Add a block-git-worktree Claude Code hook to the development-full container, blocking git worktree add (worktree creation) while leaving list/remove/prune and other worktree subcommands allowed
 ### Fixed
 ### Changed
 ### Deprecated

@@ -83,6 +83,10 @@
           {
             "type": "command",
             "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
+          },
+          {
+            "type": "command",
+            "command": "/home/developer/.claude/hooks/block-git-worktree"
           }
         ]
       },
