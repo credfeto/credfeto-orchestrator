@@ -134,8 +134,7 @@ notify_discord_no_work() {
 # "priorities_unreachable"). Falls back to a shared "_global" file when no owner is given;
 # slashes in the owner name are flattened so it can't create subdirectories.
 _discord_dedup_state_file() {
-    local key="$1" owner="${2:-}" owner_slug
-    owner_slug="${owner:-_global}"
+    local key="$1" owner_slug="${2:-_global}"
     owner_slug="${owner_slug//\//_}"
     printf '%s' "${HOME}/.orchestrator/.${key}_${owner_slug}.state"
 }
