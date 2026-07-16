@@ -145,8 +145,8 @@ _discord_dedup_state_file() {
 _discord_dedup_allowed() {
     local state_file="$1" now="$2" last_sent elapsed
     [ -f "${state_file}" ] || return 0
-    last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
-    printf '%s' "${last_sent}" | grep -qE '^[0-9]+$' || return 0
+    read -r last_sent < "${state_file}" 2>/dev/null
+    [[ "${last_sent}" =~ ^[0-9]+$ ]] || return 0
     elapsed=$(( now - last_sent ))
     [ "${elapsed}" -lt 3600 ] && return 1
     return 0
