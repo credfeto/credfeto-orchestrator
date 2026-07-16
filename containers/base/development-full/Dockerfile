@@ -255,6 +255,7 @@ COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /home/developer/.claude/hooks/enforce-git-dash-c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/developer/.claude/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /home/developer/.claude/hooks/reject-obfuscated-commands
+COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /home/developer/.claude/hooks/env-var-blocklist
@@ -389,6 +390,10 @@ RUN set -e; \
         || { echo "FATAL sanity: reject-obfuscated-commands hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/reject-obfuscated-commands ] \
         || { echo "FATAL sanity: reject-obfuscated-commands hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/block-git-worktree)" = "root:root 755" ] \
+        || { echo "FATAL sanity: block-git-worktree hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/block-git-worktree ] \
+        || { echo "FATAL sanity: block-git-worktree hook is not executable" >&2; exit 1; }; \
     for f in command-allowlist command-blocklist env-var-blocklist; do \
         [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \
