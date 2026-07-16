@@ -1,0 +1,160 @@
+---
+name: "Build development-credfeto-tools base image"
+
+# Build and push the development-credfeto-tools base image — the first-party
+# Credfeto.*/FunFair.* .NET global tools — layered on top of
+# development-dotnet-tools.
+#
+# Tags pushed:
+#   :latest       what consumers resolve by default
+#
+# Pushes to GitHub Container Registry (ghcr.io). Auth via the workflow's
+# built-in GITHUB_TOKEN — no extra secrets to manage.
+
+on:
+  schedule:
+    # Hourly (staggered after development-dotnet-tools' :35) — the
+    # nuget-latest-versions check below decides whether anything actually
+    # needs to rebuild; unchanged hours hit the GHA cache fully (only a
+    # layer-validation / tag-push noop runs).
+    - cron: "40 * * * *"
+  workflow_run:
+    workflows: ["Build development-dotnet-tools base image"]
+    types:
+      - completed
+    branches:
+      - "main"
+  push:
+    branches: ["main"]
+    paths:
+      - "containers/base/development-credfeto-tools/**"
+      - ".github/workflows/build-development-credfeto-tools.yml"
+      - ".github/actions/nuget-latest-versions/**"
+      - ".github/actions/trivy-scan/**"
+  pull_request:
+    # No paths: filter here (unlike push above) — this workflow must always
+    # run and report a status on every PR to main, since it is a required
+    # status check (see .github/actions/pr-touches-paths). It skips straight
+    # to a trivial success when the PR doesn't touch anything relevant.
+    branches: ["main"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: "build-development-credfeto-tools-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: "ghcr.io"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-credfeto-tools"
+
+permissions:
+  contents: "read"
+
+jobs:
+  # @@required: main
+  build-development-credfeto-tools:
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 60
+    permissions:
+      contents: "read"
+      packages: "write"
+      pull-requests: "read"
+      security-events: "write"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: "Check if this image needs rebuilding"
+        id: "relevance"
+        uses: ./.github/actions/pr-touches-paths
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          path-prefixes: |
+            containers/base/development-credfeto-tools/
+            .github/workflows/build-development-credfeto-tools.yml
+            .github/actions/nuget-latest-versions/
+            .github/actions/trivy-scan/
+
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
+      # configuration required. It has packages:write permission declared above.
+      - name: "Log in to GHCR"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: docker/login-action@v4.4.0
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Set up Docker Buildx"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: docker/setup-buildx-action@v4.2.0
+
+      - name: "Resolve cache-bust value"
+        id: "cb"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: ./.github/actions/nuget-latest-versions
+        with:
+          package-ids: |
+            Credfeto.Changelog.Cmd
+            Credfeto.DotNet.Code.Analysis.Overrides.Cmd
+            FunFair.BuildCheck
+            FunFair.BuildVersion
+            Credfeto.DotNet.Repo.Formatter
+
+      - name: "Build and push"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: "containers/base/development-credfeto-tools"
+          file: "containers/base/development-credfeto-tools/Dockerfile"
+          pull: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          build-args: |
+            CREDFETO_FUNFAIR_TOOLS_CACHE_BUST=${{ steps.cb.outputs.version-hash }}
+          cache-from: "type=gha"
+          cache-to: "type=gha,mode=max,ignore-error=true"
+
+      - name: "Scan image for vulnerabilities"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: ./.github/actions/trivy-scan
+        with:
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+      - name: "Summarise"
+        if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools image pushed"
+            echo ""
+            echo '```'
+            echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+            echo ""
+            echo "NuGet version hash: \`${{ steps.cb.outputs.version-hash }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (build-only, not pushed)"
+        if: ${{ github.event_name == 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools image built (not pushed — pull_request run)"
+            echo ""
+            echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (skipped — no relevant changes)"
+        if: ${{ steps.relevance.outputs.relevant != 'true' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools build skipped"
+            echo ""
+            echo "No changed file touched a watched path — nothing to rebuild."
+          } >> "$GITHUB_STEP_SUMMARY"
