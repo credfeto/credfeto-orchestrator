@@ -3337,6 +3337,7 @@ setup_main_mocks() {
     notify_discord_claude_error()      { return 0; }
     notify_discord_rate_limited()      { return 0; }
     notify_discord_low_disk_space()    { return 0; }
+    notify_discord_priorities_unreachable() { return 0; }
     check_disk_space()                 { return 0; }
     sync_pr_labels_from_linked_issues() { return 0; }
 }
@@ -3833,6 +3834,17 @@ STUBEOF
     [[ "${output}" == *"Failed to fetch priorities"* ]]
     [[ "${output}" != *"No actionable work items"* ]]
     [[ "${output}" != *"No open work items"* ]]
+}
+
+@test "main notifies Discord before dying when fetch_all_priorities ultimately fails (#1171)" {
+    setup_main_mocks
+    fetch_all_priorities() { return 1; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_priorities_unreachable() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [ -f "${discord_log}" ]
 }
 
 @test "main dies loudly when the priorities item count cannot be determined (#1089)" {
@@ -7000,6 +7012,86 @@ STUBEOF
     printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space_other_owner.state"
 
     run notify_discord_low_disk_space "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+# --- notify_discord_priorities_unreachable --------------------------------------------
+
+@test "notify_discord_priorities_unreachable does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable sends embed referencing PRIORITIES_URL when webhook is set" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+    grep -q "${PRIORITIES_URL}" "${curl_log}"
+}
+
+@test "notify_discord_priorities_unreachable includes owner in title when owner is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "myowner" "${curl_log}"
+}
+
+@test "notify_discord_priorities_unreachable suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 30 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 90 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable uses owner-scoped state file" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file for a different owner — should not suppress this call.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable_other_owner.state"
+
+    run notify_discord_priorities_unreachable "myowner"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
 }
