@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# Discord webhook notifications: work-item start/resume, no-work, low-disk-space, blocked-item,
-# Claude container error, and rate-limited notices. Also the shared item-URL builder they use.
+# Discord webhook notifications: work-item start/resume, no-work, low-disk-space,
+# priorities-unreachable, blocked-item, Claude container error, and rate-limited notices. Also
+# the shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id. Falls back to the bare repo URL for an unrecognised/empty item_type.
@@ -165,6 +166,53 @@ notify_discord_low_disk_space() {
             {name:"Minimum Required",value:("\($threshold_gb) GB"),inline:true}
         ]}]}') \
         || { warn "Discord: failed to build low disk space payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+
+    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    printf '%s\n' "${now}" > "${state_file}"
+}
+
+# Sends a Discord embed notification when fetch_all_priorities exhausts all retry attempts,
+# i.e. the priorities API itself is unreachable, distinct from a single item's GitHub calls
+# failing. Without this, a sustained priorities-API outage dies loudly in the journal but
+# produces no visible alert, so an outage can run for hours with nobody notified (#1171).
+# Arguments: owner (optional)
+# Deduplicates: at most one notification per hour per owner, mirroring notify_discord_low_disk_space.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure — a Discord outage
+# must never prevent the caller's own die() from firing.
+notify_discord_priorities_unreachable() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}"
+
+    local owner_slug state_file now last_sent elapsed
+    owner_slug="${owner:-_global}"
+    owner_slug="${owner_slug//\//_}"
+    state_file="${HOME}/.orchestrator/.priorities_unreachable_${owner_slug}.state"
+    now=$(date +%s)
+    if [ -f "${state_file}" ]; then
+        last_sent=$(cat "${state_file}" 2>/dev/null || printf '0')
+        if printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
+            elapsed=$(( now - last_sent ))
+            [ "${elapsed}" -lt 3600 ] && return 0
+        fi
+    fi
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Priorities API Unreachable${owner:+ [${owner}]}" \
+        --arg url "${PRIORITIES_URL}" \
+        --argjson attempts "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"URL",value:$url,inline:false},
+            {name:"Attempts",value:($attempts|tostring),inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build priorities-unreachable payload"; return 0; }
 
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
