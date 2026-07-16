@@ -123,8 +123,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # load_env_config and validate_config are declared in lib/core.
 
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
-# notify_discord_low_disk_space, notify_discord_blocked_item, notify_discord_claude_error, and
-# notify_discord_rate_limited are declared in lib/discord.
+# notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
+# notify_discord_claude_error, and notify_discord_rate_limited are declared in lib/discord.
 
 # rearm_closed_issue_markers and tag_pr_closed_issue are declared in lib/state.
 
@@ -187,7 +187,10 @@ main() {
 
     local items_json item_count
     info "Fetching priorities from ${PRIORITIES_URL}..."
-    items_json=$(fetch_all_priorities) || die "Failed to fetch priorities from ${PRIORITIES_URL}"
+    if ! items_json=$(fetch_all_priorities); then
+        notify_discord_priorities_unreachable "${owner_filter}"
+        die "Failed to fetch priorities from ${PRIORITIES_URL}"
+    fi
 
     if [ -n "${owner_filter}" ]; then
         items_json=$(printf '%s' "${items_json}" | jq -c --arg owner "${owner_filter}" \
