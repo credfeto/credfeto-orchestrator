@@ -2805,16 +2805,16 @@ STUBEOF
     make_stub curl 'exit 1'
 
     run fetch_all_priorities
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 1 ]
 }
 
-@test "fetch_all_priorities returns 1 without dying when the response is not valid JSON (#1089)" {
+@test "fetch_all_priorities returns 2 (not 1) without dying when the response is not valid JSON (#1089, #1171)" {
     PRIORITIES_FETCH_RETRY_ATTEMPTS=1
     PRIORITIES_FETCH_RETRY_DELAY_SECS=0
     make_stub curl 'printf "not json"'
 
     run fetch_all_priorities
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 2 ]
 }
 
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
@@ -3337,6 +3337,7 @@ setup_main_mocks() {
     notify_discord_claude_error()      { return 0; }
     notify_discord_rate_limited()      { return 0; }
     notify_discord_low_disk_space()    { return 0; }
+    notify_discord_priorities_unreachable() { return 0; }
     check_disk_space()                 { return 0; }
     sync_pr_labels_from_linked_issues() { return 0; }
 }
@@ -3833,6 +3834,29 @@ STUBEOF
     [[ "${output}" == *"Failed to fetch priorities"* ]]
     [[ "${output}" != *"No actionable work items"* ]]
     [[ "${output}" != *"No open work items"* ]]
+}
+
+@test "main notifies Discord before dying when fetch_all_priorities ultimately fails (#1171)" {
+    setup_main_mocks
+    fetch_all_priorities() { return 1; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_priorities_unreachable() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [ -f "${discord_log}" ]
+}
+
+@test "main does NOT notify Discord when fetch_all_priorities fails to parse (rc 2, not unreachable) (#1171)" {
+    setup_main_mocks
+    fetch_all_priorities() { return 2; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_priorities_unreachable() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to fetch priorities"* ]]
+    [ ! -f "${discord_log}" ]
 }
 
 @test "main dies loudly when the priorities item count cannot be determined (#1089)" {
@@ -6988,6 +7012,17 @@ STUBEOF
     [ -f "${curl_log}" ]
 }
 
+@test "notify_discord_low_disk_space does not record dedup state when the curl POST fails (#1171 review)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.low_disk_space__global.state" ]
+}
+
 @test "notify_discord_low_disk_space uses owner-scoped state file" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
     disk_space_available_kb() { printf '5242880\n'; }
@@ -7002,6 +7037,87 @@ STUBEOF
     run notify_discord_low_disk_space "myowner"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
+}
+
+# --- notify_discord_priorities_unreachable --------------------------------------------
+
+@test "notify_discord_priorities_unreachable does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable sends embed referencing PRIORITIES_URL when webhook is set" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+    grep -q "${PRIORITIES_URL}" "${curl_log}"
+}
+
+@test "notify_discord_priorities_unreachable includes owner in title when owner is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_priorities_unreachable "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "myowner" "${curl_log}"
+}
+
+@test "notify_discord_priorities_unreachable suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 30 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 90 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+
+    run notify_discord_priorities_unreachable
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_priorities_unreachable shares one dedup state file across owners (#1171 review)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # PRIORITIES_URL is one global endpoint, not per-owner — a recent alert for a different
+    # owner must suppress this call too, rather than each owner getting its own hourly quota.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+
+    run notify_discord_priorities_unreachable "myowner"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
 }
 
 # --- main: disk space check ---------------------------------------------------

@@ -71,9 +71,11 @@ require_trusted_logins() {
 
 # Outputs all open, non-on-hold priority items as a JSON array sorted by priority.
 # Retries transient fetch failures a few times before giving up. Returns 1 (does NOT die,
-# does NOT exit the shell) on ultimate failure — the caller must check this explicitly and
-# die itself, because a swallowed failure here previously fell through to a "No actionable
-# work items found" success report, masking a priorities-API outage as a healthy idle run (#1089).
+# does NOT exit the shell) when every attempt fails to connect — the caller must check this
+# explicitly and die itself, because a swallowed failure here previously fell through to a "No
+# actionable work items found" success report, masking a priorities-API outage as a healthy idle
+# run (#1089). Returns 2 when the API answered but the response body failed to parse (a distinct
+# condition from unreachability — the caller must not report this as a connectivity outage).
 fetch_all_priorities() {
     local priorities_json attempt=1
 
@@ -84,7 +86,7 @@ fetch_all_priorities() {
                     | select((.status == "Open" or .status == "Draft") and .isOnHold == false)
             ]' && return 0
             warn "Failed to parse priorities JSON from ${PRIORITIES_URL}"
-            return 1
+            return 2
         fi
         [ "${attempt}" -lt "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ] && [ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
             && sleep "${PRIORITIES_FETCH_RETRY_DELAY_SECS}"
