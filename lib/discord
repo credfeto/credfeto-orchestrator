@@ -101,10 +101,8 @@ notify_discord_no_work() {
     [ -n "${detail}" ] && message="${message} (${detail})"
 
     # Dedup: suppress if the same message was sent within the last hour.
-    local owner_slug state_file now last_message last_sent elapsed
-    owner_slug="${owner:-_global}"
-    owner_slug="${owner_slug//\//_}"
-    state_file="${HOME}/.orchestrator/.no_work_${owner_slug}.state"
+    local state_file now last_message last_sent elapsed
+    state_file=$(_discord_dedup_state_file no_work "${owner}")
     now=$(date +%s)
     if [ -f "${state_file}" ]; then
         last_message=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
@@ -152,18 +150,22 @@ _discord_dedup_allowed() {
     return 0
 }
 
-# Posts payload to DISCORD_WEBHOOK_URL and records now (unix timestamp, from the caller's
-# _discord_dedup_allowed check) in state_file so a later call suppresses repeats within the hour.
+# Posts payload to DISCORD_WEBHOOK_URL and, only on success, records now (unix timestamp, from
+# the caller's _discord_dedup_allowed check) in state_file so a later call suppresses repeats
+# within the hour. A failed post must NOT be recorded — otherwise a Discord-webhook outage
+# coincident with the condition being reported would silently suppress the next hour of retries
+# of an alert that never actually reached anyone.
 _discord_send_and_record() {
     local payload="$1" state_file="$2" now="$3"
-    curl --silent --fail --max-time 5 \
+    if curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
         -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
-        || warn "Discord webhook notification failed"
-
-    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-    printf '%s\n' "${now}" > "${state_file}"
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1; then
+        mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+        printf '%s\n' "${now}" > "${state_file}"
+    else
+        warn "Discord webhook notification failed"
+    fi
 }
 
 # Sends a Discord embed notification when disk space is below MIN_DISK_SPACE_KB.
@@ -202,16 +204,20 @@ notify_discord_low_disk_space() {
 # i.e. the priorities API itself is unreachable, distinct from a single item's GitHub calls
 # failing. Without this, a sustained priorities-API outage dies loudly in the journal but
 # produces no visible alert, so an outage can run for hours with nobody notified (#1171).
-# Arguments: owner (optional)
-# Deduplicates: at most one notification per hour per owner, mirroring notify_discord_low_disk_space.
+# Arguments: owner (optional, included in the alert title only)
+# Deduplicates: at most one notification per hour, shared across all owners — PRIORITIES_URL is
+# a single global endpoint, so an outage isn't scoped per-owner the way disk space is.
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure — a Discord outage
 # must never prevent the caller's own die() from firing.
 notify_discord_priorities_unreachable() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
 
+    # Dedup on a single shared key, not per-owner: PRIORITIES_URL is one global endpoint, so an
+    # outage affecting every owner running concurrently must produce one alert, not a flood of
+    # one per owner.
     local state_file now
-    state_file=$(_discord_dedup_state_file priorities_unreachable "${owner}")
+    state_file=$(_discord_dedup_state_file priorities_unreachable)
     now=$(date +%s)
     _discord_dedup_allowed "${state_file}" "${now}" || return 0
 

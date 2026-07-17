@@ -185,10 +185,14 @@ main() {
         exit 0
     fi
 
-    local items_json item_count
+    local items_json item_count fetch_rc
     info "Fetching priorities from ${PRIORITIES_URL}..."
-    if ! items_json=$(fetch_all_priorities); then
-        notify_discord_priorities_unreachable "${owner_filter}"
+    items_json=$(fetch_all_priorities)
+    fetch_rc=$?
+    if [ "${fetch_rc}" -ne 0 ]; then
+        # rc 1 = genuinely unreachable after retries; rc 2 = API answered but the body failed
+        # to parse — only the former is a connectivity outage worth a Discord alert.
+        [ "${fetch_rc}" -eq 1 ] && notify_discord_priorities_unreachable "${owner_filter}"
         die "Failed to fetch priorities from ${PRIORITIES_URL}"
     fi
 

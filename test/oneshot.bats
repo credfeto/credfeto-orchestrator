@@ -2805,16 +2805,16 @@ STUBEOF
     make_stub curl 'exit 1'
 
     run fetch_all_priorities
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 1 ]
 }
 
-@test "fetch_all_priorities returns 1 without dying when the response is not valid JSON (#1089)" {
+@test "fetch_all_priorities returns 2 (not 1) without dying when the response is not valid JSON (#1089, #1171)" {
     PRIORITIES_FETCH_RETRY_ATTEMPTS=1
     PRIORITIES_FETCH_RETRY_DELAY_SECS=0
     make_stub curl 'printf "not json"'
 
     run fetch_all_priorities
-    [ "${status}" -ne 0 ]
+    [ "${status}" -eq 2 ]
 }
 
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
@@ -3845,6 +3845,18 @@ STUBEOF
     run main
     [ "${status}" -ne 0 ]
     [ -f "${discord_log}" ]
+}
+
+@test "main does NOT notify Discord when fetch_all_priorities fails to parse (rc 2, not unreachable) (#1171)" {
+    setup_main_mocks
+    fetch_all_priorities() { return 2; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_priorities_unreachable() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to fetch priorities"* ]]
+    [ ! -f "${discord_log}" ]
 }
 
 @test "main dies loudly when the priorities item count cannot be determined (#1089)" {
@@ -7000,6 +7012,17 @@ STUBEOF
     [ -f "${curl_log}" ]
 }
 
+@test "notify_discord_low_disk_space does not record dedup state when the curl POST fails (#1171 review)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    disk_space_available_kb() { printf '5242880\n'; }
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_low_disk_space
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.low_disk_space__global.state" ]
+}
+
 @test "notify_discord_low_disk_space uses owner-scoped state file" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
     disk_space_available_kb() { printf '5242880\n'; }
@@ -7081,19 +7104,20 @@ STUBEOF
     [ -f "${curl_log}" ]
 }
 
-@test "notify_discord_priorities_unreachable uses owner-scoped state file" {
+@test "notify_discord_priorities_unreachable shares one dedup state file across owners (#1171 review)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
     local curl_log="${TEST_TMP}/curl_log"
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    # Write a state file for a different owner — should not suppress this call.
+    # PRIORITIES_URL is one global endpoint, not per-owner — a recent alert for a different
+    # owner must suppress this call too, rather than each owner getting its own hourly quota.
     mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable_other_owner.state"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
 
     run notify_discord_priorities_unreachable "myowner"
     [ "${status}" -eq 0 ]
-    [ -f "${curl_log}" ]
+    [ ! -f "${curl_log}" ]
 }
 
 # --- main: disk space check ---------------------------------------------------
