@@ -118,7 +118,17 @@ View [changelog](CHANGELOG.md)
 
 ## Documentation
 
-Additional documentation is in the [docs/](docs/) folder.
+Additional documentation is in the [docs/](docs/) folder:
+
+- [Architecture](docs/architecture.md) — the map tying every subsystem doc together.
+- [How `oneshot` works](docs/oneshot.md)
+- [How the Workflow board works](docs/workflow-board.md)
+- [How fingerprinting works](docs/fingerprinting.md)
+- [How the agent container works](docs/agent-container.md)
+- [How the base image chain works](docs/base-image-chain.md)
+- [How GitHub integration works](docs/github-integration.md)
+- [How Discord notifications work](docs/discord-notifications.md)
+- [How deployment and setup work](docs/deployment-and-setup.md)
 
 ## Contributing
 
