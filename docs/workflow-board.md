@@ -31,7 +31,7 @@ happens.
 | AI Simplify | the agent | Running the automated cleanup pass before review. |
 | AI Review | the agent | Running an automated code review pass. |
 | AI Security Review | the agent | Running an automated security review pass. |
-| Human Review | the agent | Everything automated has passed; auto-merge has been enabled. |
+| Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to enable auto-merge — reaching this status does not by itself mean that has happened yet. |
 | Complete | (implicit — the PR merges) | Done. |
 
 Only one of these transitions is ever made by a human: **Approved**. Every other column is moved

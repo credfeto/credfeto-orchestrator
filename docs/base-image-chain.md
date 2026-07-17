@@ -71,9 +71,14 @@ Issues and Pull Requests.
 - Each stage's own build-time sanity check (a `RUN` step near the end of its Dockerfile that
   probes every tool it just installed) is trusted to catch a broken install at build time,
   before that broken layer ever gets published and pulled by a real run.
-- A tool that's only ever verified in an *earlier* stage doesn't need re-verifying in every
-  later stage that inherits it — each stage's own sanity check only re-verifies what changed for
-  that stage, trusting the stages before it.
+- In practice the later stages (`development-full`, `agent`) deliberately go further than just
+  checking their own additions: they *also* re-probe a long list of tools inherited from every
+  earlier stage (git, gh, dotnet, python3, gpg, curl, and more). This is intentional
+  belt-and-suspenders, not redundant — it catches the case where an earlier layer's tool was
+  fine at *its own* build time but something later (a `COPY`, an `ENV` change, a path
+  rearrangement) broke it before the image the agent actually runs was finished. It does mean a
+  break several layers upstream can resurface identically in more than one later stage's build
+  log, rather than being caught only once at its origin.
 - The chain is a straight line (each stage has exactly one parent), not a diamond — nothing in
   this project currently needs to combine two independently-built branches of this chain back
   together.
