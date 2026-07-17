@@ -139,7 +139,7 @@ find ~/.orchestrator -name '*.fingerprint' | sort
 find ~/.orchestrator -name '*.fingerprint' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
-A fingerprint file holds the SHA-256 hash of a PR's or Issue's state at the end of the last run. When the fingerprint matches the current GitHub state, `oneshot` skips the item. An incorrect or stale fingerprint is why an item that should be worked on is being skipped.
+A fingerprint file holds `<schema-version>:<SHA-256 hash>` of a PR's or Issue's state at the end of the last run (see [fingerprinting.instructions.md](fingerprinting.instructions.md) for what's hashed and why the version prefix exists). When the fingerprint matches the current GitHub state, `oneshot` skips the item. An incorrect or stale fingerprint is why an item that should be worked on is being skipped — including a plan approved purely on the Workflow board, which the fingerprint now accounts for (#1204); if a board-approved item is still stuck, check whether `FINGERPRINT_SCHEMA_VERSION` was bumped for whatever field is supposed to catch it.
 
 To force a re-run, delete the relevant fingerprint file:
 
