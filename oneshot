@@ -423,7 +423,12 @@ main() {
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
                         require_trusted_logins || continue
-                        issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
+                        # Must match plan_approved exactly as compute_issue_fingerprint (the
+                        # post-invocation save for this same issue) computes it, or this
+                        # comparison never matches again once the plan is Approved (#1204 review).
+                        discover_or_create_workflow_project
+                        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+                        issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "$(issue_plan_approved "${item_repo}" "${item_id}")") \
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
@@ -542,10 +547,7 @@ main() {
                 # later call.
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-                fetch_board_approved_items
-                local issue_plan_approved="false"
-                [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && issue_plan_approved="true"
-                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${issue_plan_approved}") \
+                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "$(issue_plan_approved "${item_repo}" "${item_id}")") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
@@ -863,9 +865,8 @@ main() {
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
-            fetch_board_approved_items
-            local plan_approved="false"
-            [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && plan_approved="true"
+            local plan_approved
+            plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}")
         else

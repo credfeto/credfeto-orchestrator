@@ -87,13 +87,15 @@ fingerprint_pr_json() {
         (.autoMergeRequest != null | tostring)
     ') || return 1
 
-    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "$(printf '%s' "${canonical}" | hash_sha256)"
+    local hash
+    hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
+    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
 }
 
 # Computes a deterministic hash of the PR's current state, folding in inline review comments
-# (#1127) alongside the gh pr view fields. Outputs the hash on stdout; returns non-zero if any
-# gh call or jq fails — fails closed rather than fingerprinting against stale/empty inline
-# comment data (mirrors the get_trusted_logins fail-closed rule, #1094).
+# (#1127) alongside the gh pr view fields. Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on
+# stdout; returns non-zero if any gh call or jq fails — fails closed rather than fingerprinting
+# against stale/empty inline comment data (mirrors the get_trusted_logins fail-closed rule, #1094).
 compute_pr_fingerprint() {
     local item_id="$1"
     local pr_json trusted review_comments
@@ -246,7 +248,9 @@ fingerprint_issue_json() {
         $planApproved
     ') || return 1
 
-    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "$(printf '%s' "${canonical}" | hash_sha256)"
+    local hash
+    hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
+    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
 }
 
 # Computes a deterministic hash of the Issue's current state using a single gh issue view call.
@@ -255,16 +259,14 @@ fingerprint_issue_json() {
 # an invocation and compared against on the next tick, so it must reflect the current approval
 # state precisely the same way the pre-invocation check does, or every approved Issue would
 # appear "changed" (and be re-invoked) on every single tick from here on (#1204).
-# Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
+# Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on stdout; returns non-zero if the gh call or jq
+# fails.
 compute_issue_fingerprint() {
     local item_id="$1"
-    local issue_json trusted plan_approved
+    local issue_json trusted
     issue_json=$(fetch_issue_json "${item_id}") || return 1
     trusted=$(get_trusted_logins) || return 1
-    fetch_board_approved_items
-    plan_approved="false"
-    [ "${_WF_APPROVED_ITEMS["${REPO_FULL}/${item_id}"]:-}" = "1" ] && plan_approved="true"
-    fingerprint_issue_json "${issue_json}" "${trusted}" "${plan_approved}"
+    fingerprint_issue_json "${issue_json}" "${trusted}" "$(issue_plan_approved "${REPO_FULL}" "${item_id}")"
 }
 
 # Writes the fingerprint to the fingerprint file for a given Issue ID.
