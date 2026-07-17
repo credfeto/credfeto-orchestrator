@@ -89,10 +89,10 @@ Two constraints shape almost every design decision in this codebase:
 - Every document linked from here describes the system as it exists today; if the code changes,
   the corresponding doc (and this map) should be updated in the same change — a stale
   architecture doc is worse than no doc, since it actively misleads.
-- "One repository, one active item, one agent session at a time" (see
-  [oneshot.md](oneshot.md)) is a deliberate simplicity choice, not a hard technical limit — it
-  keeps the whole system easy to reason about at the cost of not parallelising work within a
-  single repository.
+- Exactly one agent session per `oneshot` run, across *all* repositories, not one-per-repository
+  (see [oneshot.md](oneshot.md)) — a deliberate simplicity choice, not a hard technical limit. It
+  keeps the whole system easy to reason about at the cost of not parallelising work at all within
+  a single tick; the next tick, moments later, is what picks up the next item.
 - A human is assumed to be reachable via Discord and via GitHub notifications within a
   reasonable time of being needed (an approval, an escalation) — nothing here has a fallback for
   "nobody ever looks."

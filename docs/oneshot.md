@@ -68,12 +68,17 @@ still on the branch — not just who opened the PR.
 
 ## One repository at a time
 
-Only one Issue or Pull Request per repository is actively worked in a single tick. This keeps
-things simple and avoids two agent sessions racing to push conflicting commits to the same repo
-checkout. A repository is marked "already active" for the rest of the tick the moment any
-open, non-blocked Pull Request for it is seen in the priorities list — even one that turns out to
-be unchanged and gets skipped — so a lower-priority Issue in that same repository waits its turn
-rather than starting brand-new, possibly-conflicting work alongside it.
+A single `oneshot` run only ever invokes the agent once, full stop — the moment one item has been
+worked, the whole process exits, regardless of how many other repositories also had actionable
+items waiting. So this isn't about two agent sessions racing each other within one run (that can
+never happen). It's about what happens on a tick where a repository's Pull Request is scanned
+*first*, ranks higher priority, but doesn't itself need a new invocation this tick (say, its CI
+checks are still pending) — the loop keeps scanning, and without a guard it could reach a
+lower-priority Issue in that *same* repository and start brand-new work on it, right alongside a
+Pull Request that's already mid-flight there. A repository is marked "already active" for the
+rest of the tick the moment any open, non-blocked Pull Request for it is seen in the priorities
+list — even one that doesn't need action this specific tick — so that lower-priority Issue waits
+its turn instead.
 
 ## Guard rails against an item looping forever
 
