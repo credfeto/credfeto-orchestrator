@@ -65,6 +65,12 @@ _finalize_fingerprint() {
 # Optional third argument: JSON array of inline review comments from fetch_pr_review_comments
 # (REST shape — author under `.user.login`, timestamp under `.updated_at`), defaulting to an
 # empty array for callers that predate #1127.
+# statusCheckRollup mixes two GraphQL node types (see lib/github-status): CheckRun, which has
+# `.conclusion`/`.status`, and legacy StatusContext, which has only `.state`. The `.state`
+# fallback below (#1210) is needed so a StatusContext's actual result is captured at all —
+# without it every StatusContext entry canonicalized to the same "none:<name>" regardless of
+# its real state, making a pending-to-failed (or similar) transition on that kind of check
+# invisible to this fingerprint.
 # Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on stdout; returns non-zero if jq fails.
 fingerprint_pr_json() {
     local pr_json="$1"
@@ -94,7 +100,7 @@ fingerprint_pr_json() {
         ((trc($reviewComments) | sort_by(.updated_at) | last | .updated_at) // "none"),
         ([((.statusCheckRollup // [])[]
             | (.name // "unknown") as $n
-            | (.conclusion // .status // "none") as $c
+            | (.conclusion // .status // .state // "none") as $c
             | "\($c):\($n)"
         )] | sort | join(",")),
         (.mergeable // "UNKNOWN"),
