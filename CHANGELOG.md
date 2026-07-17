@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add a development-dotnet-tools base image (stable third-party .NET global tools + claude-code) between development-python and development-full, cache-busted via a NuGet freshness check instead of a blind daily reinstall
 - Add a development-credfeto-tools base image (first-party Credfeto.*/FunFair.* .NET global tools) between development-dotnet-tools and development-full, cache-busted via the same NuGet freshness check
 - Add plain-English documentation covering the full orchestrator architecture and every major subsystem (docs/architecture.md, oneshot.md, workflow-board.md, agent-container.md, base-image-chain.md, github-integration.md, discord-notifications.md, deployment-and-setup.md), each including its own assumptions
+- Link each new architecture/subsystem doc directly from README.md's Documentation section
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
