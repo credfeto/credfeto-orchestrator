@@ -530,7 +530,22 @@ main() {
                 fi
 
                 require_trusted_logins || continue
-                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}") \
+                # Board approval must be checked BEFORE the fingerprint comparison below, not
+                # only later when building the prompt — otherwise a plan approved purely on the
+                # Workflow board (no change to the issue's own title/body/state/labels/comments/
+                # assignees/milestone) is invisible to this fingerprint and the item is skipped
+                # as "unchanged" forever, even though it has clearly been approved (#1204).
+                # discover_or_create_workflow_project normally only runs once an item is confirmed
+                # to proceed to invocation (below); calling it here too is a no-op on every path
+                # that already reaches there (idempotent/cached per repo per tick), but is needed
+                # on THIS path since an unchanged fingerprint continues before ever reaching that
+                # later call.
+                discover_or_create_workflow_project
+                [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+                fetch_board_approved_items
+                local issue_plan_approved="false"
+                [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ] && issue_plan_approved="true"
+                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${issue_plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
@@ -778,7 +793,8 @@ main() {
         # build_pr_prompt below) so _WF_PROJECT_ID is populated before ANY Discord notification
         # for this item fires this tick — otherwise board_substatus_for_item would always report
         # "Unknown" for the very first item touched per repo (#1136). Idempotent/cached, so
-        # nothing downstream that still expects it at its old position is affected.
+        # nothing downstream that still expects it at its old position is affected. For the Issue
+        # path this may already have run above (#1204) — that's fine, it's a cheap cache hit.
         discover_or_create_workflow_project
         [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
 
@@ -844,9 +860,6 @@ main() {
         fi
 
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
-
-        # discover_or_create_workflow_project already ran earlier this iteration (moved ahead
-        # of notify_discord_work_item, #1136) — no need to call it again here.
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then

@@ -50,7 +50,7 @@ fetch_pr_review_comments() {
 # Optional third argument: JSON array of inline review comments from fetch_pr_review_comments
 # (REST shape — author under `.user.login`, timestamp under `.updated_at`), defaulting to an
 # empty array for callers that predate #1127.
-# Outputs the hash on stdout; returns non-zero if jq fails.
+# Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on stdout; returns non-zero if jq fails.
 fingerprint_pr_json() {
     local pr_json="$1"
     local trusted_logins="${2:-null}"
@@ -87,7 +87,7 @@ fingerprint_pr_json() {
         (.autoMergeRequest != null | tostring)
     ') || return 1
 
-    printf '%s' "${canonical}" | hash_sha256
+    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "$(printf '%s' "${canonical}" | hash_sha256)"
 }
 
 # Computes a deterministic hash of the PR's current state, folding in inline review comments
@@ -221,11 +221,19 @@ fetch_issue_json() {
 # Computes a deterministic fingerprint from pre-fetched Issue state JSON.
 # Optional second argument: JSON array of trusted logins; when provided, only comments
 # from those users are included in the fingerprint so untrusted commenters do not trigger re-runs.
-# Outputs the hash on stdout; returns non-zero if jq fails.
+# Optional third argument: "true"/"false" (default "false") — whether the item's plan is
+# currently Approved on the Workflow board (fetch_board_approved_items). The board is a separate
+# GitHub object from the issue itself, so without this the fingerprint has no way to notice a
+# plan being approved purely via the board: once the issue's own fields (title/body/state/
+# labels/comments/assignees/milestone) stop changing, a board-only approval would be invisible
+# forever and the item would be skipped as "unchanged" indefinitely (#1204).
+# Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on stdout; returns non-zero if jq fails.
 fingerprint_issue_json() {
     local issue_json="$1"
     local trusted_logins="${2:-null}"
-    printf '%s' "${issue_json}" | jq -r --argjson trusted "${trusted_logins}" '
+    local plan_approved="${3:-false}"
+    local canonical
+    canonical=$(printf '%s' "${issue_json}" | jq -r --argjson trusted "${trusted_logins}" --arg planApproved "${plan_approved}" '
         def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
         .title,
         (.body // ""),
@@ -234,18 +242,29 @@ fingerprint_issue_json() {
         (tc(.comments // []) | length | tostring),
         ([tc(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
         ([((.assignees // [])[] | .login)] | sort | join(",")),
-        (.milestone.title // "none")
-    ' | hash_sha256
+        (.milestone.title // "none"),
+        $planApproved
+    ') || return 1
+
+    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "$(printf '%s' "${canonical}" | hash_sha256)"
 }
 
 # Computes a deterministic hash of the Issue's current state using a single gh issue view call.
+# Also folds in the Workflow board's plan-approval status (fetch_board_approved_items) for the
+# same reason fingerprint_issue_json's third argument exists: this is the fingerprint saved after
+# an invocation and compared against on the next tick, so it must reflect the current approval
+# state precisely the same way the pre-invocation check does, or every approved Issue would
+# appear "changed" (and be re-invoked) on every single tick from here on (#1204).
 # Outputs the hash on stdout; returns non-zero if the gh call or jq fails.
 compute_issue_fingerprint() {
     local item_id="$1"
-    local issue_json trusted
+    local issue_json trusted plan_approved
     issue_json=$(fetch_issue_json "${item_id}") || return 1
     trusted=$(get_trusted_logins) || return 1
-    fingerprint_issue_json "${issue_json}" "${trusted}"
+    fetch_board_approved_items
+    plan_approved="false"
+    [ "${_WF_APPROVED_ITEMS["${REPO_FULL}/${item_id}"]:-}" = "1" ] && plan_approved="true"
+    fingerprint_issue_json "${issue_json}" "${trusted}" "${plan_approved}"
 }
 
 # Writes the fingerprint to the fingerprint file for a given Issue ID.
