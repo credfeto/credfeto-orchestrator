@@ -20,6 +20,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
 - Send a Discord alert when the priorities API is unreachable after exhausting all retry attempts, instead of failing silently in the orchestrator's journal
 - Review round on the priorities-unreachable Discord alert (#1171): the dedup timestamp is no longer recorded when the Discord webhook POST itself fails (previously a coincident webhook outage silently suppressed the next hour of real alerts), a JSON-parse failure is no longer misreported as a connectivity outage with a fabricated retry-attempts count, and the dedup state is now shared across owners instead of per-owner since the priorities API is one global endpoint
+- Fix fingerprint_issue_json masking jq failures behind a bare pipeline, which let a stable wrong hash silently park an issue forever (#1102)
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 ### Deprecated
