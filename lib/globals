@@ -21,7 +21,7 @@ CONTAINER_RULES_PATH="/workspace/rules"
 # text happens to differ (which incidental/cosmetic filter edits could otherwise trigger by
 # accident). This is NOT overridable from the environment: it describes what the code hashes,
 # not an operational tuning knob.
-FINGERPRINT_SCHEMA_VERSION=1
+FINGERPRINT_SCHEMA_VERSION=2
 
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
