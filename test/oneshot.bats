@@ -1426,6 +1426,39 @@ teardown() {
     [ "${fp_base}" != "${fp_with}" ]
 }
 
+@test "fingerprint_issue_json changes when plan_approved flips, with no other field changed (#1204)" {
+    local issue='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local fp_unapproved fp_approved
+    fp_unapproved=$(fingerprint_issue_json "${issue}" "null" "false")
+    fp_approved=$(fingerprint_issue_json "${issue}" "null" "true")
+    [ "${fp_unapproved}" != "${fp_approved}" ]
+}
+
+@test "fingerprint_issue_json defaults plan_approved to false when the third argument is omitted (#1204)" {
+    local issue='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local fp_omitted fp_explicit_false
+    fp_omitted=$(fingerprint_issue_json "${issue}")
+    fp_explicit_false=$(fingerprint_issue_json "${issue}" "null" "false")
+    [ "${fp_omitted}" = "${fp_explicit_false}" ]
+}
+
+@test "fingerprint_issue_json and fingerprint_pr_json prepend FINGERPRINT_SCHEMA_VERSION and a stale version compares unequal (#1204)" {
+    local issue='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local fp_v1 fp_v2
+    fp_v1=$(fingerprint_issue_json "${issue}")
+    [[ "${fp_v1}" == "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+
+    FINGERPRINT_SCHEMA_VERSION=$(( FINGERPRINT_SCHEMA_VERSION + 1 ))
+    fp_v2=$(fingerprint_issue_json "${issue}")
+    [[ "${fp_v2}" == "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+    [ "${fp_v1}" != "${fp_v2}" ]
+
+    local pr='{"title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local pr_fp
+    pr_fp=$(fingerprint_pr_json "${pr}")
+    [[ "${pr_fp}" == "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+}
+
 @test "fingerprint_pr_json with trusted logins: trusted comment changes fingerprint" {
     local pr_base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
     local pr_trusted='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"owner"},"body":"lgtm","updatedAt":"2024-01-01T00:00:00Z"}],"reviews":[],"statusCheckRollup":[]}'
@@ -1837,6 +1870,30 @@ teardown() {
     run compute_pr_fingerprint 5
     [ "${status}" -ne 0 ]
     [ ! -f "${TEST_TMP}/fp_called" ]
+}
+
+@test "compute_issue_fingerprint passes the item's board plan-approval status to fingerprint_issue_json (#1204)" {
+    local captured_plan_approved="none"
+    _WF_PROJECT_ID="PVT_test"
+    REPO_FULL="owner/repo"
+    fetch_issue_json() { printf '{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fetch_board_approved_items() { _WF_APPROVED_ITEMS["owner/repo/42"]=1; }
+    fingerprint_issue_json() { captured_plan_approved="${3:-missing}"; printf 'test-fp\n'; }
+    compute_issue_fingerprint 42
+    [ "${captured_plan_approved}" = "true" ]
+}
+
+@test "compute_issue_fingerprint passes plan_approved=false when the item is not in _WF_APPROVED_ITEMS (#1204)" {
+    local captured_plan_approved="none"
+    _WF_PROJECT_ID="PVT_test"
+    REPO_FULL="owner/repo"
+    fetch_issue_json() { printf '{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    get_trusted_logins() { printf '["testowner"]\n'; }
+    fetch_board_approved_items() { return 0; }
+    fingerprint_issue_json() { captured_plan_approved="${3:-missing}"; printf 'test-fp\n'; }
+    compute_issue_fingerprint 42
+    [ "${captured_plan_approved}" = "false" ]
 }
 
 @test "compute_issue_fingerprint returns non-zero without calling fingerprint_issue_json when get_trusted_logins fails (#1094)" {
@@ -3325,6 +3382,11 @@ setup_main_mocks() {
     save_issue_fingerprint()    { return 0; }
     fingerprint_issue_json()    { printf 'issue-fp-default\n'; }
     load_issue_fingerprint()    { printf ''; }
+    # No Workflow board by default (#1204) — tests exercising board-approval behaviour override
+    # these individually, matching how fetch_board_approved_items itself is a no-op when
+    # _WF_PROJECT_ID is empty.
+    discover_or_create_workflow_project() { return 0; }
+    fetch_board_approved_items()          { return 0; }
     tag_pr_closed_issue()       { return 0; }
     is_owner_rate_limited()       { return 1; }
     load_env_config()             { return 0; }
@@ -5459,6 +5521,88 @@ setup_local_git_remote() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+@test "main does not skip a board-approved Issue whose own fields are otherwise unchanged (#1204)" {
+    # Reproduces credfeto-nuget-proxy#99: the issue's own GitHub fields (title/body/state/labels/
+    # comments/assignees/milestone) are identical to what was last cached, but the Workflow board
+    # now says Approved. This bug is invisible if fingerprint_issue_json/compute_issue_fingerprint
+    # are mocked away (as setup_main_mocks does by default), since the whole point is what the
+    # REAL functions do with board-approval status — so restore them here.
+    setup_main_mocks
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/lib/fingerprints"
+    # compute_issue_fingerprint (called post-invocation) keys _WF_APPROVED_ITEMS off REPO_FULL,
+    # which set_repo_context normally keeps in sync with item_repo per iteration; restore that
+    # instead of the blanket no-op set_repo_context() setup_main_mocks stubs in.
+    set_repo_context() { REPO_FULL="$1"; }
+
+    # Named to avoid colliding with main()'s own "local issue_json" — bash's dynamic scoping
+    # means a stub referencing a same-named test-body variable would see main()'s (still-empty)
+    # local instead of this one once main() declares its locals.
+    local fixture_issue_json='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '%s\n' "${fixture_issue_json}"; }
+    issue_json_has_blocked_label() { return 1; }
+    recover_orphaned_branch() { return 1; }
+
+    # Fingerprint cached BEFORE the plan was approved on the board (own fields identical).
+    local stale_fp
+    stale_fp=$(fingerprint_issue_json "${fixture_issue_json}" '["credfeto"]' "false")
+    load_issue_fingerprint() { printf '%s\n' "${stale_fp}"; }
+
+    # Board now says Approved.
+    _WF_PROJECT_ID="PVT_test"
+    fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"Issue #42 in org/repo unchanged"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+}
+
+@test "main re-invokes exactly once on board approval then skips again once re-saved (no infinite loop) (#1204)" {
+    setup_main_mocks
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/lib/fingerprints"
+    # See the previous test for why this override is needed (REPO_FULL must track item_repo).
+    set_repo_context() { REPO_FULL="$1"; }
+
+    # Named to avoid colliding with main()'s own "local issue_json" (bash dynamic scoping).
+    local fixture_issue_json='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '%s\n' "${fixture_issue_json}"; }
+    issue_json_has_blocked_label() { return 1; }
+    recover_orphaned_branch() { return 1; }
+
+    _WF_PROJECT_ID="PVT_test"
+    fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+
+    # Pre-existing on-disk fingerprint, as if cached before the plan was approved. Real
+    # save_issue_fingerprint/load_issue_fingerprint (via the re-source above) so state genuinely
+    # persists across the two ticks below, the same as it would across two real oneshot runs.
+    local stale_fp
+    stale_fp=$(fingerprint_issue_json "${fixture_issue_json}" '["credfeto"]' "false")
+    save_issue_fingerprint 42 "${stale_fp}"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    # The post-invocation save must have recorded plan_approved=true, or the second tick below
+    # would re-invoke forever instead of converging.
+    local saved_fp
+    saved_fp=$(load_issue_fingerprint 42)
+    [ "${saved_fp}" != "${stale_fp}" ]
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
 }
 
 # --- human-driven PR stand-off integration (#1131) -----------------------------

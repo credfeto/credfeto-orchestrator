@@ -595,6 +595,22 @@ fetch_board_approved_items() {
     done
 }
 
+# Returns "true"/"false" on stdout: whether item_repo/item_id's plan is currently Approved on
+# the Workflow board. Calls fetch_board_approved_items first (idempotent/cached per repo per
+# tick), so this is safe to call from multiple sites in the same tick without extra GraphQL
+# calls. Single source of truth for the "repo/id" key format and "1" sentinel value used by
+# _WF_APPROVED_ITEMS — every caller needing this must go through here rather than re-deriving it,
+# so a future change to either only needs updating in one place (#1204 review).
+issue_plan_approved() {
+    local item_repo="$1" item_id="$2"
+    fetch_board_approved_items
+    if [ "${_WF_APPROVED_ITEMS["${item_repo}/${item_id}"]:-}" = "1" ]; then
+        printf 'true'
+    else
+        printf 'false'
+    fi
+}
+
 # Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Workflow Status field
 # option ID, keyed "owner/repo/number" — covers BOTH Issues and PRs (unlike
 # fetch_board_approved_items, which only ever needs Issues for the plan-approval flow).

@@ -13,6 +13,16 @@ ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:lat
 CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
 
+# Bump whenever a field is added to or removed from fingerprint_issue_json or
+# fingerprint_pr_json (lib/fingerprints). Prepended to every computed fingerprint so a saved
+# fingerprint from a prior schema always compares unequal to a freshly computed one, forcing a
+# recheck of every open Issue/PR on the next tick each is seen — a deliberate, one-line way to
+# invalidate every cached fingerprint fleet-wide, decoupled from whether the jq filter's output
+# text happens to differ (which incidental/cosmetic filter edits could otherwise trigger by
+# accident). This is NOT overridable from the environment: it describes what the code hashes,
+# not an operational tuning knob.
+FINGERPRINT_SCHEMA_VERSION=1
+
 # Conservative pre-send guard against grossly oversized prompts.
 # The launch prompt is deliberately tiny ("Work on <item> in <repo>") — everything of
 # substance lives in the generated CLAUDE.md — so this cap is only a sanity backstop and
