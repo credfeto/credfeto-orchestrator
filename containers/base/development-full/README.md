@@ -1,43 +1,25 @@
 # development-full
 
-Base image: `ghcr.io/credfeto/development-python:latest`
+Base image: `ghcr.io/credfeto/development-credfeto-tools:latest`
 
-This image layers .NET global tools, a locked-down NuGet configuration, a curated set of Claude Code skill repositories, and a tamper-resistant global pre-commit hook chain on top of the base Python development image.
+This is stage 6 of the development base image chain:
+
+```text
+development-tools  →  development-node  →  development-python
+    →  development-dotnet-tools  →  development-credfeto-tools  →  development-full
+```
+
+It layers a curated set of Claude Code skill repositories, baked-in Claude Code
+settings/hooks, and a tamper-resistant global pre-commit hook chain on top of
+`development-credfeto-tools`. The NuGet configuration, `claude-code`, and all
+twelve .NET global tools (both stable third-party and first-party
+Credfeto.*/FunFair.*) are inherited from `development-dotnet-tools` /
+`development-credfeto-tools` — see those images' own READMEs for what they
+install and why they're split out.
 
 ---
 
 ## What it installs
-
-### NuGet.Config for FunFair feeds
-
-A `NuGet.Config` is baked into the image at `/home/developer/.nuget/NuGet/NuGet.Config`. It clears the default NuGet source and registers three FunFair-specific caching proxies:
-
-- `Cache: api.nuget.org` — `https://api-nuget.markridgwell.com/v3/index.json`
-- `Cache: FunFair` — `https://funfair-nuget.markridgwell.com/index.json`
-- `Cache: FunFair (Prerelease)` — `https://funfair-prerelease-nuget.markridgwell.com/index.json`
-
-The package restore cache is redirected to `/home/developer/.nuget-cache` (developer-owned) via `NUGET_PACKAGES` so that `dotnet restore` and `dotnet tool install -g` remain writable without touching the locked config subtree.
-
-### .NET global tools
-
-All twelve tools are installed into the `developer` user's global tool path (`/home/developer/.dotnet/tools`) via `su developer -c "dotnet tool install -g ..."`. Each tool gets its own layer to keep individual blob sizes manageable and to avoid cascading cache invalidation.
-
-| Package ID | Command(s) |
-| --- | --- |
-| `Credfeto.Changelog.Cmd` | `changelog`, `dotnet-changelog` |
-| `Credfeto.DotNet.Code.Analysis.Overrides.Cmd` | `code-analysis`, `dotnet-code-analysis` |
-| `TSQLLint` | `tsqllint`, `dotnet-tsqllint` |
-| `FunFair.BuildCheck` | `buildcheck`, `dotnet-buildcheck` |
-| `FunFair.BuildVersion` | `buildversion`, `dotnet-buildversion` |
-| `CWM.RoslynNavigator` | `cwm-roslyn-navigator`, `dotnet-cwm-roslyn-navigator` |
-| `dotnet-ef` | `dotnet-ef` |
-| `ilspycmd` | `ilspycmd`, `dotnet-ilspycmd` |
-| `Microsoft.SqlPackage` | `sqlpackage`, `dotnet-sqlpackage` |
-| `PowerShell` | `pwsh` |
-| `Credfeto.DotNet.Repo.Formatter` | `cscleanup`, `dotnet-cscleanup` |
-| `dotnet-script` | `dotnet-script` |
-
-`dotnet <name>` subcommand aliases (e.g. `dotnet-buildcheck`) are created via `ln -sf` so that the dotnet CLI can locate tools invoked through subcommand syntax.
 
 ### Skill repos cloned
 
@@ -131,23 +113,21 @@ The upstream hook orchestrator is cloned from `$PRECOMMIT_UPSTREAM` (default: `h
 
 ## Users
 
-The `developer` user is inherited from upstream images in the `development-tools` / `development-python` chain.
-
-- `/home/developer/.nuget/` and `/home/developer/.nuget/NuGet/` are root:root 0755 — the `developer` user can traverse them but cannot rename, remove, or swap out files.
-- `/home/developer/.nuget/NuGet/NuGet.Config` is root:root 0444 — readable but immutable by the agent.
-- `/home/developer/.nuget-cache/` is developer:developer — writable package restore cache.
-- All `dotnet tool install -g` commands are run as `developer` via `su developer -c "..."` so that the tools land in the correct per-user profile and are executable by the agent at runtime.
+The `developer` user, the NuGet configuration, and the .NET global tools are all inherited from
+the `development-tools` / `development-python` / `development-dotnet-tools` / `development-credfeto-tools`
+chain — see those images' own READMEs for details. All `dotnet tool install -g` commands upstream
+are run as `developer` via `su developer -c "..."` so that the tools land in the correct per-user
+profile and are executable by the agent at runtime.
 
 ---
 
 ## Locked-down paths
 
+Paths locked down by this image. NuGet.Config and the .NET tool paths are locked down by
+`development-dotnet-tools` / `development-credfeto-tools` instead — see those images' READMEs.
+
 | Path | Owner | Mode | Purpose |
 | --- | --- | --- | --- |
-| `/home/developer/.nuget/` | root:root | 0755 | Parent of the config subtree; not writable by developer |
-| `/home/developer/.nuget/NuGet/` | root:root | 0755 | Contains NuGet.Config; not writable by developer |
-| `/home/developer/.nuget/NuGet/NuGet.Config` | root:root | 0444 | Baked-in NuGet feed list; read-only for all users |
-| `/home/developer/.nuget-cache/` | developer:developer | (default) | Writable package restore cache redirected via `NUGET_PACKAGES` |
 | `/opt/pre-commit/` | root:root | 0755 | Global pre-commit orchestrator; readable and executable, not writable |
 | `/opt/git-global-hooks/` | root:root | 0755 | Global hooks shim directory; executable, not writable |
 | `/opt/git-global-hooks/pre-commit` | root:root | 0755 | Shim that delegates to `/opt/pre-commit/src/hooks/pre-commit` |

@@ -1,13 +1,12 @@
 # syntax=docker/dockerfile:1.7
 # hadolint ignore=DL3007
-FROM ghcr.io/credfeto/development-python:latest
+FROM ghcr.io/credfeto/development-credfeto-tools:latest
 
 # Use bash with pipefail for all subsequent RUN instructions so that pipes
 # fail the step on any non-zero exit in the pipeline, not just the last command.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ---- Build-time arguments ----------------------------------------------------
-ARG DOTNET_TOOLS_CACHE_BUST
 ARG CREDFETO_PRECOMMIT_CACHE_BUST
 ARG CREDFETO_AI_SKILLS_CACHE_BUST
 ARG PRECOMMIT_UPSTREAM=https://github.com/credfeto/credfeto-global-pre-commit.git
@@ -34,114 +33,10 @@ ARG WSHOBSON_AGENTS_COMMIT=5cc2549a50fc672230efd0a0307e2fd27ffba792
 ARG CC_DEVOPS_SKILLS_COMMIT=7fe7595e4512f8ce43dcf956aa5190b96d627dd1
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
 
-# ---- NuGet package sources (FunFair private feeds) ---------------------------
-# NuGet.Config is baked in root:root mode 0444 so the agent (running as the
-# unprivileged `developer` user) can read it but cannot modify, delete, or
-# replace it in place. The full /home/developer/.nuget/{,NuGet/} hierarchy is
-# also root-owned 0755 — that prevents the agent from `rm`ing the locked-down
-# NuGet subdir or swapping the file via a parent rename within .nuget itself.
-#
-# Because /home/developer/.nuget is now root-owned, dotnet's default package
-# cache at ~/.nuget/packages would not be writable. We redirect it to a
-# developer-owned sibling via NUGET_PACKAGES so `dotnet restore`, `dotnet tool
-# install -g`, etc. continue to work without leaking write permission into
-# the config subtree.
-ENV NUGET_PACKAGES=/home/developer/.nuget-cache
-RUN mkdir -p /home/developer/.nuget/NuGet \
-    && printf '<?xml version="1.0" encoding="utf-8"?>\n\
-<configuration>\n\
-  <packageSources>\n\
-    <clear />\n\
-    <add key="Cache: api.nuget.org" value="https://api-nuget.markridgwell.com/v3/index.json" protocolVersion="3" />\n\
-    <add key="Cache: FunFair" value="https://funfair-nuget.markridgwell.com/index.json" protocolVersion="3" />\n\
-    <add key="Cache: FunFair (Prerelease)" value="https://funfair-prerelease-nuget.markridgwell.com/index.json" protocolVersion="3" />\n\
-  </packageSources>\n\
-</configuration>\n' > /home/developer/.nuget/NuGet/NuGet.Config \
-    && chown -R root:root /home/developer/.nuget \
-    && chmod 0755 /home/developer/.nuget /home/developer/.nuget/NuGet \
-    && chmod 0444 /home/developer/.nuget/NuGet/NuGet.Config \
-    && mkdir -p /home/developer/.nuget-cache \
-    && chown -R developer:developer /home/developer/.nuget-cache
-
-# ---- Claude Code (apt install — keyring baked in development-tools) ----------
-# Installed here rather than in development-node because claude-code releases
-# more frequently than Node/npm globals. The keyring and apt sources list entry
-# were added in development-tools. DOTNET_TOOLS_CACHE_BUST (the daily date)
-# busts this layer daily, ensuring any new claude-code release is picked up
-# within 24 hours.
-# hadolint ignore=DL3027,DL3059
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    : "${DOTNET_TOOLS_CACHE_BUST}"; \
-    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        claude-code \
-    && rm -rf /var/lib/apt/lists/*
-
-# ---- .NET global tools (cache-bust daily so latest versions pull in) ---------
-#
-# Each tool gets its own RUN so:
-#   - per-blob layer size stays modest (any one tool fits well under
-#     typical registry edge body-size caps like Cloudflare's 100 MB).
-#   - failure on one tool doesn't blow away the cache for the others.
-# `: ${DOTNET_TOOLS_CACHE_BUST}` substitutes the ARG into the command
-# text (no-op shell `:` discards it) so the buildkit cache key for
-# every layer includes the cache-bust value — the layers re-install
-# in lockstep when the ARG changes.
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.Changelog.Cmd"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.DotNet.Code.Analysis.Overrides.Cmd"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g TSQLLint"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g FunFair.BuildCheck"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g FunFair.BuildVersion"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g CWM.RoslynNavigator"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-ef"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g ilspycmd"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g Microsoft.SqlPackage"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g PowerShell"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g Credfeto.DotNet.Repo.Formatter"
-# hadolint ignore=DL3059
-RUN su developer -c ": ${DOTNET_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-script"
-
-# dotnet- subcommand aliases. Several tools install only as `<name>` but
-# agents invoke them via `dotnet <name>` subcommand syntax — which makes
-# the dotnet CLI look for `dotnet-<name>` on PATH. Without the alias the
-# call fails with "Could not execute because the specified command or
-# file was not found". Bake them into the image. Idempotent: ln -sf overwrites.
-# hadolint ignore=DL3059
-RUN su developer -c '\
-    ln -sf cscleanup             /home/developer/.dotnet/tools/dotnet-cscleanup && \
-    ln -sf buildcheck            /home/developer/.dotnet/tools/dotnet-buildcheck && \
-    ln -sf buildversion          /home/developer/.dotnet/tools/dotnet-buildversion && \
-    ln -sf changelog             /home/developer/.dotnet/tools/dotnet-changelog && \
-    ln -sf code-analysis         /home/developer/.dotnet/tools/dotnet-code-analysis && \
-    ln -sf cwm-roslyn-navigator  /home/developer/.dotnet/tools/dotnet-cwm-roslyn-navigator && \
-    ln -sf ilspycmd              /home/developer/.dotnet/tools/dotnet-ilspycmd && \
-    ln -sf sqlpackage            /home/developer/.dotnet/tools/dotnet-sqlpackage && \
-    ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint && \
-    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh'
-
-# PSScriptAnalyzer PowerShell module — check-setup imports it
-# (`dotnet pwsh -Command "Import-Module PSScriptAnalyzer ..."`) to validate
-# the VALIDATE_POWERSHELL hook, so it must be present for the developer user
-# in addition to the pwsh binary/alias above. Installed via Install-PSResource
-# (Microsoft.PowerShell.PSResourceGet, bundled with pwsh 7.4+) rather than the
-# legacy Install-Module: the latter needs the old PackageManagement "NuGet"
-# provider bootstrapped first, which fails non-interactively here ("No match
-# was found for the specified search criteria for the provider 'NuGet'") even
-# though the PSGallery endpoint itself is reachable. PSResourceGet talks to
-# the gallery directly and needs no such bootstrap.
-# hadolint ignore=DL3059
-RUN su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command \
-    "Install-PSResource -Name PSScriptAnalyzer -Scope CurrentUser -TrustRepository -ErrorAction Stop"'
+# NuGet.Config, NUGET_PACKAGES, claude-code, all twelve .NET global tools, their
+# dotnet-* subcommand aliases, and the PSScriptAnalyzer module are already baked
+# in by development-dotnet-tools / development-credfeto-tools (this image's
+# base chain) — nothing to redo here.
 
 # ---- dotnet-claude-kit repo (cloned for the Claude Code plugin side) ---------
 # Fetches the exact pinned commit directly (not the moving default-branch
