@@ -54,9 +54,9 @@ retarget entries.
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
 `containers/base/development-full/claude-settings.json`, `claude-policy-limits.json`, and
-`claude-hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree}` are version-controlled copies of the operator's
-`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree}}`, copied into the image at
-`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree}}` as root:root
+`claude-hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install}` are version-controlled copies of the operator's
+`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install}}`, copied into the image at
+`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install}}` as root:root
 0444 (files) / 0755 (hook scripts and hooks directory) — read-only for `developer`. `reject-obfuscated-commands`
 runs first in the `PreToolUse` hook chain, ahead of every other hook, and parses each Bash command with
 `shfmt` (a real shell parser, baked into this image) rather than text-scanning: any non-printable or
@@ -73,14 +73,19 @@ same shfmt-parsed AST and blocks git commands that don't use `git -C <dir>` (plu
 arguments it cannot verify); both hooks fail closed if shfmt is missing or the command does not parse.
 `enforce-git-identity` blocks `git commit`/`fetch`/`pull`/`rebase`/`merge`/`cherry-pick`/`revert`/`am` unless
 git identity and GPG signing are correctly configured, and runs before `enforce-git-dash-c` in the chain.
-`block-git-worktree` runs last, after `enforce-git-dash-c`, and uses the same shfmt-parsed AST to block
+`block-git-worktree` runs after `enforce-git-dash-c`, and uses the same shfmt-parsed AST to block
 `git worktree add` (creating a new linked worktree; `list`/`remove`/`prune`/... stay allowed) — a linked
 worktree splits repo state across multiple checkouts sharing one object store, which has previously left
 a primary checkout registered as bare with no work tree of its own; it also fails closed if shfmt is
-missing or the command does not parse.
+missing or the command does not parse. `block-dotnet-tool-install` runs last, using the same shfmt-parsed
+AST to block `dotnet tool install` (local or global; `list`/`restore`/`uninstall`/`update`/`run`/... stay
+allowed) and `dotnet new tool-manifest` — this container's .NET global tools are pinned and baked into the
+image at build time, and either command would add an unpinned, unreviewed tool outside that set; it also
+fails closed if shfmt is missing or the command does not parse.
 All hook paths referenced from `settings.json`'s `PreToolUse` block are rewritten to the in-container path
 (`/home/developer/.claude/hooks/reject-obfuscated-commands`, `/home/developer/.claude/hooks/enforce-git-dash-c`,
-`/home/developer/.claude/hooks/enforce-git-identity`, and `/home/developer/.claude/hooks/block-git-worktree`).
+`/home/developer/.claude/hooks/enforce-git-identity`, `/home/developer/.claude/hooks/block-git-worktree`, and
+`/home/developer/.claude/hooks/block-dotnet-tool-install`).
 `oneshot` does not bind-mount over any of these
 paths at runtime (see `containers/agent/Dockerfile` for the full mount contract) — only `CLAUDE.md` and
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) are
@@ -144,6 +149,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/hooks/enforce-git-identity` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-identity`); read/execute only |
 | `/home/developer/.claude/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
 | `/home/developer/.claude/hooks/block-git-worktree` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-git-worktree`); read/execute only |
+| `/home/developer/.claude/hooks/block-dotnet-tool-install` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-dotnet-tool-install`); read/execute only |
 | `/home/developer/.claude/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
 | `/home/developer/.claude/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
 | `/home/developer/.claude/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
@@ -183,9 +189,9 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
 `.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c`,
-`.../hooks/enforce-git-identity`, `.../hooks/reject-obfuscated-commands`, and `.../hooks/block-git-worktree`
-must each be root:root 0755 and executable; the `.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}`
-policy data files must each be root:root 0444.
+`.../hooks/enforce-git-identity`, `.../hooks/reject-obfuscated-commands`, `.../hooks/block-git-worktree`,
+and `.../hooks/block-dotnet-tool-install` must each be root:root 0755 and executable; the
+`.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files must each be root:root 0444.
 
 **Claude Code skills wiring** — exactly 100 symlinks must exist directly under
 `/home/developer/.claude/skills/`; a spot-check of representative skill names (one per source repo,

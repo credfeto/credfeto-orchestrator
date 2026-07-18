@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Blocks `dotnet tool install` (local or global) and `dotnet new tool-manifest`
+# outright. Other `dotnet tool` subcommands (list/restore/uninstall/update/
+# run/search) and other `dotnet new` templates are left alone.
+# Exit 2 = blocked, 0 = allowed.
+#
+# This container's .NET global tools are pinned and baked into the image at
+# build time (see the "dotnet tools" sanity-check block in this image's
+# Dockerfile, which asserts an exact set of tool names is present via
+# `dotnet tool list -g`). A runtime `dotnet tool install` would add an
+# unpinned, unreviewed tool outside that list — not reproducible across
+# containers and not subject to the dependency-selection review the pinned
+# set went through. `dotnet new tool-manifest` is blocked for the same
+# reason: it seeds a local `.config/dotnet-tools.json` manifest whose entries
+# would then be installable via `dotnet tool restore`, the same bypass by a
+# different route.
+#
+# Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
+# the sibling block-git-worktree/enforce-git-dash-c (see those scripts'
+# header comments for the full rationale) — text/regex scanning for `tool
+# install`/`tool-manifest` would miss obfuscated forms and false-positive on
+# unrelated text, so this only inspects the subcommand position of an actual
+# dotnet call expression.
+#
+# Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
+# NOT this hook's job — reject-obfuscated-commands rejects those
+# categorically before this hook ever runs. Anything here that is not a
+# plain literal word is deliberately treated as opaque.
+#
+# Fails closed: shfmt missing or the command not parsing as shell blocks
+# the command.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
+}
+
+# Known wrapper names for the defense-in-depth `sudo dotnet tool install ...`
+# check below — mirrors the "Wrapper commands" section of command-blocklist,
+# which is what actually bans these upstream in the normal PreToolUse chain.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One line per CallExpr: every word that is a single plain literal is
+# emitted verbatim; anything else (quoted text, substitutions, expansions)
+# is represented as a \x01 marker — layer 0 of reject-obfuscated-commands
+# (which runs before this hook) already guarantees a real \x01 byte can
+# never appear in the input, so the marker is unambiguous, can never equal
+# "dotnet"/"tool"/"install"/"new"/"tool-manifest" and so is opaque to the
+# checks below, and — unlike an empty string — is never dropped by
+# IFS=<tab> word-splitting's collapsing of consecutive whitespace
+# delimiters. Words cannot contain raw whitespace, so tab is a safe
+# separator.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
+  join("\t")')
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+
+  # Only the command-name position, and the position immediately after a
+  # known wrapper name in the command-name position, are checked — a
+  # `dotnet` token appearing anywhere else is an ordinary argument, not a
+  # dotnet invocation (e.g. `grep -r dotnet .`, `find . -name dotnet`).
+  positions=(0)
+  is_wrapper "${words[0]}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
+      j=$((i + 1))
+      if [ "${words[$j]:-}" = "tool" ] && [ "${words[$((j + 1))]:-}" = "install" ]; then
+        block 'dotnet tool install is prohibited in this repo - dotnet tools are pinned and baked into the container image at build time; open an issue to add a new pinned tool instead'
+      fi
+      if [ "${words[$j]:-}" = "new" ] && [ "${words[$((j + 1))]:-}" = "tool-manifest" ]; then
+        block 'dotnet new tool-manifest is prohibited in this repo - dotnet tools are pinned and baked into the container image at build time; open an issue to add a new pinned tool instead'
+      fi
+    fi
+  done
+done <<< "$calls"
+
+exit 0

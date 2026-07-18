@@ -3,7 +3,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`.
+Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`.
 
 ## reject-obfuscated-commands
 
@@ -29,7 +29,11 @@ Parses each Bash command with `shfmt` and blocks any `git` invocation (including
 
 ## block-git-worktree
 
-Runs last in the chain, after `enforce-git-dash-c`. Blocks `git worktree add` (creating a new linked worktree) — a linked worktree splits repo state across multiple checkouts sharing one object store and one set of refs, which does not compose with this project's assumption of one checkout per repo directory. An errant `git worktree add` previously left a primary checkout registered as bare with no work tree of its own, breaking `git pull`/`git status` there until it was manually repaired. Other worktree subcommands (`list`/`remove`/`prune`/`lock`/`unlock`/`move`/`repair`/...) are inspection or cleanup of worktrees that already exist and remain allowed. Uses the same shfmt-parsed AST approach as `enforce-git-dash-c` and fails closed the same way.
+Runs after `enforce-git-dash-c`. Blocks `git worktree add` (creating a new linked worktree) — a linked worktree splits repo state across multiple checkouts sharing one object store and one set of refs, which does not compose with this project's assumption of one checkout per repo directory. An errant `git worktree add` previously left a primary checkout registered as bare with no work tree of its own, breaking `git pull`/`git status` there until it was manually repaired. Other worktree subcommands (`list`/`remove`/`prune`/`lock`/`unlock`/`move`/`repair`/...) are inspection or cleanup of worktrees that already exist and remain allowed. Uses the same shfmt-parsed AST approach as `enforce-git-dash-c` and fails closed the same way.
+
+## block-dotnet-tool-install
+
+Runs last in the chain. Blocks `dotnet tool install` (local or global — any flag combination) and `dotnet new tool-manifest`. This container's .NET global tools are pinned and baked into the image at build time (see the "dotnet tools" sanity check in `containers/base/development-full/Dockerfile`, which asserts an exact set of tool names via `dotnet tool list -g`); either command would add an unpinned, unreviewed tool outside that set, bypassing the dependency-selection review the pinned set went through. Other `dotnet tool` subcommands (`list`/`restore`/`uninstall`/`update`/`run`/`search`) and other `dotnet new` templates remain allowed. Uses the same shfmt-parsed AST approach as `block-git-worktree`/`enforce-git-dash-c` and fails closed the same way.
 
 ### Tracking allowlist requests
 

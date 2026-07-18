@@ -64,6 +64,14 @@ teardown() {
     [[ "${output}" == *"${HOME}/.claude/hooks/block-git-worktree"* ]]
 }
 
+@test "generated settings.json includes block-dotnet-tool-install in the PreToolUse chain" {
+    main
+
+    run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"${HOME}/.claude/hooks/block-dotnet-tool-install"* ]]
+}
+
 @test "a pre-existing settings.json is preserved as settings.json.bak" {
     mkdir -p "${HOME}/.claude"
     printf '{"marker": "pre-existing"}' > "${HOME}/.claude/settings.json"
