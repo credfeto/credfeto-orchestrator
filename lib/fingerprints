@@ -86,6 +86,7 @@ fingerprint_pr_json() {
         (.mergeStateStatus // "UNKNOWN"),
         (.autoMergeRequest != null | tostring)
     ') || return 1
+    [ -n "${canonical}" ] || return 1
 
     local hash
     hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
@@ -247,6 +248,7 @@ fingerprint_issue_json() {
         (.milestone.title // "none"),
         $planApproved
     ') || return 1
+    [ -n "${canonical}" ] || return 1
 
     local hash
     hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
