@@ -43,6 +43,21 @@ fetch_pr_review_comments() {
     return 1
 }
 
+# Hashes a fingerprint's canonical jq output and prepends the schema version. Rejects an empty
+# canonical string (the bare-pipeline-into-hash_sha256 failure mode from #1102: a jq error
+# upstream produces empty input here, which hash_sha256 would otherwise happily hash into a
+# stable-but-wrong fingerprint) so every fingerprint function shares this guard instead of each
+# reimplementing it. Outputs "<FINGERPRINT_SCHEMA_VERSION>:<hash>" on stdout; returns non-zero if
+# canonical is empty or hashing fails.
+_finalize_fingerprint() {
+    local canonical="$1"
+    [ -n "${canonical}" ] || return 1
+
+    local hash
+    hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
+    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
+}
+
 # Computes a deterministic fingerprint from pre-fetched PR state JSON.
 # Optional second argument: JSON array of trusted logins; when provided, only comments,
 # reviews, and inline review comments from those users are included so untrusted activity does
@@ -86,11 +101,8 @@ fingerprint_pr_json() {
         (.mergeStateStatus // "UNKNOWN"),
         (.autoMergeRequest != null | tostring)
     ') || return 1
-    [ -n "${canonical}" ] || return 1
 
-    local hash
-    hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
-    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
+    _finalize_fingerprint "${canonical}"
 }
 
 # Computes a deterministic hash of the PR's current state, folding in inline review comments
@@ -248,11 +260,8 @@ fingerprint_issue_json() {
         (.milestone.title // "none"),
         $planApproved
     ') || return 1
-    [ -n "${canonical}" ] || return 1
 
-    local hash
-    hash=$(printf '%s' "${canonical}" | hash_sha256) || return 1
-    printf '%s:%s' "${FINGERPRINT_SCHEMA_VERSION}" "${hash}"
+    _finalize_fingerprint "${canonical}"
 }
 
 # Computes a deterministic hash of the Issue's current state using a single gh issue view call.

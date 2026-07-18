@@ -1469,13 +1469,11 @@ teardown() {
     [[ "${pr_fp}" == "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
 }
 
-@test "fingerprint_issue_json returns non-zero (does not hash a partial/empty stream) when jq fails on malformed input (#1102)" {
+@test "fingerprint_issue_json and fingerprint_pr_json return non-zero (do not hash a partial/empty stream) when jq fails on malformed input (#1102)" {
     run fingerprint_issue_json 'not valid json'
     [ "${status}" -ne 0 ]
     [[ "${output}" != "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
-}
 
-@test "fingerprint_pr_json returns non-zero (does not hash a partial/empty stream) when jq fails on malformed input (#1102)" {
     run fingerprint_pr_json 'not valid json'
     [ "${status}" -ne 0 ]
     [[ "${output}" != "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
