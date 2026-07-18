@@ -1397,6 +1397,16 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_blocked_label and issue_json_has_blocked_label do not error when labels is absent (#1102)" {
+    run pr_json_has_blocked_label '{}'
+    [ "${status}" -ne 0 ]
+    [[ "${output}" != *"jq: error"* ]]
+
+    run issue_json_has_blocked_label '{}'
+    [ "${status}" -ne 0 ]
+    [[ "${output}" != *"jq: error"* ]]
+}
+
 @test "fingerprint_issue_json with trusted logins: trusted comment changes fingerprint" {
     local issue_base='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
     local issue_trusted='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[{"author":{"login":"owner"},"body":"hello","updatedAt":"2024-01-01T00:00:00Z"}],"assignees":[],"milestone":null}'
@@ -1457,6 +1467,25 @@ teardown() {
     local pr_fp
     pr_fp=$(fingerprint_pr_json "${pr}")
     [[ "${pr_fp}" == "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+}
+
+@test "fingerprint_issue_json returns non-zero (does not hash a partial/empty stream) when jq fails on malformed input (#1102)" {
+    run fingerprint_issue_json 'not valid json'
+    [ "${status}" -ne 0 ]
+    [[ "${output}" != "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+}
+
+@test "fingerprint_pr_json returns non-zero (does not hash a partial/empty stream) when jq fails on malformed input (#1102)" {
+    run fingerprint_pr_json 'not valid json'
+    [ "${status}" -ne 0 ]
+    [[ "${output}" != "${FINGERPRINT_SCHEMA_VERSION}:"* ]]
+}
+
+@test "fingerprint_issue_json happy-path hash is unchanged by the jq-failure-guard refactor (#1102)" {
+    local issue='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
+    local fp
+    fp=$(fingerprint_issue_json "${issue}" "null" "false")
+    [ "${fp}" = "${FINGERPRINT_SCHEMA_VERSION}:36d5acf9d9297f831145e17ec71ce45fcbd20d60b9af5b25ef6773cacbdc5116" ]
 }
 
 @test "fingerprint_pr_json with trusted logins: trusted comment changes fingerprint" {
