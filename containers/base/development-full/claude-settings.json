@@ -58,7 +58,9 @@
       "Bash(git config *)",
       "Bash(git -C * config *)",
       "Bash(gh auth setup-git*)",
-      "Bash(sudo *)"
+      "Bash(sudo *)",
+      "Bash(dotnet tool install*)",
+      "Bash(dotnet new tool-manifest*)"
     ]
   },
   "advisorModel": "opus",
@@ -87,6 +89,10 @@
           {
             "type": "command",
             "command": "/home/developer/.claude/hooks/block-git-worktree"
+          },
+          {
+            "type": "command",
+            "command": "/home/developer/.claude/hooks/block-dotnet-tool-install"
           }
         ]
       },

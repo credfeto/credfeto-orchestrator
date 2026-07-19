@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+# shellcheck disable=SC2030,SC2031,SC2034  # bats test bodies run in subshells; variable modifications are intentionally scoped and read by the sourced main()
 
 load test_helper
 
@@ -62,6 +62,14 @@ teardown() {
     run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"${HOME}/.claude/hooks/block-git-worktree"* ]]
+}
+
+@test "generated settings.json includes block-dotnet-tool-install in the PreToolUse chain" {
+    main
+
+    run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"${HOME}/.claude/hooks/block-dotnet-tool-install"* ]]
 }
 
 @test "a pre-existing settings.json is preserved as settings.json.bak" {
