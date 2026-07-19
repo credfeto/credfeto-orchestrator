@@ -208,10 +208,15 @@ block_pr_for_ci_timeout() {
     clear_pr_ci_pending_state "${item_id}"
 }
 
+# Returns 0 (true) if the pre-fetched JSON contains a label named 'blocked' (case-insensitive).
+_json_has_blocked_label() {
+    local json="$1"
+    printf '%s' "${json}" | jq -r '(.labels // [])[] | .name' | grep -qi '^blocked$'
+}
+
 # Returns 0 (true) if the pre-fetched PR JSON contains a label named 'blocked' (case-insensitive).
 pr_json_has_blocked_label() {
-    local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+    _json_has_blocked_label "$1"
 }
 
 # Extracts the image SHA an agent recorded when it self-diagnosed a Blocked-ing failure as an
@@ -233,6 +238,5 @@ pr_json_env_block_image_sha() {
 
 # Returns 0 (true) if the pre-fetched Issue JSON contains a label named 'blocked' (case-insensitive).
 issue_json_has_blocked_label() {
-    local issue_json="$1"
-    printf '%s' "${issue_json}" | jq -r '.labels[].name' | grep -qi '^blocked$'
+    _json_has_blocked_label "$1"
 }

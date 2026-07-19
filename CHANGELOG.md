@@ -23,6 +23,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Send a Discord alert when the priorities API is unreachable after exhausting all retry attempts, instead of failing silently in the orchestrator's journal
 - Review round on the priorities-unreachable Discord alert (#1171): the dedup timestamp is no longer recorded when the Discord webhook POST itself fails (previously a coincident webhook outage silently suppressed the next hour of real alerts), a JSON-parse failure is no longer misreported as a connectivity outage with a fabricated retry-attempts count, and the dedup state is now shared across owners instead of per-owner since the priorities API is one global endpoint
 - Issue fingerprinting now accounts for Workflow-board plan approval, so an Issue approved purely via the board (rather than a new label or comment on the issue itself) is no longer skipped as 'unchanged' forever; also introduces an explicit FINGERPRINT_SCHEMA_VERSION prepended to every fingerprint so future schema changes force a deliberate, one-line, fleet-wide recheck instead of relying on incidental hash-text drift
+- Fix fingerprint_issue_json masking jq failures behind a bare pipeline, which let a stable wrong hash silently park an issue forever (#1102)
+- Harden pr_json_has_blocked_label/issue_json_has_blocked_label against the same jq-failure-masking pattern as #1102, and add an empty-canonical defensive guard to both fingerprint functions
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 ### Deprecated
