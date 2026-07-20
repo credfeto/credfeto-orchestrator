@@ -6,61 +6,87 @@
   "permissions": {
     "defaultMode": "auto",
     "allow": [
-      "Read",
-      "Edit",
-      "Write",
-      "Bash(git -C *)",
-      "Bash(python3 *)",
-      "Bash(ls *)",
-      "Bash(find *)",
-      "Bash(grep *)",
+
+      
+      "Bash(bun add *)",
+      "Bash(bun install *)",
+      "Bash(bun run *)",
+      "Bash(bun test *)",
+      "Bash(bun x *)",
       "Bash(cat *)",
-      "Bash(ls)",
-      "Bash(git config user.name *)",
-      "Bash(git config user.email *)",
-      "Bash(dotnet tool *)",
-      "Bash(dotnet restore *)",
+      "Bash(dotnet --*)",
       "Bash(dotnet build *)",
-      "Bash(dotnet clean *)",
-      "Bash(dotnet pack *)",
-      "Bash(dotnet publish *)",
-      "Bash(dotnet run *)",
-      "Bash(dotnet test *)",
-      "Bash(dotnet nuget *)",
       "Bash(dotnet buildcheck *)",
       "Bash(dotnet buildversion *)",
       "Bash(dotnet changelog *)",
-      "Bash(dotnet tsqllint *)",
+      "Bash(dotnet clean *)",
+      "Bash(dotnet code-analysis *)",
       "Bash(dotnet cscleanup *)",
       "Bash(dotnet dotnet-script *)",
-      "Bash(dotnet code-analysis *)",
-      "Bash(dotnet --*)",
+      "Bash(dotnet nuget *)",
+      "Bash(dotnet pack *)",
+      "Bash(dotnet publish *)",
+      "Bash(dotnet restore *)",
+      "Bash(dotnet run *)",
+      "Bash(dotnet test *)",
+      "Bash(dotnet tool *)",
+      "Bash(dotnet tsqllint *)",
+      "Bash(find *)",
+      "Bash(find * -exec cat *)",
       "Bash(gh api repos/*/releases*)",
       "Bash(gh auth status*)",
       "Bash(gh issue *)",
       "Bash(gh label *)",
       "Bash(gh pr *)",
       "Bash(gh run *)",
-      "Bash(npm install *)",
+      "Bash(git -C * config --get user.email)",
+      "Bash(git -C * config --get user.name)",
+      "Bash(git -C * config --global --get core.hooks-path)",
+      "Bash(git -C * config --global --get user.email)",
+      "Bash(git -C * config --global --get user.name)",
+      "Bash(git -C * config --local --get core.hooks-path)",
+      "Bash(git -C * config --local --get user.email)",
+      "Bash(git -C * config --local --get user.name)",
+      "Bash(git -C * config --system --get core.hooks-path)",
+      "Bash(git -C *)",
+      "Bash(git config --get user.email)",
+      "Bash(git config --get user.name)",
+      "Bash(git config --global --get core.hooks-path)",
+      "Bash(git config --global --get user.email)",
+      "Bash(git config --global --get user.name)",
+      "Bash(git config --local --get core.hooks-path)",
+      "Bash(git config --local --get user.email)",
+      "Bash(git config --local --get user.name)",
+      "Bash(git config --system --get core.hooks-path)",
+      "Bash(grep *)",
+      "Bash(ls *)",
+      "Bash(ls)",
+      "Bash(npm audit *)",
       "Bash(npm ci *)",
+      "Bash(npm install *)",
+      "Bash(npm list *)",
       "Bash(npm run *)",
       "Bash(npm test *)",
-      "Bash(npm audit *)",
-      "Bash(npm list *)",
       "Bash(npx *)",
-      "Bash(bun install *)",
-      "Bash(bun run *)",
-      "Bash(bun test *)",
-      "Bash(bun add *)",
-      "Bash(bun x *)"
+      "Bash(pre-commit *",
+      "Bash(python3 *)",
+      "Edit",
+      "Read",
+      "Write"
     ],
     "deny": [
-      "Bash(git config *)",
-      "Bash(git -C * config *)",
-      "Bash(gh auth setup-git*)",
-      "Bash(sudo *)",
+      "Bash(dotnet new tool-manifest*)",
       "Bash(dotnet tool install*)",
-      "Bash(dotnet new tool-manifest*)"
+      "Bash(gh auth setup-git*)",
+      "Bash(git -C * config --add *)",
+      "Bash(git -C * config --global *)",
+      "Bash(git -C * config --replace-all*)",
+      "Bash(git -C * config --unset*)",
+      "Bash(git config --add *)",
+      "Bash(git config --global *)",
+      "Bash(git config --replace-all*)",
+      "Bash(git config --unset*)",
+      "Bash(sudo *)"
     ]
   },
   "advisorModel": "opus",
@@ -72,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/reject-obfuscated-commands"
+            "command": "/home/markr/.claude/hooks/reject-obfuscated-commands"
           },
           {
             "type": "command",
@@ -80,19 +106,19 @@
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/enforce-git-identity"
+            "command": "/home/markr/.claude/hooks/enforce-git-identity"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
+            "command": "/home/markr/.claude/hooks/enforce-git-dash-c"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/block-git-worktree"
+            "command": "/home/markr/.claude/hooks/block-git-worktree"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/block-dotnet-tool-install"
+            "command": "/home/markr/.claude/hooks/block-dotnet-tool-install"
           }
         ]
       },
