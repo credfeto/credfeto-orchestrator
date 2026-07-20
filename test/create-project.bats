@@ -234,9 +234,21 @@ teardown() {
     [[ "${output}" == *"updateProjectV2FieldOptions"* ]]
 }
 
-@test "provision_project does not touch the field when AI Simplify option already present" {
+@test "provision_project adds the AI Coverage option to an existing field that has AI Simplify but lacks it" {
     install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""}]}]}}'
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""}]}]}}'
+
+    run provision_project credfeto scripts
+    [ "${status}" -eq 0 ]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" != *"createProjectV2Field"* ]]
+    [[ "${output}" == *"updateProjectV2FieldOptions"* ]]
+}
+
+@test "provision_project does not touch the field when AI Simplify and AI Coverage options are already present" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""},{"id":"O4","name":"AI Coverage","color":"RED","description":""}]}]}}'
 
     run provision_project credfeto scripts
     [ "${status}" -eq 0 ]
