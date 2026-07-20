@@ -26,6 +26,18 @@
 #     `git -c core.pager=cat -C /repo status`. Only these two positions are
 #     checked — a `git` token appearing elsewhere is an ordinary argument
 #     (e.g. `grep -r git .`), not a git invocation.
+#   * Narrow exemptions from the `-C` requirement, checked only after the
+#     -C check itself has failed, for subcommands that don't act on ambient
+#     CWD repo state the way most git commands do (so -C protects against
+#     nothing there):
+#       - `git clone ...` — creates a new repo, doesn't read an existing one.
+#       - `git config --global|--system --get|--get-all|--get-regexp|--list`
+#         — global/system config reads. Write forms (--add, plain-set,
+#         --replace-all, --unset, --edit) are NOT exempted here and stay
+#         blocked by this hook; they're also independently denied, with or
+#         without -C, by the deny rules in settings.json permissions.
+#     Kept deliberately narrow — do not widen without re-reading the
+#     PR #1159/#1105 bypass history above.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
@@ -104,9 +116,23 @@ while IFS= read -r call_line; do
       while [ "${words[$j]:-}" = "-c" ]; do
         j=$((j + 2))
       done
-      if [ "${words[$j]:-}" != "-C" ]; then
-        block 'git commands must use "git -C <dir>" format'
+      [ "${words[$j]:-}" = "-C" ] && continue
+
+      sub="${words[$j]:-}"
+      [ "$sub" = "clone" ] && continue
+
+      if [ "$sub" = "config" ]; then
+        scope="" action=""
+        for tk in "${words[$((j + 1))]:-}" "${words[$((j + 2))]:-}"; do
+          case "$tk" in
+            --global | --system) scope="$tk" ;;
+            --get | --get-all | --get-regexp | --list) action="$tk" ;;
+          esac
+        done
+        [ -n "$scope" ] && [ -n "$action" ] && continue
       fi
+
+      block 'git commands must use "git -C <dir>" format'
     fi
   done
 done <<< "$calls"
