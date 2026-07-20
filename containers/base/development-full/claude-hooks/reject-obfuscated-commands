@@ -16,7 +16,17 @@
 # by shape, not by enumerating tricks.
 #
 # Decision layers, in order (all fail closed):
-#   0. Any non-printable or non-ASCII byte anywhere in the command: reject.
+#   0. A fixed, small table of known-benign Unicode punctuation (em/en dash,
+#      curly quotes, arrows, ellipsis, non-breaking space) is normalized to
+#      its plain-ASCII equivalent first — AI-authored commands routinely
+#      pick this up as gratuitous formatting, not obfuscation. Any
+#      non-printable or non-ASCII byte still present after that fixed
+#      substitution (control bytes, homoglyphs, zero-width/bidi-override
+#      characters, or anything else outside the table): reject. If
+#      normalization changed anything and the command clears every layer
+#      below, the normalized command is returned via
+#      hookSpecificOutput.updatedInput instead of the original — the
+#      command that actually runs is the corrected one, not a shrug.
 #   1. shfmt missing, or the command does not parse as shell: reject.
 #   2. Structure: function definitions and declare/export/local/readonly
 #      clauses are rejected outright; every environment-variable assignment
@@ -90,19 +100,37 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 [ -z "$raw_cmd" ] && exit 0
 
-# ---- Layer 0: printable ASCII only -----------------------------------------
-# Control bytes, Unicode homoglyphs of shell metacharacters, zero-width and
-# bidi-override characters have no place in an agent command — including
-# inside heredoc bodies and quoted strings.
+# ---- Layer 0: normalize known-benign punctuation, then require printable
+# ASCII only ------------------------------------------------------------
+# AI-authored commands often contain "smart" punctuation (em/en dash, curly
+# quotes, arrows, ellipsis, non-breaking space) that is gratuitous
+# formatting, not obfuscation. Rewrite exactly this fixed, small,
+# unconditionally-applied substitution table before the ASCII check; every
+# other byte — control bytes, homoglyphs of shell metacharacters,
+# zero-width/bidi-override characters, or any non-ASCII byte not in this
+# table — still blocks exactly as before. This cannot loosen the check: the
+# table never grows implicitly and nothing outside it is ever accepted.
+cmd="$raw_cmd"
+cmd=${cmd//$'\xe2\x80\x94'/-}   # em dash -> hyphen
+cmd=${cmd//$'\xe2\x80\x93'/-}   # en dash -> hyphen
+cmd=${cmd//$'\xe2\x80\x98'/\'}  # left single quote -> '
+cmd=${cmd//$'\xe2\x80\x99'/\'}  # right single quote -> '
+cmd=${cmd//$'\xe2\x80\x9c'/\"}  # left double quote -> "
+cmd=${cmd//$'\xe2\x80\x9d'/\"}  # right double quote -> "
+cmd=${cmd//$'\xc2\xa0'/ }       # non-breaking space -> space
+cmd=${cmd//$'\xe2\x86\x92'/->}  # right arrow -> ->
+cmd=${cmd//$'\xe2\x86\x90'/<-}  # left arrow -> <-
+cmd=${cmd//$'\xe2\x80\xa6'/...} # ellipsis -> ...
+
 NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
-if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+if [[ "$cmd" =~ $NON_PRINTABLE_RE ]]; then
   block 'command contains non-printable or non-ASCII characters'
 fi
 
 # ---- Layer 1: parse with a real shell parser (fail closed) -----------------
 command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
 
-ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - not a simple, obvious command'
+ast=$(printf '%s' "$cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - not a simple, obvious command'
 
 # ---- Layer 2: structural policy on the AST ----------------------------------
 
@@ -227,5 +255,14 @@ while IFS= read -r call_line; do
     block "${base} is not on the known-good command allowlist - extend ${COMMAND_ALLOWLIST##*/} if it is legitimately required"
   fi
 done <<< "$calls"
+
+# Everything above ran against the normalized command and none of it
+# blocked. If Layer 0's substitution table actually changed anything, hand
+# the normalized command back so it's what actually executes — rather than
+# just allowing the original text, which would still contain the
+# now-pointless Unicode punctuation.
+if [ "$cmd" != "$raw_cmd" ]; then
+  jq -n --arg cmd "$cmd" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: {command: $cmd}}}'
+fi
 
 exit 0
