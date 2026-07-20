@@ -29,6 +29,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Fixed the development container's baked-in Claude Code hook settings pointing at a hardcoded developer machine path instead of the container's dev user, which broke local hook testing via install-claude-hooks for any user other than that one machine.
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
+- Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
 ### Deprecated
 ### Removed
 ### Deployment Changes

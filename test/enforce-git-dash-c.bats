@@ -168,6 +168,76 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "bare git clone is exempted from -C" {
+    run_hook "git clone https://example.com/repo.git /tmp/repo"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git clone with flags before the url is exempted from -C" {
+    run_hook "git clone --depth 1 https://example.com/repo.git"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --global --get is exempted from -C" {
+    run_hook "git config --global --get user.email"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --get --global (flags reversed) is exempted from -C" {
+    run_hook "git config --get --global user.email"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --system --get-all is exempted from -C" {
+    run_hook "git config --system --get-all safe.directory"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --global --get-regexp is exempted from -C" {
+    run_hook 'git config --global --get-regexp "^user\."'
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --global --list is exempted from -C" {
+    run_hook "git config --global --list"
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare git config --global with no read/write flag is still blocked" {
+    run_hook "git config --global user.email"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config --global write (set) is still blocked" {
+    run_hook "git config --global user.email test@example.com"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config --global --add is still blocked" {
+    run_hook "git config --global --add safe.directory /x"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config --global --unset is still blocked" {
+    run_hook "git config --global --unset user.email"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config --get without --global/--system is still blocked" {
+    run_hook "git config --get user.email"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config --list without --global/--system is still blocked" {
+    run_hook "git config --list"
+    [ "${status}" -eq 2 ]
+}
+
+@test "bare git config plain (no scope, no action) is still blocked" {
+    run_hook "git config user.email"
+    [ "${status}" -eq 2 ]
+}
+
 @test "a non-git command is allowed" {
     run_hook "ls -la"
     [ "${status}" -eq 0 ]
