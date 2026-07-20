@@ -349,6 +349,78 @@ run_hook() {
     [[ "${output}" == *'non-printable or non-ASCII'* ]]
 }
 
+@test "a plain ASCII command with no substitutable punctuation emits no rewrite" {
+    run_hook 'git -C . commit -m "plain ascii message"'
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "an em dash is normalized to a hyphen and allowed with a rewritten command" {
+    run_hook $'git -C . commit -m "wip \xe2\x80\x94 more work"'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.permissionDecision')" = "allow" ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'git -C . commit -m "wip - more work"' ]
+}
+
+@test "an en dash is normalized to a hyphen and allowed" {
+    run_hook $'git -C . commit -m "pages 1\xe2\x80\x9310"'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'git -C . commit -m "pages 1-10"' ]
+}
+
+@test "curly single quotes are normalized to straight quotes and allowed" {
+    run_hook $'git -C . commit -m "\xe2\x80\x98quoted\xe2\x80\x99"'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = "git -C . commit -m \"'quoted'\"" ]
+}
+
+@test "curly double quotes are normalized to straight quotes and allowed" {
+    run_hook $'echo \xe2\x80\x9cquoted\xe2\x80\x9d'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'echo "quoted"' ]
+}
+
+@test "a non-breaking space is normalized to a regular space and allowed" {
+    run_hook $'echo one\xc2\xa0two'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'echo one two' ]
+}
+
+@test "a right arrow is normalized to -> and allowed" {
+    run_hook $'echo before \xe2\x86\x92 after'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'echo before -> after' ]
+}
+
+@test "a left arrow is normalized to <- and allowed" {
+    run_hook $'echo before \xe2\x86\x90 after'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'echo before <- after' ]
+}
+
+@test "an ellipsis is normalized to three dots and allowed" {
+    run_hook $'echo wait\xe2\x80\xa6'
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'echo wait...' ]
+}
+
+@test "a command mixing a substitutable em dash with a genuine unmapped non-ASCII byte still blocks" {
+    run_hook $'git -C . commit -m "wip \xe2\x80\x94 caf\xc3\xa9"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-printable or non-ASCII'* ]]
+}
+
+@test "a genuine homoglyph outside the substitution table still blocks (Layer 0 not loosened)" {
+    run_hook $'echo \xd0\xb0dmin'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-printable or non-ASCII'* ]]
+}
+
+@test "normalization happens before allowlist/blocklist checks, so a rewritten command that would still be blocked on other grounds stays blocked" {
+    run_hook $'sudo \xe2\x80\x9cgit\xe2\x80\x9d push'
+    [ "${status}" -eq 2 ]
+}
+
 # ---- strict allowlist (unknown commands are rejected) -----------------------
 
 @test "an unknown command name is blocked by the allowlist" {
