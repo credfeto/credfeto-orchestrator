@@ -1362,6 +1362,17 @@ teardown() {
     [ "${fp1}" != "${fp2}" ]
 }
 
+@test "fingerprint_pr_json changes when a legacy StatusContext check's .state changes, with no .conclusion/.status present (#1210)" {
+    local pr_pending='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"codecov/project","state":"PENDING"}]}'
+    local pr_failed='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"codecov/project","state":"FAILURE"}]}'
+
+    local fp1 fp2
+    fp1=$(fingerprint_pr_json "${pr_pending}")
+    fp2=$(fingerprint_pr_json "${pr_failed}")
+    [ -n "${fp1}" ]
+    [ "${fp1}" != "${fp2}" ]
+}
+
 @test "fingerprint_issue_json is deterministic and changes when input changes" {
     local issue_a='{"title":"T","body":"B","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
     local issue_b='{"title":"T","body":"CHANGED","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}'
