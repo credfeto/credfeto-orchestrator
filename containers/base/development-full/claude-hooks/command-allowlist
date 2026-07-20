@@ -122,6 +122,7 @@ test
 true
 false
 mkdir
+cd
 cp
 mv
 rm
