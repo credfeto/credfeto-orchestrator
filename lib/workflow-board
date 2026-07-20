@@ -693,7 +693,7 @@ board_substatus_for_item() {
 }
 
 # Maps a fine-grained Workflow-board sub-status to the coarse Discord status shown alongside
-# it: "Not Started"/"Planning" haven't begun real work yet; "Approved" through "AI Coverage"
+# it: "Not Started"/"Planning" haven't begun real work yet; "Approved" through "Human Review"
 # are all actively in progress; "Complete" is done. An unrecognised/empty sub-status (no board
 # configured, custom status name) falls back to "Unknown" rather than guessing (#1136).
 coarse_status_for_substatus() {

@@ -6,7 +6,7 @@
 #
 # Each step is skipped when already done, so the script is safe to re-run:
 #   1. create a "Workflow" project owned by the repository owner
-#   2. add the "Workflow Status" single-select field with its eight options
+#   2. add the "Workflow Status" single-select field with its ten options
 #   3. link the project to the repository
 #   4. grant the orchestrator bot WRITER access to the project
 #
