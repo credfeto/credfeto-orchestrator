@@ -7724,7 +7724,7 @@ STUBEOF
 }
 
 @test "coarse_status_for_substatus maps the active phases to In Progress" {
-    for phase in Approved Development "AI Simplify" "AI Review" "AI Security Review" "Human Review"; do
+    for phase in Approved Development "AI Simplify" "AI Review" "AI Security Review" "AI Coverage" "Human Review"; do
         run coarse_status_for_substatus "${phase}"
         [ "${output}" = "In Progress" ]
     done
@@ -7843,11 +7843,31 @@ STUBEOF
     [[ "${output}" == *'the board is at "AI Review"'* ]]
 }
 
-@test "build_pr_claude_md renumbers security review and finalize to PHASE F and PHASE G" {
+@test "build_pr_claude_md renumbers security review, coverage, and finalize to PHASE F, G, and H" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PHASE F — Security review"* ]]
-    [[ "${output}" == *"PHASE G — Finalize"* ]]
+    [[ "${output}" == *"PHASE G — Coverage"* ]]
+    [[ "${output}" == *"PHASE H — Finalize"* ]]
+}
+
+@test "build_pr_claude_md PHASE F (security review) advances to AI Coverage, not Human Review, when clean" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'advance the board to "AI Coverage"'* ]]
+}
+
+@test "build_pr_claude_md PHASE G (coverage) only fires once the board is at AI Coverage" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'the board is at "AI Coverage"'* ]]
+}
+
+@test "build_pr_claude_md PHASE G is documented as an inert passthrough pending coverage-measurement instructions" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"not yet defined"* ]]
+    [[ "${output}" == *'advance the board straight to "Human Review"'* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
@@ -7887,7 +7907,7 @@ STUBEOF
     [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_def456"* ]]
 }
 
-@test "_build_wf_section outputs all nine status option keys" {
+@test "_build_wf_section outputs all ten status option keys" {
     _WF_PROJECT_ID="PVT_test"
     _WF_STATUS_FIELD_ID="PVTSSF_test"
     _WF_OPTION_IDS["Not Started"]="opt1"
@@ -7897,6 +7917,7 @@ STUBEOF
     _WF_OPTION_IDS["AI Simplify"]="opt4b"
     _WF_OPTION_IDS["AI Review"]="opt5"
     _WF_OPTION_IDS["AI Security Review"]="opt6"
+    _WF_OPTION_IDS["AI Coverage"]="opt6b"
     _WF_OPTION_IDS["Human Review"]="opt7"
     _WF_OPTION_IDS[Complete]="opt8"
     run _build_wf_section
@@ -7908,8 +7929,25 @@ STUBEOF
     [[ "${output}" == *"WF_AI_SIMPLIFY=opt4b"* ]]
     [[ "${output}" == *"WF_AI_REVIEW=opt5"* ]]
     [[ "${output}" == *"WF_AI_SECURITY_REVIEW=opt6"* ]]
+    [[ "${output}" == *"WF_AI_COVERAGE=opt6b"* ]]
     [[ "${output}" == *"WF_HUMAN_REVIEW=opt7"* ]]
     [[ "${output}" == *"WF_COMPLETE=opt8"* ]]
+}
+
+@test "_build_wf_section emits WF_AI_COVERAGE between WF_AI_SECURITY_REVIEW and WF_HUMAN_REVIEW" {
+    _WF_PROJECT_ID="PVT_test"
+    _WF_STATUS_FIELD_ID="PVTSSF_test"
+    _WF_OPTION_IDS["AI Security Review"]="opt6"
+    _WF_OPTION_IDS["AI Coverage"]="opt6b"
+    _WF_OPTION_IDS["Human Review"]="opt7"
+    run _build_wf_section
+    [ "${status}" -eq 0 ]
+    local security_line coverage_line human_line
+    security_line=$(grep -n "WF_AI_SECURITY_REVIEW=" <<< "${output}" | cut -d: -f1)
+    coverage_line=$(grep -n "WF_AI_COVERAGE=" <<< "${output}" | cut -d: -f1)
+    human_line=$(grep -n "WF_HUMAN_REVIEW=" <<< "${output}" | cut -d: -f1)
+    [ "${security_line}" -lt "${coverage_line}" ]
+    [ "${coverage_line}" -lt "${human_line}" ]
 }
 
 # --- project_cache_file_path / load_project_cache / save_project_cache / --------------
@@ -8082,8 +8120,8 @@ STUBEOF
     [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid_new" ]
 }
 
-@test "discover_or_create_workflow_project does not call the field-option mutation when AI Simplify is already present" {
-    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""}]}]}}]'
+@test "discover_or_create_workflow_project does not call the field-option mutation when AI Simplify and AI Coverage are already present" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"oid3","name":"AI Security Review","color":"RED","description":""},{"id":"oid4","name":"AI Coverage","color":"RED","description":""}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
 if [[ "\$*" == *"projectsV2"* ]]; then
@@ -8101,7 +8139,31 @@ STUBEOF
     chmod +x "${STUB_BIN}/gh"
     discover_or_create_workflow_project
     [ "${_WF_OPTION_IDS["AI Simplify"]}" = "oid2" ]
+    [ "${_WF_OPTION_IDS["AI Coverage"]}" = "oid4" ]
     [ ! -f "${TEST_TMP}/unexpected.log" ]
+}
+
+@test "discover_or_create_workflow_project backfills the missing AI Coverage option onto a pre-existing board that already has AI Simplify (#1215)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"oid3","name":"AI Security Review","color":"RED","description":""},{"id":"oid5","name":"Human Review","color":"GREEN","description":""}]}]}}]'
+    local updated_field='{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Development","color":"PURPLE","description":""},{"id":"oid2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"oid3","name":"AI Security Review","color":"RED","description":""},{"id":"oid_new","name":"AI Coverage","color":"RED","description":""},{"id":"oid5","name":"Human Review","color":"GREEN","description":""}]}'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+if [[ "\$*" == *"--input"* ]]; then
+    cat >/dev/null
+    printf '{"data":{"updateProjectV2Field":{"projectV2Field":%s}}}\n' '${updated_field}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_OPTION_IDS["AI Security Review"]}" = "oid3" ]
+    [ "${_WF_OPTION_IDS["AI Coverage"]}" = "oid_new" ]
+    [ "${_WF_OPTION_IDS["Human Review"]}" = "oid5" ]
 }
 
 @test "discover_or_create_workflow_project persists a disk cache file after live discovery" {
