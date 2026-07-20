@@ -270,14 +270,13 @@ PHASE E — Code review (do this ONLY when CI is fully green, there is no outsta
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
   - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit, push in the foreground, post a one-line status comment, then STOP.
-  - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean — advancing to coverage check"), then STOP.
+  - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
 
-PHASE G — Coverage (do this ONLY when the board is at "AI Coverage"):
-  - NOTE: per-language coverage-measurement instructions for this phase are not yet defined in the loaded AI instructions. Until they are, this phase is a passthrough, not a real gate: advance the board straight to "Human Review", post a one-line status comment ("Coverage gate not yet configured — advancing to finalize"), then STOP. Once coverage-measurement instructions exist, this phase must instead: measure overall test coverage on both origin/main and this branch, and if the branch's overall coverage percentage is lower than main's, set the board back to "Development", post a status comment naming both numbers, and STOP so more tests get written; otherwise advance to "Human Review" as above.
-  - If you have already run ${MAX_REVIEW_ITERATIONS} coverage rounds on this PR without reaching parity (once the real gate is active): post a PR comment explaining that coverage is not converging, add the Blocked label, and STOP.
+PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
+  - This phase is currently a placeholder, not a real gate: the per-language coverage-measurement instructions it needs are tracked in credfeto/cs-template#992 and not yet loaded. Advance the board straight to "Human Review", post a one-line status comment ("Coverage gate not yet configured, advancing to finalize"), then STOP.
 
-PHASE H — Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
+PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - Enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
     If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
   - Post a one-line status comment confirming the PR is ready, then STOP.

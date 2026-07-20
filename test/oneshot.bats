@@ -7847,8 +7847,8 @@ STUBEOF
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PHASE F — Security review"* ]]
-    [[ "${output}" == *"PHASE G — Coverage"* ]]
-    [[ "${output}" == *"PHASE H — Finalize"* ]]
+    [[ "${output}" == *"PHASE G: Coverage"* ]]
+    [[ "${output}" == *"PHASE H: Finalize"* ]]
 }
 
 @test "build_pr_claude_md PHASE F (security review) advances to AI Coverage, not Human Review, when clean" {
@@ -7863,11 +7863,11 @@ STUBEOF
     [[ "${output}" == *'the board is at "AI Coverage"'* ]]
 }
 
-@test "build_pr_claude_md PHASE G is documented as an inert passthrough pending coverage-measurement instructions" {
+@test "build_pr_claude_md PHASE G is documented as an inert placeholder pending cs-template#992" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"not yet defined"* ]]
-    [[ "${output}" == *'advance the board straight to "Human Review"'* ]]
+    [[ "${output}" == *"credfeto/cs-template#992"* ]]
+    [[ "${output}" == *'Advance the board straight to "Human Review"'* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {

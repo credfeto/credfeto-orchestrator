@@ -32,7 +32,7 @@ The orchestrator workflow is defined in [agent-roles.instructions.md](../global/
 
 ### Workflow board
 
-Update the board status at every stage transition (Not Started → Development → AI Review → AI Security Review → Human Review). Commands are in `agent-roles.instructions.md` under **Workflow Board**.
+Update the board status at every stage transition (Not Started → Development → AI Review → AI Security Review → AI Coverage → Human Review; AI Coverage is currently a placeholder that always advances, see `docs/workflow-board.md` and `credfeto/cs-template#992`). Commands are in `agent-roles.instructions.md` under **Workflow Board**.
 
 ## Quality gates (mandatory before any commit)
 
