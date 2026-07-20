@@ -32,6 +32,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
 - reject-obfuscated-commands now auto-corrects a fixed set of known-benign Unicode punctuation (em/en dash, curly quotes, non-breaking space, arrows, ellipsis) instead of blocking, when doing so fully resolves the command to plain ASCII
+- Simplified install-claude-hooks: claude-settings.json now ships with the literal $HOME token in hook paths instead of a hardcoded /home/developer placeholder, so no path rewriting is needed on install; the template and image build both guard against a hardcoded path being reintroduced
 ### Deprecated
 ### Removed
 ### Deployment Changes

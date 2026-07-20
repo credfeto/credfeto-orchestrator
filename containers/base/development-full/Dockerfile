@@ -274,6 +274,8 @@ RUN set -e; \
         [ "$(stat -c '%U:%G %a' "$f")" = "root:root 444" ] \
             || { echo "FATAL sanity: $f has wrong owner/perms" >&2; exit 1; }; \
     done; \
+    ! jq -r '.hooks.PreToolUse[].hooks[].command' /home/developer/.claude/settings.json | grep -q '/home/developer' \
+        || { echo "FATAL sanity: settings.json hook commands contain a hardcoded /home/developer path instead of the portable \$HOME token" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-git-dash-c)" = "root:root 755" ] \
         || { echo "FATAL sanity: enforce-git-dash-c hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/enforce-git-dash-c ] \
