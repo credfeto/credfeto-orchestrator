@@ -144,3 +144,7 @@ xargs
 mktemp
 df
 du
+
+
+## Static web publishing
+hugo
