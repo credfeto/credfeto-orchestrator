@@ -68,7 +68,7 @@
       "Bash(npm run *)",
       "Bash(npm test *)",
       "Bash(npx *)",
-      "Bash(pre-commit *",
+      "Bash(pre-commit *)",
       "Bash(python3 *)",
       "Edit",
       "Read",
