@@ -34,6 +34,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
 - reject-obfuscated-commands now auto-corrects a fixed set of known-benign Unicode punctuation (em/en dash, curly quotes, non-breaking space, arrows, ellipsis) instead of blocking, when doing so fully resolves the command to plain ASCII
 - Simplified install-claude-hooks: claude-settings.json now ships with the literal $HOME token in hook paths instead of a hardcoded /home/developer placeholder, so no path rewriting is needed on install; the template and image build both guard against a hardcoded path being reintroduced
+- Update interactive-session instructions to the placeholder-first, two-mode Changelog workflow (credfeto/cs-template#994), including a Changelog correction step after each AI Review Loop phase and the previously-missing AI Simplify board status
 ### Deprecated
 ### Removed
 ### Deployment Changes
