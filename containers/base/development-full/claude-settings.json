@@ -7,7 +7,7 @@
     "defaultMode": "auto",
     "allow": [
 
-      
+
       "Bash(bun add *)",
       "Bash(bun install *)",
       "Bash(bun run *)",
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/markr/.claude/hooks/reject-obfuscated-commands"
+            "command": "/home/developer/.claude/hooks/reject-obfuscated-commands"
           },
           {
             "type": "command",
@@ -106,19 +106,19 @@
           },
           {
             "type": "command",
-            "command": "/home/markr/.claude/hooks/enforce-git-identity"
+            "command": "/home/developer/.claude/hooks/enforce-git-identity"
           },
           {
             "type": "command",
-            "command": "/home/markr/.claude/hooks/enforce-git-dash-c"
+            "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
           },
           {
             "type": "command",
-            "command": "/home/markr/.claude/hooks/block-git-worktree"
+            "command": "/home/developer/.claude/hooks/block-git-worktree"
           },
           {
             "type": "command",
-            "command": "/home/markr/.claude/hooks/block-dotnet-tool-install"
+            "command": "/home/developer/.claude/hooks/block-dotnet-tool-install"
           }
         ]
       },
