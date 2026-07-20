@@ -5,6 +5,12 @@
 
 Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`.
 
+## Prefer auto-correction over blocking, when it's a genuine correction
+
+`PreToolUse` hooks can rewrite the tool call instead of only allowing/denying it, via `hookSpecificOutput.updatedInput` alongside `permissionDecision: "allow"` in the hook's JSON stdout (see Claude Code hooks documentation). When a blocked command has an unambiguous, safe rewrite available - one that fixes the actual problem rather than merely satisfying the check's syntax - prefer emitting that rewrite over blocking-and-retrying. It cuts a round trip without weakening the guardrail.
+
+This is not a blanket instruction to auto-fix every block. A rewrite is only valid when it adds real information the hook can't already infer risk-free. It is not valid when the only available substitution would make the check pass without verifying anything - that's equivalent to not enforcing the check at all, just with extra steps. Concretely: `enforce-git-dash-c` stays block-only. The only value it could inject for a missing `-C <dir>` is the hook's own `$PWD`, which is exactly what plain `git` already defaults to when `-C` is omitted - so `git -C "$PWD" status` and bare `git status` behave identically. Auto-injecting it would make `-C` optional in practice for every command the settings.json deny-list doesn't separately cover, defeating the whole point of forcing the target repo to be explicit in the tool call. Before adding auto-correction to any hook, check whether the "fix" is actually a no-op like this one.
+
 ## reject-obfuscated-commands
 
 Delegates parsing to `shfmt` and applies policy to the resulting AST rather than text-scanning. Blocks in layered order (all fail closed): non-ASCII/non-printable bytes anywhere in the command, unparseable shell, disallowed AST shapes (function defs, `declare`/`export`, non-literal command names), interpreters given an inline-code flag (`bash -c`, `python3 -c`, ...), `command-blocklist` names (`eval`, `sudo`, `env`, ...), then `command-allowlist` (anything not listed is rejected).
