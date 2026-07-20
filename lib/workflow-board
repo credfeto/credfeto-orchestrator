@@ -286,10 +286,12 @@ discover_or_create_workflow_project() {
         return 0
     }
 
-    # Backfills the "AI Simplify" option onto boards provisioned before that option existed
-    # (#1169), mirroring create-project's own migration so oneshot self-heals a pre-existing
-    # board without needing a human to re-run create-project by hand.
+    # Backfills the "AI Simplify" and "AI Coverage" options onto boards provisioned before
+    # those options existed (#1169, #1215), mirroring create-project's own migration so
+    # oneshot self-heals a pre-existing board without needing a human to re-run create-project
+    # by hand.
     status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Simplify" PURPLE "Development")
+    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Coverage" RED "AI Security Review")
 
     _WF_STATUS_FIELD_ID=$(printf '%s' "${status_field_node}" | jq -r '.id // empty')
     [ -n "${_WF_STATUS_FIELD_ID}" ] || {
@@ -487,7 +489,7 @@ _wf_create_project() {
     }
     rm -f "${project_err}"
 
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"AI Coverage\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
     local field_json field_err field_err_content
     field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
     field_json=$(gh api graphql \
@@ -699,7 +701,7 @@ coarse_status_for_substatus() {
     case "${substatus}" in
         "Not Started"|Planning)
             printf 'To Do' ;;
-        Approved|Development|"AI Simplify"|"AI Review"|"AI Security Review"|"Human Review")
+        Approved|Development|"AI Simplify"|"AI Review"|"AI Security Review"|"AI Coverage"|"Human Review")
             printf 'In Progress' ;;
         Complete)
             printf 'Done' ;;

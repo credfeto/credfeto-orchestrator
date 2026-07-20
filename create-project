@@ -6,7 +6,7 @@
 #
 # Each step is skipped when already done, so the script is safe to re-run:
 #   1. create a "Workflow" project owned by the repository owner
-#   2. add the "Workflow Status" single-select field with its eight options
+#   2. add the "Workflow Status" single-select field with its ten options
 #   3. link the project to the repository
 #   4. grant the orchestrator bot WRITER access to the project
 #
@@ -152,9 +152,10 @@ ensure_status_field() {
     if [ -n "${field_node}" ]; then
         info "Status field \"${STATUS_FIELD_NAME}\" already present — checking its options are up to date"
         field_node=$(ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development")
+        field_node=$(ensure_status_field_option "${field_node}" "AI Coverage" RED "AI Security Review")
     else
-        info "Adding \"${STATUS_FIELD_NAME}\" field with its nine options..."
-        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
+        info "Adding \"${STATUS_FIELD_NAME}\" field with its ten options..."
+        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"AI Coverage\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
         local resp
         resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}")
         field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)

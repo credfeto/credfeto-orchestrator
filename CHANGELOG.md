@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add plain-English documentation covering the full orchestrator architecture and every major subsystem (docs/architecture.md, oneshot.md, workflow-board.md, agent-container.md, base-image-chain.md, github-integration.md, discord-notifications.md, deployment-and-setup.md), each including its own assumptions
 - Link each new architecture/subsystem doc directly from README.md's Documentation section
 - Added a Claude Code hook (block-dotnet-tool-install) to the development-full container that blocks `dotnet tool install` (local or global) and `dotnet new tool-manifest`, since this container's .NET global tools are pinned and baked into the image at build time
+- Added an 'AI Coverage' stage to the Workflow board state machine, the last automated gate before Human Review, intended to ratchet whole-repo test coverage so it cannot drop below main's; currently ships as an inert passthrough pending per-language measurement instructions (credfeto/cs-template#992).
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
