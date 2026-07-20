@@ -45,15 +45,27 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "generated settings.json rewrites hook paths to \$HOME/.claude, not /home/developer" {
+@test "generated settings.json is copied verbatim with the literal \$HOME token, not rewritten" {
     main
 
     run jq -r '.hooks.PreToolUse[0].hooks[0].command' "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == "${HOME}/.claude/hooks/"* ]]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == '$HOME/.claude/hooks/'* ]]
 
     run grep -c '/home/developer' "${HOME}/.claude/settings.json"
     [ "${status}" -eq 1 ]
+
+    diff "${SOURCE_SETTINGS}" "${HOME}/.claude/settings.json"
+}
+
+@test "the template claude-settings.json never ships a hardcoded /home/<user> path" {
+    run grep -qE '/home/[^/[:space:]]+/\.claude' "${SOURCE_SETTINGS}"
+    [ "${status}" -eq 1 ]
+
+    run jq -r '.hooks.PreToolUse[0].hooks[0].command' "${SOURCE_SETTINGS}"
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == '$HOME/.claude/hooks/'* ]]
 }
 
 @test "generated settings.json includes block-git-worktree in the PreToolUse chain" {
@@ -61,7 +73,8 @@ teardown() {
 
     run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"${HOME}/.claude/hooks/block-git-worktree"* ]]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == *'$HOME/.claude/hooks/block-git-worktree'* ]]
 }
 
 @test "generated settings.json includes block-dotnet-tool-install in the PreToolUse chain" {
@@ -69,7 +82,8 @@ teardown() {
 
     run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"${HOME}/.claude/hooks/block-dotnet-tool-install"* ]]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == *'$HOME/.claude/hooks/block-dotnet-tool-install'* ]]
 }
 
 @test "a pre-existing settings.json is preserved as settings.json.bak" {

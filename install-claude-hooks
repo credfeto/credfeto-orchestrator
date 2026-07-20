@@ -4,9 +4,10 @@
 # hooks into the current host user's ~/.claude, so the hooks can be exercised
 # outside the container. Hook/data files are symlinked straight back into this
 # repo (edit here, re-run nothing, the symlink already points at the change);
-# settings.json is generated from the container's copy with every
-# /home/developer/.claude path rewritten to this host's own $HOME/.claude,
-# since the container's hardcoded developer-user path would not resolve here.
+# settings.json is copied verbatim from the container's copy - its hook
+# command strings use the literal "$HOME" token (shell-expanded by whichever
+# shell Claude Code invokes the hook through, both in the container as
+# developer and here as the host user), so no path rewriting is needed.
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -36,10 +37,7 @@ SOURCE_SETTINGS="${SOURCE_DIR}/claude-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
 
 check_required_tools() {
-    local tool
-    for tool in jq sed; do
-        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
-    done
+    command -v jq >/dev/null 2>&1 || die "Required tool not found: jq"
 }
 
 # Symlinks every file directly under SOURCE_HOOKS_DIR into TARGET_HOOKS_DIR,
@@ -58,19 +56,20 @@ install_hook_symlinks() {
     done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f | sort)
 }
 
-# Generates target_settings from SOURCE_SETTINGS with every
-# /home/developer/.claude path rewritten to target_claude_dir, validating the
-# result is well-formed JSON before it is written into place. Backs up any
-# pre-existing settings.json first (single fixed name, overwritten each run).
+# Copies SOURCE_SETTINGS to target_settings verbatim - its hook command
+# strings use the literal "$HOME" token, which the shell Claude Code invokes
+# hooks through expands at execution time, so no rewriting is needed here.
+# Validates the copy is well-formed JSON before it is written into place.
+# Backs up any pre-existing settings.json first (single fixed name,
+# overwritten each run).
 install_settings() {
     local target_claude_dir="$1"
     local target_settings="${target_claude_dir}/settings.json"
     local tmp_settings
     tmp_settings=$(mktemp) || die "Failed to create a temp file for settings.json"
 
-    sed "s|/home/developer/\.claude|${target_claude_dir}|g" "${SOURCE_SETTINGS}" > "${tmp_settings}" \
-        || die "Failed to rewrite paths in settings.json"
-    jq empty "${tmp_settings}" 2>/dev/null || die "Generated settings.json is not valid JSON"
+    cp -f "${SOURCE_SETTINGS}" "${tmp_settings}" || die "Failed to copy settings.json"
+    jq empty "${tmp_settings}" 2>/dev/null || die "settings.json is not valid JSON"
 
     if [ -f "${target_settings}" ]; then
         cp -f "${target_settings}" "${target_claude_dir}/settings.json.bak" \
@@ -79,7 +78,7 @@ install_settings() {
     fi
 
     mv "${tmp_settings}" "${target_settings}" || die "Failed to install settings.json"
-    info "Installed settings.json (hook paths rewritten to ${target_claude_dir})"
+    info "Installed settings.json"
 }
 
 main() {

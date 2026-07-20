@@ -100,7 +100,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/reject-obfuscated-commands"
+            "command": "$HOME/.claude/hooks/reject-obfuscated-commands"
           },
           {
             "type": "command",
@@ -108,19 +108,19 @@
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/enforce-git-identity"
+            "command": "$HOME/.claude/hooks/enforce-git-identity"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/enforce-git-dash-c"
+            "command": "$HOME/.claude/hooks/enforce-git-dash-c"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/block-git-worktree"
+            "command": "$HOME/.claude/hooks/block-git-worktree"
           },
           {
             "type": "command",
-            "command": "/home/developer/.claude/hooks/block-dotnet-tool-install"
+            "command": "$HOME/.claude/hooks/block-dotnet-tool-install"
           }
         ]
       },
