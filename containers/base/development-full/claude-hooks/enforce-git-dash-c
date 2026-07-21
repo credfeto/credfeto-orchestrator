@@ -34,12 +34,16 @@
 #       - Reads (--get, --get-all, --get-regexp, --get-urlmatch, --list) of
 #         --global/--system scope are allowed anywhere; any other read still
 #         requires -C like the rest of git.
-#       - Writes (plain `key value` set, --add, --replace-all, --unset,
-#         --unset-all) are allowed ONLY when the target setting currently
-#         has no value in either the local or the global scope (checked via
-#         `git config --local|--global --get <key>`) — an existing value,
-#         e.g. the baked-in identity, must never be overwritten or removed.
-#         Local-scope writes additionally require -C. The key must be a
+#       - Writes to --global/--system scope (plain `key value` set, --add,
+#         --replace-all, --unset, --unset-all) are blocked outright — the
+#         baked-in identity/signing config must never be modified.
+#       - Local-scope writes require -C and are allowed ONLY when the
+#         target setting currently has no value in either the local or the
+#         global scope (checked via `git config --local|--global --get
+#         <key>`) — an existing value must never be overwritten or removed
+#         — and the key must not be one that can execute code or move
+#         trust boundaries (alias.*, core.hooksPath, core.fsmonitor,
+#         credential.*, filter/diff/merge drivers, ...). The key must be a
 #         plain literal token and no unrecognised flags may accompany a
 #         write (both fail closed) so the checked key is provably the
 #         written key.
@@ -136,15 +140,30 @@ check_config_call() {
     block 'git commands must use "git -C <dir>" format'
   fi
 
-  # Write path — fail closed on anything that stops the existing-value
-  # check from provably targeting the key being written.
+  # Write path. Global/system config (identity, signing, hooks path) is
+  # baked into the environment and must never be modified from a session.
+  [ "$scope" = "global" ] && block 'git config --global/--system writes are not permitted'
+
+  # Fail closed on anything that stops the checks below from provably
+  # targeting the key being written.
   [ -n "$unknown_flag" ] && block "git config write with unrecognised flag ${unknown_flag} is not permitted"
   if [ -z "$key" ] || [ "$key" = "$MARKER" ]; then
     block 'git config writes must name a plain literal key'
   fi
-  if [ "$scope" != "global" ] && [ "$has_C" != 1 ]; then
-    block 'git commands must use "git -C <dir>" format'
-  fi
+  [ "$has_C" = 1 ] || block 'git commands must use "git -C <dir>" format'
+
+  # Keys that can execute code or move trust boundaries are blocked at any
+  # scope regardless of current value (git config keys are case-insensitive
+  # in section and key name, so compare lowercased).
+  local lkey="${key,,}"
+  case "$lkey" in
+    alias.* | credential.* | gpg.* | filter.* | http.* | url.* | protocol.* | ssh.* | \
+      core.hookspath | core.fsmonitor | core.sshcommand | core.gitproxy | core.editor | \
+      core.pager | core.askpass | core.attributesfile | core.excludesfile | sequence.editor | \
+      *.command | *.driver | *.external | *.textconv | *.process | *.smudge | *.clean)
+      block "git config ${key} can execute code or change trust boundaries - not permitted"
+      ;;
+  esac
 
   local dirargs=()
   if [ "$has_C" = 1 ] && [ -n "$cdir" ] && [ "$cdir" != "$MARKER" ]; then
