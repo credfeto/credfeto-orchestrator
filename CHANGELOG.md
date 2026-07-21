@@ -30,6 +30,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Fixed the development container's baked-in Claude Code hook settings pointing at a hardcoded developer machine path instead of the container's dev user, which broke local hook testing via install-claude-hooks for any user other than that one machine.
 - PR fingerprinting now hashes legacy StatusContext checks' actual .state (e.g. Codecov-style commit statuses), instead of treating every such check as an unchanging 'none', closing a gap in the same class of bug fixed for Issue board-approval in #1204
 - enforce-git-identity checks the --global git identity instead of resolving -C paths, so commands using shell variables like $REPO are no longer misreported as having no user.email
+- duplicate git config --global --get user.signingkey allow rule corrected to the intended --local variant
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement

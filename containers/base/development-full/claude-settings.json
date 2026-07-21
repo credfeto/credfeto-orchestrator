@@ -63,7 +63,7 @@
       "Bash(git config --local --get core.hooks-path)",
       "Bash(git config --local --get user.email)",
       "Bash(git config --local --get user.name)",
-      "Bash(git config --global --get user.signingkey)",
+      "Bash(git config --local --get user.signingkey)",
       "Bash(git config --system --get core.hooks-path)",
       "Bash(grep *)",
       "Bash(ls *)",
