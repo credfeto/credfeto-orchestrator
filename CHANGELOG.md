@@ -38,7 +38,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Simplified install-claude-hooks: claude-settings.json now ships with the literal $HOME token in hook paths instead of a hardcoded /home/developer placeholder, so no path rewriting is needed on install; the template and image build both guard against a hardcoded path being reintroduced
 - Update interactive-session instructions to the placeholder-first, two-mode Changelog workflow (credfeto/cs-template#994), including a Changelog correction step after each AI Review Loop phase and the previously-missing AI Simplify board status
 - enforce-git-dash-c makes git config strictly read-only - every config write is blocked at local, global and system scope, while --get reads remain allowed
-- TBD - to be finalized after review
+- Pinned all GitHub Actions workflow and composite-action uses: references to full commit SHAs so upstream tag repointing cannot inject unreviewed action code
 ### Deprecated
 ### Removed
 ### Deployment Changes
