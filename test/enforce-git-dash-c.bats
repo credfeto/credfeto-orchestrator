@@ -163,9 +163,9 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "git -C . config --global is allowed by this hook (settings deny rule covers that layer)" {
+@test "git -C . config --global write is blocked (config is read-only)" {
     run_hook "git -C . config --global user.email test@example.com"
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
 }
 
 @test "bare git clone is exempted from -C" {
@@ -235,6 +235,47 @@ run_hook() {
 
 @test "bare git config plain (no scope, no action) is still blocked" {
     run_hook "git config user.email"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git -C . config plain set (local write) is blocked" {
+    run_hook "git -C . config pull.rebase false"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git -C . config --add (local write) is blocked" {
+    run_hook "git -C . config --add safe.directory /x"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git -C . config --unset (local write) is blocked" {
+    run_hook "git -C . config --unset user.email"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git -C . config --get read is allowed" {
+    run_hook "git -C . config --get user.email"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git -C . config single-key read (no action flag) is allowed" {
+    run_hook "git -C . config user.email"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted variable value cannot disguise a local write as a single-key read" {
+    # shellcheck disable=SC2016  # the variable must reach the hook unexpanded
+    run_hook 'git -C . config user.email "$EVIL"'
+    [ "${status}" -eq 2 ]
+}
+
+@test "git config --edit is blocked outright" {
+    run_hook "git -C . config --edit"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git config --file is blocked outright" {
+    run_hook "git -C . config --file /tmp/x --get user.email"
     [ "${status}" -eq 2 ]
 }
 
