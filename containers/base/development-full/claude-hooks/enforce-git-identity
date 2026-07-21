@@ -63,19 +63,13 @@ cmd=$(strip_heredocs "$raw_cmd")
 GATE="(^|;|&&|\\|\\|)[[:space:]]*git[[:space:]]+${FLAGS}(${SUBCMDS})([[:space:]]|\$)"
 printf '%s' "$cmd" | grep -qE "$GATE" || exit 0
 
-# Re-extract the exact matched invocation (same anchored pattern as the gate,
-# so this can't drift from — or be tricked by unrelated text elsewhere in the
-# command into disagreeing with — what actually triggered the check), then
-# pull the `-C` value (if any) out of *that* scoped text only.
-invocation=$(printf '%s' "$cmd" | grep -oE "$GATE" | head -1)
-
-git_dir_args=()
-repo=$(printf '%s' "$invocation" | grep -oE -- "-C[[:space:]]+${VALTOKEN}" | head -1 \
-  | sed -E 's/^-C[[:space:]]+//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/')
-[ -n "$repo" ] && git_dir_args=(-C "$repo")
-
+# Identity is checked against --global config deliberately: the policy is that
+# the machine-wide identity must be correct. Resolving the repo from the
+# command's `-C` value is not possible in general — the value may be an
+# unexpanded shell variable (e.g. `REPO=/x; git -C "$REPO" commit`), which
+# would make the lookup fail and misreport a correctly-set identity as unset.
 git_cfg() {
-  git "${git_dir_args[@]}" config "$1" 2>/dev/null
+  git config --global --get "$1" 2>/dev/null
 }
 
 CURRENT_EMAIL=$(git_cfg user.email)

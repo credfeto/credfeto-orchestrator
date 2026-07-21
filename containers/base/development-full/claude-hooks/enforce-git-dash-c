@@ -26,18 +26,27 @@
 #     `git -c core.pager=cat -C /repo status`. Only these two positions are
 #     checked — a `git` token appearing elsewhere is an ordinary argument
 #     (e.g. `grep -r git .`), not a git invocation.
-#   * Narrow exemptions from the `-C` requirement, checked only after the
-#     -C check itself has failed, for subcommands that don't act on ambient
-#     CWD repo state the way most git commands do (so -C protects against
-#     nothing there):
+#   * Exemptions from the `-C` requirement, kept deliberately narrow — do
+#     not widen without re-reading the PR #1159/#1105 bypass history above:
 #       - `git clone ...` — creates a new repo, doesn't read an existing one.
-#       - `git config --global|--system --get|--get-all|--get-regexp|--list`
-#         — global/system config reads. Write forms (--add, plain-set,
-#         --replace-all, --unset, --edit) are NOT exempted here and stay
-#         blocked by this hook; they're also independently denied, with or
-#         without -C, by the deny rules in settings.json permissions.
-#     Kept deliberately narrow — do not widen without re-reading the
-#     PR #1159/#1105 bypass history above.
+#       - `git config ...` — governed by the config policy below instead.
+#   * `git config` policy (applies with or without -C):
+#       - Reads (--get, --get-all, --get-regexp, --get-urlmatch, --list) of
+#         --global/--system scope are allowed anywhere; any other read still
+#         requires -C like the rest of git.
+#       - Writes (plain `key value` set, --add, --replace-all, --unset,
+#         --unset-all) are allowed ONLY when the target setting currently
+#         has no value in either the local or the global scope (checked via
+#         `git config --local|--global --get <key>`) — an existing value,
+#         e.g. the baked-in identity, must never be overwritten or removed.
+#         Local-scope writes additionally require -C. The key must be a
+#         plain literal token and no unrecognised flags may accompany a
+#         write (both fail closed) so the checked key is provably the
+#         written key.
+#       - --edit/-e, --file/-f, --blob, --rename-section and
+#         --remove-section are blocked outright — interactive,
+#         arbitrary-file or whole-section forms this hook cannot verify
+#         against the existing-value rule.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
@@ -77,19 +86,78 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
+# Opaque-word marker. Layer 0 of reject-obfuscated-commands (which runs
+# before this hook) guarantees a real \x01 byte can never appear in the
+# input, so the marker is unambiguous, can never equal "git"/"-C"/"-c" and
+# so is opaque to the checks below, and — unlike an empty string — is never
+# dropped by IFS=<tab> word-splitting's collapsing of consecutive
+# whitespace delimiters.
+MARKER=$'\x01'
+
 # One line per CallExpr: every word that is a single plain literal is
 # emitted verbatim; anything else (quoted text, substitutions, expansions)
-# is represented as a \x01 marker — layer 0 of reject-obfuscated-commands
-# (which runs before this hook) already guarantees a real \x01 byte can
-# never appear in the input, so the marker is unambiguous, can never equal
-# "git"/"-C"/"-c" and so is opaque to the checks below, and — unlike an
-# empty string — is never dropped by IFS=<tab> word-splitting's collapsing
-# of consecutive whitespace delimiters. Words cannot contain raw
-# whitespace, so tab is a safe separator.
+# is represented as the \x01 marker. Words cannot contain raw whitespace,
+# so tab is a safe separator.
 calls=$(printf '%s' "$ast" | jq -r '
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
   join("\t")')
+
+# Applies the `git config` policy documented in the header. Reads the
+# surrounding loop's state: words (tokens of the call), j (index of the
+# `config` token), has_C, cdir. Either blocks (exits) or returns 0 to allow.
+check_config_call() {
+  local scope="" read_flag="" write_flag="" unknown_flag="" key="" extra=0 k tk
+  k=$((j + 1))
+  while [ "$k" -lt "${#words[@]}" ]; do
+    tk="${words[$k]}"
+    case "$tk" in
+      --global | --system) scope="global" ;;
+      --local | --worktree) scope="local" ;;
+      --get | --get-all | --get-regexp | --get-urlmatch | --list | -l) read_flag="$tk" ;;
+      --add | --replace-all | --unset | --unset-all) write_flag="$tk" ;;
+      --edit | -e | --file | -f | --blob | --rename-section | --remove-section)
+        block "git config ${tk} is not permitted"
+        ;;
+      -*) unknown_flag="$tk" ;;
+      *)
+        if [ -z "$key" ]; then key="$tk"; else extra=1; fi
+        ;;
+    esac
+    k=$((k + 1))
+  done
+
+  # A write is any explicit write flag, or the plain `git config key value`
+  # set form (no read flag, more than one non-flag token).
+  if [ -z "$write_flag" ] && { [ -n "$read_flag" ] || [ "$extra" = "0" ]; }; then
+    # Read: global/system reads are safe anywhere; the rest need -C.
+    [ "$scope" = "global" ] && return 0
+    [ "$has_C" = 1 ] && return 0
+    block 'git commands must use "git -C <dir>" format'
+  fi
+
+  # Write path — fail closed on anything that stops the existing-value
+  # check from provably targeting the key being written.
+  [ -n "$unknown_flag" ] && block "git config write with unrecognised flag ${unknown_flag} is not permitted"
+  if [ -z "$key" ] || [ "$key" = "$MARKER" ]; then
+    block 'git config writes must name a plain literal key'
+  fi
+  if [ "$scope" != "global" ] && [ "$has_C" != 1 ]; then
+    block 'git commands must use "git -C <dir>" format'
+  fi
+
+  local dirargs=()
+  if [ "$has_C" = 1 ] && [ -n "$cdir" ] && [ "$cdir" != "$MARKER" ]; then
+    dirargs=(-C "$cdir")
+  fi
+  if git "${dirargs[@]}" config --global --get "$key" > /dev/null 2>&1; then
+    block "git config ${key} already has a global value - refusing to overwrite it"
+  fi
+  if git "${dirargs[@]}" config --local --get "$key" > /dev/null 2>&1; then
+    block "git config ${key} already has a local value - refusing to overwrite it"
+  fi
+  return 0
+}
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
@@ -116,21 +184,26 @@ while IFS= read -r call_line; do
       while [ "${words[$j]:-}" = "-c" ]; do
         j=$((j + 2))
       done
-      [ "${words[$j]:-}" = "-C" ] && continue
-
+      has_C=0
+      cdir=""
+      if [ "${words[$j]:-}" = "-C" ]; then
+        has_C=1
+        cdir="${words[$((j + 1))]:-}"
+        j=$((j + 2))
+        # `-c` pairs may also follow -C
+        while [ "${words[$j]:-}" = "-c" ]; do
+          j=$((j + 2))
+        done
+      fi
       sub="${words[$j]:-}"
-      [ "$sub" = "clone" ] && continue
 
       if [ "$sub" = "config" ]; then
-        scope="" action=""
-        for tk in "${words[$((j + 1))]:-}" "${words[$((j + 2))]:-}"; do
-          case "$tk" in
-            --global | --system) scope="$tk" ;;
-            --get | --get-all | --get-regexp | --list) action="$tk" ;;
-          esac
-        done
-        [ -n "$scope" ] && [ -n "$action" ] && continue
+        check_config_call
+        continue
       fi
+
+      [ "$has_C" = 1 ] && continue
+      [ "$sub" = "clone" ] && continue
 
       block 'git commands must use "git -C <dir>" format'
     fi
