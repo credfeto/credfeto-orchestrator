@@ -128,8 +128,9 @@ check_config_call() {
     block 'git config writes are not permitted at any scope'
   fi
 
-  # Read: global/system reads are safe anywhere; the rest need -C.
-  [ -n "$global_scope" ] && return 0
+  # Read: global/system reads with an explicit read flag are safe anywhere;
+  # everything else needs -C like the rest of git.
+  [ -n "$global_scope" ] && [ -n "$read_flag" ] && return 0
   [ "$has_C" = 1 ] && return 0
   block 'git commands must use "git -C <dir>" format'
 }
