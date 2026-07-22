@@ -7874,11 +7874,40 @@ STUBEOF
     [[ "${output}" == *'the board is at "AI Coverage"'* ]]
 }
 
-@test "build_pr_claude_md PHASE G is documented as an inert placeholder pending cs-template#992" {
+@test "build_pr_claude_md PHASE G runs the real coverage ratchet decision procedure" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"credfeto/cs-template#992"* ]]
-    [[ "${output}" == *'Advance the board straight to "Human Review"'* ]]
+    [[ "${output}" == *"coverage-ratchet.instructions.md"* ]]
+    [[ "${output}" == *"AI Coverage Phase Decision Procedure"* ]]
+    [[ "${output}" != *"credfeto/cs-template#992"* ]]
+}
+
+@test "build_pr_claude_md PHASE G blocks when no coverage baseline comment exists" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no baseline was ever captured"* ]]
+    [[ "${output}" == *"add the Blocked label"* ]]
+}
+
+@test "build_pr_claude_md PHASE G returns failing coverage to Development" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"returning to Development"* ]]
+    [[ "${output}" == *"move the board back to \"Development\""* ]]
+}
+
+@test "build_pr_claude_md PHASE G advances to Human Review on a passing coverage ratchet" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Coverage ratchet passed - advancing to Human Review"* ]]
+    [[ "${output}" == *'advance the board to "Human Review"'* ]]
+}
+
+@test "build_pr_claude_md PHASE G caps non-converging coverage rounds with Blocked" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"coverage rounds on this PR without the branch catching up"* ]]
+    [[ "${output}" == *"still-failing languages and their gap"* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
