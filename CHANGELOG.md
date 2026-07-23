@@ -32,6 +32,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - enforce-git-identity checks the --global git identity instead of resolving -C paths, so commands using shell variables like $REPO are no longer misreported as having no user.email
 - duplicate git config --global --get user.signingkey allow rule corrected to the intended --local variant
 - Wired the AI Coverage board phase to the real coverage-ratchet decision procedure instead of an inert placeholder that always advanced straight to Human Review, so a PR whose branch coverage regresses below main's (or has no captured baseline) is now sent back to Development or blocked instead of skipping the check.
+- Coverage gate no longer blocks on a missing baseline: PHASE G now reads a committed COVERAGE.md live from main (bootstrapping it on first use) and skips measurement entirely for dependency-only branches, instead of getting stuck behind an ephemeral PR comment that may never have been posted
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement

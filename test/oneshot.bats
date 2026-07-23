@@ -7882,11 +7882,32 @@ STUBEOF
     [[ "${output}" != *"credfeto/cs-template#992"* ]]
 }
 
-@test "build_pr_claude_md PHASE G blocks when no coverage baseline comment exists" {
+@test "build_pr_claude_md PHASE G bootstraps and passes when COVERAGE.md does not exist on main yet" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"no baseline was ever captured"* ]]
-    [[ "${output}" == *"add the Blocked label"* ]]
+    [[ "${output}" == *"bootstrap case"* ]]
+    [[ "${output}" == *"treat it as passed"* ]]
+}
+
+@test "build_pr_claude_md PHASE G skips measurement entirely for a dependency-only branch" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependency-only"* ]]
+    [[ "${output}" == *"skip straight to the success step"* ]]
+}
+
+@test "build_pr_claude_md PHASE G commits COVERAGE.md on a passing ratchet, but not on a failing one" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"write/overwrite COVERAGE.md"* ]]
+    [[ "${output}" == *"Do not touch COVERAGE.md in this case"* ]]
+}
+
+@test "build_pr_claude_md PHASE G no longer looks for a PR comment" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"## Coverage Baseline (main)"* ]]
+    [[ "${output}" == *"there isn't one"* ]]
 }
 
 @test "build_pr_claude_md PHASE G returns failing coverage to Development" {
