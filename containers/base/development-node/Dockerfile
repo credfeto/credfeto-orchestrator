@@ -3,12 +3,19 @@
 FROM ghcr.io/credfeto/development-tools:latest
 
 # ---- Build-time arguments ----------------------------------------------------
+# Pin CLI/runtime versions for reproducibility. Bump deliberately — unpinned
+# installs silently pick up the latest and can break in lockstep across all
+# users (same policy as containers/base/development-tools/Dockerfile).
+ARG NODE_MAJOR=24
+ARG NODESOURCE_GPG_KEY_SHA256=b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0aa0a271d
 ARG BUN_VERSION=1.3.13
-ARG MARKDOWNLINT_CLI2_VERSION=latest
-ARG MARKDOWNLINT_CLI_VERSION=latest
-ARG STYLELINT_VERSION=latest
-ARG STYLELINT_CONFIG_STANDARD_VERSION=latest
-ARG ESLINT_VERSION=latest
+ARG BUN_SHA256_AMD64=79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a
+ARG BUN_SHA256_ARM64=70bae41b3908b0a120e1e58c5c8af30e74afae3b8d11b0d3fdd8e787ddfb4b22
+ARG MARKDOWNLINT_CLI2_VERSION=0.23.1
+ARG MARKDOWNLINT_CLI_VERSION=0.49.1
+ARG STYLELINT_VERSION=17.14.1
+ARG STYLELINT_CONFIG_STANDARD_VERSION=40.0.0
+ARG ESLINT_VERSION=10.7.0
 ARG BLOCK_NO_VERIFY_VERSION=1.1.5
 
 # Use bash with pipefail for all subsequent RUN instructions so that pipes
@@ -25,17 +32,43 @@ RUN echo "registry=https://npm.markridgwell.com/" > /etc/npmrc \
     && chmod 0444 /etc/npmrc
 ENV NPM_CONFIG_REGISTRY=https://npm.markridgwell.com/
 
-# ---- Node.js v24.x via NodeSource -------------------------------------------
-RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+# ---- Node.js via NodeSource --------------------------------------------------
+# The NodeSource apt repository is configured directly (mirroring what
+# setup_24.x itself does) instead of piping that script to bash — avoids
+# executing remotely-fetched code without integrity verification. The signing
+# key is checked against a pinned SHA256 before being dearmored into a keyring
+# that apt then verifies the repo's Release file against.
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
+    && echo "${NODESOURCE_GPG_KEY_SHA256}  /tmp/nodesource.key" | sha256sum -c - \
+    && gpg --dearmor -o /usr/share/keyrings/nodesource.gpg /tmp/nodesource.key \
+    && chmod 0644 /usr/share/keyrings/nodesource.gpg \
+    && rm /tmp/nodesource.key \
+    && printf 'Types: deb\nURIs: https://deb.nodesource.com/node_%s.x\nSuites: nodistro\nComponents: main\nArchitectures: %s\nSigned-By: /usr/share/keyrings/nodesource.gpg\n' \
+        "${NODE_MAJOR}" "${ARCH}" > /etc/apt/sources.list.d/nodesource.sources \
+    && printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' \
+        > /etc/apt/preferences.d/nodejs \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- Bun runtime -------------------------------------------------------------
-# Install via the official script (handles multi-arch detection), then move
-# the binary to /usr/local/bin so every user can execute it.
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
-    && install -m 0755 /root/.bun/bin/bun /usr/local/bin/bun \
-    && rm -rf /root/.bun
+# Static release archive; downloaded directly from GitHub releases and
+# verified against the pinned SHA256 checksum, replacing the official
+# bun.sh/install script to avoid executing remotely-fetched code without
+# integrity verification.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) BUN_ARCH=x64;     SHA256="${BUN_SHA256_AMD64}" ;; \
+         arm64) BUN_ARCH=aarch64; SHA256="${BUN_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" \
+        -o /tmp/bun.zip \
+    && echo "${SHA256}  /tmp/bun.zip" | sha256sum -c - \
+    && unzip -q /tmp/bun.zip -d /tmp/bun-extract \
+    && install -m 0755 "/tmp/bun-extract/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bun-extract
 
 # ---- npm global installs (most stable first, most frequently bumped last) ----
 # markdownlint-cli2: companion CLI for the markdown-linter-fixer-skill kit.
