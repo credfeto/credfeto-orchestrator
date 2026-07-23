@@ -345,6 +345,16 @@ teardown() {
     [[ "${output}" == *"rebase origin/main"* ]]
 }
 
+@test "build_pr_claude_md rebase notice covers COVERAGE.md conflicts alongside CHANGELOG.md" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"CHANGELOG.md conflicts: keep entries from both sides."* ]]
+    [[ "${output}" == *"COVERAGE.md conflicts: take origin/main's copy"* ]]
+    [[ "${output}" == *"checkout --ours -- COVERAGE.md"* ]]
+    [[ "${output}" == *"rebase reverses ours/theirs vs a merge"* ]]
+    [[ "${output}" == *"once the build/tests pass re-run the coverage extraction"* ]]
+}
+
 @test "build_pr_claude_md uses provided repo_path in rebase notice" {
     run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo"
     [ "${status}" -eq 0 ]
