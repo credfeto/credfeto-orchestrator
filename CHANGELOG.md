@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- development-node base image installs Node.js via a pinned NodeSource apt repository and the Bun runtime from a checksum-verified release archive instead of piping curl output straight to bash, and pins the markdownlint-cli2, markdownlint-cli, stylelint, stylelint-config-standard and eslint npm globals to explicit versions instead of 'latest' (#1106)
 ### Added
 - Add a block-git-worktree Claude Code hook to the development-full container, blocking git worktree add (worktree creation) while leaving list/remove/prune and other worktree subcommands allowed
 - Add an install-claude-hooks script that installs the development-full container's Claude Code settings.json and hooks into the current host user's ~/.claude (hooks symlinked back into the repo, settings.json path-rewritten for the host), so hooks can be exercised outside the container
