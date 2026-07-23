@@ -8,6 +8,12 @@ FROM ghcr.io/credfeto/development-tools:latest
 # users (same policy as containers/base/development-tools/Dockerfile).
 ARG NODE_MAJOR=24
 ARG NODESOURCE_GPG_KEY_SHA256=b42e0321dabdc24e892115da705cf061167eac12a317f23d329862d0aa0a271d
+# npm bundled with the NodeSource nodejs package for NODE_MAJOR=24 currently ships
+# tar@7.5.15 (CVE-2026-59873, DoS via crafted gzip bomb, fixed in tar@7.5.19). Pin
+# npm explicitly to the first release whose bundled tar clears that fix
+# (npm@11.18.0 declares "tar": "^7.5.19"; 11.17.0 was still on ^7.5.16) instead of
+# floating to npm@latest.
+ARG NPM_VERSION=11.18.0
 ARG BUN_VERSION=1.3.13
 ARG BUN_SHA256_AMD64=79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a
 ARG BUN_SHA256_ARM64=70bae41b3908b0a120e1e58c5c8af30e74afae3b8d11b0d3fdd8e787ddfb4b22
@@ -50,6 +56,12 @@ RUN ARCH=$(dpkg --print-architecture) \
         > /etc/apt/preferences.d/nodejs \
     && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- npm (pinned, overriding the version bundled with the nodejs apt package) --
+# See CVE-2026-59873 note on NPM_VERSION above; re-pinning here rather than
+# relying on whatever npm ships inside NODE_MAJOR's apt package keeps this
+# under the same explicit-version policy as every other tool in this file.
+RUN npm install -g "npm@${NPM_VERSION}"
 
 # ---- Bun runtime -------------------------------------------------------------
 # Static release archive; downloaded directly from GitHub releases and
@@ -110,6 +122,7 @@ RUN set -e; \
         || { echo "FATAL sanity: composite-action-lint is not functional" >&2; exit 1; }; \
     echo "== stage 2 binary version probe =="; \
     node --version; \
+    npm --version; \
     bun --version; \
     markdownlint-cli2 --version; \
     markdownlint --version; \
