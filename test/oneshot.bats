@@ -7889,11 +7889,21 @@ STUBEOF
     [[ "${output}" == *"treat it as passed"* ]]
 }
 
-@test "build_pr_claude_md PHASE G skips measurement entirely for a dependency-only branch" {
+@test "build_pr_claude_md PHASE G skips measurement entirely for a non-code-only branch" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"dependency-only"* ]]
+    [[ "${output}" == *"non-code-only"* ]]
     [[ "${output}" == *"skip straight to the success step"* ]]
+}
+
+@test "build_pr_claude_md PHASE G lists workflow, SQL, shell, Docker, and docs-only changes as non-code" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"GitHub Actions workflow"* ]]
+    [[ "${output}" == *"SQL/T-SQL"* ]]
+    [[ "${output}" == *"shell script"* ]]
+    [[ "${output}" == *"Dockerfile"* ]]
+    [[ "${output}" == *"documentation-only change"* ]]
 }
 
 @test "build_pr_claude_md PHASE G commits COVERAGE.md on a passing ratchet, but not on a failing one" {

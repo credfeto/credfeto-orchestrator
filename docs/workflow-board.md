@@ -69,7 +69,8 @@ over driving the board through a fixed sequence of phases (see `build_pr_claude_
 6. **Security review** — same shape as code review, for security-specific findings.
 7. **Coverage**: the last automated gate. It compares the branch's live per-language coverage
    against the Overall figures in `COVERAGE.md` as committed on `main` (no PR comment; a
-   dependency-only branch or a `main` with no `COVERAGE.md` yet both skip straight to a pass), and
+   non-code-only branch — dependency bump, or a workflow/SQL/shell/Docker/docs-only change — or a
+   `main` with no `COVERAGE.md` yet both skip straight to a pass), and
    if any language's branch coverage is lower, sends the board back to Development instead of
    advancing, so more tests get written before the PR reaches a human. On a pass, `COVERAGE.md` is
    regenerated on the branch and committed, so it carries the new baseline into `main` once the PR
