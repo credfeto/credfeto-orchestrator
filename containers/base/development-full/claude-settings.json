@@ -144,6 +144,15 @@
             "command": "block-no-verify"
           }
         ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/enforce-context-budget"
+          }
+        ]
       }
     ]
   },
