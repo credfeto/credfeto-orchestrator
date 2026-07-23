@@ -3,7 +3,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`.
+Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json`. Most are `Bash`-matcher `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`. `enforce-context-budget` is matched separately against every tool (matcher `.*`), not just `Bash` - see its own section below.
 
 ## Prefer auto-correction over blocking, when it's a genuine correction
 
@@ -48,6 +48,10 @@ Runs after `enforce-git-dash-c`. Blocks `git worktree add` (creating a new linke
 ## block-dotnet-tool-install
 
 Runs last in the chain. Blocks `dotnet tool install` (local or global — any flag combination) and `dotnet new tool-manifest`. This container's .NET global tools are pinned and baked into the image at build time (see the "dotnet tools" sanity check in `containers/base/development-full/Dockerfile`, which asserts an exact set of tool names via `dotnet tool list -g`); either command would add an unpinned, unreviewed tool outside that set, bypassing the dependency-selection review the pinned set went through. Other `dotnet tool` subcommands (`list`/`restore`/`uninstall`/`update`/`run`/`search`) and other `dotnet new` templates remain allowed. Uses the same shfmt-parsed AST approach as `block-git-worktree`/`enforce-git-dash-c` and fails closed the same way. No safe auto-correct: there's no pinned-tool substitute the hook could infer and inject on the agent's behalf - adding a new pinned tool is a reviewed image-build change, not something a command rewrite can do.
+
+## enforce-context-budget
+
+Matched against every tool (`.*`, not just `Bash`), independent of the ordered `Bash` chain above. Proactively checkpoints-and-stops a single-phase session before it hits the model's hard context-window error ("Prompt is too long") instead of letting the session run until the API hard-fails and kills the whole invocation (#1070). `autoCompactEnabled` + `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (see `lib/globals`) already ask Claude Code to compact its own history around the 100k-token mark using its internal token accounting, but #1070 found that insufficient on its own - a single large tool result can still jump the next request straight past the 200k hard limit before compaction runs. This hook is a second, external backstop: it measures the on-disk session transcript directly (~4 bytes/token estimate) and, once the estimate crosses `CLAUDE_CONTEXT_BUDGET_TOKENS` (default 170000, see `lib/globals`), denies every tool call except a small allow-listed set of checkpoint actions (`git add|commit|push|status|diff|log|rev-parse`, `gh pr comment|edit|view|checks`, `gh issue comment|edit|view`) so the session can commit/push what it has and post a status comment before ending its response, instead of running to the fatal error. Uses the same shfmt-parsed-AST, fail-closed, SOH-marker approach as `block-dotnet-tool-install` to verify a `Bash` command is genuinely one of those checkpoint verbs (not merely a chain that starts with one). Fails *open* (allows) when it cannot read/measure the transcript at all - this is a budget safety net, not a security boundary, so an unmeasurable state should not block otherwise-legitimate work.
 
 ### Tracking allowlist requests
 

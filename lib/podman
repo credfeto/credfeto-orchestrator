@@ -485,6 +485,7 @@ invoke_claude() {
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
+    PODMAN_RUN_ARGS+=( --env "CLAUDE_CONTEXT_BUDGET_TOKENS=${CLAUDE_CONTEXT_BUDGET_TOKENS}" )
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
