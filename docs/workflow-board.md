@@ -31,7 +31,7 @@ happens.
 | AI Simplify | the agent | Running the automated cleanup pass before review. |
 | AI Review | the agent | Running an automated code review pass. |
 | AI Security Review | the agent | Running an automated security review pass. |
-| AI Coverage | the agent | Checks that the branch's overall test coverage has not dropped below `main`'s, per language (recomputed live, not from a stored baseline; see [coverage-ratchet.instructions.md](https://github.com/credfeto/cs-template/blob/main/ai/global/coverage-ratchet.instructions.md)). This is the last automated gate, placed after both review passes so it also catches coverage regressions those later commits could otherwise introduce unchecked. A drop sends the card back to Development. |
+| AI Coverage | the agent | Checks that the branch's overall test coverage has not dropped below `main`'s, per language, against the `COVERAGE.md` committed on `main` (see [coverage-ratchet.instructions.md](https://github.com/credfeto/cs-template/blob/main/ai/global/coverage-ratchet.instructions.md)). This is the last automated gate, placed after both review passes so it also catches coverage regressions those later commits could otherwise introduce unchecked. A drop sends the card back to Development; a pass regenerates `COVERAGE.md` on the branch. |
 | Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to enable auto-merge — reaching this status does not by itself mean that has happened yet. |
 | Complete | (implicit — the PR merges) | Done. |
 
@@ -68,12 +68,15 @@ over driving the board through a fixed sequence of phases (see `build_pr_claude_
    or, if clean, the board advances to security review.
 6. **Security review** — same shape as code review, for security-specific findings.
 7. **Coverage**: the last automated gate. It compares the branch's live per-language coverage
-   against the `main` baseline captured when the PR was created (posted as a
-   `## Coverage Baseline (main)` PR comment), and if any language's branch coverage is lower,
-   sends the board back to Development instead of advancing, so more tests get written before
-   the PR reaches a human. Placed after both review phases (not right after Development) because
-   those phases can themselves commit production code, and an earlier gate would let those
-   commits degrade coverage unchecked.
+   against the Overall figures in `COVERAGE.md` as committed on `main` (no PR comment; a
+   non-code-only branch — dependency bump, or a workflow/SQL/shell/Docker/docs-only change — or a
+   `main` with no `COVERAGE.md` yet both skip straight to a pass), and
+   if any language's branch coverage is lower, sends the board back to Development instead of
+   advancing, so more tests get written before the PR reaches a human. On a pass, `COVERAGE.md` is
+   regenerated on the branch and committed, so it carries the new baseline into `main` once the PR
+   merges. Placed after both review phases (not right after Development) because those phases can
+   themselves commit production code, and an earlier gate would let those commits degrade coverage
+   unchecked.
 8. **Finalize** — enable auto-merge (or mark the PR ready if auto-merge isn't available) and
    stop. GitHub takes it from here.
 

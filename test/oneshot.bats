@@ -345,6 +345,16 @@ teardown() {
     [[ "${output}" == *"rebase origin/main"* ]]
 }
 
+@test "build_pr_claude_md rebase notice covers COVERAGE.md conflicts alongside CHANGELOG.md" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"CHANGELOG.md conflicts: keep entries from both sides."* ]]
+    [[ "${output}" == *"COVERAGE.md conflicts: take origin/main's copy"* ]]
+    [[ "${output}" == *"checkout --ours -- COVERAGE.md"* ]]
+    [[ "${output}" == *"rebase reverses ours/theirs vs a merge"* ]]
+    [[ "${output}" == *"once the build/tests pass re-run the coverage extraction"* ]]
+}
+
 @test "build_pr_claude_md uses provided repo_path in rebase notice" {
     run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo"
     [ "${status}" -eq 0 ]
@@ -7882,11 +7892,42 @@ STUBEOF
     [[ "${output}" != *"credfeto/cs-template#992"* ]]
 }
 
-@test "build_pr_claude_md PHASE G blocks when no coverage baseline comment exists" {
+@test "build_pr_claude_md PHASE G bootstraps and passes when COVERAGE.md does not exist on main yet" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"no baseline was ever captured"* ]]
-    [[ "${output}" == *"add the Blocked label"* ]]
+    [[ "${output}" == *"bootstrap case"* ]]
+    [[ "${output}" == *"treat it as passed"* ]]
+}
+
+@test "build_pr_claude_md PHASE G skips measurement entirely for a non-code-only branch" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"non-code-only"* ]]
+    [[ "${output}" == *"skip straight to the success step"* ]]
+}
+
+@test "build_pr_claude_md PHASE G lists workflow, SQL, shell, Docker, and docs-only changes as non-code" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"GitHub Actions workflow"* ]]
+    [[ "${output}" == *"SQL/T-SQL"* ]]
+    [[ "${output}" == *"shell script"* ]]
+    [[ "${output}" == *"Dockerfile"* ]]
+    [[ "${output}" == *"documentation-only change"* ]]
+}
+
+@test "build_pr_claude_md PHASE G commits COVERAGE.md on a passing ratchet, but not on a failing one" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"write/overwrite COVERAGE.md"* ]]
+    [[ "${output}" == *"Do not touch COVERAGE.md in this case"* ]]
+}
+
+@test "build_pr_claude_md PHASE G no longer looks for a PR comment" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"## Coverage Baseline (main)"* ]]
+    [[ "${output}" == *"there isn't one"* ]]
 }
 
 @test "build_pr_claude_md PHASE G returns failing coverage to Development" {

@@ -167,7 +167,7 @@ build_pr_claude_md() {
    b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
       Otherwise: git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout -- . && git -C ${repo_path} checkout ${branch_name}
    c. git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
-      CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
+      CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop.
    d. git -C ${repo_path} push --force-with-lease"
     elif [ -n "${dirty_branch}" ]; then
         checkout_step="3. The working tree is on branch '${dirty_branch}' with uncommitted changes — clean up before checking out the PR branch:
@@ -178,7 +178,7 @@ build_pr_claude_md() {
         checkout_step="3. The PR is ${merge_state} — check out the branch and rebase immediately before any other work:
    git -C ${repo_path} checkout ${branch_name}
    git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
-   CHANGELOG.md conflicts: keep entries from both sides. Any other conflict: post the details as a PR comment and stop.
+   CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop.
    git -C ${repo_path} push --force-with-lease"
     else
         checkout_step="3. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
@@ -274,10 +274,10 @@ PHASE F — Security review (do this ONLY when the board is at "AI Security Revi
   - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
-  - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: find the most recent "## Coverage Baseline (main)" PR comment, re-run the same per-language coverage extraction against the branch's current (already checked out) working tree, and compare branch vs. baseline per language.
-  - If no such baseline comment exists: post a comment explaining that no baseline was ever captured, add the Blocked label, and STOP.
-  - On failure (any language's branch coverage below its baseline): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP.
-  - On success (every present language's branch coverage >= its baseline): advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
+  - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: if the branch is non-code-only (every changed file is a dependency manifest/version-pin, a GitHub Actions workflow/composite action beyond a version pin, SQL/T-SQL, a shell script, a Dockerfile/Docker Compose file, or a documentation-only change — no source or test file touched), skip straight to the success step below without measuring anything. Otherwise, read COVERAGE.md from origin/main live (git -C <repodir> show origin/main:COVERAGE.md) — do NOT look for a PR comment, there isn't one. If COVERAGE.md doesn't exist on origin/main yet, this is the bootstrap case: there is nothing to compare against, so treat it as passed.
+  - Otherwise, re-run the same per-language extraction against the branch's current (already checked out) working tree (per-component rows plus each language's Overall figure) and compare branch Overall vs. baseline Overall per language — component rows never gate, only Overall does.
+  - On failure (any language's branch Overall below its baseline Overall): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
+  - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP.
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
