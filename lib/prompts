@@ -274,7 +274,11 @@ PHASE F — Security review (do this ONLY when the board is at "AI Security Revi
   - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
-  - This phase is currently a placeholder, not a real gate: the per-language coverage-measurement instructions it needs are tracked in credfeto/cs-template#992 and not yet loaded. Advance the board straight to "Human Review", post a one-line status comment ("Coverage gate not yet configured, advancing to finalize"), then STOP.
+  - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: find the most recent "## Coverage Baseline (main)" PR comment, re-run the same per-language coverage extraction against the branch's current (already checked out) working tree, and compare branch vs. baseline per language.
+  - If no such baseline comment exists: post a comment explaining that no baseline was ever captured, add the Blocked label, and STOP.
+  - On failure (any language's branch coverage below its baseline): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP.
+  - On success (every present language's branch coverage >= its baseline): advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
+  - If you have already run ${MAX_REVIEW_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP.
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - Enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
