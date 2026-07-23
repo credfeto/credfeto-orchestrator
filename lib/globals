@@ -157,6 +157,21 @@ GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
 CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
 [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000
 
+# Estimated-token budget at which the baked-in enforce-context-budget PreToolUse hook
+# (containers/base/development-full/claude-hooks/enforce-context-budget) starts denying
+# further tool calls and forces the session to checkpoint (commit/push/status-comment) and
+# stop, instead of running until the model's ~200k-token window hard-fails with "Prompt is
+# too long" (#1070). Deliberately independent of CLAUDE_CODE_AUTO_COMPACT_WINDOW above: that
+# asks Claude Code to compact around 100k tokens using its own internal token accounting,
+# which #1070 found insufficient on its own — a single large tool result can still jump the
+# next request straight past the hard limit before compaction runs. This budget is measured
+# externally (transcript file size on disk) and set comfortably below the 200k hard limit so
+# it can act as a backstop regardless of whether compaction kept up. Passed into the
+# container as CLAUDE_CONTEXT_BUDGET_TOKENS. Override with CLAUDE_CONTEXT_BUDGET_TOKENS in
+# the environment.
+CLAUDE_CONTEXT_BUDGET_TOKENS="${CLAUDE_CONTEXT_BUDGET_TOKENS:-170000}"
+[[ "${CLAUDE_CONTEXT_BUDGET_TOKENS}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CONTEXT_BUDGET_TOKENS=170000
+
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
 # Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.

