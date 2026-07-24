@@ -104,6 +104,7 @@ jobs:
             Microsoft.SqlPackage
             PowerShell
             dotnet-script
+            dotnet-reportgenerator-globaltool
 
       - name: "Build and push"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}

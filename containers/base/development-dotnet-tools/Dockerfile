@@ -83,6 +83,8 @@ RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g Micros
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g PowerShell"
 # hadolint ignore=DL3059
 RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-script"
+# hadolint ignore=DL3059
+RUN su developer -c ": ${STABLE_TOOLS_CACHE_BUST}; dotnet tool install -g dotnet-reportgenerator-globaltool"
 
 # dotnet- subcommand aliases. Several tools install only as `<name>` but
 # agents invoke them via `dotnet <name>` subcommand syntax — which makes
@@ -95,7 +97,8 @@ RUN su developer -c '\
     ln -sf ilspycmd              /home/developer/.dotnet/tools/dotnet-ilspycmd && \
     ln -sf sqlpackage            /home/developer/.dotnet/tools/dotnet-sqlpackage && \
     ln -sf tsqllint              /home/developer/.dotnet/tools/dotnet-tsqllint && \
-    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh'
+    ln -sf pwsh                  /home/developer/.dotnet/tools/dotnet-pwsh && \
+    ln -sf reportgenerator       /home/developer/.dotnet/tools/dotnet-reportgenerator'
 
 # PSScriptAnalyzer PowerShell module — check-setup (in development-full)
 # imports it (`dotnet pwsh -Command "Import-Module PSScriptAnalyzer ..."`) to
@@ -125,7 +128,7 @@ RUN set -e; \
     claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 \
         || { echo "FATAL sanity: 'claude' is not functional" >&2; exit 1; }; \
     echo "== dotnet tools =="; \
-    for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script; do \
+    for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script dotnet-reportgenerator-globaltool; do \
         if ! su developer -c "dotnet tool list -g" | awk '{print tolower($1)}' | grep -Fxq "$tool"; then \
             echo "FATAL sanity: dotnet tool '$tool' is missing" >&2; exit 1; \
         fi; \
@@ -133,6 +136,9 @@ RUN set -e; \
     echo "== cwm-roslyn-navigator functional probe =="; \
     su developer -c "cwm-roslyn-navigator --help >/dev/null 2>&1" \
         || { echo "FATAL sanity: cwm-roslyn-navigator --help did not exit 0" >&2; exit 1; }; \
+    echo "== reportgenerator functional probe =="; \
+    su developer -c "dotnet reportgenerator -h >/dev/null 2>&1" \
+        || { echo "FATAL sanity: dotnet reportgenerator -h did not exit 0" >&2; exit 1; }; \
     echo "== pwsh + PSScriptAnalyzer functional probe =="; \
     su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "Import-Module PSScriptAnalyzer -ErrorAction Stop"' \
         || { echo "FATAL sanity: PSScriptAnalyzer module did not import" >&2; exit 1; }; \

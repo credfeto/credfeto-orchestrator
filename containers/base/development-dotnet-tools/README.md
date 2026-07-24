@@ -57,6 +57,7 @@ blob sizes manageable and to avoid cascading cache invalidation.
 | `Microsoft.SqlPackage` | `sqlpackage`, `dotnet-sqlpackage` |
 | `PowerShell` | `pwsh` |
 | `dotnet-script` | `dotnet-script` |
+| `dotnet-reportgenerator-globaltool` | `reportgenerator`, `dotnet-reportgenerator` |
 
 `dotnet <name>` subcommand aliases (e.g. `dotnet-tsqllint`) are created via `ln -sf` so the
 dotnet CLI can locate tools invoked through subcommand syntax.
@@ -72,9 +73,9 @@ Installed via `Install-PSResource` for the `developer` user's PowerShell profile
 `.github/actions/nuget-latest-versions` composite action: it queries the NuGet flat-container
 API for the latest published version of every package this image installs (`TSQLLint`,
 `CWM.RoslynNavigator`, `dotnet-ef`, `ilspycmd`, `Microsoft.SqlPackage`, `PowerShell`,
-`dotnet-script`) and hashes them together. The value only changes when one of those packages
-actually ships a new release, so an unchanged day is a full build-cache hit rather than a blind
-reinstall.
+`dotnet-script`, `dotnet-reportgenerator-globaltool`) and hashes them together. The value only
+changes when one of those packages actually ships a new release, so an unchanged day is a full
+build-cache hit rather than a blind reinstall.
 
 ## Self-checks
 
@@ -82,8 +83,9 @@ The build-time sanity `RUN` step verifies everything this stage adds and fails t
 the container at runtime) if anything is missing:
 
 - `claude` is present and responds to `--version`/`--help`.
-- Each of the seven .NET tools above is present in `dotnet tool list -g`.
+- Each of the eight .NET tools above is present in `dotnet tool list -g`.
 - `cwm-roslyn-navigator --help` exits `0`.
+- `dotnet reportgenerator -h` exits `0`.
 - The `PSScriptAnalyzer` PowerShell module imports successfully under `pwsh`.
 
 `development-full`'s own build-time sanity check still probes the full inherited toolchain
