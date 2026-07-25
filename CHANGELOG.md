@@ -45,6 +45,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Update interactive-session instructions to the placeholder-first, two-mode Changelog workflow (credfeto/cs-template#994), including a Changelog correction step after each AI Review Loop phase and the previously-missing AI Simplify board status
 - enforce-git-dash-c makes git config strictly read-only - every config write is blocked at local, global and system scope, while --get reads remain allowed
 - Pinned all GitHub Actions workflow and composite-action uses: references to full commit SHAs so upstream tag repointing cannot inject unreviewed action code
+- Simplify phase (PHASE D) no longer shares MAX_REVIEW_ITERATIONS with the other review phases and no longer blocks the PR on non-convergence: it now uses dedicated MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT budgets, and gives up by posting a PR comment and advancing to code review instead of adding the Blocked label
 ### Deprecated
 ### Removed
 ### Deployment Changes

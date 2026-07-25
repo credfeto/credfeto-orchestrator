@@ -63,6 +63,19 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
 MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
 
+# Hard cap on /simplify rounds (PHASE D), separate from MAX_REVIEW_ITERATIONS: Simplify is
+# expected to run more rounds than the other phases and never blocks the PR on non-convergence,
+# so it gets its own, larger budget. See SIMPLIFY_THRASH_LIMIT below for the earlier exit taken
+# when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the environment
+# before calling oneshot.
+MAX_SIMPLIFY_ITERATIONS="${MAX_SIMPLIFY_ITERATIONS:-10}"
+
+# Once this many /simplify rounds have run, a thrashing round (its diff is flat or larger than
+# the previous round's, i.e. not shrinking) ends the Simplify phase immediately even though
+# MAX_SIMPLIFY_ITERATIONS has not been reached. Override with SIMPLIFY_THRASH_LIMIT in the
+# environment before calling oneshot.
+SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
+
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
