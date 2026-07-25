@@ -7369,6 +7369,26 @@ STUBEOF
     [ "${MAX_REVIEW_ITERATIONS}" -eq 5 ]
 }
 
+# --- MAX_SIMPLIFY_ITERATIONS / SIMPLIFY_THRASH_LIMIT constants ----------------
+
+@test "MAX_SIMPLIFY_ITERATIONS defaults to 10" {
+    [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 10 ]
+}
+
+@test "MAX_SIMPLIFY_ITERATIONS can be overridden via environment variable" {
+    MAX_SIMPLIFY_ITERATIONS=20
+    [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 20 ]
+}
+
+@test "SIMPLIFY_THRASH_LIMIT defaults to 3" {
+    [ "${SIMPLIFY_THRASH_LIMIT}" -eq 3 ]
+}
+
+@test "SIMPLIFY_THRASH_LIMIT can be overridden via environment variable" {
+    SIMPLIFY_THRASH_LIMIT=5
+    [ "${SIMPLIFY_THRASH_LIMIT}" -eq 5 ]
+}
+
 # --- build_issue_claude_md plan-first steps -----------------------------------
 
 @test "build_issue_claude_md includes plan-check command" {
@@ -7843,11 +7863,30 @@ STUBEOF
     [[ "${output}" == *"Do NOT proceed to code review in this same session"* ]]
 }
 
-@test "build_pr_claude_md PHASE D has an iteration cap and Blocked escape valve like its siblings" {
+@test "build_pr_claude_md PHASE D gives up on thrashing without blocking the PR" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"have already run 3 simplify rounds"* ]]
-    [[ "${output}" == *"simplify is not converging"* ]]
+    [[ "${output}" == *"3 or more simplify rounds have run"* ]]
+    [[ "${output}" == *"simplify did not converge"* ]]
+    [[ "${output}" == *"Do NOT add the Blocked label"* ]]
+}
+
+@test "build_pr_claude_md PHASE D embeds MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT values" {
+    MAX_SIMPLIFY_ITERATIONS=10
+    SIMPLIFY_THRASH_LIMIT=3
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"3 or more simplify rounds have run"* ]]
+    [[ "${output}" == *"once 10 simplify rounds have run"* ]]
+}
+
+@test "build_pr_claude_md PHASE D embeds custom MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT when overridden" {
+    MAX_SIMPLIFY_ITERATIONS=20
+    SIMPLIFY_THRASH_LIMIT=5
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"5 or more simplify rounds have run"* ]]
+    [[ "${output}" == *"once 20 simplify rounds have run"* ]]
 }
 
 @test "build_pr_claude_md PHASE D triggers on any pre-AI-Review board state, not just Development" {

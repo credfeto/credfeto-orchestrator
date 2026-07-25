@@ -259,7 +259,10 @@ PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstandi
   - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
   - If it changed any files: commit and push them in the foreground, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
   - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
-  - If you have already run ${MAX_REVIEW_ITERATIONS} simplify rounds on this PR without it converging to no changes (judge from the PR's commit history): post a PR comment explaining that simplify is not converging, add the Blocked label, and STOP.
+  - Otherwise, judge convergence from the PR's commit history of simplify rounds, comparing each round's diff size (lines changed by that round's commit) to the previous round's:
+    - If ${SIMPLIFY_THRASH_LIMIT} or more simplify rounds have run AND the latest round is thrashing (its diff is flat or larger than the previous round's, i.e. not shrinking): give up now, even though ${MAX_SIMPLIFY_ITERATIONS} has not been reached.
+    - Otherwise, once ${MAX_SIMPLIFY_ITERATIONS} simplify rounds have run without converging to no changes: give up regardless of whether the diff was still shrinking.
+    - When giving up for either reason: post a PR comment noting that simplify did not converge, advance the board to "AI Review", post a one-line status comment ("Simplify not converging after N rounds — advancing to code review"), then STOP. Do NOT add the Blocked label — the next cycle proceeds straight to code review, which re-covers the same reuse/simplification/efficiency categories as a safety net.
 
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment

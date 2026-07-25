@@ -22,7 +22,7 @@ The orchestrator workflow is defined in [agent-roles.instructions.md](../global/
 
 1. Implement the code, running tests and linting as you go (Code Writer / Code Tester / Code Reviewer dev loop).
 2. Once satisfied: run Changelog in **correction** mode — read `git diff origin/main...HEAD`, remove the placeholder entry and add the corrected one. Commit code+tests as one commit and `CHANGELOG.md` as a separate commit, push.
-3. Run `/simplify` against the diff (up to `MAX_REVIEW_ITERATIONS` rounds; board status **AI Simplify**). If it changed any files: run Changelog (correction) again against the resulting diff, commit code and (if the entry changed) `CHANGELOG.md` separately, push, re-run.
+3. Run `/simplify` against the diff (up to `MAX_SIMPLIFY_ITERATIONS` rounds, exiting early at `SIMPLIFY_THRASH_LIMIT` rounds onwards if thrashing; board status **AI Simplify**). If it changed any files: run Changelog (correction) again against the resulting diff, commit code and (if the entry changed) `CHANGELOG.md` separately, push, re-run.
 4. Run `/code-review --comment` (up to `MAX_REVIEW_ITERATIONS` rounds; board status **AI Review**); fix each inline finding in its own commit. After each fix, run Changelog (correction) and commit `CHANGELOG.md` separately if the entry changed, then push.
 5. Run `/security-review` (up to `MAX_REVIEW_ITERATIONS` rounds; board status **AI Security Review**); fix each finding in its own commit. After each fix, run Changelog (correction) and commit `CHANGELOG.md` separately if the entry changed, then push.
 6. Set Workflow board to **Human Review** and enable auto-merge:
