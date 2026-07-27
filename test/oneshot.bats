@@ -1065,6 +1065,16 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_is_terminal is false when auto-merge is enabled, mergeStateStatus is BLOCKED, and statusCheckRollup is empty" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal stays true when mergeStateStatus is BLOCKED but a required check is still pending (already-handled case)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_has_unaddressed_review_request is true for reviewDecision CHANGES_REQUESTED (#1083)" {
     run pr_json_has_unaddressed_review_request '{"reviewDecision":"CHANGES_REQUESTED"}'
     [ "${status}" -eq 0 ]
@@ -1156,6 +1166,31 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q 'pr comment 5 --repo org/repo --body This PR has an unaddressed review requesting changes' "${call_log}"
     grep -q 'notified PullRequest #5 reason=This PR has an unaddressed review requesting changes' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_missing_check does not post a comment when the label cannot be verified" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_missing_check 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified PullRequest #5 reason=GitHub reports this PR as BLOCKED' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_missing_check posts the missing-check-specific reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_missing_check 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q 'pr comment 5 --repo org/repo --body GitHub reports this PR as BLOCKED' "${call_log}"
+    grep -q 'notified PullRequest #5 reason=GitHub reports this PR as BLOCKED' "${TEST_TMP}/discord_calls"
 }
 
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
@@ -1282,6 +1317,36 @@ teardown() {
     run pr_json_has_failed_required_check '{"statusCheckRollup":[]}'
     [ "${status}" -ne 0 ]
     run pr_json_has_failed_required_check '{}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_missing_required_check is true when mergeStateStatus is BLOCKED, auto-merge is enabled, and statusCheckRollup is empty" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_missing_required_check is true when mergeStateStatus is BLOCKED and statusCheckRollup only has other, unrelated required checks completed" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_missing_required_check is false when mergeStateStatus is not BLOCKED" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"CLEAN","statusCheckRollup":[]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_missing_required_check is false when auto-merge is not enabled" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":null,"mergeStateStatus":"BLOCKED","statusCheckRollup":[]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_missing_required_check is false when a required check has definitively failed (already handled by pr_json_has_failed_required_check)" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_missing_required_check is false when a required check is still pending (already handled by pr_json_has_pending_ci_checks)" {
+    run pr_json_has_missing_required_check '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
     [ "${status}" -ne 0 ]
 }
 
@@ -9632,6 +9697,27 @@ STUBEOF
         ! grep -q 'Blocked' "${GH_CALL_LOG}"
         ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
     fi
+}
+
+@test "main blocks unchanged PR with idle budget exhausted and a missing required check in direct-PR path" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main blocks PR and posts complaint when CI checks exceed timeout in Issue-to-PR pivot path" {
