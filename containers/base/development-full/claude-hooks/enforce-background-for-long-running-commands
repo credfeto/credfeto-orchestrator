@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Blocks git commit, pre-commit, dotnet build, dotnet test, npm test, and bun
+# test unless the tool call sets run_in_background: true.
+# Exit 2 = blocked, 0 = allowed.
+#
+# credfeto-long-running-commands (this repo's own AI instructions) mandates
+# that these five commands have no bounded, predictable duration and must
+# always run via a background-task mechanism, never in the foreground,
+# regardless of how fast the specific run is expected to be. A foreground
+# run that outlives the tool's own timeout gets killed mid-run, which skips
+# the target process's own cleanup (a shell EXIT trap, a runtime's
+# IDisposable-style teardown, etc.) and has previously left orphaned state
+# behind. Before this hook existed, nothing enforced the rule but prose.
+#
+# Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
+# the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
+# (see those scripts' header comments for the full rationale). Text/regex
+# scanning would miss obfuscated forms and false-positive on unrelated text
+# (e.g. a string that merely mentions "git commit"), so this only inspects
+# the command-name/subcommand position of an actual call expression.
+#
+# Obfuscated command names (quote-splices, substitutions, IFS games) are NOT
+# this hook's job - reject-obfuscated-commands rejects those categorically
+# before this hook ever runs. Anything here that is not a plain literal word
+# is deliberately treated as opaque.
+#
+# Fails closed: shfmt missing or the command not parsing as shell blocks
+# the command.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+block() {
+  printf 'Blocked: %s\n' "$1" >&2
+  exit 2
+}
+
+# Known wrapper names for the defense-in-depth "sudo git commit ..." check
+# below - mirrors the "Wrapper commands" section of command-blocklist, which
+# is what actually bans these upstream in the normal PreToolUse chain.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+# A Bash tool call may omit run_in_background entirely when unset - that is
+# not permission to run in the foreground, so only an explicit "true" allows.
+run_in_background=$(printf '%s' "$input" | jq -r '.tool_input.run_in_background // false')
+[ "$run_in_background" = "true" ] && exit 0
+
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One line per CallExpr: every word that is a single plain literal is
+# emitted verbatim; anything else (quoted text, substitutions, expansions)
+# is emitted as an empty string, same as block-git-worktree - an empty word
+# can never equal any of the literal command/subcommand names checked below,
+# so it is opaque to those checks. Words cannot contain raw whitespace, so
+# tab is a safe separator for the IFS-based splitting below.
+calls=$(printf '%s' "$ast" | jq -r '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  join("\t")')
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$call_line"
+
+  # Only the command-name position, and the position immediately after a
+  # known wrapper name in the command-name position, are checked - a token
+  # appearing anywhere else is an ordinary argument, not an invocation of
+  # that command (e.g. `grep -r "dotnet test" .`).
+  positions=(0)
+  is_wrapper "${words[0]}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+
+    if [ "$tok" = "git" ] || [[ "$tok" == */git ]]; then
+      j=$((i + 1))
+      # skip "-c <key>=<value>" / "-C <dir>" global option pairs before the
+      # subcommand, in any order - e.g. `git -c core.pager=cat -C . commit ...`.
+      while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
+        j=$((j + 2))
+      done
+      [ "${words[$j]:-}" = "commit" ] \
+        && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
+    fi
+
+    if [ "$tok" = "pre-commit" ] || [[ "$tok" == */pre-commit ]]; then
+      block 'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
+    fi
+
+    if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
+      j=$((i + 1))
+      case "${words[$j]:-}" in
+        build) block 'dotnet build must run with run_in_background: true (analyzer/restore duration is unbounded)' ;;
+        test) block 'dotnet test must run with run_in_background: true (test run duration scales with what changed)' ;;
+      esac
+    fi
+
+    if { [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; } && [ "${words[$((i + 1))]:-}" = "test" ]; then
+      block 'npm test must run with run_in_background: true (test run duration has no fixed bound)'
+    fi
+
+    if { [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; } && [ "${words[$((i + 1))]:-}" = "test" ]; then
+      block 'bun test must run with run_in_background: true (test run duration has no fixed bound)'
+    fi
+  done
+done <<< "$calls"
+
+exit 0

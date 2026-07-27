@@ -3,7 +3,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`.
+Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-background-for-long-running-commands`.
 
 ## Prefer auto-correction over blocking, when it's a genuine correction
 
@@ -47,7 +47,11 @@ Runs after `enforce-git-dash-c`. Blocks `git worktree add` (creating a new linke
 
 ## block-dotnet-tool-install
 
-Runs last in the chain. Blocks `dotnet tool install` (local or global — any flag combination) and `dotnet new tool-manifest`. This container's .NET global tools are pinned and baked into the image at build time (see the "dotnet tools" sanity check in `containers/base/development-full/Dockerfile`, which asserts an exact set of tool names via `dotnet tool list -g`); either command would add an unpinned, unreviewed tool outside that set, bypassing the dependency-selection review the pinned set went through. Other `dotnet tool` subcommands (`list`/`restore`/`uninstall`/`update`/`run`/`search`) and other `dotnet new` templates remain allowed. Uses the same shfmt-parsed AST approach as `block-git-worktree`/`enforce-git-dash-c` and fails closed the same way. No safe auto-correct: there's no pinned-tool substitute the hook could infer and inject on the agent's behalf - adding a new pinned tool is a reviewed image-build change, not something a command rewrite can do.
+Runs before `enforce-background-for-long-running-commands`. Blocks `dotnet tool install` (local or global — any flag combination) and `dotnet new tool-manifest`. This container's .NET global tools are pinned and baked into the image at build time (see the "dotnet tools" sanity check in `containers/base/development-full/Dockerfile`, which asserts an exact set of tool names via `dotnet tool list -g`); either command would add an unpinned, unreviewed tool outside that set, bypassing the dependency-selection review the pinned set went through. Other `dotnet tool` subcommands (`list`/`restore`/`uninstall`/`update`/`run`/`search`) and other `dotnet new` templates remain allowed. Uses the same shfmt-parsed AST approach as `block-git-worktree`/`enforce-git-dash-c` and fails closed the same way. No safe auto-correct: there's no pinned-tool substitute the hook could infer and inject on the agent's behalf - adding a new pinned tool is a reviewed image-build change, not something a command rewrite can do.
+
+## enforce-background-for-long-running-commands
+
+Runs last in the chain. Enforces the `credfeto-long-running-commands` rule that `git commit` (whose `pre-commit` hook run has no bounded duration), a directly-invoked `pre-commit`, `dotnet build`, `dotnet test`, `npm test`, and `bun test` must always be run with `run_in_background: true` on the Bash tool call. If `run_in_background` is `true`, allows immediately with no further check; a Bash call that omits the field entirely (the common case when a caller simply forgets it) is treated the same as an explicit `false` - it blocks. Otherwise parses the command with the same shfmt AST approach as `enforce-git-dash-c`/`block-git-worktree`/`block-dotnet-tool-install` and blocks if `git`/`.../git` in the command-name position (after skipping any `-c <k>=<v>`/`-C <dir>` pairs) is followed by subcommand `commit`, or `pre-commit`/`.../pre-commit` appears directly in the command-name position, or `dotnet`/`.../dotnet` is followed by `build` or `test`, or `npm`/`.../npm` or `bun`/`.../bun` is followed by `test`. Fails closed if `shfmt` is missing or the command doesn't parse. No safe auto-correct: the hook cannot inject `run_in_background: true` itself - that field lives in the tool call the hook is inspecting, not in the command string it could rewrite.
 
 ### Tracking allowlist requests
 
