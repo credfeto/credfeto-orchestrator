@@ -82,9 +82,10 @@ source "${ONESHOT_DIR}/lib/podman" \
 # load_issue_invocation_counts, save_issue_invocation_counts, and
 # reset_issue_invocation_counts_if_capped are declared in lib/state.
 
-# pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
-# apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
-# pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review, and
+# pr_json_is_terminal, pr_json_has_failed_required_check, pr_json_has_missing_required_check,
+# gh_noun_for_item_type, apply_blocked_label, apply_blocked_label_with_reason,
+# block_pr_for_idle_exhausted_failure, pr_json_has_unaddressed_review_request,
+# block_pr_for_idle_exhausted_review, block_pr_for_idle_exhausted_missing_check, and
 # pr_should_advance_unchanged are declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
@@ -442,6 +443,9 @@ main() {
                                 elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                                     info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                                     block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
+                                elif pr_json_has_missing_required_check "${pr_json}"; then
+                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
+                                    block_pr_for_idle_exhausted_missing_check "${open_pr}" "${item_repo}"
                                 else
                                     info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
                                 fi
@@ -704,6 +708,9 @@ main() {
                     elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
+                    elif pr_json_has_missing_required_check "${pr_json}"; then
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
+                        block_pr_for_idle_exhausted_missing_check "${item_id}" "${item_repo}"
                     else
                         info "PR #${item_id} in ${item_repo} unchanged — skipping"
                     fi

@@ -10,8 +10,11 @@
 # long before a later push breaks a required check, at which point GitHub will never complete
 # the merge and the orchestrator needs to step back in and fix it rather than walk away.  Uses
 # the same CheckRun-vs-legacy-StatusContext classification as pr_json_has_pending_ci_checks.
+# Also excludes a PR GitHub itself has already given up on (see pr_json_has_missing_required_check)
+# even though nothing in statusCheckRollup shows a failure or pending entry to explain why.
 pr_json_is_terminal() {
     local pr_json="$1"
+    pr_json_has_missing_required_check "${pr_json}" && return 1
     printf '%s' "${pr_json}" | jq -e '
         .autoMergeRequest != null
         and .reviewDecision != "CHANGES_REQUESTED"
@@ -50,6 +53,22 @@ pr_json_has_failed_required_check() {
             )
         )
     ' > /dev/null 2>&1
+}
+
+# Returns 0 (true) if GitHub's own mergeStateStatus reports BLOCKED with auto-merge enabled, but
+# neither pr_json_has_failed_required_check nor pr_json_has_pending_ci_checks can explain why —
+# i.e. a required branch-protection check that has never posted any status at all (no CheckRun
+# or StatusContext entry for it ever existed in statusCheckRollup, typically because the workflow
+# that would produce it never triggers for this PR). Those two predicates only ever look at
+# entries actually present in the rollup, so a required check that is simply absent is invisible
+# to both — the PR reads as "fine" (pr_json_is_terminal would otherwise report terminal) even
+# though GitHub itself has already given up waiting and will never complete the merge as-is.
+pr_json_has_missing_required_check() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.mergeStateStatus == "BLOCKED" and .autoMergeRequest != null' \
+        > /dev/null 2>&1 \
+        && ! pr_json_has_failed_required_check "${pr_json}" \
+        && ! pr_json_has_pending_ci_checks "${pr_json}"
 }
 
 # Maps an item_type ("Issue"|"PullRequest") to the gh CLI noun ("issue"|"pr") used in `gh pr
@@ -137,6 +156,18 @@ pr_json_has_unaddressed_review_request() {
 block_pr_for_idle_exhausted_review() {
     local item_id="$1" item_repo="$2"
     local reason="This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
+}
+
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
+# while GitHub reports mergeStateStatus BLOCKED with no failed or pending required check to
+# explain it (see pr_json_has_missing_required_check) — most likely a required branch-protection
+# check whose workflow never triggers for this PR at all. Pushing more commits cannot fix a
+# missing required check, so a human needs to fix the repository's branch-protection/workflow
+# configuration rather than the PR's own code.
+block_pr_for_idle_exhausted_missing_check() {
+    local item_id="$1" item_repo="$2"
+    local reason="GitHub reports this PR as BLOCKED (mergeStateStatus) with auto-merge enabled, but no required check is failed or pending — most likely a required status check that has never reported any result at all. The automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates the repository's required status checks."
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
