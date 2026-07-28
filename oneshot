@@ -409,18 +409,44 @@ main() {
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
+                pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
 
-                if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                    if pr_json_has_pending_ci_checks "${pr_json}"; then
-                        if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
-                            block_pr_for_ci_timeout "${open_pr}" "${item_repo}"
+                # These two checks run regardless of whether the fingerprint changed since last
+                # tick — see the matching comment on the direct-PR path above (#1256) for why:
+                # short version, mergeStateStatus/statusCheckRollup feed the fingerprint and can
+                # flap on their own while nothing about the PR's content changes.
+                if pr_json_has_pending_ci_checks "${pr_json}"; then
+                    if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
+                        block_pr_for_ci_timeout "${open_pr}" "${item_repo}"
+                    else
+                        info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
+                    fi
+                    count_unchanged=$((count_unchanged + 1))
+                    continue
+                fi
+                clear_pr_ci_pending_state "${open_pr}"
+
+                if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
+                    if pr_json_is_terminal "${pr_json}"; then
+                        info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        count_unchanged=$((count_unchanged + 1))
+                        continue
+                    fi
+                    if pr_json_has_missing_required_check "${pr_json}"; then
+                        load_pr_invocation_counts "${open_pr}"
+                        if [ "${PR_INVOCATION_IDLE}" -ge "${MAX_PR_IDLE_INVOCATIONS}" ]; then
+                            info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
+                            block_pr_for_idle_exhausted_missing_check "${open_pr}" "${item_repo}"
                         else
-                            info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
+                            save_pr_invocation_counts "${open_pr}" "${PR_INVOCATION_TOTAL}" "$(( PR_INVOCATION_IDLE + 1 ))"
+                            info "PR #${open_pr} in ${item_repo}: missing required check, nothing actionable — waiting"
                         fi
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
-                    clear_pr_ci_pending_state "${open_pr}"
+                fi
+
+                if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
                         require_trusted_logins || continue
@@ -443,9 +469,6 @@ main() {
                                 elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                                     info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                                     block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
-                                elif pr_json_has_missing_required_check "${pr_json}"; then
-                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
-                                    block_pr_for_idle_exhausted_missing_check "${open_pr}" "${item_repo}"
                                 else
                                     info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
                                 fi
@@ -681,19 +704,58 @@ main() {
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
+            pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
 
-            if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                if pr_json_has_pending_ci_checks "${pr_json}"; then
-                    if ci_checks_timed_out "${item_id}" "${pr_json}"; then
-                        block_pr_for_ci_timeout "${item_id}" "${item_repo}"
+            # These two checks run regardless of whether the fingerprint changed since last tick:
+            # mergeStateStatus/statusCheckRollup feed the fingerprint (lib/fingerprints) and GitHub
+            # recomputes them asynchronously (e.g. while a required review is pending), so they can
+            # flap tick to tick with nothing about the PR's actual content changing. Gating them
+            # behind "fingerprint unchanged" let a PR purely waiting on CI or on a human review
+            # spin up a fresh agent session every time that flapping nudged the hash, burning
+            # through MAX_PR_TOTAL_INVOCATIONS before the more specific idle-exhausted escalations
+            # below ever got a chance to fire (confirmed live on credfeto-changlog-manager#359,
+            # #1256).
+            if pr_json_has_pending_ci_checks "${pr_json}"; then
+                if ci_checks_timed_out "${item_id}" "${pr_json}"; then
+                    block_pr_for_ci_timeout "${item_id}" "${item_repo}"
+                else
+                    info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
+                fi
+                count_unchanged=$((count_unchanged + 1))
+                continue
+            fi
+            clear_pr_ci_pending_state "${item_id}"
+
+            if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
+                if pr_json_is_terminal "${pr_json}"; then
+                    info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                    count_unchanged=$((count_unchanged + 1))
+                    continue
+                fi
+                # A required check that has never posted any status at all (mergeStateStatus
+                # BLOCKED with nothing failed/pending in statusCheckRollup to explain it — most
+                # commonly a missing required review, see #1256) is, by construction, never
+                # actionable by the agent even the first time it's observed: unlike a fresh CI
+                # failure or a fresh review request (both left on the fingerprint-changed path
+                # below, since those genuinely need a look), there is nothing here to fix. The
+                # agent is never invoked for this state; PR_INVOCATION_IDLE is bumped directly so
+                # the existing idle-exhausted escalation still fires once it's been stuck long
+                # enough.
+                if pr_json_has_missing_required_check "${pr_json}"; then
+                    load_pr_invocation_counts "${item_id}"
+                    if [ "${PR_INVOCATION_IDLE}" -ge "${MAX_PR_IDLE_INVOCATIONS}" ]; then
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
+                        block_pr_for_idle_exhausted_missing_check "${item_id}" "${item_repo}"
                     else
-                        info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
+                        save_pr_invocation_counts "${item_id}" "${PR_INVOCATION_TOTAL}" "$(( PR_INVOCATION_IDLE + 1 ))"
+                        info "PR #${item_id} in ${item_repo}: missing required check, nothing actionable — waiting"
                     fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
-                clear_pr_ci_pending_state "${item_id}"
-                pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            fi
+
+            if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                 if [ "${pr_is_draft}" = "true" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
                 elif [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
@@ -708,9 +770,6 @@ main() {
                     elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
-                    elif pr_json_has_missing_required_check "${pr_json}"; then
-                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
-                        block_pr_for_idle_exhausted_missing_check "${item_id}" "${item_repo}"
                     else
                         info "PR #${item_id} in ${item_repo} unchanged — skipping"
                     fi

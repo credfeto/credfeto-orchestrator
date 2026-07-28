@@ -3554,8 +3554,8 @@ setup_main_mocks() {
 
     run main
     [ "${status}" -eq 0 ]
-    # Item 1: PR unchanged → skip_repos += org/repo
-    [[ "${output}" == *"PR #5 in org/repo unchanged"* ]]
+    # Item 1: PR terminal (settled) → skip_repos += org/repo
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     # Item 2: Issue #10 correctly skipped via skip_repos (is_skipped=true at end of this iteration)
     [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
     # Item 3: Issue #20 must be evaluated (is_skipped reset to false) and hit the "blocked" path
@@ -3581,7 +3581,7 @@ setup_main_mocks() {
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #5 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
 }
@@ -3622,7 +3622,7 @@ setup_main_mocks() {
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #5 in org/repo unchanged"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [[ "${output}" != *"Skipping PullRequest #17 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"Found actionable PullRequest #17 in org/repo"* ]]
 }
@@ -3719,7 +3719,7 @@ setup_main_mocks() {
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #99 in org/repo unchanged — skipping repo"* ]]
+    [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
     [[ "${output}" == *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
 }
@@ -9733,6 +9733,113 @@ STUBEOF
     [ ! -f "${TEST_TMP}/claude_log" ]
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main does not invoke the agent for a changed-fingerprint PR with a missing required check, and bumps idle (#1256)" {
+    # Regression guard for #1256: mergeStateStatus/statusCheckRollup feed the fingerprint and can
+    # flap on their own (e.g. while GitHub is waiting on a required review) with nothing about the
+    # PR's actual content changing. Before the fix, a changed fingerprint bypassed the
+    # missing-required-check detection entirely and invoked the agent every tick; confirmed this
+    # reproduces the credfeto-changlog-manager#359 symptom (30 invocations, nothing actionable).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"missing required check, nothing actionable — waiting"* ]]
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.invocations")" = "0 1" ]
+}
+
+@test "main escalates a changed-fingerprint PR with a missing required check once idle budget is already exhausted (#1256)" {
+    # Same #1256 scenario as above, but idle is already at the cap — must still reach the
+    # existing block_pr_for_idle_exhausted_missing_check escalation instead of the blunt
+    # MAX_PR_TOTAL_INVOCATIONS runaway backstop (which is what actually fired on #359, since the
+    # idle-exhausted branch was unreachable while the fingerprint kept changing).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main does not invoke the agent for a changed-fingerprint terminal PR (auto-merge armed, nothing failed/pending) (#1256)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+}
+
+@test "main still performs non-agentic rebase for a BEHIND PR even with auto-merge armed (#1256 regression guard)" {
+    # pr_json_is_terminal ignores mergeStateStatus entirely, so without the explicit BEHIND/DIRTY
+    # guard on the new hoisted terminal check, a PR that's actually waiting on a rebase (not
+    # genuinely settled) could be misclassified as "nothing to do".
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json()  { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"rebased non-agentically"* ]]
+    [[ "${output}" != *"settled"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main does not invoke the agent via the Issue-to-PR pivot for a changed-fingerprint PR with a missing required check (#1256)" {
+    # Mirrors the original reported scenario exactly: an Issue with an open, non-blocked PR
+    # (credfeto/credfeto-docker-registry#7 -> PR #8-shaped) where the PR itself is what's stuck.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '7\n'; }
+    fetch_issue_json()         { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()            { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()      { printf 'fp-new\n'; }
+    load_pr_fingerprint()      { printf 'fp-old\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"missing required check, nothing actionable — waiting"* ]]
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_7.invocations")" = "0 1" ]
 }
 
 @test "main blocks PR and posts complaint when CI checks exceed timeout in Issue-to-PR pivot path" {
