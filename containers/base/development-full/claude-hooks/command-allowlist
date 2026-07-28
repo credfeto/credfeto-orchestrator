@@ -10,6 +10,7 @@
 # listed command may actually do.
 
 ssh
+scp
 
 # Version control / forge
 git

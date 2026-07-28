@@ -38,6 +38,11 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "scp is on the command-allowlist and is allowed" {
+    run_hook "scp file.txt user@host:/tmp/"
+    [ "${status}" -eq 0 ]
+}
+
 @test "a whole-token double-quoted command name is blocked" {
     run_hook '"git" push'
     [ "${status}" -eq 2 ]
