@@ -238,6 +238,53 @@ teardown() {
     [ "${stale_pos}" -lt "${step1_pos}" ]
 }
 
+@test "build_issue_claude_md step 7 tells the agent to check out the existing branch instead of creating a new one (#1262 review)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"7. When ready to start work: an existing branch for this issue already exists"* ]]
+    [[ "${output}" == *"git -C /workspace/repo checkout chore/42-fix-something"* ]]
+    [[ "${output}" == *"INSTEAD OF creating a new one"* ]]
+    [[ "${output}" != *"7. When ready to start work: create a new branch BEFORE"* ]]
+}
+
+@test "build_issue_claude_md step 7 still tells the agent to create a new branch when no stale branch was detected" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"7. When ready to start work: create a new branch BEFORE making any changes"* ]]
+}
+
+# --- dirty checkout on this issue's own resumable branch (#1262 review) ---------
+# When DIRTY_BRANCH == stale_branch, the checkout is already sitting on the resumable branch
+# WITH uncommitted changes: likely genuine in-progress work from the earlier session, not
+# unrelated leftover state. The two sections must not independently render conflicting
+# instructions (discard-and-reset-to-main vs. check-out-and-continue) for the same branch.
+
+@test "build_issue_claude_md merges dirty and stale guidance into one section when they name the same branch (#1262 review)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "chore/42-fix-something" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WORKING TREE IS DIRTY ON THIS ISSUE'S OWN RESUMABLE BRANCH"* ]]
+    [[ "${output}" == *"Do NOT discard them"* ]]
+    # Neither the generic dirty-branch section nor the separate stale-branch section should
+    # also render — exactly one, consistent instruction for this branch.
+    [[ "${output}" != *"WORKING TREE IS DIRTY (MANDATORY"* ]]
+    [[ "${output}" != *"AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS"* ]]
+}
+
+@test "build_issue_claude_md merged dirty/stale section does not instruct resetting to main (#1262 review)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "chore/42-fix-something" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"checkout main && git -C /workspace/repo pull"* ]]
+    [[ "${output}" == *"do NOT reset to main"* ]]
+}
+
+@test "build_issue_claude_md keeps both dirty and stale sections separate when they name different branches (#1262 review)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "dependabot/github_actions/actions/checkout-7.0.0" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"WORKING TREE IS DIRTY (MANDATORY"* ]]
+    [[ "${output}" == *"AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS"* ]]
+    [[ "${output}" == *"git -C /workspace/repo checkout chore/42-fix-something"* ]]
+}
+
 # --- board status only advances to Development after the draft PR exists (#1262) -
 
 @test "build_issue_claude_md no longer advances the board to Development at the start of implementation (#1262)" {
@@ -5879,8 +5926,13 @@ setup_local_git_remote() {
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { printf 'chore/42-fix\n'; return 0; }
 
-    local captured_args="${TEST_TMP}/build-issue-claude-md-args"
-    build_issue_claude_md() { printf '%s\n' "$*" > "${captured_args}"; printf 'mock-issue-claude-md\n'; }
+    # Captures the 7th positional argument specifically (not just "$*"): build_issue_claude_md's
+    # signature is (item_id, ai_instructions, repo_path, plan_approved, trusted_logins,
+    # dirty_branch, stale_branch), so this pins that the branch landed in its own dedicated
+    # stale_branch slot, distinct from dirty_branch (arg 6) — a swapped-argument regression at
+    # the call site would go undetected by a substring-anywhere check on the full argument list.
+    local captured_arg7="${TEST_TMP}/build-issue-claude-md-arg7"
+    build_issue_claude_md() { printf '%s\n' "$7" > "${captured_arg7}"; printf 'mock-issue-claude-md\n'; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -5896,9 +5948,8 @@ setup_local_git_remote() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Found actionable Issue #42"* ]]
-    [ -f "${captured_args}" ]
-    run cat "${captured_args}"
-    [[ "${output}" == *"chore/42-fix"* ]]
+    [ -f "${captured_arg7}" ]
+    [ "$(cat "${captured_arg7}")" = "chore/42-fix" ]
 }
 
 @test "main does not skip a board-approved Issue whose own fields are otherwise unchanged (#1204)" {
