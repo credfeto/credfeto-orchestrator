@@ -3351,38 +3351,42 @@ STUBEOF
 # --- resolve_resumable_issue_branch (#1262) -------------------------------------
 
 @test "resolve_resumable_issue_branch returns 1 when find_stale_issue_branch finds no candidate" {
+    REPO_FULL="org/repo"
     find_stale_issue_branch() { return 1; }
-    run resolve_resumable_issue_branch 42 org/repo
+    run resolve_resumable_issue_branch 42
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
 @test "resolve_resumable_issue_branch returns the branch when no PR covers it" {
+    REPO_FULL="org/repo"
     find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
     make_stub gh 'case "$*" in
         "pr list --repo org/repo --head chore/42-fix --state open --json number --jq length") printf "0\n" ;;
         *) exit 1 ;;
     esac'
-    run resolve_resumable_issue_branch 42 org/repo
+    run resolve_resumable_issue_branch 42
     [ "${status}" -eq 0 ]
     [ "${output}" = "chore/42-fix" ]
 }
 
 @test "resolve_resumable_issue_branch returns 1 when a PR already covers the candidate branch (#1262)" {
+    REPO_FULL="org/repo"
     find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
     make_stub gh 'case "$*" in
         "pr list --repo org/repo --head chore/42-fix --state open --json number --jq length") printf "1\n" ;;
         *) exit 1 ;;
     esac'
-    run resolve_resumable_issue_branch 42 org/repo
+    run resolve_resumable_issue_branch 42
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
 @test "resolve_resumable_issue_branch returns 1 (fails safe) when the gh pr list check itself fails" {
+    REPO_FULL="org/repo"
     find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
     make_stub gh 'exit 1'
-    run resolve_resumable_issue_branch 42 org/repo
+    run resolve_resumable_issue_branch 42
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
@@ -5745,6 +5749,35 @@ setup_local_git_remote() {
     run find_stale_issue_branch 439
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
+}
+
+@test "find_stale_issue_branch matches a bare <type>/<issue> branch with no slug, per the shared issue_branch_regex convention (#1262 review)" {
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b chore/439 >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin chore/439 >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout main >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "chore/439" ]
+}
+
+# --- issue_branch_regex unit tests (#1262 review) -------------------------------
+
+@test "issue_branch_regex matches <type>/<issue>-<slug> and a bare <type>/<issue>" {
+    local pattern
+    pattern=$(issue_branch_regex 439)
+    [[ "chore/439-pin-actions" =~ ${pattern} ]]
+    [[ "chore/439" =~ ${pattern} ]]
+}
+
+@test "issue_branch_regex does not match a longer issue number sharing a prefix" {
+    local pattern
+    pattern=$(issue_branch_regex 439)
+    [[ ! "chore/4390-unrelated" =~ ${pattern} ]]
+    [[ ! "chore/1439-unrelated" =~ ${pattern} ]]
 }
 
 # --- main() integration: orphaned-branch fingerprint bypass --------------------

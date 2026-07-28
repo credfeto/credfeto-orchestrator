@@ -155,18 +155,26 @@ recover_orphaned_branch() {
     return 0
 }
 
-# Detects a branch on origin matching this repo's issue-branch naming convention
-# (<type>/<issue>-<slug>) that has commits ahead of origin/main — the signature of an agent
-# session that pushed work for this issue and then died before opening a pull request (#1262).
-# Deliberately performs no fetch of its own: it is only ever called immediately after
-# recover_orphaned_branch on the same fingerprint-unchanged path, which already pays for a
-# fetch --prune whenever the local checkout is not already on main; when it IS already on main
-# (the common, nothing-happened case) there is nothing new to find here either, so skipping an
-# extra fetch costs nothing on that path (#1262 review).
-# The "*/<issue>-*" glob is boundary-safe on its own: it requires a literal "/" immediately
-# before the issue number and a literal "-" immediately after it, so neither a shorter issue
-# number embedded inside a longer one (issue 439 vs branch chore/4390-foo) nor a longer number
-# with extra leading digits (issue 439 vs branch chore/1439-foo) can match.
+# Outputs the boundary-safe regex matching this repo's issue-branch naming convention
+# (<type>/<issue-number>, optionally followed by "-<slug>") for the given issue number. Single
+# source of truth shared by find_stale_issue_branch below (matched in bash against local git
+# refs) and find_human_taken_over_pr_for_issue (lib/github, matched via jq against a PR's
+# headRefName) so the convention has exactly one definition instead of two that can silently
+# drift (#1262 review). "([^0-9]|$)" requires a non-digit or end-of-string right after the issue
+# number, so neither a shorter number embedded inside a longer one (issue 439 vs branch
+# chore/4390-foo) nor a longer number with extra leading digits (issue 439 vs branch
+# chore/1439-foo) can match.
+issue_branch_regex() {
+    printf '^[A-Za-z]+/%s([^0-9]|$)' "$1"
+}
+
+# Detects a branch on origin matching issue_branch_regex for this issue that has commits ahead
+# of origin/main — the signature of an agent session that pushed work for this issue and then
+# died before opening a pull request (#1262). Performs no fetch of its own: called both from the
+# fingerprint-unchanged skip decision (where recover_orphaned_branch has usually just fetched,
+# since the local checkout stays off main for as long as this stale branch remains unresolved)
+# and, for the authoritative answer, from the work block right after ensure_repo_current's own
+# fetch — see oneshot and its "#1262 review" comment for why the second call exists.
 # Outputs the branch name (without the "origin/" prefix) and returns 0 when found; returns 1
 # when the repo has never been cloned locally, no branch matches the convention, or the only
 # match has no commits ahead of origin/main.
@@ -174,15 +182,18 @@ find_stale_issue_branch() {
     local issue_id="$1"
     [ -d "${REPO_WORK_DIR}/.git" ] || return 1
 
-    local branch candidate ahead
-    while IFS= read -r branch; do
-        [ -n "${branch}" ] || continue
-        ahead=$(git -C "${REPO_WORK_DIR}" rev-list --count "origin/main..${branch}" 2>/dev/null) || continue
-        [[ "${ahead}" =~ ^[0-9]+$ ]] && [ "${ahead}" -gt 0 ] || continue
-        candidate="${branch#origin/}"
+    local branch_regex full_branch candidate ahead
+    branch_regex=$(issue_branch_regex "${issue_id}")
+
+    while IFS= read -r full_branch; do
+        [ -n "${full_branch}" ] || continue
+        candidate="${full_branch#origin/}"
+        [[ "${candidate}" =~ ${branch_regex} ]] || continue
+        ahead=$(git -C "${REPO_WORK_DIR}" rev-list --count "origin/main..${full_branch}" 2>/dev/null) || continue
+        [ "${ahead}" -gt 0 ] || continue
         printf '%s' "${candidate}"
         return 0
-    done < <(git -C "${REPO_WORK_DIR}" branch -r --list "*/${issue_id}-*" --format='%(refname:short)' 2>/dev/null)
+    done < <(git -C "${REPO_WORK_DIR}" branch -r --format='%(refname:short)' 2>/dev/null)
 
     return 1
 }

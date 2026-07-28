@@ -236,7 +236,7 @@ main() {
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
-    local stale_issue_branch
+    local stale_issue_branch resumable_branch
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -585,10 +585,13 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
                     if recover_orphaned_branch; then
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
-                    elif stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}" "${item_repo}"); then
+                    elif resumable_branch=$(resolve_resumable_issue_branch "${item_id}"); then
                         # A stalled Issue branch: a prior agent session pushed a branch for this
-                        # issue and died before opening a pull request (#1262).
-                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${stale_issue_branch}' has commits ahead of main and no open PR — resuming stalled work"
+                        # issue and died before opening a pull request (#1262). This is only a
+                        # cheap heuristic gate on whether to re-run at all; the authoritative branch
+                        # name threaded into the generated CLAUDE.md is recomputed later, after
+                        # ensure_repo_current's fetch, in case origin/main has moved since.
+                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
                     else
                         info "Issue #${item_id} in ${item_repo} unchanged — skipping"
                         count_unchanged=$((count_unchanged + 1))
@@ -849,16 +852,6 @@ main() {
             fi
         fi
 
-        # Recompute fresh (using the refs ensure_repo_current just fetched above) rather than
-        # relying solely on whatever the fingerprint-unchanged skip-decision above found: that
-        # check only runs when the fingerprint matched the saved one, so a session that changed
-        # the Issue (e.g. posted a comment) after pushing a branch and dying would otherwise reach
-        # here with stale_issue_branch still empty and no guidance to resume the existing branch,
-        # risking a duplicate one (#1262 review).
-        if [ "${item_type}" = "Issue" ]; then
-            stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}" "${item_repo}") || stale_issue_branch=""
-        fi
-
         if is_owner_rate_limited; then
             if [ -z "${reported_rate_limited["${OWNER}"]:-}" ]; then
                 info "Owner ${OWNER} is rate-limited — skipping all actionable items"
@@ -952,6 +945,15 @@ main() {
         if [ "${item_type}" = "Issue" ]; then
             local plan_approved
             plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
+            # Computed fresh here (after ensure_repo_current's fetch above), not reused from the
+            # fingerprint-unchanged skip decision earlier in this iteration: that check only runs
+            # when the fingerprint matched the saved one, so a session that changed the Issue
+            # (e.g. posted a comment) after pushing a branch and dying would otherwise reach here
+            # with no guidance to resume the existing branch, risking a duplicate one (#1262
+            # review). Placed after every abort point above (rate limit, missing AI instructions,
+            # runaway backstop, trusted-logins) so a paid gh call is never spent on an Issue that
+            # bails out before reaching the agent invocation anyway.
+            stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}") || stale_issue_branch=""
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")
         else
