@@ -211,6 +211,53 @@ teardown() {
     [[ "${output}" == *"clearly relevant to THIS issue"* ]]
 }
 
+# --- Issue session stale-branch resumption (#1262) -------------------------------
+
+@test "build_issue_claude_md omits the stale-branch section when no stale branch was detected" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS"* ]]
+}
+
+@test "build_issue_claude_md instructs checking out an existing stale branch instead of creating a new one (#1262)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS"* ]]
+    [[ "${output}" == *"git -C /workspace/repo checkout chore/42-fix-something"* ]]
+    [[ "${output}" == *"Do NOT create a second branch"* ]]
+}
+
+@test "build_issue_claude_md stale-branch section appears before step 1 (#1262)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "/workspace/repo" "false" "" "" "chore/42-fix-something"
+    [ "${status}" -eq 0 ]
+    local stale_pos step1_pos
+    stale_pos=$(printf '%s' "${output}" | grep -n "AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS" | head -1 | cut -d: -f1)
+    step1_pos=$(printf '%s' "${output}" | grep -n "^1\. Assign yourself" | head -1 | cut -d: -f1)
+    [ -n "${stale_pos}" ]
+    [ -n "${step1_pos}" ]
+    [ "${stale_pos}" -lt "${step1_pos}" ]
+}
+
+# --- board status only advances to Development after the draft PR exists (#1262) -
+
+@test "build_issue_claude_md no longer advances the board to Development at the start of implementation (#1262)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'5. (Implementation mode) Proceed with the plan from the plan comment.'* ]]
+}
+
+@test "build_issue_claude_md advances the board to Development only once the draft PR has been created (#1262)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to "Development"'* ]]
+}
+
+@test "build_issue_claude_md places the Development board-status update after draft-PR creation within step 7 (#1262)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"create a draft pull request"*'update the Workflow board status to "Development"'* ]]
+}
+
 # --- "never block without a comment" mandatory rule (#1140) ---------------------
 
 @test "build_issue_claude_md mandates a comment on every Blocked application" {
@@ -3301,6 +3348,45 @@ STUBEOF
     [ "${output}" = "42" ]
 }
 
+# --- resolve_resumable_issue_branch (#1262) -------------------------------------
+
+@test "resolve_resumable_issue_branch returns 1 when find_stale_issue_branch finds no candidate" {
+    find_stale_issue_branch() { return 1; }
+    run resolve_resumable_issue_branch 42 org/repo
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "resolve_resumable_issue_branch returns the branch when no PR covers it" {
+    find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
+    make_stub gh 'case "$*" in
+        "pr list --repo org/repo --head chore/42-fix --state open --json number --jq length") printf "0\n" ;;
+        *) exit 1 ;;
+    esac'
+    run resolve_resumable_issue_branch 42 org/repo
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "chore/42-fix" ]
+}
+
+@test "resolve_resumable_issue_branch returns 1 when a PR already covers the candidate branch (#1262)" {
+    find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
+    make_stub gh 'case "$*" in
+        "pr list --repo org/repo --head chore/42-fix --state open --json number --jq length") printf "1\n" ;;
+        *) exit 1 ;;
+    esac'
+    run resolve_resumable_issue_branch 42 org/repo
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "resolve_resumable_issue_branch returns 1 (fails safe) when the gh pr list check itself fails" {
+    find_stale_issue_branch() { printf 'chore/42-fix\n'; return 0; }
+    make_stub gh 'exit 1'
+    run resolve_resumable_issue_branch 42 org/repo
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
 # --- pr_is_human_driven (#1131) -------------------------------------------------
 # Operates on the caller's pr_json (author/commits included by fetch_pr_json, #1134) — no gh
 # fetch of its own; the stubs below exist only to prove no call happens or to fail resolve_gh_me.
@@ -3489,6 +3575,7 @@ setup_main_mocks() {
     ensure_rules_current()      { return 0; }
     ensure_repo_current()       { return 0; }
     recover_orphaned_branch()   { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
     try_nonagentic_rebase()     { return 1; }
     # Default: no human-driven PRs anywhere (#1131) — tests that exercise the
     # stand-off paths override these individually.
@@ -5607,6 +5694,59 @@ setup_local_git_remote() {
     [ "${current_branch}" = "main" ]
 }
 
+# --- find_stale_issue_branch unit tests (#1262) ---------------------------------
+
+@test "find_stale_issue_branch returns 1 when repo directory does not exist" {
+    REPO_WORK_DIR="${TEST_TMP}/nonexistent/repo"
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_stale_issue_branch returns 1 when no branch matches the issue" {
+    setup_local_git_remote >/dev/null
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_stale_issue_branch finds a <type>/<issue>-<slug> branch ahead of main" {
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b chore/439-pin-actions >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "placeholder changelog" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin chore/439-pin-actions >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout main >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "chore/439-pin-actions" ]
+}
+
+@test "find_stale_issue_branch does not match a branch whose issue number only shares a prefix (#1262)" {
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b chore/4390-unrelated >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin chore/4390-unrelated >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout main >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_stale_issue_branch ignores a matching branch with no commits ahead of main" {
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b chore/439-noop >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin chore/439-noop >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" checkout main >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    run find_stale_issue_branch 439
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
 # --- main() integration: orphaned-branch fingerprint bypass --------------------
 
 @test "main re-runs issue with matching fingerprint when recover_orphaned_branch detects orphaned branch" {
@@ -5649,6 +5789,83 @@ setup_local_git_remote() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+# --- main() integration: stalled Issue branch bypass (#1262) -------------------
+
+@test "main re-runs issue with matching fingerprint when resolve_resumable_issue_branch finds a resumable branch (#1262)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { printf 'chore/42-fix\n'; return 0; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"branch 'chore/42-fix' has commits ahead of main and no open PR — resuming stalled work"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+}
+
+@test "main still skips issue when resolve_resumable_issue_branch finds no resumable branch (already covered by a PR or no candidate) (#1262)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+@test "main threads a resumable stale branch into the generated CLAUDE.md even when the Issue's own fingerprint changed (#1262 review)" {
+    # The fingerprint-unchanged skip-decision only runs when the fingerprint matched the saved
+    # one. A session that changed the Issue (e.g. posted a comment) after pushing a branch and
+    # dying must still surface the existing branch to the freshly-invoked agent via the
+    # work-block recomputation, or it would risk creating a duplicate branch.
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { printf 'chore/42-fix\n'; return 0; }
+
+    local captured_args="${TEST_TMP}/build-issue-claude-md-args"
+    build_issue_claude_md() { printf '%s\n' "$*" > "${captured_args}"; printf 'mock-issue-claude-md\n'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'new-fp\n'; }
+    load_issue_fingerprint()      { printf 'old-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    [ -f "${captured_args}" ]
+    run cat "${captured_args}"
+    [[ "${output}" == *"chore/42-fix"* ]]
 }
 
 @test "main does not skip a board-approved Issue whose own fields are otherwise unchanged (#1204)" {

@@ -278,6 +278,33 @@ find_human_taken_over_pr_for_issue() {
     return 1
 }
 
+# Combines find_stale_issue_branch (lib/git) with a confirmation that no open pull request
+# already covers the candidate branch (#1262) — the one paid gh call, made only when a
+# candidate actually exists. This is a genuinely separate check from the bot-authorship-based
+# stand-offs above: those only ever see a PR the bot itself authored, so they cannot catch a
+# human who has independently opened their own PR (as author) from the exact branch name the
+# bot's earlier, now-dead session pushed.
+# Called from two places that both need the same answer: the fingerprint-unchanged skip
+# decision (should this Issue be re-run instead of skipped?) and the work-block prompt build
+# (what branch guidance, if any, should the agent be given?) — kept as one function so they
+# cannot silently diverge.
+# Outputs the branch name and returns 0 when a resumable stale branch is confirmed; returns 1
+# when there is no candidate, or an open PR already covers the one that was found.
+resolve_resumable_issue_branch() {
+    local issue_id="$1" repo_full="$2"
+    local branch open_pr_count
+
+    branch=$(find_stale_issue_branch "${issue_id}") || return 1
+    [ -n "${branch}" ] || return 1
+
+    open_pr_count=$(gh pr list --repo "${repo_full}" --head "${branch}" --state open --json number --jq 'length' 2>/dev/null)
+    [[ "${open_pr_count}" =~ ^[0-9]+$ ]] || open_pr_count=1
+    [ "${open_pr_count}" -eq 0 ] || return 1
+
+    printf '%s' "${branch}"
+    return 0
+}
+
 # Decides whether an open PR from the priorities feed is being driven by a human rather than the
 # bot (#1131): the bot has authored no commits on it, AND it is either a PR the bot itself
 # created (the issue workflow's draft PR, since taken over) or it contains commits authored by a
