@@ -1770,6 +1770,21 @@ teardown() {
     [ "${fp_none}" = "${fp_untrusted}" ]
 }
 
+@test "fingerprint_pr_json succeeds when inline review comments exceed 128KiB (#1254)" {
+    # Linux caps a single execve argument at MAX_ARG_STRLEN (128KiB), well below the ~2MiB total
+    # ARG_MAX. A PR with enough inline review comments serialises past that per-argument ceiling;
+    # passing the blob to jq via --argjson (a command-line argument) used to fail with
+    # "jq: Argument list too long" once a real PR (credfeto-docker-registry#8) crossed it.
+    local pr='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local big_body
+    big_body=$(head -c 200000 /dev/zero | tr '\0' 'a')
+    local rc="[{\"user\":{\"login\":\"bob\"},\"updated_at\":\"2024-01-01T00:00:00Z\",\"body\":\"${big_body}\"}]"
+
+    run fingerprint_pr_json "${pr}" "null" "${rc}"
+    [ "${status}" -eq 0 ]
+    [ -n "${output}" ]
+}
+
 # --- fetch_pr_review_comments (#1127) -------------------------------------------
 
 @test "fetch_pr_review_comments requests the pulls/<n>/comments REST endpoint with pagination and slurp (#1127)" {
