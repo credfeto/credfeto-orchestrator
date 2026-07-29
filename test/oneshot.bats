@@ -9971,6 +9971,28 @@ STUBEOF
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
 }
 
+@test "main does not invoke the agent or escalate a changed-fingerprint PR with mergeStateStatus BLOCKED and an empty rollup (#1266)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+    if [ -f "${GH_CALL_LOG}" ]; then
+        ! grep -q 'Blocked' "${GH_CALL_LOG}"
+    fi
+}
+
 @test "main still performs non-agentic rebase for a BEHIND PR even with auto-merge armed (#1256 regression guard)" {
     # pr_json_is_terminal ignores mergeStateStatus entirely, so without the explicit BEHIND/DIRTY
     # guard on the new hoisted terminal check, a PR that's actually waiting on a rebase (not

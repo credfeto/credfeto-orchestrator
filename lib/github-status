@@ -10,10 +10,11 @@
 # long before a later push breaks a required check, at which point GitHub will never complete
 # the merge and the orchestrator needs to step back in and fix it rather than walk away.  Uses
 # the same CheckRun-vs-legacy-StatusContext classification as pr_json_has_pending_ci_checks.
-# GitHub's own mergeStateStatus (e.g. BLOCKED) is deliberately not consulted here — it reflects
-# GitHub's own merge-readiness computation (missing reviews, branch-protection rules, etc.), not
-# something the orchestrator itself has any part in, and is not a reliable signal that the PR
-# needs a human (#1266).
+# This predicate deliberately ignores mergeStateStatus's BLOCKED value specifically — it reflects
+# GitHub's own merge-readiness computation (missing reviews, branch-protection rules, etc.), not a
+# reliable signal that the PR needs a human (#1266). mergeStateStatus is still consulted elsewhere:
+# callers gate this predicate on BEHIND/DIRTY before invoking it, and drive a non-agentic rebase
+# directly off it.
 pr_json_is_terminal() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '
