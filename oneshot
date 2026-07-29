@@ -84,10 +84,9 @@ source "${ONESHOT_DIR}/lib/podman" \
 # load_issue_invocation_counts, save_issue_invocation_counts, and
 # reset_issue_invocation_counts_if_capped are declared in lib/state.
 
-# pr_json_is_terminal, pr_json_has_failed_required_check, pr_json_has_missing_required_check,
-# gh_noun_for_item_type, apply_blocked_label, apply_blocked_label_with_reason,
-# block_pr_for_idle_exhausted_failure, pr_json_has_unaddressed_review_request,
-# block_pr_for_idle_exhausted_review, block_pr_for_idle_exhausted_missing_check, and
+# pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
+# apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
+# pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review, and
 # pr_should_advance_unchanged are declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
@@ -436,18 +435,6 @@ main() {
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
-                    if pr_json_has_missing_required_check "${pr_json}"; then
-                        load_pr_invocation_counts "${open_pr}"
-                        if [ "${PR_INVOCATION_IDLE}" -ge "${MAX_PR_IDLE_INVOCATIONS}" ]; then
-                            info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
-                            block_pr_for_idle_exhausted_missing_check "${open_pr}" "${item_repo}"
-                        else
-                            save_pr_invocation_counts "${open_pr}" "${PR_INVOCATION_TOTAL}" "$(( PR_INVOCATION_IDLE + 1 ))"
-                            info "PR #${open_pr} in ${item_repo}: missing required check, nothing actionable — waiting"
-                        fi
-                        count_unchanged=$((count_unchanged + 1))
-                        continue
-                    fi
                 fi
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
@@ -741,27 +728,6 @@ main() {
             if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
                 if pr_json_is_terminal "${pr_json}"; then
                     info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
-                    count_unchanged=$((count_unchanged + 1))
-                    continue
-                fi
-                # A required check that has never posted any status at all (mergeStateStatus
-                # BLOCKED with nothing failed/pending in statusCheckRollup to explain it — most
-                # commonly a missing required review, see #1256) is, by construction, never
-                # actionable by the agent even the first time it's observed: unlike a fresh CI
-                # failure or a fresh review request (both left on the fingerprint-changed path
-                # below, since those genuinely need a look), there is nothing here to fix. The
-                # agent is never invoked for this state; PR_INVOCATION_IDLE is bumped directly so
-                # the existing idle-exhausted escalation still fires once it's been stuck long
-                # enough.
-                if pr_json_has_missing_required_check "${pr_json}"; then
-                    load_pr_invocation_counts "${item_id}"
-                    if [ "${PR_INVOCATION_IDLE}" -ge "${MAX_PR_IDLE_INVOCATIONS}" ]; then
-                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with a missing required check — blocking"
-                        block_pr_for_idle_exhausted_missing_check "${item_id}" "${item_repo}"
-                    else
-                        save_pr_invocation_counts "${item_id}" "${PR_INVOCATION_TOTAL}" "$(( PR_INVOCATION_IDLE + 1 ))"
-                        info "PR #${item_id} in ${item_repo}: missing required check, nothing actionable — waiting"
-                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi

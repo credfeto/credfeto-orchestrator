@@ -67,9 +67,6 @@ Common reasons an item gets `Blocked` automatically:
 
 - A plan was posted but not yet approved (see [workflow-board.md](workflow-board.md)).
 - A required CI check has failed, or stayed pending past a timeout, with nothing progressing it.
-- GitHub reports the PR as `BLOCKED` with auto-merge enabled, but no required check is failed or
-  pending — most likely a required branch-protection check whose workflow never triggers for
-  this PR at all, past the idle-invocation budget (see [oneshot.md](oneshot.md)).
 - A reviewer requested changes that remain unaddressed past the idle-invocation budget (see
   [oneshot.md](oneshot.md)).
 - The item hit its total invocation cap without converging (see [oneshot.md](oneshot.md)).
