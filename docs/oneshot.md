@@ -91,11 +91,14 @@ time and money with nothing to show for it. Two independent budgets catch this:
   invocations `oneshot` will ever spend on it (before a Pull Request exists for an Issue; and for
   the Pull Request itself once one does). Hit the cap without converging, and the item is marked
   `Blocked` for a human to look at, with an explanation of exactly why.
-- **Idle invocation cap** (Pull Requests only) — some phases legitimately don't change anything
-  a human would call "progress" (a clean code review that finds nothing to fix just advances the
-  board and stops). A PR that keeps getting re-invoked with nothing changing, tick after tick, is
-  parked once it hits this smaller cap, rather than treated as broken outright — it might
-  genuinely be done and just waiting on something (auto-merge to catch up, a human review).
+- **Idle invocation cap** — some phases legitimately don't change anything a human would call
+  "progress" (a clean code review that finds nothing to fix just advances the board and stops,
+  or an approved Issue whose last invocation only posted a status-update comment without opening
+  a Pull Request). A PR or a plan-approved Issue that keeps getting re-invoked with nothing
+  changing, tick after tick, is parked once it hits this smaller cap, rather than treated as
+  broken outright — it might genuinely be done and just waiting on something (auto-merge to
+  catch up, a human review). An Issue whose plan is not (yet) approved never touches this cap at
+  all — that's the ordinary "waiting on a human" case, not idle churn.
 
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated
@@ -121,9 +124,10 @@ human-driven PR" (see [github-integration.md](github-integration.md)).
 - `gh` (the GitHub CLI) is already authenticated with enough permission to read/write issues,
   PRs, labels, and comments on every repository this owner is configured to work on.
 - Every agent invocation either converges within the invocation budgets above, or leaves enough
-  of a trail (a pushed commit, a status comment) that the next tick can tell what to do next —
-  an invocation that silently does nothing durable is the one failure mode the fingerprint/board
-  mechanism can't fully protect against (see the "residual edge case" note in
+  of a trail (a pushed commit, a status comment) that the next tick can tell what to do next — an
+  invocation that does nothing durable at all is handled by the idle-invocation cap above rather
+  than being invisible forever (see ["When 'unchanged' still isn't the end of the
+  story"](fingerprinting.md#when-unchanged-still-isnt-the-end-of-the-story) in
   [fingerprinting.md](fingerprinting.md)).
 - Only one `oneshot` process runs at a time per owner (enforced by a lock file) — running two
   concurrently against the same repositories would race on the same git checkouts and container

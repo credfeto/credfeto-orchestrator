@@ -100,6 +100,17 @@ MAX_ISSUE_TOTAL_INVOCATIONS="${MAX_ISSUE_TOTAL_INVOCATIONS:-15}"
 MAX_PR_IDLE_INVOCATIONS="${MAX_PR_IDLE_INVOCATIONS:-5}"
 [[ "${MAX_PR_IDLE_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_IDLE_INVOCATIONS=5
 
+# How many consecutive "in-progress" re-invocations to allow on an unchanged, plan-approved Issue
+# fingerprint before parking it (#1264). Mirrors MAX_PR_IDLE_INVOCATIONS: an approved Issue whose
+# last invocation didn't produce a durable change (no new comment, no PR opened — e.g. it only
+# posted a status update) would otherwise sit at "unchanged — skipping" forever, since nothing
+# about the Issue's own trusted fields ever changes again on its own. An Issue that is NOT
+# plan-approved never re-invokes on this budget at all — that's the correct, unrelated "waiting on
+# a human to approve the plan" behaviour and must stay silent.
+# Override with MAX_ISSUE_IDLE_INVOCATIONS in the environment before calling oneshot.
+MAX_ISSUE_IDLE_INVOCATIONS="${MAX_ISSUE_IDLE_INVOCATIONS:-5}"
+[[ "${MAX_ISSUE_IDLE_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_ISSUE_IDLE_INVOCATIONS=5
+
 # How many times oneshot will auto-clear the Blocked label on a PR the agent itself diagnosed as
 # blocked by an environment/infrastructure failure (#1118) once a newer agent image has been
 # built. Bounds the (rare, low-frequency) case where the "environment" diagnosis was actually
@@ -182,6 +193,7 @@ PR_INVOCATION_TOTAL=0
 PR_INVOCATION_IDLE=0
 ENV_UNBLOCK_ATTEMPTS=0
 ISSUE_INVOCATION_TOTAL=0
+ISSUE_INVOCATION_IDLE=0
 
 # Workflow project cache — populated by discover_or_create_workflow_project (lib/workflow-board).
 # Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode).

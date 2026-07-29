@@ -86,8 +86,9 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
-# pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review, and
-# pr_should_advance_unchanged are declared in lib/github-status.
+# pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
+# pr_should_advance_unchanged, issue_should_advance_unchanged, and
+# block_issue_for_idle_exhausted_no_progress are declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
@@ -228,7 +229,7 @@ main() {
     # so initialising them here (and resetting where needed at the top of each
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
-    local skip_repo is_skipped original_issue_id pr_idle_advance
+    local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
     local issue_json issue_state issue_fp saved_issue_fp
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
@@ -278,6 +279,9 @@ main() {
         # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
         # (no external change); consumed when persisting the PR idle counter before invocation.
         pr_idle_advance=0
+        # Same idea as pr_idle_advance, for a plan-approved Issue re-invoked only because its idle
+        # budget allows another try, not because anything actually changed (#1264).
+        issue_idle_advance=0
         if [ "${item_type}" = "Issue" ]; then
             for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
                 if [ "${skip_repo}" = "${item_repo}" ]; then
@@ -565,7 +569,9 @@ main() {
                 # later call.
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "$(issue_plan_approved "${item_repo}" "${item_id}")") \
+                local plan_approved
+                plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
+                issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
@@ -579,8 +585,21 @@ main() {
                         # name threaded into the generated CLAUDE.md is recomputed later, after
                         # ensure_repo_current's fetch, in case origin/main has moved since.
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
+                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved}"; then
+                        # A plan-approved Issue whose last invocation produced no durable change at
+                        # all (no new comment, no branch, no PR — e.g. only a status-update
+                        # comment). Neither of the two checks above found anything to resume from,
+                        # so this is a generic re-poke up to the idle budget rather than a resume
+                        # (#1264).
+                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
+                        issue_idle_advance=1
                     else
-                        info "Issue #${item_id} in ${item_repo} unchanged — skipping"
+                        if [ "${plan_approved}" = "true" ]; then
+                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
+                            block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        else
+                            info "Issue #${item_id} in ${item_repo} unchanged — skipping"
+                        fi
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
@@ -986,7 +1005,9 @@ main() {
             [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
             save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
         elif [ "${item_type}" = "Issue" ]; then
-            save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))"
+            local issue_new_idle=0
+            [ "${issue_idle_advance}" = "1" ] && issue_new_idle=$(( ISSUE_INVOCATION_IDLE + 1 ))
+            save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))" "${issue_new_idle}"
         fi
 
         success "Completed one workflow phase for ${item_type} #${item_id} in ${item_repo}"
