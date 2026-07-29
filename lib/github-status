@@ -159,6 +159,17 @@ block_pr_for_idle_exhausted_review() {
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
+# Posts a Blocked-marking comment and label when a plan-approved Issue's idle-invocation budget
+# has been exhausted with no durable progress observed (no new PR, no new trusted comment/label/
+# state change) — mirrors block_pr_for_idle_exhausted_failure/_review for Issues (#1264). Pushing
+# more agent invocations at an Issue that already isn't producing anything won't help; a human
+# needs to check whether work genuinely stalled (e.g. an expected PR was never opened).
+block_issue_for_idle_exhausted_no_progress() {
+    local item_id="$1" item_repo="$2"
+    local reason="This issue's plan is approved but no further progress (e.g. a Pull Request) has been observed, and the automation's idle-invocation budget (${MAX_ISSUE_IDLE_INVOCATIONS}) is exhausted. Blocking this issue until a human investigates."
+    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
+}
+
 # Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
 # while GitHub reports mergeStateStatus BLOCKED with no failed or pending required check to
 # explain it (see pr_json_has_missing_required_check) — most likely a required branch-protection
@@ -181,6 +192,21 @@ pr_should_advance_unchanged() {
     pr_json_is_terminal "${pr_json}" && return 1
     load_pr_invocation_counts "${item_id}"
     [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
+}
+
+# Decides whether to re-invoke an Issue whose fingerprint is UNCHANGED, mirroring
+# pr_should_advance_unchanged (#1264). Issues have no CI/review sub-state to distinguish
+# "terminal" from "stuck" the way pr_json_is_terminal does for PRs — plan approval is the only
+# available "is there still real intent here" signal, so an Issue whose plan is not (yet) approved
+# always returns false here (correct, unrelated "waiting on a human" behaviour that must stay
+# silent). Only a plan-approved Issue re-invokes, and only up to the idle budget, so an approved
+# Issue whose last invocation produced no durable change (e.g. only a status-update comment, no
+# PR opened) gets periodically re-poked instead of sitting at "unchanged — skipping" forever.
+issue_should_advance_unchanged() {
+    local item_id="$1" plan_approved="$2"
+    [ "${plan_approved}" = "true" ] || return 1
+    load_issue_invocation_counts "${item_id}"
+    [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ]
 }
 
 # Posts a comment on the current GitHub work item and adds the Blocked label.

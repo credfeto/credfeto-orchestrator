@@ -72,6 +72,8 @@ Common reasons an item gets `Blocked` automatically:
   this PR at all, past the idle-invocation budget (see [oneshot.md](oneshot.md)).
 - A reviewer requested changes that remain unaddressed past the idle-invocation budget (see
   [oneshot.md](oneshot.md)).
+- A plan-approved Issue keeps getting re-invoked with no durable progress (no new Pull Request,
+  comment, or state change) past the idle-invocation budget (see [oneshot.md](oneshot.md)).
 - The item hit its total invocation cap without converging (see [oneshot.md](oneshot.md)).
 - The agent container itself failed to even start, repeatedly (an environment/infrastructure
   problem, not a problem with the code).

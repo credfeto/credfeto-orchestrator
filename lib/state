@@ -247,36 +247,53 @@ COMMENT
     return 0
 }
 
-# Per-Issue invocation guard — same runaway-backstop idea as the PR guard above, but Issues have
-# no idle-park case (an unchanged Issue is simply skipped, never re-invoked), so this only tracks
-# a single total: every agent invocation ever spent on this Issue while it has no active PR.  At
-# MAX_ISSUE_TOTAL_INVOCATIONS the Issue is marked Blocked for a human (#1093) — this closes the
-# gap where a non-converging Issue (agent keeps planning/erroring, never opens a PR) re-fires
-# every tick forever, since PullRequest_*.invocations only starts counting once a PR exists.
+# Per-Issue invocation guard — same runaway-backstop idea as the PR guard above. The guard file
+# holds two space-separated counters, "<total> <idle>", same shape as the PR guard (#1264):
+#   total — every agent invocation ever spent on this Issue while it has no active PR.  At
+#           MAX_ISSUE_TOTAL_INVOCATIONS the Issue is marked Blocked for a human (#1093) — this
+#           closes the gap where a non-converging Issue (agent keeps planning/erroring, never
+#           opens a PR) re-fires every tick forever, since PullRequest_*.invocations only starts
+#           counting once a PR exists.
+#   idle  — consecutive re-invocations of a plan-approved Issue whose fingerprint had not changed
+#           (the last invocation produced no durable change — e.g. only a status-update comment,
+#           no new PR). At MAX_ISSUE_IDLE_INVOCATIONS the Issue is marked Blocked for a human
+#           (#1264) instead of silently sitting at "unchanged — skipping" forever; an Issue whose
+#           plan is not (yet) approved never touches this counter at all.
+# A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts parses
+# just the first token in that case and defaults idle to 0, so no migration is needed.
 issue_invocation_guard_file_path() {
     local item_id="$1"
     invocation_guard_file_path "Issue" "${item_id}"
 }
 
-# Reads the saved total invocation count for an Issue, defaulting missing/corrupt values to 0.
-# Sets global ISSUE_INVOCATION_TOTAL (declared in lib/globals).
+# Reads the saved "<total> <idle>" counters for an Issue, defaulting missing/corrupt values to 0.
+# Sets globals ISSUE_INVOCATION_TOTAL and ISSUE_INVOCATION_IDLE (declared in lib/globals).
 load_issue_invocation_counts() {
-    local item_id="$1" guard_file total
+    local item_id="$1" guard_file line
     ISSUE_INVOCATION_TOTAL=0
+    ISSUE_INVOCATION_IDLE=0
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
-    total=$(cat "${guard_file}" 2>/dev/null)
-    total="${total%% *}"
-    [[ "${total}" =~ ^[0-9]+$ ]] && ISSUE_INVOCATION_TOTAL="${total}"
+    line=$(cat "${guard_file}" 2>/dev/null)
+    # Match both tokens from the whole line at once, same as load_pr_invocation_counts — extracting
+    # total/idle independently would alias a corrupt single-token file ("7") into BOTH counters
+    # (#1103). A legacy single-token file (pre-#1264) simply doesn't match this two-token regex, so
+    # it falls through to the single-token fallback below instead, leaving idle at 0.
+    if [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+        ISSUE_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
+        ISSUE_INVOCATION_IDLE="${BASH_REMATCH[2]}"
+    elif [[ "${line}" =~ ^([0-9]+)$ ]]; then
+        ISSUE_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
+    fi
     return 0
 }
 
-# Persists the total invocation count for an Issue.
+# Persists the "<total> <idle>" counters for an Issue.
 save_issue_invocation_counts() {
-    local item_id="$1" total="$2" guard_file
+    local item_id="$1" total="$2" idle="$3" guard_file
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s\n' "${total}" > "${guard_file}" \
+    printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
         || die "Failed to write invocation guard file: ${guard_file}"
 }
 
@@ -289,7 +306,7 @@ reset_issue_invocation_counts_if_capped() {
     local item_id="$1" marker_file
     marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
     if [ -f "${marker_file}" ]; then
-        save_issue_invocation_counts "${item_id}" 0
+        save_issue_invocation_counts "${item_id}" 0 0
         rm -f "${marker_file}" 2>/dev/null || true
     fi
 }

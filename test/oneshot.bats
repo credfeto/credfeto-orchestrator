@@ -918,46 +918,63 @@ teardown() {
 
 # --- per-Issue invocation guard ----------------------------------------------
 
-@test "load_issue_invocation_counts defaults to 0 when no guard file exists" {
+@test "load_issue_invocation_counts defaults to 0/0 when no guard file exists" {
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
 }
 
 @test "save_issue_invocation_counts and load_issue_invocation_counts round-trip" {
-    save_issue_invocation_counts 99 4
+    save_issue_invocation_counts 99 4 2
     [ -f "${SESSION_BASE_DIR}/Issue_99.invocations" ]
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 4 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 2 ]
 }
 
-@test "load_issue_invocation_counts treats a corrupt guard file as 0" {
+@test "load_issue_invocation_counts treats a corrupt guard file as 0/0" {
     mkdir -p "${SESSION_BASE_DIR}"
     printf 'garbage not numbers\n' > "${SESSION_BASE_DIR}/Issue_99.invocations"
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
 }
 
-@test "reset_issue_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
-    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+@test "load_issue_invocation_counts treats a legacy single-token guard file as total-only, idle 0 (#1264)" {
+    # Pre-#1264 guard files hold only "<total>" (Issues had no idle counter until #1264 added
+    # one) — must parse the total correctly and default idle to 0, not treat the whole file as
+    # corrupt (that would silently discard real invocation history on every repo already running
+    # before this change).
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf '7\n' > "${SESSION_BASE_DIR}/Issue_99.invocations"
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 7 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
+}
+
+@test "reset_issue_invocation_counts_if_capped resets both counters and clears the marker when the runaway-blocked marker is present" {
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_99.runaway-blocked"
     reset_issue_invocation_counts_if_capped 99
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
     [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
-@test "reset_issue_invocation_counts_if_capped leaves the total untouched when no runaway-blocked marker exists" {
-    save_issue_invocation_counts 99 5
+@test "reset_issue_invocation_counts_if_capped leaves the counters untouched when no runaway-blocked marker exists" {
+    save_issue_invocation_counts 99 5 2
     reset_issue_invocation_counts_if_capped 99
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 5 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 2 ]
 }
 
 @test "reset_issue_invocation_counts_if_capped does not reset a total that just now reached the cap without a marker" {
     # Regression guard: same rationale as the PR-side test — a not-yet-blocked Issue whose total
     # just reached the cap must not be reset before the backstop gets a chance to fire.
-    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     reset_issue_invocation_counts_if_capped 99
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]
@@ -978,13 +995,13 @@ teardown() {
 }
 
 @test "mark_capped_block_for_forgiveness writes the marker for an Issue at the cap" {
-    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     mark_capped_block_for_forgiveness Issue 99
     [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 @test "mark_capped_block_for_forgiveness does not write the marker for an Issue below the cap" {
-    save_issue_invocation_counts 99 5
+    save_issue_invocation_counts 99 5 0
     mark_capped_block_for_forgiveness Issue 99
     [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
@@ -1465,6 +1482,55 @@ teardown() {
     save_pr_invocation_counts 42 10 "${MAX_PR_IDLE_INVOCATIONS}"
     run pr_should_advance_unchanged 42 '{"autoMergeRequest":null}'
     [ "${status}" -ne 0 ]
+}
+
+# --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_progress (#1264) ---
+
+@test "issue_should_advance_unchanged is false when the plan is not approved, regardless of idle count" {
+    run issue_should_advance_unchanged 99 "false"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_should_advance_unchanged is true when the plan is approved and idle count is below budget" {
+    save_issue_invocation_counts 99 4 2
+    run issue_should_advance_unchanged 99 "true"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_should_advance_unchanged is false when the plan is approved but the idle budget is exhausted" {
+    save_issue_invocation_counts 99 10 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    run issue_should_advance_unchanged 99 "true"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) that is plan-approved" {
+    run issue_should_advance_unchanged 99 "true"
+    [ "${status}" -eq 0 ]
+}
+
+@test "block_issue_for_idle_exhausted_no_progress does not post a comment when the label cannot be verified" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'issue comment 99' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified Issue #99 reason=This issue.s plan is approved' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_progress posts the reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 99 --repo org/repo --body This issue's plan is approved" "${call_log}"
+    grep -q "notified Issue #99 reason=This issue.s plan is approved" "${TEST_TMP}/discord_calls"
 }
 
 # --- fingerprinting --------------------------------------------------------
@@ -5917,6 +5983,65 @@ setup_local_git_remote() {
     [[ "${output}" != *"Found actionable Issue #42"* ]]
 }
 
+# --- main() integration: plan-approved Issue idle-retry (#1264) ---------------
+
+@test "main re-invokes a plan-approved Issue with matching fingerprint and no resumable branch, within the idle budget (#1264)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'true'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"fingerprint unchanged but plan approved — re-invoking to check progress"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    # Idle counter bumped from 0 to 1 for this re-poke.
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_42.invocations")" = "1 1" ]
+}
+
+@test "main blocks a plan-approved Issue once the idle budget is exhausted with no progress (#1264)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'true'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"idle budget exhausted with plan approved but no progress — blocking"* ]]
+    grep -q "issue comment 42 --repo org/repo --body This issue's plan is approved" "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
 @test "main threads a resumable stale branch into the generated CLAUDE.md even when the Issue's own fingerprint changed (#1262 review)" {
     # The fingerprint-unchanged skip-decision only runs when the fingerprint matched the saved
     # one. A session that changed the Issue (e.g. posted a comment) after pushing a branch and
@@ -5993,7 +6118,7 @@ setup_local_git_remote() {
     [[ "${output}" == *"Found actionable Issue #42"* ]]
 }
 
-@test "main re-invokes exactly once on board approval then skips again once re-saved (no infinite loop) (#1204)" {
+@test "main re-invokes on board approval, then the fingerprint stabilises and the idle budget takes over (#1204, #1264)" {
     setup_main_mocks
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/lib/fingerprints"
@@ -6023,15 +6148,19 @@ setup_local_git_remote() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Found actionable Issue #42"* ]]
-    # The post-invocation save must have recorded plan_approved=true, or the second tick below
-    # would re-invoke forever instead of converging.
+    # The post-invocation save must have recorded plan_approved=true, or the fingerprint would
+    # keep looking "changed" every tick instead of stabilising.
     local saved_fp
     saved_fp=$(load_issue_fingerprint 42)
     [ "${saved_fp}" != "${stale_fp}" ]
 
+    # The fingerprint itself has now stabilised (matches on the next tick) — but since the plan
+    # is approved, this no longer means silence forever: it means the idle-invocation budget
+    # takes over instead (#1264), re-poking a bounded number of times rather than looping
+    # infinitely or going permanently quiet.
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" == *"fingerprint unchanged but plan approved — re-invoking to check progress"* ]]
 }
 
 # --- human-driven PR stand-off integration (#1131) -----------------------------
@@ -9833,7 +9962,7 @@ STUBEOF
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
     make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
@@ -9855,7 +9984,7 @@ STUBEOF
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
     make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
@@ -9882,7 +10011,7 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     [ -f "${SESSION_BASE_DIR}/Issue_10.invocations" ]
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1" ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1 0" ]
 }
 
 @test "main resets an Issue's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
@@ -9895,7 +10024,7 @@ STUBEOF
     # capped total, and the runaway-blocked marker from the prior blocking tick is still present,
     # exercising the reset-on-unblock path (#1093).
     fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}"
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_10.runaway-blocked"
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
@@ -9904,7 +10033,7 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     # Reset to 0 then bumped once for this invocation — proof the stale cap did not re-block it.
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1" ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1 0" ]
 }
 
 @test "main skips (does not die on, and does not hand off to agent for) a transient repo-fetch failure (#1090)" {
