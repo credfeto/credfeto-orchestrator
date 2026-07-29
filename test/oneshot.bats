@@ -121,11 +121,11 @@ teardown() {
     [[ "${output}" == *"foreground"* ]]
 }
 
-@test "build_issue_claude_md instructs waiting for slow pre-commit hooks instead of ending the turn" {
+@test "build_issue_claude_md instructs backgrounding git commit and waiting for it to finish instead of ending the turn (#1270)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WAIT for the foreground command to return no matter how long it takes"* ]]
-    [[ "${output}" == *"genuinely hung"* ]]
+    [[ "${output}" == *"MUST be started with run_in_background: true"* ]]
+    [[ "${output}" == *"WAIT for it to actually finish before doing anything else, including ending your turn"* ]]
 }
 
 @test "build_issue_claude_md states the container-vs-GitHub survival rule" {
@@ -136,14 +136,15 @@ teardown() {
     [[ "${output}" == *"survives independently of this container"* ]]
 }
 
-@test "build_issue_claude_md forbids truncating pre-commit, dotnet test, npm test, or bun test with a tool timeout" {
+@test "build_issue_claude_md mandates run_in_background for pre-commit, dotnet test, npm test, and bun test (#1270)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Never pass a tool-level timeout that could truncate"* ]]
+    [[ "${output}" == *"must always be run with run_in_background: true"* ]]
+    [[ "${output}" == *"unconditional, not a per-invocation judgement call"* ]]
     [[ "${output}" == *"dotnet test"* ]]
     [[ "${output}" == *"npm test"* ]]
     [[ "${output}" == *"bun test"* ]]
-    [[ "${output}" == *"run_in_background"* ]]
+    [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]
 }
 
 @test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
@@ -387,21 +388,22 @@ teardown() {
     [[ "${output}" == *"foreground"* ]]
 }
 
-@test "build_pr_claude_md instructs waiting for slow pre-commit hooks instead of ending the turn" {
+@test "build_pr_claude_md instructs backgrounding git commit and waiting for it to finish instead of ending the turn (#1270)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WAIT for the foreground command to return no matter how long it takes"* ]]
-    [[ "${output}" == *"genuinely hung"* ]]
+    [[ "${output}" == *"MUST be started with run_in_background: true"* ]]
+    [[ "${output}" == *"WAIT for it to actually finish before doing anything else, including ending your turn"* ]]
 }
 
-@test "build_pr_claude_md forbids truncating pre-commit, dotnet test, npm test, or bun test with a tool timeout" {
+@test "build_pr_claude_md mandates run_in_background for pre-commit, dotnet test, npm test, and bun test (#1270)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Never pass a tool-level timeout that could truncate"* ]]
+    [[ "${output}" == *"must always be run with run_in_background: true"* ]]
+    [[ "${output}" == *"unconditional, not a per-invocation judgement call"* ]]
     [[ "${output}" == *"dotnet test"* ]]
     [[ "${output}" == *"npm test"* ]]
     [[ "${output}" == *"bun test"* ]]
-    [[ "${output}" == *"run_in_background"* ]]
+    [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]
 }
 
 @test "build_pr_claude_md states the container-vs-GitHub survival rule" {

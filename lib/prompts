@@ -69,6 +69,28 @@ Git transport — SSH is always configured and always works:
 GITSSH
 }
 
+# Shared "container dies at turn-end" note referenced by both build_issue_claude_md and
+# build_pr_claude_md's PHASE DISCIPLINE section. Backgrounding a command changes how you wait
+# for it, not whether the container needs to stay alive until it finishes — a run_in_background
+# command that is still running when your turn ends is killed exactly as a foreground one would
+# be, just later.
+_build_container_vs_github_note() {
+    cat <<'CVGNOTE'
+- Container-vs-GitHub rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed the instant your turn ends — including a command you started with run_in_background: true, if you end your turn before it actually finishes. Backgrounding changes how you wait for something, not whether the container has to stay alive until it's done. git commit, pre-commit (direct invocation), dotnet build, dotnet test, npm test, and bun test MUST be started with run_in_background: true (the container's enforce-background-for-long-running-commands hook blocks running any of these five any other way) — then poll with the Monitor tool for the command's own completion string (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings and the 30-minute deadline) and WAIT for it to actually finish before doing anything else, including ending your turn. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container — for those, STOP and let the orchestrator re-invoke you next cycle instead of polling.
+CVGNOTE
+}
+
+# Shared MANDATORY background-commands rule referenced by both build_issue_claude_md and
+# build_pr_claude_md's numbered "General rules" list. Supersedes the old "always run git commit
+# in the foreground" text (#1253 review) — the enforce-background-for-long-running-commands hook
+# now blocks that outright; see _build_container_vs_github_note above for why waiting for it to
+# finish still matters even when it is backgrounded.
+_build_background_commands_rule() {
+    cat <<'BGRULE'
+MANDATORY: git commit, pre-commit (direct invocation), dotnet build, dotnet test, npm test, and bun test must always be run with run_in_background: true — this is unconditional, not a per-invocation judgement call, and the container hook blocks any other way of running them regardless of how fast the run is expected to be. Immediately after starting one, poll with the Monitor tool for its completion string and WAIT for it to actually finish before doing anything else or ending your turn (see the container-vs-GitHub rule above and the Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings and the 30-minute deadline) — a long stretch with no new output is normal, not a hang; only the poll tool's own timeout or the 30-minute deadline firing is a valid reason to stop waiting. A killed run does not just fail — it skips the target process's own cleanup (a bash EXIT trap, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs. git push and other bounded git operations are NOT covered by this rule and may run in the foreground as normal, with an explicit maximum timeout (e.g. 600000ms) rather than the tool's 2-minute default. If you use the Monitor tool, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever — use a branch-agnostic string from the command's actual output instead.
+BGRULE
+}
+
 # Output the dirty-working-tree recovery section for build_issue_claude_md, when the checkout
 # has uncommitted changes on some other branch — most commonly leftover state orphaned by an
 # earlier, unrelated session (e.g. an interrupted dependency-PR run). Unlike build_pr_claude_md
@@ -174,7 +196,7 @@ $(_build_issue_stale_branch_section "${stale_branch}" "${repo_path}" "${dirty_br
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the issue, its comments, labels, and the Workflow board status above).
-- Container-vs-GitHub rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed the instant your turn ends, no matter what you say about waiting for it — block on it in the foreground until it actually finishes, however long that takes, and only intervene if it is genuinely hung rather than merely slow. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container — for those, STOP and let the orchestrator re-invoke you next cycle instead of polling.
+$(_build_container_vs_github_note)
 - Do EXACTLY ONE phase and then STOP: either PLAN mode (steps 3–4) or IMPLEMENTATION mode (steps 5–7), never both in one session. The orchestrator re-invokes you on the next cycle.
 - Once a draft pull request exists, this issue's work continues under the pull-request workflow on later cycles — do not try to drive reviews or merging from the issue session.
 - NEVER apply the Blocked label without ALSO posting a comment, in the SAME turn, that specifically explains why. A human who sees the label with no explanation has no way to act on it and no way to tell whether their own last action (an approval, a fix, a reply) was even seen — this applies to every blocking scenario in this file, not only the ones spelled out explicitly below, including re-blocking something that was JUST unblocked (#1140).
@@ -213,8 +235,7 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}")
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
 7. $(_build_issue_branch_step "${item_id}" "${repo_path}" "${stale_branch}")
 8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
-9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available (see the container-vs-GitHub rule above: pre-commit hooks taking several minutes is normal — WAIT for the foreground command to return no matter how long it takes; only a genuinely hung command, not a merely slow one, needs diagnosing). If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
-10. MANDATORY: Never pass a tool-level timeout that could truncate pre-commit, a git commit in a repo with pre-commit enabled, dotnet test, npm test, or bun test — these must run to completion. Pass the maximum available timeout rather than a short one; if even that is not enough, use run_in_background and Monitor instead of accepting a truncated run. A killed run does not just fail — it skips the target process's own cleanup (bash EXIT traps, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs (a killed bats run once left thousands of orphaned fixture directories under a shared runtime directory, which went on to break an unrelated tool that walked the same path).
+9. $(_build_background_commands_rule)
 EOF
 }
 
@@ -293,7 +314,7 @@ $(_build_wf_section)
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
-- Container-vs-GitHub rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed the instant your turn ends, no matter what you say about waiting for it — block on it in the foreground until it actually finishes, however long that takes, and only intervene if it is genuinely hung rather than merely slow. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container — for those, STOP and let the orchestrator re-invoke you next cycle instead of polling (see PHASE B below).
+$(_build_container_vs_github_note)
 - You must do EXACTLY ONE phase from the list below — the FIRST one that applies — and then STOP. Do NOT continue to later phases in this session. The orchestrator will re-invoke you on the next cycle to do the next phase.
 - NEVER run more than one /code-review round or one /security-review round per session. Running a review loop in a single session is what overflows the context window — that is the bug this design fixes.
 - The Workflow board status above is your phase marker. Read the current status for this PR to know where you are; advance it as instructed when a phase completes.
@@ -315,12 +336,12 @@ PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddre
   - Check BOTH comment surfaces before concluding there is nothing to address — they are different GitHub object models and neither shows the other: top-level PR comments and review summaries (gh pr view ${item_id} --repo ${REPO_FULL} --json comments,reviews,reviewDecision) AND inline/diff-level review comments (gh api repos/${REPO_FULL}/pulls/${item_id}/comments). A reviewer can submit a CHANGES_REQUESTED review with an empty top-level body and put their actual question only in an inline diff comment — that review decision alone is reason enough to treat this PR as having unaddressed work, and the inline comment endpoint is the only place its content is visible.
   - If a required check FAILED: diagnose and fix it in a commit. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
   - Set the board status to "Development".
-  - Commit and push your fix in the foreground, then STOP. (CI will run; the next cycle continues.)
+  - Commit your fix (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push it, then STOP. (CI will run; the next cycle continues.)
 
 PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
   - Set the board status to "AI Simplify" (if not already set).
   - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
-  - If it changed any files: commit and push them in the foreground, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
+  - If it changed any files: commit them (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
   - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
   - Otherwise, judge convergence from the PR's commit history of simplify rounds, comparing each round's diff size (lines changed by that round's commit) to the previous round's:
     - If ${SIMPLIFY_THRASH_LIMIT} or more simplify rounds have run AND the latest round is thrashing (its diff is flat or larger than the previous round's, i.e. not shrinking): give up now, even though ${MAX_SIMPLIFY_ITERATIONS} has not been reached.
@@ -329,13 +350,13 @@ PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstandi
 
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
-  - If findings were posted: fix EACH in its own commit, push in the foreground, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
+  - If findings were posted: fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} code-review rounds on this PR (judge from the PR's history of code-review comments) and findings remain: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
-  - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit, push in the foreground, post a one-line status comment, then STOP.
+  - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
   - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
 
@@ -355,8 +376,7 @@ If auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --js
 
 General rules:
 - All interaction with humans including status reports must be made as a comment to the pull request.
-- MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available (see the container-vs-GitHub rule above: pre-commit hooks taking several minutes is normal — WAIT for the foreground command to return no matter how long it takes; only a genuinely hung command, not a merely slow one, needs diagnosing). If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
-- MANDATORY: Never pass a tool-level timeout that could truncate pre-commit, a git commit in a repo with pre-commit enabled, dotnet test, npm test, or bun test — these must run to completion. Pass the maximum available timeout rather than a short one; if even that is not enough, use run_in_background and Monitor instead of accepting a truncated run. A killed run does not just fail — it skips the target process's own cleanup (bash EXIT traps, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs (a killed bats run once left thousands of orphaned fixture directories under a shared runtime directory, which went on to break an unrelated tool that walked the same path).
+- $(_build_background_commands_rule)
 EOF
     fi
 }
