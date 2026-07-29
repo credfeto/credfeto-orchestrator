@@ -122,8 +122,8 @@ for the exact rule on when to bump it.
 ## When "unchanged" still isn't the end of the story
 
 An unchanged fingerprint means the Issue's own GitHub-visible state hasn't moved — but that's
-not quite the same as "nothing needs to happen." Two situations bypass the skip even when the
-fingerprint matches, both checked immediately after the fingerprint comparison, before oneshot
+not quite the same as "nothing needs to happen." Three situations bypass the skip even when the
+fingerprint matches, all checked immediately after the fingerprint comparison, before oneshot
 gives up on the Issue for this tick:
 
 - **An orphaned local checkout.** If the orchestrator's own local clone was left checked out on
@@ -147,6 +147,17 @@ gives up on the Issue for this tick:
   (e.g. posted a comment) after pushing the branch and dying would otherwise reach that point with
   no memory of the earlier check. Either way, the generated `CLAUDE.md` tells the agent to check
   out and continue the existing branch instead of creating a duplicate one.
+- **A plan-approved Issue with no branch at all yet ([#1264](https://github.com/credfeto/credfeto-orchestrator/issues/1264)).**
+  Neither of the two checks above finds anything to resume from when an earlier invocation's only
+  visible effect was a comment — e.g. a status update, or a correction like "Blocked will not
+  clear itself automatically" — and never pushed a branch. Once that comment lands, the Issue's
+  own fields stop changing forever, exactly like the board-approval bug above, but here the plan
+  *is* approved and nothing resumable exists to detect. `issue_should_advance_unchanged`
+  (`lib/github-status`) re-invokes a plan-approved Issue up to `MAX_ISSUE_IDLE_INVOCATIONS` tries
+  (mirroring the PR-side idle budget) instead of skipping forever; once that budget is exhausted
+  with still no PR opened, the Issue is marked `Blocked` for a human rather than silently
+  re-attempted every tick indefinitely. An Issue whose plan is *not* approved never enters this
+  path at all — that is the correct, silent "waiting on a human" behaviour, unchanged.
 
 ### Version history
 

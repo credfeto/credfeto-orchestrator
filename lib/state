@@ -68,6 +68,22 @@ pr_invocation_guard_file_path() {
     invocation_guard_file_path "PullRequest" "${item_id}"
 }
 
+# Parses a "<total> <idle>" counter-guard-file line into _PARSED_COUNT_TOTAL/_PARSED_COUNT_IDLE
+# (both reset to 0 first, declared in lib/globals), returning 1 with both left at 0 if the line
+# doesn't match. Shared by load_pr_invocation_counts and load_issue_invocation_counts: matching
+# both tokens from the WHOLE line at once — rather than extracting total/idle independently via
+# ${line%% *}/${line##* *} — is what stops a corrupt single-token file ("7") aliasing into BOTH
+# counters, letting a bogus total silently exhaust the idle budget (#1103); keeping that one
+# piece of logic in a single place instead of copy-pasted is what actually matters here.
+parse_two_token_counters() {
+    local line="$1"
+    _PARSED_COUNT_TOTAL=0
+    _PARSED_COUNT_IDLE=0
+    [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]] || return 1
+    _PARSED_COUNT_TOTAL="${BASH_REMATCH[1]}"
+    _PARSED_COUNT_IDLE="${BASH_REMATCH[2]}"
+}
+
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
 # Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE (declared in lib/globals).
 load_pr_invocation_counts() {
@@ -77,12 +93,9 @@ load_pr_invocation_counts() {
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
-    # Match both tokens from the whole line at once — extracting total/idle independently via
-    # ${line%% *}/${line##* *} would alias a corrupt single-token file ("7") into BOTH counters,
-    # letting a bogus total silently exhaust the idle budget (#1103).
-    if [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
-        PR_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
-        PR_INVOCATION_IDLE="${BASH_REMATCH[2]}"
+    if parse_two_token_counters "${line}"; then
+        PR_INVOCATION_TOTAL="${_PARSED_COUNT_TOTAL}"
+        PR_INVOCATION_IDLE="${_PARSED_COUNT_IDLE}"
     fi
     return 0
 }
@@ -111,31 +124,40 @@ runaway_blocked_marker_file_path() {
     printf '%s/%s_%s.runaway-blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
 }
 
-# Writes the marker for an item observed carrying the Blocked label whose invocation total is
-# already at/above its cap (#1115) — covers blocks NOT authored by oneshot's own backstop (e.g.
-# the code-review workflow's "3+ rounds" rule), which never call this on their own. Without this,
-# a human clearing such a Blocked label is a no-op: the total survives untouched, and the very
-# next tick that reaches the item reloads the same at-or-over-cap total and re-blocks it before
-# any new work happens — turning "unblock" into a silent instant re-block. Best-effort: a failure
-# to write only means a future clear-the-label won't auto-reset, not that anything breaks now.
+# Writes the marker for an item observed carrying the Blocked label whose invocation total OR
+# idle counter is already at/above its cap (#1115, extended to the idle cap by #1264 review) —
+# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review workflow's "3+
+# rounds" rule, or block_pr_for_idle_exhausted_failure/_review / block_issue_for_idle_exhausted_
+# no_progress), none of which call this on their own. Without this, a human clearing such a
+# Blocked label is a no-op: the counters survive untouched, and the very next tick that reaches
+# the item reloads the same at-or-over-cap value and re-blocks it before any new work happens —
+# turning "unblock" into a silent instant re-block. Checking the idle cap too matters just as
+# much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
+# after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
+# failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
+# now.
 mark_capped_block_for_forgiveness() {
-    local item_type="$1" item_id="$2" total cap
+    local item_type="$1" item_id="$2" total total_cap idle idle_cap
     case "${item_type}" in
         PullRequest)
             load_pr_invocation_counts "${item_id}"
             total="${PR_INVOCATION_TOTAL}"
-            cap="${MAX_PR_TOTAL_INVOCATIONS}"
+            total_cap="${MAX_PR_TOTAL_INVOCATIONS}"
+            idle="${PR_INVOCATION_IDLE}"
+            idle_cap="${MAX_PR_IDLE_INVOCATIONS}"
             ;;
         Issue)
             load_issue_invocation_counts "${item_id}"
             total="${ISSUE_INVOCATION_TOTAL}"
-            cap="${MAX_ISSUE_TOTAL_INVOCATIONS}"
+            total_cap="${MAX_ISSUE_TOTAL_INVOCATIONS}"
+            idle="${ISSUE_INVOCATION_IDLE}"
+            idle_cap="${MAX_ISSUE_IDLE_INVOCATIONS}"
             ;;
         *)
             return 0
             ;;
     esac
-    [ "${total}" -ge "${cap}" ] || return 0
+    { [ "${total}" -ge "${total_cap}" ] || [ "${idle}" -ge "${idle_cap}" ]; } || return 0
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
     touch "$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
         || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
@@ -247,36 +269,55 @@ COMMENT
     return 0
 }
 
-# Per-Issue invocation guard — same runaway-backstop idea as the PR guard above, but Issues have
-# no idle-park case (an unchanged Issue is simply skipped, never re-invoked), so this only tracks
-# a single total: every agent invocation ever spent on this Issue while it has no active PR.  At
-# MAX_ISSUE_TOTAL_INVOCATIONS the Issue is marked Blocked for a human (#1093) — this closes the
-# gap where a non-converging Issue (agent keeps planning/erroring, never opens a PR) re-fires
-# every tick forever, since PullRequest_*.invocations only starts counting once a PR exists.
+# Per-Issue invocation guard — same runaway-backstop idea as the PR guard above. The guard file
+# holds two space-separated counters, "<total> <idle>", same shape as the PR guard (#1264):
+#   total — every agent invocation ever spent on this Issue while it has no active PR.  At
+#           MAX_ISSUE_TOTAL_INVOCATIONS the Issue is marked Blocked for a human (#1093) — this
+#           closes the gap where a non-converging Issue (agent keeps planning/erroring, never
+#           opens a PR) re-fires every tick forever, since PullRequest_*.invocations only starts
+#           counting once a PR exists.
+#   idle  — consecutive re-invocations of a plan-approved Issue whose fingerprint had not changed
+#           (the last invocation produced no durable change — e.g. only a status-update comment,
+#           no new PR). At MAX_ISSUE_IDLE_INVOCATIONS the Issue is marked Blocked for a human
+#           (#1264) instead of silently sitting at "unchanged — skipping" forever; an Issue whose
+#           plan is not (yet) approved never touches this counter at all.
+# A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts falls
+# back to parsing just that token when parse_two_token_counters doesn't match, defaulting idle to
+# 0, so no migration is needed.
 issue_invocation_guard_file_path() {
     local item_id="$1"
     invocation_guard_file_path "Issue" "${item_id}"
 }
 
-# Reads the saved total invocation count for an Issue, defaulting missing/corrupt values to 0.
-# Sets global ISSUE_INVOCATION_TOTAL (declared in lib/globals).
+# Reads the saved "<total> <idle>" counters for an Issue, defaulting missing/corrupt values to 0.
+# Sets globals ISSUE_INVOCATION_TOTAL and ISSUE_INVOCATION_IDLE (declared in lib/globals).
 load_issue_invocation_counts() {
-    local item_id="$1" guard_file total
+    local item_id="$1" guard_file line
     ISSUE_INVOCATION_TOTAL=0
+    ISSUE_INVOCATION_IDLE=0
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
-    total=$(cat "${guard_file}" 2>/dev/null)
-    total="${total%% *}"
-    [[ "${total}" =~ ^[0-9]+$ ]] && ISSUE_INVOCATION_TOTAL="${total}"
+    line=$(cat "${guard_file}" 2>/dev/null)
+    if parse_two_token_counters "${line}"; then
+        ISSUE_INVOCATION_TOTAL="${_PARSED_COUNT_TOTAL}"
+        ISSUE_INVOCATION_IDLE="${_PARSED_COUNT_IDLE}"
+    elif [[ "${line%% *}" =~ ^[0-9]+$ ]]; then
+        # Recovers total from the leading token alone (idle stays 0) for any line that isn't a
+        # clean two-token pair — a legacy pre-#1264 single-token file, or a torn/corrupted write
+        # with trailing junk after a numeric total. Deriving ONLY total this way, never idle, does
+        # not reintroduce the #1103 aliasing bug (which came from extracting both ends of a lone
+        # token independently) - it only prevents a recoverable total from being silently zeroed.
+        ISSUE_INVOCATION_TOTAL="${line%% *}"
+    fi
     return 0
 }
 
-# Persists the total invocation count for an Issue.
+# Persists the "<total> <idle>" counters for an Issue.
 save_issue_invocation_counts() {
-    local item_id="$1" total="$2" guard_file
+    local item_id="$1" total="$2" idle="$3" guard_file
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
-    printf '%s\n' "${total}" > "${guard_file}" \
+    printf '%s %s\n' "${total}" "${idle}" > "${guard_file}" \
         || die "Failed to write invocation guard file: ${guard_file}"
 }
 
@@ -289,7 +330,7 @@ reset_issue_invocation_counts_if_capped() {
     local item_id="$1" marker_file
     marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
     if [ -f "${marker_file}" ]; then
-        save_issue_invocation_counts "${item_id}" 0
+        save_issue_invocation_counts "${item_id}" 0 0
         rm -f "${marker_file}" 2>/dev/null || true
     fi
 }
