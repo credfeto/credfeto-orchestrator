@@ -9988,9 +9988,7 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-    fi
+    [ ! -f "${GH_CALL_LOG}" ]
 }
 
 @test "main still performs non-agentic rebase for a BEHIND PR even with auto-merge armed (#1256 regression guard)" {
