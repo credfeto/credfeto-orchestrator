@@ -68,6 +68,24 @@ pr_invocation_guard_file_path() {
     invocation_guard_file_path "PullRequest" "${item_id}"
 }
 
+# Parses a "<total> <idle>" counter-guard-file line into _PARSED_COUNT_TOTAL/_PARSED_COUNT_IDLE
+# (both reset to 0 first), returning 1 with both left at 0 if the line doesn't match. Shared by
+# load_pr_invocation_counts and load_issue_invocation_counts: matching both tokens from the WHOLE
+# line at once — rather than extracting total/idle independently via ${line%% *}/${line##* *} —
+# is what stops a corrupt single-token file ("7") aliasing into BOTH counters, letting a bogus
+# total silently exhaust the idle budget (#1103); keeping that one piece of logic in a single
+# place instead of copy-pasted is what actually matters here.
+_PARSED_COUNT_TOTAL=0
+_PARSED_COUNT_IDLE=0
+parse_two_token_counters() {
+    local line="$1"
+    _PARSED_COUNT_TOTAL=0
+    _PARSED_COUNT_IDLE=0
+    [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]] || return 1
+    _PARSED_COUNT_TOTAL="${BASH_REMATCH[1]}"
+    _PARSED_COUNT_IDLE="${BASH_REMATCH[2]}"
+}
+
 # Reads the saved "<total> <idle>" counters for a PR, defaulting missing/corrupt values to 0.
 # Sets globals PR_INVOCATION_TOTAL and PR_INVOCATION_IDLE (declared in lib/globals).
 load_pr_invocation_counts() {
@@ -77,12 +95,9 @@ load_pr_invocation_counts() {
     guard_file=$(pr_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
-    # Match both tokens from the whole line at once — extracting total/idle independently via
-    # ${line%% *}/${line##* *} would alias a corrupt single-token file ("7") into BOTH counters,
-    # letting a bogus total silently exhaust the idle budget (#1103).
-    if [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
-        PR_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
-        PR_INVOCATION_IDLE="${BASH_REMATCH[2]}"
+    if parse_two_token_counters "${line}"; then
+        PR_INVOCATION_TOTAL="${_PARSED_COUNT_TOTAL}"
+        PR_INVOCATION_IDLE="${_PARSED_COUNT_IDLE}"
     fi
     return 0
 }
@@ -259,8 +274,9 @@ COMMENT
 #           no new PR). At MAX_ISSUE_IDLE_INVOCATIONS the Issue is marked Blocked for a human
 #           (#1264) instead of silently sitting at "unchanged — skipping" forever; an Issue whose
 #           plan is not (yet) approved never touches this counter at all.
-# A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts parses
-# just the first token in that case and defaults idle to 0, so no migration is needed.
+# A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts falls
+# back to parsing just that token when parse_two_token_counters doesn't match, defaulting idle to
+# 0, so no migration is needed.
 issue_invocation_guard_file_path() {
     local item_id="$1"
     invocation_guard_file_path "Issue" "${item_id}"
@@ -275,13 +291,9 @@ load_issue_invocation_counts() {
     guard_file=$(issue_invocation_guard_file_path "${item_id}")
     [ -f "${guard_file}" ] || return 0
     line=$(cat "${guard_file}" 2>/dev/null)
-    # Match both tokens from the whole line at once, same as load_pr_invocation_counts — extracting
-    # total/idle independently would alias a corrupt single-token file ("7") into BOTH counters
-    # (#1103). A legacy single-token file (pre-#1264) simply doesn't match this two-token regex, so
-    # it falls through to the single-token fallback below instead, leaving idle at 0.
-    if [[ "${line}" =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
-        ISSUE_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
-        ISSUE_INVOCATION_IDLE="${BASH_REMATCH[2]}"
+    if parse_two_token_counters "${line}"; then
+        ISSUE_INVOCATION_TOTAL="${_PARSED_COUNT_TOTAL}"
+        ISSUE_INVOCATION_IDLE="${_PARSED_COUNT_IDLE}"
     elif [[ "${line}" =~ ^([0-9]+)$ ]]; then
         ISSUE_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
     fi

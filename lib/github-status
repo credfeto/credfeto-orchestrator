@@ -155,7 +155,6 @@ block_issue_for_idle_exhausted_no_progress() {
     apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
-
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
 # can run (phases that only advance the board — e.g. a clean review — leave the fingerprint
 # unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the

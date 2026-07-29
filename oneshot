@@ -231,7 +231,7 @@ main() {
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
-    local issue_json issue_state issue_fp saved_issue_fp
+    local issue_json issue_state issue_fp saved_issue_fp plan_approved
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
@@ -569,7 +569,6 @@ main() {
                 # later call.
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-                local plan_approved
                 plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
@@ -928,7 +927,6 @@ main() {
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
-            local plan_approved
             plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
             # Computed fresh here (after ensure_repo_current's fetch above), not reused from the
             # fingerprint-unchanged skip decision earlier in this iteration: that check only runs

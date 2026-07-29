@@ -820,6 +820,29 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+# --- parse_two_token_counters (shared by load_pr_invocation_counts / load_issue_invocation_counts, #1264) ---
+
+@test "parse_two_token_counters extracts both tokens from a matching line" {
+    parse_two_token_counters "7 3"
+    [ "${_PARSED_COUNT_TOTAL}" -eq 7 ]
+    [ "${_PARSED_COUNT_IDLE}" -eq 3 ]
+}
+
+@test "parse_two_token_counters fails and zeroes both outputs for a single-token line" {
+    _PARSED_COUNT_TOTAL=9
+    _PARSED_COUNT_IDLE=9
+    local parse_rc=0
+    parse_two_token_counters "7" || parse_rc=$?
+    [ "${parse_rc}" -ne 0 ]
+    [ "${_PARSED_COUNT_TOTAL}" -eq 0 ]
+    [ "${_PARSED_COUNT_IDLE}" -eq 0 ]
+}
+
+@test "parse_two_token_counters fails for garbage input" {
+    run parse_two_token_counters "garbage not numbers"
+    [ "${status}" -ne 0 ]
+}
+
 # --- per-PR invocation guard -----------------------------------------------
 
 @test "load_pr_invocation_counts defaults to 0/0 when no guard file exists" {
