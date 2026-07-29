@@ -67,9 +67,11 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _fetch_repo_collaborators, get_trusted_logins, require_trusted_logins, fetch_all_priorities,
 # resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_login,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
-# pr_has_depends_branch, pr_has_dependency_label, and pr_is_human_driven are declared in
-# lib/github. ensure_rules_current, clean_local_git_url_rewrites, ensure_repo_current,
-# recover_orphaned_branch, and try_nonagentic_rebase are declared in lib/git.
+# resolve_resumable_issue_branch, pr_has_depends_branch, pr_has_dependency_label, and
+# pr_is_human_driven are declared in lib/github. ensure_rules_current,
+# clean_local_git_url_rewrites, ensure_repo_current,
+# recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
+# lib/git.
 # check_required_tools and hash_sha256 are declared in lib/core.
 
 # invocation_guard_file_path, infra_failure_guard_file_path, load_infra_failure_count,
@@ -103,8 +105,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # _build_plan_approval_check, _build_plan_approval_instruction,
 # _build_trusted_commenters_section, _build_git_ssh_section,
-# _build_issue_dirty_branch_section, build_issue_claude_md, build_pr_claude_md,
-# build_issue_prompt, and build_pr_prompt are declared in lib/prompts.
+# _build_issue_dirty_branch_section, _build_issue_stale_branch_section, build_issue_claude_md,
+# build_pr_claude_md, build_issue_prompt, and build_pr_prompt are declared in lib/prompts.
 
 # run_claude_fresh, handle_claude_is_error, setup_cgroup_leaf, cleanup_dangling_images,
 # stop_ssh_agent, preload_ssh_keys, verify_gpg_signing_ready, add_gpg_podman_args,
@@ -234,6 +236,7 @@ main() {
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
+    local stale_issue_branch resumable_branch
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -272,6 +275,7 @@ main() {
         # Explicit reset — the 'local' initialiser above only fires once.
         is_skipped=false
         original_issue_id=""
+        stale_issue_branch=""
         # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
         # (no external change); consumed when persisting the PR idle counter before invocation.
         pr_idle_advance=0
@@ -579,12 +583,20 @@ main() {
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
-                    if ! recover_orphaned_branch; then
+                    if recover_orphaned_branch; then
+                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
+                    elif resumable_branch=$(resolve_resumable_issue_branch "${item_id}"); then
+                        # A stalled Issue branch: a prior agent session pushed a branch for this
+                        # issue and died before opening a pull request (#1262). This is only a
+                        # cheap heuristic gate on whether to re-run at all; the authoritative branch
+                        # name threaded into the generated CLAUDE.md is recomputed later, after
+                        # ensure_repo_current's fetch, in case origin/main has moved since.
+                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
+                    else
                         info "Issue #${item_id} in ${item_repo} unchanged — skipping"
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
-                    info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
                 fi
 
                 # A bot-created PR that a human has taken over (zero bot-authored commits) is
@@ -933,8 +945,17 @@ main() {
         if [ "${item_type}" = "Issue" ]; then
             local plan_approved
             plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
+            # Computed fresh here (after ensure_repo_current's fetch above), not reused from the
+            # fingerprint-unchanged skip decision earlier in this iteration: that check only runs
+            # when the fingerprint matched the saved one, so a session that changed the Issue
+            # (e.g. posted a comment) after pushing a branch and dying would otherwise reach here
+            # with no guidance to resume the existing branch, risking a duplicate one (#1262
+            # review). Placed after every abort point above (rate limit, missing AI instructions,
+            # runaway backstop, trusted-logins) so a paid gh call is never spent on an Issue that
+            # bails out before reaching the agent invocation anyway.
+            stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}") || stale_issue_branch=""
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')

@@ -27,7 +27,7 @@ happens.
 | Not Started | `oneshot` | Card created; nothing has happened yet. |
 | Planning | the agent | A plan has been posted; waiting for human review. |
 | Approved | **a human, manually** | The plan is approved — the agent may start implementing. |
-| Development | the agent | Actively writing code / fixing things. |
+| Development | the agent | Actively writing code / fixing things. Set only once the draft pull request (with its placeholder CHANGELOG.md entry) has actually been created — not at the start of implementation — so a session that dies mid-step (e.g. after the placeholder commit but before the PR is opened) doesn't leave the board looking further along than the work really is ([#1262](https://github.com/credfeto/credfeto-orchestrator/issues/1262)). |
 | AI Simplify | the agent | Running the automated cleanup pass before review. |
 | AI Review | the agent | Running an automated code review pass. |
 | AI Security Review | the agent | Running an automated security review pass. |

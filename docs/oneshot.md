@@ -37,8 +37,9 @@ done next.
      other than the bot.
    - Compute a **fingerprint** of its current state and compare it to the fingerprint saved the
      last time this item was looked at. If they match, nothing has changed since last time —
-     skip it (see [fingerprinting.md](fingerprinting.md) for exactly how this works, including a
-     real bug this caused).
+     skip it, unless the local checkout was left on an orphaned or stalled branch for this Issue
+     (see [fingerprinting.md](fingerprinting.md) for exactly how fingerprinting works, and both of
+     these bypasses, including a real bug each one caused).
    - If none of the above applies: this is the item to work on this run. Build the exact
      instructions (a generated `CLAUDE.md`, see [workflow-board.md](workflow-board.md) for what
      goes in it) and launch one agent container session against it (see

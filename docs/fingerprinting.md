@@ -119,6 +119,35 @@ fingerprint text. See
 [fingerprinting.instructions.md](../ai/local/fingerprinting.instructions.md)
 for the exact rule on when to bump it.
 
+## When "unchanged" still isn't the end of the story
+
+An unchanged fingerprint means the Issue's own GitHub-visible state hasn't moved — but that's
+not quite the same as "nothing needs to happen." Two situations bypass the skip even when the
+fingerprint matches, both checked immediately after the fingerprint comparison, before oneshot
+gives up on the Issue for this tick:
+
+- **An orphaned local checkout.** If the orchestrator's own local clone was left checked out on
+  a branch that no longer exists on origin (`recover_orphaned_branch`, `lib/git`) — most often
+  because a human deleted a merged or abandoned branch — the checkout is reset to `main` and the
+  Issue is re-run so a fresh session can pick up cleanly.
+- **A stalled Issue branch on origin ([#1262](https://github.com/credfeto/credfeto-orchestrator/issues/1262)).**
+  If an earlier agent session pushed a branch for this Issue (matching the `<type>/<issue>-<slug>`
+  naming convention, with commits ahead of `main`) and then died before opening the draft pull
+  request, the Issue's own fields never change again — the same blind spot that caused the
+  board-approval bug above, but for "work is provably in flight" instead of "a human approved
+  this." `find_stale_issue_branch` (`lib/git`) detects the candidate branch from local git state
+  alone (no extra network cost in the common case, since it's checked right after
+  `recover_orphaned_branch`, which already fetches whenever the checkout isn't already on
+  `main`); `resolve_resumable_issue_branch` (`lib/github`) wraps it with one `gh pr list --head
+  <branch> --state open` call — paid only when a candidate exists — to confirm no pull request
+  already covers it, a check the bot-authorship-based stand-offs elsewhere can't make since they
+  only ever see PRs the bot itself opened. Because this whole bypass only runs when the
+  fingerprint is unchanged, the same resumable-branch check also re-runs unconditionally in the
+  work block right before the agent's `CLAUDE.md` is generated — a session that changed the Issue
+  (e.g. posted a comment) after pushing the branch and dying would otherwise reach that point with
+  no memory of the earlier check. Either way, the generated `CLAUDE.md` tells the agent to check
+  out and continue the existing branch instead of creating a duplicate one.
+
 ### Version history
 
 Individual fields (comments, reviews, assignees, and so on) were added to the fingerprint

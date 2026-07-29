@@ -79,8 +79,32 @@ GITSSH
 # silently re-blocking the issue instead — the dirty state had nothing to do with the issue's
 # own content, and reads as unrelated confusion, not a legitimate blocker.
 _build_issue_dirty_branch_section() {
-    local dirty_branch="$1" repo_path="$2"
+    local dirty_branch="$1" repo_path="$2" stale_branch="${3:-}"
     [ -n "${dirty_branch}" ] || return 0
+    if [ -n "${stale_branch}" ] && [ "${dirty_branch}" = "${stale_branch}" ]; then
+        # The checkout is dirty on THIS issue's own resumable branch (#1262 review) — not the
+        # generic "unrelated leftover session" case below. An earlier session for this issue
+        # pushed this branch and then made further, uncommitted edits before dying: those changes
+        # are very likely genuine in-progress work on THIS issue's plan, not unrelated confusion,
+        # so the generic "discard the common case" instruction below would risk losing real work.
+        # This case fully replaces both the generic dirty-branch cleanup and the separate
+        # stale-branch resumption note (_build_issue_stale_branch_section skips rendering when
+        # its stale_branch matches this dirty_branch) so the agent only ever sees one, consistent
+        # instruction for this branch rather than two that could contradict each other.
+        cat <<EOF
+
+WORKING TREE IS DIRTY ON THIS ISSUE'S OWN RESUMABLE BRANCH (MANDATORY — read before step 1 below):
+The checkout at ${repo_path} is on branch '${dirty_branch}' with uncommitted changes. This is the
+SAME branch an earlier session for this issue pushed and then died before opening a pull request
+— these uncommitted changes are very likely further, genuine progress on this issue, not leftover
+state from something unrelated. Do NOT discard them.
+a. git -C ${repo_path} status   (inspect what is there)
+b. git -C ${repo_path} diff     (review the uncommitted changes)
+c. If they are clearly unrelated to this issue (rare): stash them first — git -C ${repo_path} stash — so nothing is lost, then continue on this branch anyway.
+Stay on '${dirty_branch}' and continue the plan from here — do NOT reset to main and do NOT create a new branch (see step 7). Once ready, commit, push, and create the draft pull request as step 7 describes.
+EOF
+        return 0
+    fi
     cat <<EOF
 
 WORKING TREE IS DIRTY (MANDATORY — resolve before step 1 below):
@@ -93,8 +117,46 @@ Only proceed to step 1 once the working tree is clean and on main. This is a mec
 EOF
 }
 
+# Output the stalled-branch resumption note for build_issue_claude_md, when oneshot has detected
+# a branch on origin for this issue with commits ahead of main and no open pull request — the
+# signature of an earlier agent session that pushed work and died before opening the draft PR
+# (#1262). Outputs nothing when no stale branch was detected, or when the checkout is already
+# dirty on this exact branch — that combined case is fully covered by
+# _build_issue_dirty_branch_section above instead, so the agent never sees two sections with
+# potentially conflicting instructions for the same branch.
+_build_issue_stale_branch_section() {
+    local stale_branch="$1" repo_path="$2" dirty_branch="${3:-}"
+    [ -n "${stale_branch}" ] || return 0
+    [ "${stale_branch}" = "${dirty_branch}" ] && return 0
+    cat <<EOF
+
+AN EXISTING BRANCH FOR THIS ISSUE ALREADY EXISTS (MANDATORY — read before step 7):
+Branch '${stale_branch}' at ${repo_path} already has commits ahead of main and no open pull
+request — an earlier session pushed work here and died before opening the draft PR. Step 7 below
+already tells you to check it out and continue on it instead of creating a new one; this note is
+just the advance warning of why.
+EOF
+}
+
+# Output step 7 of build_issue_claude_md (create the branch/placeholder-changelog/draft-PR
+# sequence), varying its own text on whether a stale resumable branch was detected. Step 7's
+# instruction must not rely solely on the earlier _build_issue_stale_branch_section aside to
+# override the default "create a new branch" text — an agent that only skims or forgets that
+# aside must still see the right instruction right here, where it actually acts (#1262 review).
+_build_issue_branch_step() {
+    local item_id="$1" repo_path="$2" stale_branch="$3"
+    local board_note='Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to "Development" (if board data is present above) — do NOT advance the board before the draft PR exists, so a session that dies mid-step does not leave the board looking further along than the work actually is (#1262). Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it.'
+    if [ -n "${stale_branch}" ]; then
+        printf 'When ready to start work: an existing branch for this issue already exists (see the mandatory note above) — check it out and continue on it INSTEAD OF creating a new one: git -C %s checkout %s. It may already contain only a placeholder CHANGELOG.md entry from an earlier session; implement the plan on top of it, then push and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Do NOT create a second branch for this issue. %s' \
+            "${repo_path}" "${stale_branch}" "${item_id}" "${board_note}"
+    else
+        printf 'When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Example: gh pr create --draft --title "..." --body $'"'"'...\n\nCloses #%s'"'"'. %s' \
+            "${item_id}" "${item_id}" "${board_note}"
+    fi
+}
+
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}"
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -107,7 +169,8 @@ $(_build_trusted_commenters_section "${trusted_logins}")
 $(_build_git_ssh_section)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
 $(_build_wf_section)
-$(_build_issue_dirty_branch_section "${dirty_branch}" "${repo_path}")
+$(_build_issue_dirty_branch_section "${dirty_branch}" "${repo_path}" "${stale_branch}")
+$(_build_issue_stale_branch_section "${stale_branch}" "${repo_path}" "${dirty_branch}")
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the issue, its comments, labels, and the Workflow board status above).
@@ -146,9 +209,9 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}")
 
 4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-5. (Implementation mode) Update the Workflow board status to "Development" (if board data is present above), then proceed with the plan from the plan comment.
+5. (Implementation mode) Proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
-7. When ready to start work: create a new branch BEFORE making any changes to the repo, commit a placeholder CHANGELOG.md entry, push upstream, and create a draft pull request. The PR body MUST include the line "Closes #${item_id}" so GitHub automatically closes the issue when the PR is merged. Example: gh pr create --draft --title "..." --body $'...\n\nCloses #${item_id}'. Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it.
+7. $(_build_issue_branch_step "${item_id}" "${repo_path}" "${stale_branch}")
 8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
 9. MANDATORY: Never run git commit, git push, or any other bounded git operation as a background task — always run them in the foreground so their exit code is immediately available (see the container-vs-GitHub rule above: pre-commit hooks taking several minutes is normal — WAIT for the foreground command to return no matter how long it takes; only a genuinely hung command, not a merely slow one, needs diagnosing). If you use the Monitor tool for any background process, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever. Use a branch-agnostic string from the command's actual output (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings).
 10. MANDATORY: Never pass a tool-level timeout that could truncate pre-commit, a git commit in a repo with pre-commit enabled, dotnet test, npm test, or bun test — these must run to completion. Pass the maximum available timeout rather than a short one; if even that is not enough, use run_in_background and Monitor instead of accepting a truncated run. A killed run does not just fail — it skips the target process's own cleanup (bash EXIT traps, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs (a killed bats run once left thousands of orphaned fixture directories under a shared runtime directory, which went on to break an unrelated tool that walked the same path).
