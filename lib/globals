@@ -195,6 +195,11 @@ ENV_UNBLOCK_ATTEMPTS=0
 ISSUE_INVOCATION_TOTAL=0
 ISSUE_INVOCATION_IDLE=0
 
+# Output pair for parse_two_token_counters (lib/state) — shared by load_pr_invocation_counts and
+# load_issue_invocation_counts, populated fresh on every call.
+_PARSED_COUNT_TOTAL=0
+_PARSED_COUNT_IDLE=0
+
 # Workflow project cache — populated by discover_or_create_workflow_project (lib/workflow-board).
 # Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode).
 _WF_PROJECT_ID=""

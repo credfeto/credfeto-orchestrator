@@ -975,6 +975,17 @@ teardown() {
     [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
 }
 
+@test "load_issue_invocation_counts recovers total from a torn/corrupted line with trailing junk after a numeric total" {
+    # A partial/torn write (crash mid-write, disk full) can leave a numeric total followed by
+    # garbage rather than a clean second token. Recovering total here (idle defaults to 0) does
+    # not reintroduce the #1103 aliasing bug, since idle is never derived from the trailing junk.
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf '7 gar\n' > "${SESSION_BASE_DIR}/Issue_99.invocations"
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 7 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
+}
+
 @test "reset_issue_invocation_counts_if_capped resets both counters and clears the marker when the runaway-blocked marker is present" {
     save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
@@ -1041,6 +1052,32 @@ teardown() {
     [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_116.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness writes the marker for a PR at the idle cap even when total is well below its cap (#1264 review)" {
+    save_pr_invocation_counts 42 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    mark_capped_block_for_forgiveness PullRequest 42
+    [ -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness writes the marker for an Issue at the idle cap even when total is well below its cap (#1264 review)" {
+    save_issue_invocation_counts 99 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    mark_capped_block_for_forgiveness Issue 99
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "mark_capped_block_for_forgiveness then reset forgives an Issue blocked purely by idle exhaustion (#1264 review)" {
+    # Without checking the idle cap, docs/oneshot.md's claim that "both caps reset automatically
+    # once a human clears Blocked" was false for an idle-only block: no marker meant clearing the
+    # label was a no-op, and the still-unchanged fingerprint re-blocked the Issue on the very next
+    # tick.
+    save_issue_invocation_counts 99 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    mark_capped_block_for_forgiveness Issue 99
+    reset_issue_invocation_counts_if_capped 99
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- environment-block auto-unblock (#1118) ---------------------------------

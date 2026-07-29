@@ -69,14 +69,12 @@ pr_invocation_guard_file_path() {
 }
 
 # Parses a "<total> <idle>" counter-guard-file line into _PARSED_COUNT_TOTAL/_PARSED_COUNT_IDLE
-# (both reset to 0 first), returning 1 with both left at 0 if the line doesn't match. Shared by
-# load_pr_invocation_counts and load_issue_invocation_counts: matching both tokens from the WHOLE
-# line at once — rather than extracting total/idle independently via ${line%% *}/${line##* *} —
-# is what stops a corrupt single-token file ("7") aliasing into BOTH counters, letting a bogus
-# total silently exhaust the idle budget (#1103); keeping that one piece of logic in a single
-# place instead of copy-pasted is what actually matters here.
-_PARSED_COUNT_TOTAL=0
-_PARSED_COUNT_IDLE=0
+# (both reset to 0 first, declared in lib/globals), returning 1 with both left at 0 if the line
+# doesn't match. Shared by load_pr_invocation_counts and load_issue_invocation_counts: matching
+# both tokens from the WHOLE line at once — rather than extracting total/idle independently via
+# ${line%% *}/${line##* *} — is what stops a corrupt single-token file ("7") aliasing into BOTH
+# counters, letting a bogus total silently exhaust the idle budget (#1103); keeping that one
+# piece of logic in a single place instead of copy-pasted is what actually matters here.
 parse_two_token_counters() {
     local line="$1"
     _PARSED_COUNT_TOTAL=0
@@ -126,31 +124,40 @@ runaway_blocked_marker_file_path() {
     printf '%s/%s_%s.runaway-blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
 }
 
-# Writes the marker for an item observed carrying the Blocked label whose invocation total is
-# already at/above its cap (#1115) — covers blocks NOT authored by oneshot's own backstop (e.g.
-# the code-review workflow's "3+ rounds" rule), which never call this on their own. Without this,
-# a human clearing such a Blocked label is a no-op: the total survives untouched, and the very
-# next tick that reaches the item reloads the same at-or-over-cap total and re-blocks it before
-# any new work happens — turning "unblock" into a silent instant re-block. Best-effort: a failure
-# to write only means a future clear-the-label won't auto-reset, not that anything breaks now.
+# Writes the marker for an item observed carrying the Blocked label whose invocation total OR
+# idle counter is already at/above its cap (#1115, extended to the idle cap by #1264 review) —
+# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review workflow's "3+
+# rounds" rule, or block_pr_for_idle_exhausted_failure/_review / block_issue_for_idle_exhausted_
+# no_progress), none of which call this on their own. Without this, a human clearing such a
+# Blocked label is a no-op: the counters survive untouched, and the very next tick that reaches
+# the item reloads the same at-or-over-cap value and re-blocks it before any new work happens —
+# turning "unblock" into a silent instant re-block. Checking the idle cap too matters just as
+# much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
+# after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
+# failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
+# now.
 mark_capped_block_for_forgiveness() {
-    local item_type="$1" item_id="$2" total cap
+    local item_type="$1" item_id="$2" total total_cap idle idle_cap
     case "${item_type}" in
         PullRequest)
             load_pr_invocation_counts "${item_id}"
             total="${PR_INVOCATION_TOTAL}"
-            cap="${MAX_PR_TOTAL_INVOCATIONS}"
+            total_cap="${MAX_PR_TOTAL_INVOCATIONS}"
+            idle="${PR_INVOCATION_IDLE}"
+            idle_cap="${MAX_PR_IDLE_INVOCATIONS}"
             ;;
         Issue)
             load_issue_invocation_counts "${item_id}"
             total="${ISSUE_INVOCATION_TOTAL}"
-            cap="${MAX_ISSUE_TOTAL_INVOCATIONS}"
+            total_cap="${MAX_ISSUE_TOTAL_INVOCATIONS}"
+            idle="${ISSUE_INVOCATION_IDLE}"
+            idle_cap="${MAX_ISSUE_IDLE_INVOCATIONS}"
             ;;
         *)
             return 0
             ;;
     esac
-    [ "${total}" -ge "${cap}" ] || return 0
+    { [ "${total}" -ge "${total_cap}" ] || [ "${idle}" -ge "${idle_cap}" ]; } || return 0
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
     touch "$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
         || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
@@ -294,8 +301,13 @@ load_issue_invocation_counts() {
     if parse_two_token_counters "${line}"; then
         ISSUE_INVOCATION_TOTAL="${_PARSED_COUNT_TOTAL}"
         ISSUE_INVOCATION_IDLE="${_PARSED_COUNT_IDLE}"
-    elif [[ "${line}" =~ ^([0-9]+)$ ]]; then
-        ISSUE_INVOCATION_TOTAL="${BASH_REMATCH[1]}"
+    elif [[ "${line%% *}" =~ ^[0-9]+$ ]]; then
+        # Recovers total from the leading token alone (idle stays 0) for any line that isn't a
+        # clean two-token pair — a legacy pre-#1264 single-token file, or a torn/corrupted write
+        # with trailing junk after a numeric total. Deriving ONLY total this way, never idle, does
+        # not reintroduce the #1103 aliasing bug (which came from extracting both ends of a lone
+        # token independently) - it only prevents a recoverable total from being silently zeroed.
+        ISSUE_INVOCATION_TOTAL="${line%% *}"
     fi
     return 0
 }
