@@ -172,6 +172,21 @@ Every `build-development-*.yml` workflow's `cache-to` MUST include `ignore-error
 
 GitHub's Actions Cache backend has per-repo storage/write-rate limits; with five build workflows all writing `type=gha` caches on an hourly cron plus push triggers, cache-write contention/quota exhaustion periodically fails the export with `error writing layer blob: failed to reserve cache` — **after** the actual image has already been fully pushed to ghcr.io. Without `ignore-error=true`, buildx treats that as a fatal build failure even though the image is fine; with it, a cache-export failure just logs a warning.
 
+## SBOM and Provenance (MANDATORY)
+
+Every `build-development-*.yml` workflow's `docker/build-push-action` step MUST set `sbom` and `provenance` on the push path only, matching the existing `push`/`load` conditional:
+
+```yaml
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
+```
+
+`provenance` MUST use `mode=max` (not bare `true`, which resolves to `mode=min` and omits build args/source materials — near-useless for supply-chain auditing) whenever the build args being embedded are safe to publish (cache-bust hashes, `BUILD_GIT_SHA` — none of these workflows pass secrets as build-args).
+
+Both MUST stay disabled on the `pull_request` (`load: true`) path: buildx's docker exporter used for `--load` cannot store attestation manifests, so requesting `sbom`/`provenance` there fails the build.
+
 ## File Placement
 
 - Dockerfiles: `containers/base/<stage>/Dockerfile`
