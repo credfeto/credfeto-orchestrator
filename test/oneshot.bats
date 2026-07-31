@@ -2016,6 +2016,15 @@ teardown() {
     printf '%s' "${result}" | jq -e 'index("copilot-pull-request-reviewer") != null' > /dev/null
 }
 
+@test "get_trusted_logins includes github-advanced-security[bot]" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS=""
+    make_stub gh 'printf ""'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("github-advanced-security[bot]") != null' > /dev/null
+}
+
 @test "get_trusted_logins includes whitelisted users from WHITELISTED_USERS" {
     set_repo_context "myorg/myrepo"
     WHITELISTED_USERS="trusted1,trusted2"
