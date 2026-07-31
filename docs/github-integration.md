@@ -15,6 +15,7 @@ A list of trusted GitHub logins is built fresh for each repository, from:
 - The repository's owner.
 - Every collaborator on the repository (fetched from GitHub directly, not hand-maintained).
 - GitHub's own automated Copilot code-review bot.
+- GitHub's own Advanced Security (code scanning) bot.
 - An explicit extra allow-list an operator can configure (`WHITELISTED_USERS`).
 
 This list gates two separate things: whether a comment/review counts towards a

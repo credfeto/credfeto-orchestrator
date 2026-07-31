@@ -20,7 +20,8 @@ _fetch_repo_collaborators() {
 }
 
 # Returns a JSON array of trusted GitHub logins for the current repo context.
-# Includes: OWNER, repo collaborators, the GitHub Copilot reviewer bot, and WHITELISTED_USERS.
+# Includes: OWNER, repo collaborators, GitHub's own Copilot reviewer and Advanced Security
+# (code scanning) bots, and WHITELISTED_USERS.
 # The result is cached in _TRUSTED_LOGINS_JSON; cache is cleared by set_repo_context.
 # Returns non-zero (and leaves _TRUSTED_LOGINS_JSON empty) if the collaborators list cannot be
 # fetched after retrying — callers must skip the item this tick rather than proceed with a
@@ -39,6 +40,7 @@ get_trusted_logins() {
     done <<< "${collaborators}"
 
     logins+=("copilot-pull-request-reviewer")
+    logins+=("github-advanced-security[bot]")
 
     if [ -n "${WHITELISTED_USERS}" ]; then
         local user remainder="${WHITELISTED_USERS}"
