@@ -8276,6 +8276,102 @@ STUBEOF
     [ "${output}" = "Human Review" ]
 }
 
+# --- _wf_status_ordinal (#1276) ---------------------------------------------
+
+@test "_wf_status_ordinal returns the index of a known status name" {
+    run _wf_status_ordinal "Not Started"
+    [ "${output}" = "0" ]
+    run _wf_status_ordinal "Development"
+    [ "${output}" = "3" ]
+    run _wf_status_ordinal "Complete"
+    [ "${output}" = "9" ]
+}
+
+@test "_wf_status_ordinal returns empty for an unrecognised or blank status name" {
+    run _wf_status_ordinal "Bogus"
+    [ -z "${output}" ]
+    run _wf_status_ordinal ""
+    [ -z "${output}" ]
+}
+
+# --- sync_pr_workflow_status_from_linked_issues (#1276) ----------------------
+
+@test "sync_pr_workflow_status_from_linked_issues advances a PR whose linked issue is further along" {
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'Development' ;;
+            412) printf 'Unknown' ;;
+        esac
+    }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf "383\n"'
+
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    grep -q 'PullRequest 412 Development' "${status_log}"
+}
+
+@test "sync_pr_workflow_status_from_linked_issues never lowers a PR's card that is already ahead of its issue" {
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'Development' ;;
+            412) printf 'AI Review' ;;
+        esac
+    }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf "383\n"'
+
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ ! -f "${status_log}" ]
+}
+
+@test "sync_pr_workflow_status_from_linked_issues floors the mirrored status at Development even if the issue is only Approved" {
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'Approved' ;;
+            412) printf 'Unknown' ;;
+        esac
+    }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf "383\n"'
+
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    grep -q 'PullRequest 412 Development' "${status_log}"
+}
+
+@test "sync_pr_workflow_status_from_linked_issues falls back to first-touch Not Started when there is no linked issue" {
+    _WF_PROJECT_ID="PVT_test"
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf ""'
+
+    sync_pr_workflow_status_from_linked_issues 500 "true"
+    grep -q 'PullRequest 500 Not Started' "${status_log}"
+}
+
+@test "sync_pr_workflow_status_from_linked_issues with no linked issue and not first touch does nothing" {
+    _WF_PROJECT_ID="PVT_test"
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf ""'
+
+    sync_pr_workflow_status_from_linked_issues 500 "false"
+    [ ! -f "${status_log}" ]
+}
+
+@test "sync_pr_workflow_status_from_linked_issues is a no-op when the board is not configured" {
+    _WF_PROJECT_ID=""
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_log}"
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ ! -f "${call_log}" ]
+}
+
 # --- coarse_status_for_substatus (#1136) ----------------------------------------
 
 @test "coarse_status_for_substatus maps Not Started and Planning to To Do" {

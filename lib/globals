@@ -236,6 +236,15 @@ declare -gA _WF_ITEM_STATUS_OPTION_ID
 # Per-repo fetch guard: value "1" means fetch_board_item_statuses has already run for that repo.
 declare -gA _WF_ITEM_STATUS_FETCHED
 
+# Ordered Workflow Status option names, earliest first. Defines the ordinal used by
+# sync_pr_workflow_status_from_linked_issues (lib/workflow-board) to compare a PR's card
+# against its linked issue's without hardcoding numeric ranks at each call site, and to
+# guarantee that mirror never moves a card backward.
+_WF_STATUS_ORDER=(
+    "Not Started" "Planning" "Approved" "Development" "AI Simplify" "AI Review"
+    "AI Security Review" "AI Coverage" "Human Review" "Complete"
+)
+
 # How long (seconds) a disk-persisted project cache entry stays valid before
 # discover_or_create_workflow_project falls back to a live re-discovery. Override in the
 # environment; the project/field/option IDs are effectively permanent once set up, so the

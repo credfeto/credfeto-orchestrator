@@ -692,6 +692,77 @@ board_substatus_for_item() {
     fi
 }
 
+# Returns the ordinal (0-based index into _WF_STATUS_ORDER, lib/globals) for a Workflow Status
+# name on stdout, or nothing if the name is blank or unrecognised (e.g. "Unknown" from
+# board_substatus_for_item, meaning the item isn't on the board at all).
+_wf_status_ordinal() {
+    local name="$1" i
+    [ -n "${name}" ] || return 0
+    for i in "${!_WF_STATUS_ORDER[@]}"; do
+        if [ "${_WF_STATUS_ORDER[${i}]}" = "${name}" ]; then
+            printf '%s' "${i}"
+            return 0
+        fi
+    done
+}
+
+# Keeps a PR's own Workflow-board card from lagging behind the Workflow Status already reached
+# by its linked issue(s). The issue and its PR are separate project items with independent
+# cards, and nothing else keeps them in step: oneshot used to stamp every newly-touched PR's
+# card with a hardcoded "Not Started" regardless of its issue's actual status. A PR only ever
+# exists once its issue has passed the human Approved gate, so the issue's card is always the
+# source of truth for "has this been authorised" — a PR-phase session that dies between opening
+# the draft PR and advancing its own card to "Development" otherwise leaves that card reading
+# "Not Started" indefinitely, which is indistinguishable, to a later PR-phase session reading
+# only the PR's own card, from an issue that was never approved at all (#1276).
+#
+# One-directional (issue -> PR only — never write the issue's card from the PR's; nothing in
+# this codebase may ever write "Approved" itself, see docs/workflow-board.md) and forward-only
+# (never lowers the PR's card): once the PR starts driving its own status through AI Simplify /
+# AI Review / AI Coverage / etc. it legitimately runs ahead of its issue, and this must never
+# pull it back. The floor is "Development" — a PR's card is never mirrored below that, since
+# Development is the status a PR-phase session is entitled to assume once its PR exists at all,
+# regardless of the exact status still recorded on the issue (e.g. if the issue-phase session
+# itself died before advancing the issue past "Approved").
+#
+# Safe to call every tick, not just on first touch, so a PR whose card is already stuck (like
+# #412 in recommendations-defi-dashboard) self-heals without a human having to intervene.
+#
+# Arguments: pr_number, is_first_touch ("true"/"false"). is_first_touch is only consulted for
+# the no-linked-issue fallback, to preserve the original first-touch-only "Not Started"
+# initialisation for PRs with no closing issue reference at all (e.g. dependency-update PRs,
+# which build_pr_claude_md's is_dependency_pr branch never gates on board status anyway).
+sync_pr_workflow_status_from_linked_issues() {
+    local pr_number="$1" is_first_touch="$2"
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+
+    local linked_issues
+    linked_issues=$(gh pr view "${pr_number}" --repo "${REPO_FULL}" \
+        --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[].number' 2>/dev/null) || linked_issues=""
+
+    if [ -z "${linked_issues}" ]; then
+        [ "${is_first_touch}" = "true" ] && update_workflow_status "PullRequest" "${pr_number}" "Not Started"
+        return 0
+    fi
+
+    local best_ord issue_num issue_ord
+    best_ord=$(_wf_status_ordinal "Development")
+    while IFS= read -r issue_num; do
+        [ -n "${issue_num}" ] || continue
+        issue_ord=$(_wf_status_ordinal "$(board_substatus_for_item "${issue_num}")")
+        [ -n "${issue_ord}" ] || continue
+        [ "${issue_ord}" -gt "${best_ord}" ] && best_ord="${issue_ord}"
+    done <<< "${linked_issues}"
+
+    local pr_ord
+    pr_ord=$(_wf_status_ordinal "$(board_substatus_for_item "${pr_number}")")
+    # Empty pr_ord means the PR isn't on the board yet at all ("Unknown") — always add it.
+    if [ -z "${pr_ord}" ] || [ "${best_ord}" -gt "${pr_ord}" ]; then
+        update_workflow_status "PullRequest" "${pr_number}" "${_WF_STATUS_ORDER[${best_ord}]}"
+    fi
+}
+
 # Maps a fine-grained Workflow-board sub-status to the coarse Discord status shown alongside
 # it: "Not Started"/"Planning" haven't begun real work yet; "Approved" through "Human Review"
 # are all actively in progress; "Complete" is done. An unrecognised/empty sub-status (no board
