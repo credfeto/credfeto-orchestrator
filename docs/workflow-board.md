@@ -24,7 +24,7 @@ happens.
 
 | Status | Set by | Meaning |
 | --- | --- | --- |
-| Not Started | `oneshot` | Card created; nothing has happened yet. |
+| Not Started | `oneshot` | Card created; nothing has happened yet. For a PR this is only a lasting state when the PR has no linked issue at all (e.g. a dependency-update PR) — otherwise `oneshot` immediately mirrors the linked issue's status onto it, floored at "Development" (see [Keeping a PR's card in step with its issue's](#keeping-a-prs-card-in-step-with-its-issues) below). |
 | Planning | the agent | A plan has been posted; waiting for human review. |
 | Approved | **a human, manually** | The plan is approved — the agent may start implementing. |
 | Development | the agent | Actively writing code / fixing things. Set only once the draft pull request (with its placeholder CHANGELOG.md entry) has actually been created — not at the start of implementation — so a session that dies mid-step (e.g. after the placeholder commit but before the PR is opened) doesn't leave the board looking further along than the work really is ([#1262](https://github.com/credfeto/credfeto-orchestrator/issues/1262)). |
@@ -46,10 +46,12 @@ visible decision a human has to make — everything downstream of it is automati
   [fingerprinting.md](fingerprinting.md) for the bug that happened when this fact was invisible
   to the fingerprint that gates re-checking an Issue at all.
 - **Writes**: the card's status, at specific well-defined points — e.g. "Not Started" the first
-  time an item is ever touched, or whatever status the agent itself decided to move to as part
-  of its own turn (the agent is the one actually setting "Development," "AI Review," etc. — see
-  `_build_wf_section` in `lib/prompts`, which hands the agent the raw GitHub Project field/option
-  IDs it needs to make that GraphQL call itself).
+  time an Issue is ever touched, a PR's card mirrored forward from its linked issue on every
+  tick (see [Keeping a PR's card in step with its issue's](#keeping-a-prs-card-in-step-with-its-issues)
+  below), or whatever status the agent itself decided to move to as part of its own turn (the
+  agent is the one actually setting "Development," "AI Review," etc. — see `_build_wf_section`
+  in `lib/prompts`, which hands the agent the raw GitHub Project field/option IDs it needs to
+  make that GraphQL call itself).
 
 ## How a Pull Request actually moves through these columns
 
@@ -86,6 +88,42 @@ one small enough to actually fit in the agent's context window). Progress across
 because every phase leaves something durable in GitHub for the next invocation to discover
 (a pushed commit, an updated board status, or at minimum a status comment) — a phase that does
 nothing durable is invisible to the next tick and the workflow stalls.
+
+## Keeping a PR's card in step with its issue's
+
+An Issue and its Pull Request are two separate items on the board, each with its own
+independent Workflow Status card — nothing about GitHub Projects keeps them in sync with each
+other automatically. That used to cause a real failure: `oneshot` stamped every newly-touched
+PR's card with a hardcoded "Not Started", regardless of what its linked issue's card already
+said. A PR only ever exists once its issue has passed the human Approved gate, so the issue's
+card is always further along by then — but if the session that opened the draft PR died before
+also advancing the *PR's own* card to "Development" (see the table entry above), the PR was left
+looking, to any later PR-phase session reading only its own card, exactly like an issue that was
+never approved at all. That's what happened in
+[credfeto/recommendations-defi-dashboard#412](https://github.com/credfeto/recommendations-defi-dashboard/pull/412):
+the PR-phase session read "Not Started" on the PR's own card, incorrectly fell back to the
+Issue-workflow's Approved gate (which does not apply once a PR already exists — see
+`agent-roles.instructions.md`), and blocked instead of finishing the deferred implementation
+([#1276](https://github.com/credfeto/credfeto-orchestrator/issues/1276)).
+
+`sync_pr_workflow_status_from_linked_issues` (`lib/workflow-board`) fixes this by mirroring
+every PR's linked issue's Workflow Status onto the PR's own card, every tick — not just on
+first touch, so an already-stuck PR self-heals without a human having to intervene:
+
+- **One-directional**: issue → PR only. The PR's card is never read back onto the issue's — the
+  Approved gate is enforced solely on the issue's card, and nothing may ever write "Approved"
+  itself (see Assumptions below); mirroring in the other direction would let PR-phase progress
+  leak "AI Review"/"Complete" etc. back onto the issue.
+- **Forward-only**: the PR's card is never moved backward. Once a PR starts driving its own
+  status through AI Simplify / AI Review / AI Coverage / etc. it legitimately runs ahead of its
+  issue, and the mirror must never pull it back down to match.
+- **Floored at "Development"**: a PR's card is never mirrored below "Development", regardless of
+  the issue's exact recorded status — a PR's mere existence is proof its issue was approved, even
+  if the issue-phase session that created the PR died before writing "Development" onto the
+  issue's own card too.
+- **No linked issue**: PRs with no closing-issue reference at all (dependency-update PRs) keep
+  the old first-touch-only "Not Started" initialisation, since `build_pr_claude_md`'s
+  dependency-PR branch never reads board status in the first place.
 
 ## What happens if the "Workflow" project doesn't exist yet for a repo
 

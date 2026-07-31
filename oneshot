@@ -93,15 +93,17 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
 # _WF_CACHED_REPO, _WF_CACHE, _WF_REPORTED_REPOS, _WF_CREATION_FAILED, _WF_APPROVED_ITEMS,
-# _WF_APPROVED_FETCHED, _WF_ITEM_STATUS_OPTION_ID, _WF_ITEM_STATUS_FETCHED, PROJECT_CACHE_TTL)
-# are declared in lib/globals — populated by discover_or_create_workflow_project (lib/workflow-board).
+# _WF_APPROVED_FETCHED, _WF_ITEM_STATUS_OPTION_ID, _WF_ITEM_STATUS_FETCHED, _WF_STATUS_ORDER,
+# PROJECT_CACHE_TTL) are declared in lib/globals — populated by discover_or_create_workflow_project
+# (lib/workflow-board).
 
 # project_cache_file_path, load_project_cache, save_project_cache, invalidate_project_cache,
 # _wf_ensure_status_field_option, discover_or_create_workflow_project,
 # report_missing_workflow_project, _wf_invite_trusted_collaborators, _wf_create_project,
 # update_workflow_status, fetch_board_approved_items, fetch_board_item_statuses,
-# workflow_status_name_for_option_id, board_substatus_for_item, coarse_status_for_substatus,
-# and priority_for_labels are declared in lib/workflow-board.
+# workflow_status_name_for_option_id, board_substatus_for_item, _wf_status_ordinal,
+# sync_pr_workflow_status_from_linked_issues, coarse_status_for_substatus, and
+# priority_for_labels are declared in lib/workflow-board.
 
 # _build_plan_approval_check, _build_plan_approval_instruction,
 # _build_trusted_commenters_section, _build_git_ssh_section,
@@ -948,12 +950,18 @@ main() {
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
 
-        # Initialise the board to "Not Started" only on the first-ever touch of the item, so
-        # re-invocations never clobber a phase the agent has already advanced the board to. This
-        # must happen BEFORE invoke_claude — the agent's own session can move the board forward
-        # during this very invocation, and setting it afterwards would clobber that.
+        # PRs: mirror the linked issue's Workflow Status onto this PR's own card (forward-only,
+        # floor "Development" — see sync_pr_workflow_status_from_linked_issues, lib/workflow-
+        # board) every tick, not just first touch, so a card left behind by a session that died
+        # between opening the draft PR and advancing it (#1276) self-heals. This must happen
+        # BEFORE invoke_claude — the agent's own session can move the board forward during this
+        # very invocation, and setting it afterwards would clobber that.
+        #
+        # Issues: initialise the board to "Not Started" only on the first-ever touch of the
+        # item, so re-invocations never clobber a phase the agent has already advanced the
+        # board to.
         if [ "${item_type}" = "PullRequest" ]; then
-            [ "${pr_first_touch}" = "true" ] && update_workflow_status "${item_type}" "${item_id}" "Not Started"
+            sync_pr_workflow_status_from_linked_issues "${item_id}" "${pr_first_touch}"
         elif [ "${item_type}" = "Issue" ]; then
             if [ -z "$(load_issue_fingerprint "${item_id}")" ] \
                 && [ ! -f "$(infra_failure_guard_file_path "Issue" "${item_id}")" ]; then
