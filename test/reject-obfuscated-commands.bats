@@ -43,6 +43,22 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "the bracket test idiom is allowed (issue #1282)" {
+    run_hook "[ -d /proc/2094 ]"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a until-loop polling with the bracket test idiom is allowed (issue #1282)" {
+    run_hook 'until [ ! -d /proc/2094 ]; do sleep 5; done'
+    [ "${status}" -eq 0 ]
+}
+
+@test "kill is still not on the command-allowlist and is blocked" {
+    run_hook "kill -0 2094"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
 @test "a whole-token double-quoted command name is blocked" {
     run_hook '"git" push'
     [ "${status}" -eq 2 ]

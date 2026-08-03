@@ -33,7 +33,9 @@
 #      (standalone or per-command prefix) must not target a variable on
 #      env-var-blocklist; every command name in the AST — at any nesting
 #      depth, including inside $(...)/backtick substitutions — must be a
-#      single plain literal word matching ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$.
+#      single plain literal word matching ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$,
+#      with one carved-out exception: the literal single-character name `[`
+#      (the `test` builtin's bracket form).
 #      Anything else (quote-splice, escape, substitution, brace expansion,
 #      leading redirection or dash) is obfuscation by definition: reject.
 #   3. Known interpreters handed an inline-code flag (bash -c, python3 -c,
@@ -178,7 +180,13 @@ calls=$(printf '%s' "$ast" | jq -r '
   join("\t")')
 
 MARKER=$'\x01'
-NAME_RE='^[A-Za-z0-9_./][A-Za-z0-9_./-]*$'
+# `[` (the `test` builtin's bracket form) is a single-character command name
+# that the generic pattern below cannot match (it requires an alnum/_/./
+# leading character); it is carved out as its own literal alternative rather
+# than loosening the generic pattern, so no other punctuation-led name is
+# newly permitted. `]` is never checked here - it is a trailing argument
+# word, not the command name.
+NAME_RE='^(\[|[A-Za-z0-9_./][A-Za-z0-9_./-]*)$'
 
 # Loaded once, not re-read from disk per CallExpr.
 mapfile -t command_blocklist_lines < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)

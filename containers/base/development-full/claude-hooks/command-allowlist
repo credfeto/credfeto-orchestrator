@@ -120,6 +120,7 @@ diff
 echo
 printf
 test
+[
 true
 false
 mkdir
