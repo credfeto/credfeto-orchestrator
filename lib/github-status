@@ -155,6 +155,79 @@ block_issue_for_idle_exhausted_no_progress() {
     apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
+# Returns 0 (true) if the pre-fetched Issue JSON contains a comment matching "## Implementation
+# Plan" (case-insensitive). Same detector used to decide whether an issue needs a plan at all
+# (see the identical check embedded into the generated CLAUDE.md, lib/prompts).
+issue_json_has_plan_comment() {
+    local issue_json="$1"
+    printf '%s' "${issue_json}" | jq -e '
+        [.comments[]?.body // ""] | any(test("##\\s*Implementation Plan";"i"))
+    ' > /dev/null 2>&1
+}
+
+# Returns 0 (true) if the pre-fetched Issue JSON contains a genuine HUMAN approval comment
+# (approved / go ahead / looks good / lgtm — case-insensitive, whole word) posted by someone other
+# than the orchestrator itself ($me_login) and a member of $trusted_logins_json, at any point AFTER
+# the most recent "## Implementation Plan" comment. Restricting the matching author to a trusted
+# human is what stops the orchestrator's OWN comments from ever satisfying the check — verified
+# live on funfair-build-check#434 and adblockplusrules#615, where the only "approved"-matching text
+# on the issue was the bot's own comment explaining that approval was MISSING (#1286). Single
+# source of truth for "was this plan approved by a human": used both by
+# issue_plan_awaiting_human_approval below and — via human_plan_approval_jq_literal, same filter
+# text baked into a self-contained one-liner — the identical check embedded into the generated
+# CLAUDE.md (lib/prompts) for no-board repos, so the orchestrator and the agent it launches always
+# agree on what counts as "approved".
+issue_json_has_human_plan_approval() {
+    local issue_json="$1" me_login="$2" trusted_logins_json="$3"
+    printf '%s' "${issue_json}" | jq -e --arg me "${me_login}" --argjson trusted "${trusted_logins_json:-null}" '
+        (.comments) as $c
+        | (first(range($c|length) | select($c[.].body // "" | test("##\\s*Implementation Plan";"i"))) // -1) as $i
+        | if $i >= 0 then
+            $c[($i+1):]
+            | map(select(.author.login as $login | $login != $me and (($trusted // []) | index($login)) != null))
+            | any(.[]; .body // "" | test("\\b(approved|go ahead|looks good|lgtm)\\b";"i"))
+          else
+            false
+          end
+    ' > /dev/null 2>&1
+}
+
+# Same semantics as issue_json_has_human_plan_approval's inner filter, but with $me_login/
+# $trusted_logins_json already baked in as jq literals rather than passed via --arg/--argjson, so
+# the result is a single self-contained string an agent can paste directly after `gh ... --jq`,
+# which — unlike the `jq` CLI itself — has no separate --arg/--argjson flags. Keeping this
+# generation in the SAME file as the shell-side predicate (rather than hand-duplicating the filter
+# text at the lib/prompts call site) is what makes the two copies impossible to drift apart —
+# exactly the class of bug #1286 exists to catch.
+human_plan_approval_jq_literal() {
+    local me_login="$1" trusted_logins_json="$2"
+    # shellcheck disable=SC2016 # intentional — this is jq syntax ($c, $i), not a bash variable
+    printf '%s' '(.comments) as $c | (first(range($c|length)|select($c[.].body|test("##\\s*Implementation Plan";"i"))) // -1) as $i | if $i>=0 then ($c[($i+1):]|map(select(.author.login as $login | $login != "'"${me_login}"'" and ('"${trusted_logins_json:-[]}"'|index($login)) != null))|any(.[]; .body|test("\\b(approved|go ahead|looks good|lgtm)\\b";"i"))) else false end'
+}
+
+# Returns 0 (true) if the Issue has a plan comment with no genuine human approval following it —
+# the drift oneshot self-heals by applying Blocked (#1286). Operates on already-fetched issue JSON,
+# no extra API call. See issue_json_has_plan_comment / issue_json_has_human_plan_approval for what
+# "plan" and "approved" mean.
+issue_plan_awaiting_human_approval() {
+    local issue_json="$1" me_login="$2" trusted_logins_json="$3"
+    issue_json_has_plan_comment "${issue_json}" || return 1
+    ! issue_json_has_human_plan_approval "${issue_json}" "${me_login}" "${trusted_logins_json}"
+}
+
+# Posts a Blocked-marking comment and label when an Issue's own posted plan was never followed by
+# the Blocked label — the self-heal for #1286 (an agent posted "## Implementation Plan" and ended
+# its session without applying Blocked; the fingerprint then never changes, so Claude is never
+# re-invoked to notice its own omission). Reuses _build_plan_approval_instruction (lib/prompts) so
+# the human-facing wording of what to do next (board vs. comment-based approval) stays in exactly
+# one place, matching what the agent itself would have said.
+block_issue_for_unapplied_plan_approval() {
+    local item_id="$1" item_repo="$2"
+    local reason
+    reason="This issue has a posted Implementation Plan with no human approval since, but the Blocked label was never applied — self-healing by applying it now. $(_build_plan_approval_instruction)"
+    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
+}
+
 # Decides whether to re-invoke a PR whose fingerprint is UNCHANGED, so the next workflow phase
 # can run (phases that only advance the board — e.g. a clean review — leave the fingerprint
 # unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the

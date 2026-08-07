@@ -1082,6 +1082,33 @@ teardown() {
     [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
+# --- issue_plan_block marker (#1286) ----------------------------------------
+
+@test "issue_plan_block_marked is false when no marker file exists" {
+    run issue_plan_block_marked 42
+    [ "${status}" -ne 0 ]
+}
+
+@test "mark_issue_plan_block writes the marker and issue_plan_block_marked then reports it" {
+    mark_issue_plan_block 42
+    [ -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+    run issue_plan_block_marked 42
+    [ "${status}" -eq 0 ]
+}
+
+@test "clear_issue_plan_block_marker removes the marker" {
+    mark_issue_plan_block 42
+    clear_issue_plan_block_marker 42
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+    run issue_plan_block_marked 42
+    [ "${status}" -ne 0 ]
+}
+
+@test "clear_issue_plan_block_marker is a no-op when no marker exists" {
+    run clear_issue_plan_block_marker 42
+    [ "${status}" -eq 0 ]
+}
+
 # --- environment-block auto-unblock (#1118) ---------------------------------
 
 @test "pr_json_env_block_image_sha extracts the sha from a single marker comment" {
@@ -1653,6 +1680,79 @@ teardown() {
     run issue_json_has_blocked_label '{}'
     [ "${status}" -ne 0 ]
     [[ "${output}" != *"jq: error"* ]]
+}
+
+# --- plan-awaiting-human-approval detection (#1286) -------------------------
+
+@test "issue_json_has_plan_comment detects the heading case-insensitively and is false when absent" {
+    run issue_json_has_plan_comment '{"comments":[{"body":"## implementation plan\n\nstuff"}]}'
+    [ "${status}" -eq 0 ]
+
+    run issue_json_has_plan_comment '{"comments":[{"body":"just chatting"}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_json_has_human_plan_approval is true for a trusted human approval comment posted after the plan" {
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"body":"approved"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_json_has_human_plan_approval is false when only the bot's OWN comment matches the approval keyword (#434, #615 regression)" {
+    # Live-verified: funfair-build-check#434's only "approved"-matching comment was the bot's own,
+    # explaining that approval was NOT found. The pre-#1286 matcher (no author restriction) read
+    # this as approved.
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"bot"},"body":"I cannot treat it as approved yet: the board status is Todo, not Approved."}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_json_has_human_plan_approval is false when the approving author is not in the trusted logins list" {
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"randomer"},"body":"lgtm"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_json_has_human_plan_approval is false when the approval comment precedes the plan comment" {
+    local issue='{"comments":[{"author":{"login":"credfeto"},"body":"looks good"},{"author":{"login":"bot"},"body":"## Implementation Plan\n..."}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_json_has_human_plan_approval is false when there is no plan comment at all" {
+    local issue='{"comments":[{"author":{"login":"credfeto"},"body":"approved"}]}'
+    run issue_json_has_human_plan_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_plan_awaiting_human_approval is true for a plan comment with no human approval since (#1232-shaped)" {
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n### Open questions\nNone, ready to proceed pending approval."}]}'
+    run issue_plan_awaiting_human_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_plan_awaiting_human_approval is false once a trusted human approves" {
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"credfeto"},"body":"go ahead"}]}'
+    run issue_plan_awaiting_human_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_plan_awaiting_human_approval is false when there is no plan comment at all (key negative case, #3613-shaped)" {
+    # funfair-ethereum-proxy-server-monitor#3613: a tracking issue whose own open questions live on
+    # sub-issues, not itself — must never be flagged just because it has comments.
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"Status update. Sub-issue status: ..."}]}'
+    run issue_plan_awaiting_human_approval "${issue}" "bot" '["credfeto"]'
+    [ "${status}" -ne 0 ]
+}
+
+@test "human_plan_approval_jq_literal bakes in the login and trusted-logins literals and matches issue_json_has_human_plan_approval's own verdict" {
+    local issue='{"comments":[{"author":{"login":"bot"},"body":"## Implementation Plan\n..."},{"author":{"login":"bot"},"body":"not approved yet"}]}'
+    local jq_expr
+    jq_expr=$(human_plan_approval_jq_literal "bot" '["credfeto"]')
+    [[ "${jq_expr}" == *'"bot"'* ]]
+    [[ "${jq_expr}" == *'["credfeto"]'* ]]
+    run bash -c 'printf "%s" "$1" | jq -e "$2"' -- "${issue}" "${jq_expr}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "fingerprint_issue_json with trusted logins: trusted comment changes fingerprint" {
@@ -6053,6 +6153,97 @@ setup_local_git_remote() {
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
+# --- main() integration: self-heal a plan posted without Blocked (#1286) ----
+
+@test "main self-heals an Issue whose plan was posted but Blocked was never applied" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        # shellcheck disable=SC2016
+        printf '%s\n' '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"testuser"},"body":"## Implementation Plan\n### Open questions\nNone, ready to proceed pending approval."}],"assignees":[],"milestone":null}'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"plan posted but never marked Blocked — self-healing"* ]]
+    grep -q "issue comment 42 --repo org/repo" "${GH_CALL_LOG}"
+    grep -q 'add-label Blocked' "${GH_CALL_LOG}"
+    [ -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+}
+
+@test "main does not re-block an Issue whose plan-block marker is already set and Blocked has since been cleared by a human (#1115 regression guard)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        # shellcheck disable=SC2016
+        printf '%s\n' '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"testuser"},"body":"## Implementation Plan\n### Open questions\nNone, ready to proceed pending approval."}],"assignees":[],"milestone":null}'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    touch "${GH_CALL_LOG}"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" != *"self-healing"* ]]
+    run grep -q 'add-label Blocked' "${GH_CALL_LOG}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "main clears a stale plan-block marker once the Issue's plan becomes approved (#1286)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'true'; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+}
+
 @test "main threads a resumable stale branch into the generated CLAUDE.md even when the Issue's own fingerprint changed (#1262 review)" {
     # The fingerprint-unchanged skip-decision only runs when the fingerprint matched the saved
     # one. A session that changed the Issue (e.g. posted a comment) after pushing a branch and
@@ -7963,6 +8154,16 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"approved|go ahead|looks good|lgtm"* ]]
     [[ "${output}" != *"approved on the Workflow board"* ]]
+}
+
+@test "build_issue_claude_md without board bakes the current bot login and trusted logins into the printed approval-check jq, excluding the bot's own comments (#1286)" {
+    _WF_PROJECT_ID=""
+    _GH_ME="the-bot"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false" '["credfeto"]'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'"the-bot"'* ]]
+    [[ "${output}" == *'["credfeto"]'* ]]
+    [[ "${output}" == *"your own prior comments never count"* ]]
 }
 
 @test "build_issue_claude_md with board and plan not approved shows board-pending text" {
