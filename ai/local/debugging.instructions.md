@@ -132,6 +132,19 @@ find ~/.orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
 - At `MAX_PR_ENV_AUTO_UNBLOCKS` (default 3), oneshot stops auto-clearing and instead posts a one-time comment saying the same failure recurred after a rebuild (the "environment" diagnosis was likely wrong) — `PullRequest_<n>.env-unblock-cap-notified` marks that this notice has already been sent, so it isn't repeated every tick.
 - If a PR you expected to auto-unblock is still sitting `Blocked`, check (a) whether its latest diagnosis comment actually carries the marker, (b) whether `current_agent_image_sha` (a `podman inspect` on `${ORCHESTRATOR_IMAGE}`) actually differs from the recorded SHA — the image may not have rebuilt yet — and (c) whether the `.env-unblock-cap-notified` marker is already present (the cap was hit).
 
+### 5b — Plan-block self-heal marker (#1286)
+
+An Issue's `fingerprint_issue_json` includes its labels, but the agent applying `Blocked` after posting a plan is a *prompt instruction*, not something the shell verifies — an agent that ends its session without applying it leaves the Issue's fingerprint unchanged forever, so it is never re-invoked to notice its own omission (`Issue #N ... unchanged — skipping`, every tick). `oneshot` self-heals this directly: on an unchanged-fingerprint, plan-not-approved Issue, if a `## Implementation Plan` comment exists with no genuine human approval since (see `issue_plan_awaiting_human_approval` / `issue_json_has_human_plan_approval` in `lib/github-status`), it applies `Blocked` itself and writes a marker:
+
+```bash
+find ~/.orchestrator -name 'Issue_*.plan-block' -exec echo "=== {} ===" \; -exec cat {} \;
+```
+
+- `Issue_<n>.plan-block` — presence means oneshot has already auto-applied `Blocked` once for this exact drift. Bounds the self-heal to firing at most once per drift episode: if a human later clears `Blocked` **without** approving (no board `Approved`, no human approval comment), oneshot sees the marker and does **not** re-add the label — mirroring the `MAX_PR_ENV_AUTO_UNBLOCKS` precedent (bound the automation, never the human) and specifically avoiding a repeat of the #1115 incident (a bot re-adding `Blocked` within two hours of a human clearing it, with zero activity in between).
+- Cleared once the Issue's plan is observed board-`Approved` (`clear_issue_plan_block_marker`, called right after `issue_plan_approved` returns `true`) — so a later, unrelated plan-revision drift episode on the same Issue is not wrongly suppressed by a stale marker from an already-resolved one.
+- Unlike `Issue_<n>.blocked` (re-armed on every "observed open + unblocked" tick, for Discord notification), this marker deliberately does **not** clear on that observation — clearing it there would defeat its only purpose.
+- If an Issue that should have self-healed is still missing `Blocked`, check whether it actually has a `## Implementation Plan` comment and whether any comment after it could be misread as approval — `issue_json_has_human_plan_approval` only counts a comment from a human (not the orchestrator's own login) who is also in the trusted-logins list; the bot's own comments explaining that approval is *missing* must never satisfy the check (verified live against `funfair-build-check#434` and `adblockplusrules#615`, both of which had only their own such comment before this fix).
+
 ### 6 — Fingerprint files
 
 ```bash

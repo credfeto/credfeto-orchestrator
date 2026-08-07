@@ -26,17 +26,22 @@ _build_wf_section() {
 # Output the step-2 approval-check line(s) for build_issue_claude_md.
 # With board + board-approved: one-liner directing agent to implementation.
 # With board + not approved:   redirect to plan/revision mode.
-# No board:                    jq command to detect human approval comment.
+# No board:                    jq command to detect a HUMAN approval comment (#1286 — must exclude
+#                               the orchestrator's own login, or the bot's own comments explaining
+#                               that approval is missing can themselves satisfy the check; verified
+#                               live on funfair-build-check#434 and adblockplusrules#615).
 _build_plan_approval_check() {
-    local item_id="$1" plan_approved="$2"
+    local item_id="$1" plan_approved="$2" trusted_logins="${3:-}"
     if [ "${plan_approved}" = "true" ]; then
         printf '   Result "true"  → plan exists and was approved on the Workflow board by a human — skip to step 5 (Implementation mode).'
     elif [ -n "${_WF_PROJECT_ID}" ]; then
         printf '   Result "true"  → plan exists but has not been approved on the Workflow board yet. If any comment on the issue left feedback requesting changes to the plan, revise it and re-post the FULL updated plan as a new comment in the same format as step 3. Either way — even when the plan itself needs no changes — you MUST ALSO post a short comment BEFORE re-blocking: fetch the Workflow board'"'"'s CURRENT status for this issue and state it explicitly (e.g. "board status is currently '"'"'Planning'"'"', not '"'"'Approved'"'"'"), and remind that removing the Blocked label alone is not enough — the status must read exactly "Approved". Silently re-applying Blocked with no comment is NEVER acceptable, especially if the label was just removed by a human (#1140 — this is exactly what left a human with no idea why their approval was not recognised). Then mark Blocked and STOP (step 3).'
     else
-        local jq_expr="(.comments) as \$c | (first(range(\$c|length)|select(\$c[.].body|test(\"##\\\\s*Implementation Plan\";\"i\"))) // -1) as \$i | if \$i>=0 then \$c[(\$i+1):]|map(.body|test(\"\\\\b(approved|go ahead|looks good|lgtm)\\\\b\";\"i\"))|any else false end"
-        printf '   Result "true"  → plan exists. Check for a human approval comment posted AFTER the plan comment\n'
-        printf '                    (approved / go ahead / looks good / lgtm — case-insensitive, whole word):\n'
+        local jq_expr
+        jq_expr=$(human_plan_approval_jq_literal "${_GH_ME}" "${trusted_logins:-[]}")
+        printf '   Result "true"  → plan exists. Check for a HUMAN approval comment posted AFTER the plan comment\n'
+        printf '                    (approved / go ahead / looks good / lgtm — case-insensitive, whole word;\n'
+        printf '                    your own prior comments never count, even ones that happen to contain that word):\n'
         printf '     gh issue view %s --repo %s --json comments \\\n' "${item_id}" "${REPO_FULL}"
         printf "       --jq '%s'\n" "${jq_expr}"
         printf '   Result "true"  → approved — skip to step 5 (Implementation mode).\n'
@@ -207,7 +212,7 @@ Steps:
      gh issue view ${item_id} --repo ${REPO_FULL} --json comments \\
        --jq '[.comments[].body] | any(test("## Implementation Plan"; "i"))'
    Result "false" → no plan yet, go to step 3 (Plan mode).
-$(_build_plan_approval_check "${item_id}" "${plan_approved}")
+$(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}")
 3. (Plan mode) Read the issue and all comments. If any comment contains an unanswered question, answer it, mark the issue as Blocked, and STOP:
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
    Otherwise, using /plan produce a concrete implementation plan and post it as an issue comment in EXACTLY this format:

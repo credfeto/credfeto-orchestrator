@@ -572,6 +572,11 @@ main() {
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
                 plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
+                # The plan-block self-heal marker (#1286) only needs to survive across a human
+                # clearing Blocked WITHOUT approving; once the plan is genuinely approved, any
+                # earlier unapplied-Blocked drift episode is fully resolved, so clear it now rather
+                # than risk it wrongly suppressing self-heal on a LATER, unrelated plan revision.
+                [ "${plan_approved}" = "true" ] && clear_issue_plan_block_marker "${item_id}"
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
@@ -598,6 +603,19 @@ main() {
                         if [ "${plan_approved}" = "true" ]; then
                             info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
                             block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        elif issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
+                            && ! issue_plan_block_marked "${item_id}"; then
+                            # The agent posted a plan and ended its session without applying
+                            # Blocked, and no human has approved it since. The fingerprint never
+                            # changes from here, so Claude is never re-invoked to notice its own
+                            # omission (#1286) — self-heal directly in the shell instead. Bounded to
+                            # at most once per drift episode via the marker: if a human later clears
+                            # Blocked without approving, do NOT re-add it (see the #1115 incident
+                            # this guards against — a bot re-adding Blocked within two hours of a
+                            # human clearing it, with zero activity in between).
+                            info "Issue #${item_id} in ${item_repo}: plan posted but never marked Blocked — self-healing"
+                            block_issue_for_unapplied_plan_approval "${item_id}" "${item_repo}" \
+                                && mark_issue_plan_block "${item_id}"
                         else
                             info "Issue #${item_id} in ${item_repo} unchanged — skipping"
                         fi

@@ -463,6 +463,44 @@ blocked_marker_file_path() {
     printf '%s/%s_%s.blocked' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
 }
 
+# Returns the path to the per-Issue "plan self-heal already applied" marker — set once oneshot
+# auto-blocks an Issue whose plan comment was never followed by a human approval AND never
+# received the Blocked label (#1286, see issue_plan_awaiting_human_approval /
+# block_issue_for_unapplied_plan_approval in lib/github-status). Bounds the self-heal to firing at
+# MOST ONCE per drift episode: if a human later clears Blocked without approving, the marker
+# (still present) tells oneshot NOT to re-add it — mirroring the automation-vs-human precedent set
+# by MAX_PR_ENV_AUTO_UNBLOCKS/try_auto_unblock_env_diagnosed_pr above, and specifically avoiding a
+# repeat of the #1115 incident (a bot re-adding Blocked under two hours after a human cleared it,
+# with zero activity in between). Unlike blocked_marker_file_path just above — which is cleared on
+# every "observed open + unblocked" tick to re-arm Discord notification — THIS marker must SURVIVE
+# that exact observation; clearing it there would defeat its only purpose.
+issue_plan_block_marker_file_path() {
+    local item_id="$1"
+    printf '%s/Issue_%s.plan-block' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Returns 0 (true) if the self-heal marker above is present for this Issue.
+issue_plan_block_marked() {
+    [ -f "$(issue_plan_block_marker_file_path "$1")" ]
+}
+
+# Writes the self-heal marker. Best-effort: a failure to write only means a future human-cleared
+# unblock might see one avoidable extra self-heal attempt, not that anything breaks now.
+mark_issue_plan_block() {
+    local item_id="$1"
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    touch "$(issue_plan_block_marker_file_path "${item_id}")" 2>/dev/null \
+        || warn "Failed to write plan-block self-heal marker for Issue #${item_id} — a human clearing Blocked without approving may see it re-applied once more than intended"
+}
+
+# Clears the self-heal marker once the Issue genuinely advances (its plan is approved), so a
+# LATER, unrelated plan-revision drift episode is not wrongly suppressed by a stale marker left
+# over from a fully resolved earlier episode. Call once plan_approved is observed true.
+clear_issue_plan_block_marker() {
+    local item_id="$1"
+    rm -f "$(issue_plan_block_marker_file_path "${item_id}")" 2>/dev/null || true
+}
+
 # Clears the blocked-notification marker for an item, re-arming the notifier so a
 # future transition back into the blocked state notifies again. Call on any path
 # where the item is observed open and not carrying the Blocked label.
