@@ -33,6 +33,7 @@ layer that `FROM`s this image.
 | `pylint` | Python static analysis |
 | `python3` | Python 3 runtime |
 | `python3-pip` | Python package installer |
+| `python3-venv` | Provides `ensurepip`/the `venv` module — without it `python3 -m venv` fails outright |
 | `shellcheck` | Shell script linter |
 | `shfmt` | Shell script formatter |
 | `sqlite3` | SQLite CLI |
@@ -143,6 +144,12 @@ interference. A successful clone confirms that TLS certificate verification
 works (the CA bundle is present), DNS resolves, and outbound HTTPS is
 reachable from the build host. The cloned directory is removed immediately
 afterwards.
+
+**`python3 -m venv` round-trip.** A throwaway virtual environment is created
+in `/tmp`, its bundled `pip` is invoked with `--version` to confirm
+`ensurepip` actually worked, and the venv is then removed. This is what
+`python3-venv` exists to provide — without it, `python3 -m venv` fails
+outright rather than producing a working environment (#1289).
 
 SSH authentication and mount-dependent checks are intentionally deferred to
 runtime startup scripts in the consuming image because SSH keys are not
