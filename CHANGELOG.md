@@ -51,6 +51,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Mirror a PR's Workflow board status forward from its linked issue's, so a PR-phase session no longer misreads a card left at "Not Started" as an unmet approval gate
 - Allow the bracket ('[') test idiom on the reject-obfuscated-commands allowlist, so a backgrounded command's PID-liveness check (e.g. `[ -d /proc/$PID ]`) no longer strands agent sessions that use it
 - Issues whose plan comment was posted but never marked Blocked are now self-healed: oneshot detects a plan with no genuine human approval since and applies Blocked itself, so a missed label no longer leaves an issue silently unactionable forever. Bounded to fire at most once per drift episode so a human clearing Blocked without approving is never fought.
+- Discord notification when a settled PR (auto-merge armed, all required checks green) has no approving review, so a human is alerted instead of the PR sitting invisibly mergeable-but-unapproved indefinitely (#1278)
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement

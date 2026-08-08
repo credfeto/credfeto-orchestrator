@@ -1275,6 +1275,20 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_needs_review_approval is true for reviewDecision REVIEW_REQUIRED (#1278)" {
+    run pr_json_needs_review_approval '{"reviewDecision":"REVIEW_REQUIRED"}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_needs_review_approval is false for reviewDecision APPROVED, CHANGES_REQUESTED, or absent (#1278)" {
+    run pr_json_needs_review_approval '{"reviewDecision":"APPROVED"}'
+    [ "${status}" -ne 0 ]
+    run pr_json_needs_review_approval '{"reviewDecision":"CHANGES_REQUESTED"}'
+    [ "${status}" -ne 0 ]
+    run pr_json_needs_review_approval '{}'
+    [ "${status}" -ne 0 ]
+}
+
 # --- apply_blocked_label (#1092) ----------------------------------------------
 
 @test "apply_blocked_label returns 0 when the label is confirmed present on first try (#1092)" {
@@ -3839,6 +3853,7 @@ setup_main_mocks() {
     notify_discord_work_item()         { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
+    notify_discord_pr_needs_approval() { return 0; }
     notify_discord_claude_error()      { return 0; }
     notify_discord_rate_limited()      { return 0; }
     notify_discord_low_disk_space()    { return 0; }
@@ -3899,6 +3914,43 @@ setup_main_mocks() {
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [[ "${output}" == *"Skipping Issue #10 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main notifies Discord when a settled direct PR needs review approval (#1278)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_pr_needs_approval() { printf 'notified %s: %s\n' "$1" "$2" >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+    [ -f "${discord_log}" ]
+    grep -q '^notified 5: .*"title":"T"' "${discord_log}"
+}
+
+@test "main does not notify Discord when a settled direct PR is already approved (#1278)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_pr_needs_approval() { printf 'notified\n' >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+    [ ! -f "${discord_log}" ]
 }
 
 @test "main evaluates second PR in same repo when first PR is unchanged" {
@@ -4037,6 +4089,32 @@ setup_main_mocks() {
     [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
     [[ "${output}" == *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
     [[ "${output}" == *"No actionable work items found"* ]]
+}
+
+@test "main notifies Discord when a settled pivot PR needs review approval (#1278)" {
+    # Same pivot scenario as above (Issue #10 → linked PR #99, settled), but the linked PR's
+    # reviewDecision is REVIEW_REQUIRED — the notifier must fire from the issue-pivot call site,
+    # not just the direct-PR one.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_pr_needs_approval() { printf 'notified %s: %s\n' "$1" "$2" >> "${discord_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
+    [ -f "${discord_log}" ]
+    grep -q '^notified 99: .*"title":"PR title"' "${discord_log}"
 }
 
 @test "main re-runs via pivot PR when PR unchanged but issue has new comment" {
@@ -8022,6 +8100,118 @@ STUBEOF
     run notify_discord_priorities_unreachable "myowner"
     [ "${status}" -eq 0 ]
     [ ! -f "${curl_log}" ]
+}
+
+# --- notify_discord_pr_needs_approval (#1278) ---------------------------------
+
+@test "notify_discord_pr_needs_approval does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_pr_needs_approval sends embed naming the PR and repo" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+    grep -q "org/repo/pull/397" "${curl_log}"
+    grep -q "Some PR title" "${curl_log}"
+}
+
+@test "notify_discord_pr_needs_approval suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state"
+
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_pr_needs_approval resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state"
+
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_pr_needs_approval does not record dedup state when the curl POST fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state" ]
+}
+
+@test "notify_discord_pr_needs_approval scopes its dedup state per repo-and-PR, not just PR number" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # A recent alert for PR #397 in a DIFFERENT repo must not suppress this call — same PR
+    # number, different repo, is a different PR.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.pr_needs_approval_other_repo_397.state"
+
+    run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_pr_needs_approval falls back to a generic title when pr_json has none" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 397 '{}'
+    [ "${status}" -eq 0 ]
+    grep -q "PullRequest #397" "${curl_log}"
+}
+
+@test "notify_discord_pr_needs_approval truncates an over-long title to stay under Discord's embed-title cap" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    local long_title
+    long_title=$(printf '%*s' 300 '' | tr ' ' 'x')
+    run notify_discord_pr_needs_approval 397 "$(jq -n --arg t "${long_title}" '{title:$t}')"
+    [ "${status}" -eq 0 ]
+    # 240-char slice of the title, plus the "Needs Approval: " prefix, must appear; the raw
+    # 300-char title must not (it would have been sliced down).
+    grep -qE "x{240}" "${curl_log}"
+    run ! grep -qE "x{300}" "${curl_log}"
 }
 
 # --- main: disk space check ---------------------------------------------------

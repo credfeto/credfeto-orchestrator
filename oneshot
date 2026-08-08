@@ -87,7 +87,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
-# pr_should_advance_unchanged, issue_should_advance_unchanged, and
+# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged, and
 # block_issue_for_idle_exhausted_no_progress are declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
@@ -129,7 +129,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
 # notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
-# notify_discord_claude_error, and notify_discord_rate_limited are declared in lib/discord.
+# notify_discord_pr_needs_approval, notify_discord_claude_error, and notify_discord_rate_limited
+# are declared in lib/discord.
 
 # rearm_closed_issue_markers and tag_pr_closed_issue are declared in lib/state.
 
@@ -438,6 +439,9 @@ main() {
                 if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
                     if pr_json_is_terminal "${pr_json}"; then
                         info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        if pr_json_needs_review_approval "${pr_json}"; then
+                            notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
+                        fi
                         count_unchanged=$((count_unchanged + 1))
                         continue
                     fi
@@ -766,6 +770,9 @@ main() {
             if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
                 if pr_json_is_terminal "${pr_json}"; then
                     info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                    if pr_json_needs_review_approval "${pr_json}"; then
+                        notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
+                    fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
                 fi
