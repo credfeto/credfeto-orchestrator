@@ -155,3 +155,14 @@ of side effects.
   only in that source — if a *followed* rename ever reintroduces that check, disable SC2153
   file-wide with a one-line comment rather than renaming every local/global pair that collides.
 - `checkbashisms` does not apply because the scripts use `#!/bin/bash`.
+- The commit-time pre-commit hook lints staged `*.bats` files with `shellcheck` too, separately
+  from the top-level-scripts invocation above — a plain `shellcheck oneshot loop create-project
+  setup-owner install-timer` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
+  SC2314, "In Bats, `!` will not fail the test if it is not the last command") can pass local
+  verification and only surface at commit time. Run `shellcheck test/*.bats` alongside the
+  top-level-scripts check before committing a test change. Prefer the repo's existing bare
+  `! cmd` idiom (see the `apply_blocked_label`-style `if [ -f ... ]; then ! grep ...; fi` guard)
+  over `run ! cmd` for a negative assertion inside a `@test` — `run !` only asserts non-zero on
+  bats >= 1.5.0, and this repo does not pin a minimum bats version, so it can silently no-op on
+  an older bats. A count-based assertion (`[ "$(grep -c ... )" -eq 0 ]`) sidesteps both the
+  shellcheck rule and the version question and is the preferred form (#1278 review).

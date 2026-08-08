@@ -8211,7 +8211,7 @@ STUBEOF
     # 240-char slice of the title, plus the "Needs Approval: " prefix, must appear; the raw
     # 300-char title must not (it would have been sliced down).
     grep -qE "x{240}" "${curl_log}"
-    run ! grep -qE "x{300}" "${curl_log}"
+    [ "$(grep -cE "x{300}" "${curl_log}")" -eq 0 ]
 }
 
 # --- main: disk space check ---------------------------------------------------
