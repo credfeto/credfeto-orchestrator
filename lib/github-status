@@ -135,6 +135,17 @@ pr_json_has_unaddressed_review_request() {
     printf '%s' "${pr_json}" | jq -e '.reviewDecision == "CHANGES_REQUESTED"' > /dev/null 2>&1
 }
 
+# Returns 0 (true) if GitHub's own review-decision aggregate is REVIEW_REQUIRED — auto-merge is
+# armed and no required check has failed (i.e. the PR is otherwise "settled", see
+# pr_json_is_terminal), but it cannot merge because no approving review exists yet, whether that
+# review was dismissed by a later force-push or was never requested at all. Distinct from
+# pr_json_has_unaddressed_review_request (CHANGES_REQUESTED), which is a reviewer actively asking
+# for changes rather than the PR just sitting unapproved (#1278).
+pr_json_needs_review_approval() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '.reviewDecision == "REVIEW_REQUIRED"' > /dev/null 2>&1
+}
+
 # Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
 # while a reviewer's requested changes are still outstanding, so a human is pulled in instead of
 # the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
