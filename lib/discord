@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Discord webhook notifications: work-item start/resume, no-work, low-disk-space,
-# priorities-unreachable, blocked-item, Claude container error, and rate-limited notices. Also
-# the shared item-URL builder they use.
+# priorities-unreachable, blocked-item, PR-needs-approval, Claude container error, and
+# rate-limited notices. Also the shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id. Falls back to the bare repo URL for an unrecognised/empty item_type.
@@ -320,6 +320,55 @@ notify_discord_blocked_item() {
     # Record that this blocked spell has been notified, so the next run is silent.
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || true
     printf '%s\n' "blocked" > "${marker_file}" 2>/dev/null || true
+}
+
+# Sends a Discord embed notification when a PR is settled (auto-merge armed, nothing
+# failed/pending — see pr_json_is_terminal) but reviewDecision is REVIEW_REQUIRED: the PR is
+# mergeable in every way except a missing human approval, whether that approval was dismissed by
+# a later force-push or never requested at all. Without this the PR sits invisibly "complete"
+# indefinitely — oneshot correctly declines to waste an agent invocation on it, but nothing tells
+# a human it is waiting (#1278).
+# Arguments: item_id, pr_json (the pre-fetched PR JSON, so the title is extracted here rather
+# than by every caller — see below)
+# Uses the REPO_FULL global (set by set_repo_context) for both the URL and the Repository field,
+# matching every other per-item notifier in this file (e.g. notify_discord_blocked_item).
+# Deduplicates like notify_discord_low_disk_space/notify_discord_priorities_unreachable: at most
+# one notification per hour. Scoped per-repo-and-PR (not per-owner) so two different PRs, or the
+# same PR number in two different repos, never suppress each other's alert. Checked before the
+# title is extracted, so a `jq` fork over pr_json is only ever paid on ticks that actually send —
+# every other tick this fires on (Discord unconfigured, or the once-an-hour dedup window not yet
+# open) returns early with no extra work (#1278 review).
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_pr_needs_approval() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_id="$1" pr_json="$2"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file pr_needs_approval "${REPO_FULL}/${item_id}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local item_title url payload
+    item_title=$(printf '%s' "${pr_json}" | jq -r '.title // empty' 2>/dev/null)
+    [ -n "${item_title}" ] || item_title="PullRequest #${item_id}"
+    # Same codepoint-aware slicing/reasoning as notify_discord_blocked_item's item_title, and for
+    # the same reason: an embed title over Discord's 256-char cap makes curl --fail reject the
+    # whole payload (#1140 review).
+    item_title=$(printf '%s' "${item_title}" | jq -Rsr '.[0:240]' 2>/dev/null)
+    url="$(build_item_url "PullRequest" "${item_id}")"
+
+    payload=$(jq --null-input \
+        --argjson color 15844367 \
+        --arg title "Needs Approval: ${item_title}" \
+        --arg url "${url}" \
+        --arg repo "${REPO_FULL}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Repository",value:$repo,inline:true},
+            {name:"Reason",value:"Auto-merge is armed and all required checks pass, but this PR has no approving review — it cannot merge until a human approves it.",inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build pr-needs-approval payload for PR #${item_id}"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
 # Sends a Discord embed notification when Claude returns an application-level error.

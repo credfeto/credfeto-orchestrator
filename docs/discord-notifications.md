@@ -20,6 +20,7 @@ rule, matched to what actually makes sense for that alert:
 | Low disk space | Available disk space drops below a configured threshold before launching a container. | At most one per hour, per owner. |
 | Priorities API unreachable | The priorities feed itself could not be reached after retrying (see [oneshot.md](oneshot.md)) — distinct from the feed answering with something that failed to parse, which is not treated as a connectivity problem. | At most one per hour, shared across all owners (see below). |
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
+| PR needs approval | A Pull Request is "settled" (auto-merge armed, nothing failed/pending) but GitHub's `reviewDecision` is `REVIEW_REQUIRED` — it cannot merge purely because no approving review exists, whether one was dismissed by a later force-push or never requested at all. | At most one per hour, per repo-and-PR (not per owner, so the same PR number in two different repos never suppresses each other's alert). |
 | Claude error | The agent session itself returned an application-level error. | None — fires every time, every tick. |
 | Rate limited | The Claude API rate-limited the current owner; work pauses until the reported reset time. | None — fires every time, every tick. |
 
@@ -28,18 +29,18 @@ Three different suppression shapes are in play, not one universal rule:
 1. **No suppression** (work started, Claude error, rate limited) — these are expected to be rare
    or already self-limiting (a rate limit, once hit, stops further work — and further alerts —
    until it clears), so nothing extra is layered on top.
-2. **A rolling one-hour window** (low disk space, priorities unreachable, and no-work *when the
-   message is unchanged*) — a small state file records the last time this alert actually sent,
-   and a repeat within the hour is dropped.
+2. **A rolling one-hour window** (low disk space, priorities unreachable, PR needs approval, and
+   no-work *when the message is unchanged*) — a small state file records the last time this
+   alert actually sent, and a repeat within the hour is dropped.
 3. **A persistent latch** (item blocked) — not time-based at all: exactly one notification per
    *episode* of being blocked, however long that episode lasts, re-armed only when the item is
    later seen open and un-blocked again.
 
 For the rolling-window alerts, whether a **failed** attempt to reach Discord counts as "sent"
-differs by alert, and this is a real, known gap rather than a settled guarantee: low disk space
-and priorities-unreachable both use a shared helper that only records the send after a
-*successful* POST, so a Discord outage at the exact moment either fires means the next tick
-retries immediately. The no-work and item-blocked alerts do **not** have this protection — both
+differs by alert, and this is a real, known gap rather than a settled guarantee: low disk space,
+priorities-unreachable, and PR-needs-approval all use a shared helper that only records the send
+after a *successful* POST, so a Discord outage at the exact moment any of them fires means the
+next tick retries immediately. The no-work and item-blocked alerts do **not** have this protection — both
 write their state/marker file unconditionally, even when the `curl` call itself failed — so a
 Discord outage at the exact moment either of those fires can silently suppress the next
 occurrence for up to an hour (no-work) or for the rest of that blocked episode (item-blocked).
