@@ -108,6 +108,8 @@ RUN useradd -m -s /bin/bash developer
 #   procps     — provides ps/pkill/free; needed by .NET benchmark tooling
 #                      (BenchmarkDotNet process-priority/affinity handling),
 #                      e.g. funfair-server-code-analysis#463
+#   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
+#                      not; without it `python3 -m venv` fails outright (#1289)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
@@ -128,6 +130,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         procps \
         python3 \
         python3-pip \
+        python3-venv \
         shellcheck \
         shfmt \
         sqlite3 \
@@ -408,6 +411,12 @@ RUN set -e; \
     GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 \
         https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone1; \
     rm -rf /tmp/sanity-clone1; \
+    echo "== python3 -m venv round-trip (python3-venv provides ensurepip; #1289) =="; \
+    rm -rf /tmp/sanity-venv; \
+    python3 -m venv /tmp/sanity-venv; \
+    /tmp/sanity-venv/bin/python3 -m pip --version >/dev/null 2>&1 \
+        || { echo "FATAL sanity: venv's pip is not functional — python3-venv/ensurepip broken" >&2; exit 1; }; \
+    rm -rf /tmp/sanity-venv; \
     echo "== all build-time checks passed =="
 
 # Bake the git SHA of the orchestrator commit that built this image layer into the
