@@ -3419,6 +3419,22 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "json_has_commit_author_identity ignores an email match when login is resolved to someone else (spoofing guard, #1294 review)" {
+    # Security regression guard: a resolved (verified) login that is NOT the bot must win over a
+    # spoofable raw email that happens to equal GIT_USER_EMAIL — otherwise anyone with push access
+    # could claim bot authorship just by setting their commit-author email to a value copied from
+    # the bot's own commit history, defeating the human-takeover check (#1131/#1134).
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":"humanuser","email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity email match is case-insensitive (#1294 review)" {
+    run json_has_commit_author_identity "testuser" "Bot@Example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "json_has_commit_author_identity does not match a different email (#1294)" {
     run json_has_commit_author_identity "testuser" "bot@example.com" \
         <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"}]}]}'
@@ -3480,6 +3496,19 @@ STUBEOF
     _GH_ME="testuser"
     GIT_USER_EMAIL="bot@example.com"
     make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser","email":"human@example.com"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit returns 1 for a resolved human commit even with a spoofed matching email (#1294 review)" {
+    # Security regression guard: find_human_taken_over_pr_for_issue relies on this returning 1
+    # (not bot-authored) to detect a genuine takeover. A resolved, non-bot login must win over an
+    # unauthenticated commit-author email that happens to equal GIT_USER_EMAIL - otherwise a
+    # takeover is invisible to the stand-off logic and oneshot opens a duplicate branch/PR
+    # alongside the human's already-in-progress work.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser","email":"bot@example.com"}]}]}\n'"'"
     run pr_has_bot_authored_commit "org/repo" 5
     [ "${status}" -eq 1 ]
 }
@@ -3730,6 +3759,18 @@ STUBEOF
     GIT_USER_EMAIL="bot@example.com"
     run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}' '["credfeto"]'
     [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven still returns 0 for a human takeover even if a co-author email matches GIT_USER_EMAIL (spoofing guard, #1294 review)" {
+    # A human taking over a bot-created PR could add a "Co-Authored-By" trailer carrying the
+    # bot's own commit-author email (trivially copyable from the bot's git history) without ever
+    # controlling the bot's GitHub account. The resolved login on that commit is genuinely the
+    # human's own — the human-takeover verdict must not flip back to "still bot-driven" just
+    # because an unauthenticated email string happens to match.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"humanuser","email":"someone@example.com"},{"login":"humanuser","email":"bot@example.com"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
 }
 
 @test "pr_is_human_driven still detects a bot-created taken-over PR when the sole commit's email does not match GIT_USER_EMAIL (#1294)" {
