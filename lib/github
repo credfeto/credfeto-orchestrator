@@ -171,26 +171,28 @@ fetch_pr_fields_json() {
     return 1
 }
 
-# Reads JSON with a .commits array on stdin and succeeds when any commit author or co-author
-# matches the given identity — by resolved GitHub login, or, ONLY when that commit's login is
-# unresolved (null/empty), by raw commit-author email. GitHub maps commit author emails to
-# logins asynchronously after a push; a freshly-pushed commit's login can be temporarily empty
-# even though the raw email (whatever the committer's git identity actually wrote) is present
-# immediately (#1294 — confirmed live: a genuinely bot-authored PR was misclassified as
-# human-driven for ~1h48m purely because the login resolution for its latest commit hadn't
-# landed yet).
+# Reads JSON with a .commits array on stdin and succeeds when any commit matches the given
+# identity — by resolved GitHub login (of that commit's author OR co-author), or, ONLY when that
+# ENTIRE COMMIT has no resolved login at all (neither author nor any co-author), by raw
+# commit-author email. GitHub maps commit author emails to logins asynchronously after a push; a
+# freshly-pushed commit's login can be temporarily empty even though the raw email (whatever the
+# committer's git identity actually wrote) is present immediately (#1294 — confirmed live: a
+# genuinely bot-authored PR was misclassified as human-driven for ~1h48m purely because the login
+# resolution for its latest commit hadn't landed yet).
 #
-# The email match is deliberately gated on an unresolved login, not an unconditional OR (#1294
-# review): raw commit-author email is unauthenticated — anyone with push access can set
-# `git config user.email` to any string, including a value copied from the bot's own commit
-# history (it is literally the author email on every commit the bot makes). An unconditional OR
-# let a human spoof bot authorship by matching on email alone, which silently defeated
-# pr_is_human_driven's takeover check (#1131/#1134) and find_human_taken_over_pr_for_issue's
-# ownership check — the orchestrator would keep auto-driving over a human's actual work, or spin
-# up a duplicate branch/PR alongside it. Restricting the email match to "login not yet resolved"
-# means a commit whose login DOES resolve — to the bot, to a human taking over, or to anyone
-# else — is decided by that verified signal alone; email only ever fills the gap while GitHub
-# hasn't told us anything yet, never overrides what GitHub has already told us.
+# The email match is deliberately gated per COMMIT, not per individual author entry (#1294
+# review, round 2): raw commit-author email is unauthenticated — anyone with push access can set
+# `git config user.email`, or add a free-text `Co-authored-by:` trailer, to any string, including
+# a value copied from the bot's own commit history (it is literally the author email on every
+# commit the bot makes). Gating per author-entry instead of per commit was itself found to be
+# bypassable: a commit resolved to a genuine human primary author, plus an attacker-added
+# co-author trailer whose email matched, still matched via that co-author entry even though the
+# commit as a whole was unambiguously human-authored. Grouping by commit and requiring NONE of
+# that commit's authors to have a resolved login before trusting any of their emails closes that
+# gap: a commit whose primary author OR any co-author DOES resolve — to the bot, to a human
+# taking over, or to anyone else — is decided by that verified signal alone; email only ever
+# fills the gap when GitHub has told us nothing at all about that commit's identity, never
+# overrides what GitHub has already told us about it.
 #
 # Comparison is case-insensitive on the email side: a commit's raw author email can be recorded
 # in different case than GIT_USER_EMAIL depending on how it was set, and this is not a security
@@ -205,15 +207,15 @@ fetch_pr_fields_json() {
 json_has_commit_author_identity() {
     local me="$1" my_email="${2:-}"
     jq -e --arg me "${me}" --arg my_email "${my_email}" '
-        [(.commits // [])[] | (.authors // [])[]]
-        | any(
-            .login == $me
-            or (
-                ($my_email != "")
-                and (.login == null or .login == "")
-                and ((.email // "" | ascii_downcase) == ($my_email | ascii_downcase))
-            )
-          )
+        [(.commits // [])[] |
+            ((.authors // []) | map(.login // "") | map(select(. != ""))) as $resolved_logins
+            | ($resolved_logins | index($me) != null)
+              or (
+                  ($my_email != "")
+                  and ($resolved_logins | length == 0)
+                  and ((.authors // []) | any((.email // "" | ascii_downcase) == ($my_email | ascii_downcase)))
+              )
+        ] | any
     ' > /dev/null 2>&1
 }
 

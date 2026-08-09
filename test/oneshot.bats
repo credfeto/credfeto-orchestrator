@@ -3435,6 +3435,26 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+@test "json_has_commit_author_identity ignores a co-author email spoof when the same commit's primary author already resolved to a human (spoofing guard round 2, #1294 review)" {
+    # A resolved GitHub identity anywhere on a commit (author or co-author) must gate the email
+    # fallback for that WHOLE commit, not just the individual author entry it appears on —
+    # otherwise a human could take over with their own resolved commit and add a free-text
+    # "Co-authored-by: <name> <bot's email>" trailer to flip the commit back to "bot-authored"
+    # even though GitHub has already unambiguously attributed the commit to them.
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":"humanuser","email":"human@example.com"},{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity still matches email when every author entry on the commit is unresolved (#1294 review)" {
+    # Companion to the above: a commit where NEITHER author nor co-author has a resolved login
+    # yet must still get the lag-fix benefit of the doubt via email — the per-commit gate must
+    # not become so strict it stops matching the original #1294 scenario.
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"},{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "json_has_commit_author_identity does not match a different email (#1294)" {
     run json_has_commit_author_identity "testuser" "bot@example.com" \
         <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"}]}]}'
