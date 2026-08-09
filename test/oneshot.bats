@@ -5118,28 +5118,29 @@ STUBEOF
 }
 
 # --- record_item_status / serialize_item_status_log unit tests -----------------
+# record_item_status is a pure function (outputs JSON, does not mutate a caller array) and
+# serialize_item_status_log takes its entries as positional arguments (#1291 review: makes the
+# data flow explicit at every call site instead of relying on bash's dynamic scoping).
 
-@test "record_item_status appends a compact JSON object to item_status_log" {
-    local -a item_status_log=()
-    record_item_status "Issue" "42" "org/repo" "blocked - skipping"
-    [ "${#item_status_log[@]}" -eq 1 ]
-    [ "$(printf '%s' "${item_status_log[0]}" | jq -r '.type')" = "Issue" ]
-    [ "$(printf '%s' "${item_status_log[0]}" | jq -r '.id')" = "42" ]
-    [ "$(printf '%s' "${item_status_log[0]}" | jq -r '.repo')" = "org/repo" ]
-    [ "$(printf '%s' "${item_status_log[0]}" | jq -r '.reason')" = "blocked - skipping" ]
+@test "record_item_status outputs a compact JSON object for the given fields" {
+    local obj
+    obj=$(record_item_status "Issue" "42" "org/repo" "blocked - skipping")
+    [ "$(printf '%s' "${obj}" | jq -r '.type')" = "Issue" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.id')" = "42" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.repo')" = "org/repo" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.reason')" = "blocked - skipping" ]
 }
 
-@test "serialize_item_status_log returns an empty JSON array when nothing was recorded" {
-    local -a item_status_log=()
+@test "serialize_item_status_log returns an empty JSON array when given no arguments" {
     [ "$(serialize_item_status_log)" = "[]" ]
 }
 
-@test "serialize_item_status_log combines multiple recorded items into one JSON array, in order" {
+@test "serialize_item_status_log combines multiple entries into one JSON array, in order" {
     local -a item_status_log=()
-    record_item_status "Issue" "1" "org/repo" "reason one"
-    record_item_status "PullRequest" "2" "org/repo2" "reason two"
+    item_status_log+=("$(record_item_status "Issue" "1" "org/repo" "reason one")")
+    item_status_log+=("$(record_item_status "PullRequest" "2" "org/repo2" "reason two")")
     local combined
-    combined=$(serialize_item_status_log)
+    combined=$(serialize_item_status_log "${item_status_log[@]}")
     [ "$(printf '%s' "${combined}" | jq 'length')" -eq 2 ]
     [ "$(printf '%s' "${combined}" | jq -r '.[0].id')" = "1" ]
     [ "$(printf '%s' "${combined}" | jq -r '.[1].id')" = "2" ]

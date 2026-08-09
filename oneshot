@@ -230,14 +230,9 @@ main() {
     local count_error=0
     local count_human_driven=0
     # Per-item {type,id,repo,reason} breakdown for the no-actionable-work Discord notification
-    # (#1291) — record_item_status (lib/discord) appends to this array right after each
-    # count_* increment below; serialize_item_status_log turns it into JSON for
-    # notify_discord_no_work's final argument. shellcheck cannot see either function's use of
-    # this array: both rely on bash's dynamic scoping to read/write a local declared in this
-    # function, from a different function defined in a different sourced file — the same
-    # "shellcheck can't see across an unfollowed boundary" class of false positive as the
-    # SC2153 disable at the top of this file, just triggering SC2034 (appears unused) instead.
-    # shellcheck disable=SC2034
+    # (#1291): record_item_status (lib/discord) builds one entry right after each count_*
+    # increment below, appended here; serialize_item_status_log (also lib/discord) turns the
+    # whole array into JSON for notify_discord_no_work's final argument.
     local -a item_status_log=()
     local item_index=0
     # Declare all loop-body variables here so they are function-scoped.
@@ -309,7 +304,7 @@ main() {
         if [ "${is_skipped}" = true ]; then
             info "Skipping Issue #${item_id} in ${item_repo} — repo already has active work"
             count_active_repo=$((count_active_repo + 1))
-            record_item_status "Issue" "${item_id}" "${item_repo}" "repo already has active work"
+            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "repo already has active work")")
             continue
         fi
 
@@ -326,7 +321,7 @@ main() {
             if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}"); then
                 warn "Failed to query open PRs for ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
-                record_item_status "Issue" "${item_id}" "${item_repo}" "failed to query open PRs - skipping this item for now"
+                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to query open PRs - skipping this item for now")")
                 continue
             fi
 
@@ -334,7 +329,7 @@ main() {
                 if [[ ! "${open_pr}" =~ ^[0-9]+$ ]]; then
                     warn "Non-numeric open PR number from GitHub: ${open_pr} — skipping this item"
                     count_error=$((count_error + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "non-numeric open PR number from GitHub - skipping this item"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "non-numeric open PR number from GitHub - skipping this item")")
                     continue
                 fi
 
@@ -345,7 +340,7 @@ main() {
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then
                     warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "failed to fetch issue state - skipping this item for now"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to fetch issue state - skipping this item for now")")
                     continue
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
@@ -369,7 +364,7 @@ main() {
                         fi
                     fi
                     count_not_open=$((count_not_open + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - tagging linked PR #${open_pr} for investigation"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - tagging linked PR #${open_pr} for investigation")")
                     continue
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
@@ -377,7 +372,7 @@ main() {
                     mark_capped_block_for_forgiveness "Issue" "${item_id}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
                 # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
@@ -394,7 +389,7 @@ main() {
                 if ! pr_json=$(fetch_pr_json "${open_pr}"); then
                     warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch PR state - skipping this item for now"
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch PR state - skipping this item for now")")
                     # The pivot has already confirmed a bot-driven PR exists here — serialize
                     # the repo even though this tick cannot work it (#1134 review round 3).
                     skip_repos+=("${item_repo}")
@@ -405,21 +400,21 @@ main() {
                 if [ "${pr_state}" != "OPEN" ]; then
                     info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
                     count_not_open=$((count_not_open + 1))
-                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "no longer open - skipping"
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
 
                 if pr_json_has_blocked_label "${pr_json}"; then
                     if try_auto_unblock_env_diagnosed_pr "${open_pr}" "${item_repo}" "${pr_json}"; then
                         count_blocked=$((count_blocked + 1))
-                        record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - auto-unblock attempted this tick"
+                        item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - auto-unblock attempted this tick")")
                         continue
                     fi
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
                     mark_capped_block_for_forgiveness "PullRequest" "${open_pr}"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
                     count_blocked=$((count_blocked + 1))
-                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)"
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)")")
                     continue
                 fi
                 # PR observed open and un-blocked — re-arm its blocked notifier and, if the
@@ -436,7 +431,7 @@ main() {
                 if ! pr_review_comments=$(fetch_pr_review_comments "${open_pr}"); then
                     warn "Failed to fetch review comments for PR #${open_pr} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch review comments - skipping this item for now"
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch review comments - skipping this item for now")")
                     continue
                 fi
                 pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
@@ -456,7 +451,7 @@ main() {
                         info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
                     fi
                     count_unchanged=$((count_unchanged + 1))
-                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "CI checks pending"
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "CI checks pending")")
                     continue
                 fi
                 clear_pr_ci_pending_state "${open_pr}"
@@ -468,7 +463,7 @@ main() {
                             notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
                         fi
                         count_unchanged=$((count_unchanged + 1))
-                        record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed"
+                        item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
                         continue
                     fi
                 fi
@@ -493,14 +488,14 @@ main() {
                                 if pr_json_has_failed_required_check "${pr_json}"; then
                                     info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
                                     block_pr_for_idle_exhausted_failure "${open_pr}" "${item_repo}"
-                                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with a failed required check - blocking"
+                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with a failed required check - blocking")")
                                 elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                                     info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                                     block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
-                                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking"
+                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                                 else
                                     info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                                    record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo"
+                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo")")
                                 fi
                                 count_unchanged=$((count_unchanged + 1))
                                 continue
@@ -523,7 +518,7 @@ main() {
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then
                     warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "failed to fetch issue state - skipping this item for now"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to fetch issue state - skipping this item for now")")
                     continue
                 fi
 
@@ -558,7 +553,7 @@ main() {
                     fi
                     info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
                     count_not_open=$((count_not_open + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - skipping"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
 
@@ -567,7 +562,7 @@ main() {
                     mark_capped_block_for_forgiveness "Issue" "${item_id}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
                 # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
@@ -584,7 +579,7 @@ main() {
                 if ! resolve_gh_me; then
                     warn "Failed to determine current GitHub user for Issue #${item_id} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "failed to determine current GitHub user - skipping this item for now"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to determine current GitHub user - skipping this item for now")")
                     continue
                 fi
                 if printf '%s' "${issue_json}" | jq -e --arg me "${_GH_ME}" \
@@ -592,7 +587,7 @@ main() {
                     > /dev/null 2>&1; then
                     info "Issue #${item_id} in ${item_repo} is assigned to another user — standing off"
                     count_human_driven=$((count_human_driven + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "assigned to another user - standing off"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "assigned to another user - standing off")")
                     continue
                 fi
 
@@ -641,7 +636,7 @@ main() {
                         if [ "${plan_approved}" = "true" ]; then
                             info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
                             block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
-                            record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
                         elif issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
                             && ! issue_plan_block_marked "${item_id}"; then
                             # The agent posted a plan and ended its session without applying
@@ -655,10 +650,10 @@ main() {
                             info "Issue #${item_id} in ${item_repo}: plan posted but never marked Blocked — self-healing"
                             block_issue_for_unapplied_plan_approval "${item_id}" "${item_repo}" \
                                 && mark_issue_plan_block "${item_id}"
-                            record_item_status "Issue" "${item_id}" "${item_repo}" "plan posted but never marked Blocked - self-healing"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "plan posted but never marked Blocked - self-healing")")
                         else
                             info "Issue #${item_id} in ${item_repo} unchanged — skipping"
-                            record_item_status "Issue" "${item_id}" "${item_repo}" "unchanged - skipping"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "unchanged - skipping")")
                         fi
                         count_unchanged=$((count_unchanged + 1))
                         continue
@@ -677,12 +672,12 @@ main() {
                 if [ "${standoff_rc}" -eq 0 ]; then
                     info "Issue #${item_id} in ${item_repo}: PR #${standoff_pr} is being developed by a human — standing off"
                     count_human_driven=$((count_human_driven + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "linked PR #${standoff_pr} is being developed by a human - standing off"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "linked PR #${standoff_pr} is being developed by a human - standing off")")
                     continue
                 elif [ "${standoff_rc}" -eq 2 ]; then
                     warn "Failed to check for a human-driven PR for Issue #${item_id} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
-                    record_item_status "Issue" "${item_id}" "${item_repo}" "failed to check for a human-driven PR - skipping this item for now"
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to check for a human-driven PR - skipping this item for now")")
                     continue
                 fi
                 # Fall through to work block (item_type remains "Issue").
@@ -693,7 +688,7 @@ main() {
             if ! pr_json=$(fetch_pr_json "${item_id}"); then
                 warn "Failed to fetch state for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch PR state - skipping this item for now"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch PR state - skipping this item for now")")
                 # An open PR whose state cannot be fetched must still serialize its repo, like
                 # every other unknown-status path (#1134 review round 3).
                 skip_repos+=("${item_repo}")
@@ -704,21 +699,21 @@ main() {
             if [ "${pr_state}" != "OPEN" ]; then
                 info "PR #${item_id} in ${item_repo} is no longer open — skipping"
                 count_not_open=$((count_not_open + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "no longer open - skipping"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "no longer open - skipping")")
                 continue
             fi
 
             if pr_json_has_blocked_label "${pr_json}"; then
                 if try_auto_unblock_env_diagnosed_pr "${item_id}" "${item_repo}" "${pr_json}"; then
                     count_blocked=$((count_blocked + 1))
-                    record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - auto-unblock attempted this tick"
+                    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - auto-unblock attempted this tick")")
                     continue
                 fi
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
                 mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
                 notify_discord_blocked_item "PullRequest" "${item_id}"
                 count_blocked=$((count_blocked + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - skipping (not counting as active work)"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - skipping (not counting as active work)")")
                 continue
             fi
             # PR observed open and un-blocked — re-arm its blocked notifier and, if the
@@ -745,12 +740,12 @@ main() {
             if [ "${human_driven_rc}" -eq 0 ]; then
                 info "PR #${item_id} in ${item_repo} is being developed by a human — standing off"
                 count_human_driven=$((count_human_driven + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "being developed by a human - standing off"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "being developed by a human - standing off")")
                 continue
             elif [ "${human_driven_rc}" -eq 2 ]; then
                 warn "Failed to determine commit authorship for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to determine commit authorship - skipping this item for now"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to determine commit authorship - skipping this item for now")")
                 skip_repos+=("${item_repo}")
                 continue
             fi
@@ -765,7 +760,7 @@ main() {
             if ! resolve_gh_me; then
                 warn "Failed to determine current GitHub user for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to determine current GitHub user - skipping this item for now"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to determine current GitHub user - skipping this item for now")")
                 skip_repos+=("${item_repo}")
                 continue
             fi
@@ -775,7 +770,7 @@ main() {
                     > /dev/null 2>&1; then
                     info "PR #${item_id} in ${item_repo} is assigned to another user — standing off"
                     count_human_driven=$((count_human_driven + 1))
-                    record_item_status "PullRequest" "${item_id}" "${item_repo}" "assigned to another user - standing off"
+                    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "assigned to another user - standing off")")
                     continue
                 fi
             fi
@@ -786,7 +781,7 @@ main() {
             if ! pr_review_comments=$(fetch_pr_review_comments "${item_id}"); then
                 warn "Failed to fetch review comments for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch review comments - skipping this item for now"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch review comments - skipping this item for now")")
                 continue
             fi
             pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
@@ -811,7 +806,7 @@ main() {
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
                 fi
                 count_unchanged=$((count_unchanged + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "CI checks pending"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "CI checks pending")")
                 continue
             fi
             clear_pr_ci_pending_state "${item_id}"
@@ -823,7 +818,7 @@ main() {
                         notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
                     fi
                     count_unchanged=$((count_unchanged + 1))
-                    record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed"
+                    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
                     continue
                 fi
             fi
@@ -840,14 +835,14 @@ main() {
                     if pr_json_has_failed_required_check "${pr_json}"; then
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
                         block_pr_for_idle_exhausted_failure "${item_id}" "${item_repo}"
-                        record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with a failed required check - blocking"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with a failed required check - blocking")")
                     elif pr_json_has_unaddressed_review_request "${pr_json}"; then
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
-                        record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
                         info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                        record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged - skipping"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged - skipping")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
@@ -883,7 +878,7 @@ main() {
         ensure_repo_current_status=$?
         if [ "${ensure_repo_current_status}" -eq 2 ]; then
             count_error=$((count_error + 1))
-            record_item_status "${item_type}" "${item_id}" "${item_repo}" "failed to bring the repo up to date - skipping this item for now"
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "failed to bring the repo up to date - skipping this item for now")")
             continue
         elif [ "${ensure_repo_current_status}" -ne 0 ]; then
             info "Repo not clean for ${item_repo} — handing off to agent to recover"
@@ -901,7 +896,7 @@ main() {
                     else
                         warn "Failed to compute post-rebase fingerprint for PR #${item_id} in ${item_repo} — will re-evaluate next tick"
                         count_error=$((count_error + 1))
-                        record_item_status "PullRequest" "${item_id}" "${item_repo}" "rebased non-agentically but failed to compute post-rebase fingerprint - will re-evaluate next tick"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "rebased non-agentically but failed to compute post-rebase fingerprint - will re-evaluate next tick")")
                     fi
                     # A free non-agentic rebase must not block other same-repo Issues from
                     # being picked up in the same tick (#1114).
@@ -983,7 +978,7 @@ main() {
                     fi
                 fi
                 count_blocked=$((count_blocked + 1))
-                record_item_status "PullRequest" "${item_id}" "${item_repo}" "used ${PR_INVOCATION_TOTAL} agent invocations without converging - marking Blocked"
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "used ${PR_INVOCATION_TOTAL} agent invocations without converging - marking Blocked")")
                 continue
             fi
         elif [ "${item_type}" = "Issue" ]; then
@@ -1002,7 +997,7 @@ main() {
                     fi
                 fi
                 count_blocked=$((count_blocked + 1))
-                record_item_status "Issue" "${item_id}" "${item_repo}" "used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging - marking Blocked"
+                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging - marking Blocked")")
                 continue
             fi
         fi
@@ -1071,12 +1066,12 @@ main() {
                 warn "${item_type} #${item_id} in ${item_repo}: agent container failed ${new_infra_failures} times in a row before Claude could even start — marking Blocked"
                 apply_blocked_label_with_reason "${item_type}" "${item_id}" "${item_repo}" "${infra_block_reason}"
                 count_blocked=$((count_blocked + 1))
-                record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed ${new_infra_failures} times in a row before Claude could even start - marking Blocked"
+                item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed ${new_infra_failures} times in a row before Claude could even start - marking Blocked")")
                 continue
             fi
             warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) — not counted against the invocation budget"
             count_error=$((count_error + 1))
-            record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) - not counted against the invocation budget"
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) - not counted against the invocation budget")")
             continue
         fi
         # No other invoke_claude_exit value is reachable here: invoke_claude either dies
@@ -1137,7 +1132,8 @@ main() {
         exit 0
     done
 
-    notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}" "${count_error}" "${count_human_driven}" "$(serialize_item_status_log)"
+    notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}" "${count_error}" "${count_human_driven}" \
+        "$(serialize_item_status_log "${item_status_log[@]+"${item_status_log[@]}"}")"
     success "No actionable work items found across all priorities (blocked: ${count_blocked}, unchanged: ${count_unchanged}, repo-active: ${count_active_repo}, not-open: ${count_not_open}, errors: ${count_error}, human-driven: ${count_human_driven})"
 }
 

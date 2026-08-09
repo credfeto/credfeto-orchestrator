@@ -20,31 +20,35 @@ build_item_url() {
     esac
 }
 
-# Records one work-item's terminal status for this tick, for notify_discord_no_work's per-item
-# breakdown (#1291). Arguments: item_type, item_id, item_repo, reason (the trailing status
-# clause already logged via info/warn at the call site — reused verbatim, not reinvented).
-# Appends a compact JSON object to the caller's item_status_log array. Relies on bash's dynamic
-# scoping: item_status_log is declared local in oneshot's main() and this function, called from
-# within that scope, appends to it directly rather than returning a value.
+# Builds one work-item's terminal-status JSON object for this tick, for notify_discord_no_work's
+# per-item breakdown (#1291). Arguments: item_type, item_id, item_repo, reason (derived from the
+# reason already given to info/warn at the call site — the redundant "<Type> #<id> in <repo>"
+# prefix stripped, since those are captured as separate fields here, but otherwise not
+# reinvented). Outputs the compact JSON object on stdout; the caller (oneshot's main loop)
+# appends it to its own item_status_log array — kept a pure function, not a caller-array
+# mutator, so the data flow is an explicit argument/return at every call site rather than bash's
+# dynamic scoping (a rename of item_status_log in oneshot would otherwise silently break this
+# with no error, per #1291 review).
 record_item_status() {
     local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
-    item_status_log+=("$(jq -cn \
+    jq -cn \
         --arg type "${item_type}" --arg id "${item_id}" --arg repo "${item_repo}" --arg reason "${reason}" \
-        '{type:$type,id:$id,repo:$repo,reason:$reason}')")
+        '{type:$type,id:$id,repo:$repo,reason:$reason}'
 }
 
-# Serializes the item_status_log array (populated by record_item_status) into a single compact
-# JSON array, for notify_discord_no_work's items_json argument. Bash dynamic scoping: reads the
-# caller's item_status_log directly, matching record_item_status's convention. Guards the
-# never-appended-to case explicitly rather than piping a possibly-empty array expansion into
-# jq -s — an empty `printf` still succeeds and jq -s on empty stdin already yields "[]", but the
-# explicit check avoids depending on that behaviour and keeps this readable as "nothing to do".
+# Serializes the caller's item_status_log entries (each produced by record_item_status) into a
+# single compact JSON array, for notify_discord_no_work's items_json argument. Takes the array
+# elements as positional arguments ("${item_status_log[@]}") rather than reading a same-named
+# variable by dynamic scope, matching record_item_status's explicit-data-flow convention (#1291
+# review). Guards the no-arguments case explicitly rather than piping a possibly-empty expansion
+# into jq -s — an empty `printf` still succeeds and jq -s on empty stdin already yields "[]", but
+# the explicit check avoids depending on that behaviour and keeps this readable as "nothing to do".
 serialize_item_status_log() {
-    if [ "${#item_status_log[@]}" -eq 0 ]; then
+    if [ "$#" -eq 0 ]; then
         printf '[]'
         return 0
     fi
-    printf '%s\n' "${item_status_log[@]}" | jq -s -c '.'
+    printf '%s\n' "$@" | jq -s -c '.'
 }
 
 # Sends a Discord embed notification when starting or resuming work on an item.
@@ -107,7 +111,10 @@ notify_discord_work_item() {
 # under Discord's 4096-character embed-description cap (#1291). Arguments: items_json (JSON
 # array of {type,id,repo,reason} objects, as produced by serialize_item_status_log). Reserves
 # headroom below the cap for a trailer line so any dropped tail is stated, never silently
-# dropped ("... and N more (see the journal for full detail)").
+# dropped ("... and N more (see the journal for full detail)"). Stops building lines (including
+# skipping the build_item_url call) as soon as the budget is exhausted, rather than building
+# every line up front and discarding the tail, so a large items_json does not pay for work whose
+# result is guaranteed to be thrown away (#1291 review).
 # Outputs nothing (not even a trailing newline) when items_json is empty or "[]".
 _build_no_work_item_breakdown() {
     local items_json="$1"
@@ -116,31 +123,24 @@ _build_no_work_item_breakdown() {
     [[ "${total}" =~ ^[0-9]+$ ]] || total=0
     [ "${total}" -gt 0 ] || return 0
 
-    local -a all_lines=()
-    local type id repo reason url line
-    while IFS=$'\t' read -r type id repo reason; do
-        url="$(build_item_url "${type}" "${id}" "${repo}")"
-        line="- [${type} #${id} in ${repo}](${url}): ${reason}"
-        all_lines+=("${line}")
-    done < <(printf '%s' "${items_json}" | jq -r '.[] | [.type, .id, .repo, .reason] | @tsv')
-
     # Budget leaves headroom under Discord's 4096-char cap for the trailer line below.
     local budget=3900
     local -a kept_lines=()
-    local used=0 shown=0 line_len
-    for line in "${all_lines[@]}"; do
+    local type id repo reason url line used=0 line_len
+    while IFS=$'\t' read -r type id repo reason; do
+        url="$(build_item_url "${type}" "${id}" "${repo}")"
+        line="- [${type} #${id} in ${repo}](${url}): ${reason}"
         line_len=$(( ${#line} + 1 ))   # +1 for the joining newline
         [ "$(( used + line_len ))" -le "${budget}" ] || break
         kept_lines+=("${line}")
         used=$(( used + line_len ))
-        shown=$(( shown + 1 ))
-    done
+    done < <(printf '%s' "${items_json}" | jq -r '.[] | [.type, .id, .repo, .reason] | @tsv')
 
     local description
     description=$(printf '%s\n' "${kept_lines[@]+"${kept_lines[@]}"}")
-    if [ "${shown}" -lt "${total}" ]; then
+    if [ "${#kept_lines[@]}" -lt "${total}" ]; then
         description="${description}
-... and $(( total - shown )) more (see the journal for full detail)"
+... and $(( total - ${#kept_lines[@]} )) more (see the journal for full detail)"
     fi
     printf '%s' "${description}"
 }
