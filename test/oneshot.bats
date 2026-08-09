@@ -3971,6 +3971,10 @@ STUBEOF
 # Call this inside each test after sourcing (i.e. after setup has run) to
 # replace every function that performs real I/O.
 setup_main_mocks() {
+    # Deterministic baseline for the self-update staleness gate (#1298): never inherit a real
+    # INVOCATION_ID from whatever environment is actually running these tests. Individual tests
+    # opt into the "systemd-invoked" path by exporting it themselves.
+    unset INVOCATION_ID
     make_stub flock 'exit 0'
     check_required_tools()      { return 0; }
     set_repo_context()          { return 0; }
@@ -6406,8 +6410,9 @@ setup_local_git_remote() {
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {
+    # setup_local_git_remote's own push already updates REPO_WORK_DIR's origin/main tracking ref
+    # locally — no separate fetch needed to observe it.
     setup_local_git_remote >/dev/null
-    git -C "${REPO_WORK_DIR}" fetch -q origin
 
     run git_commits_behind "${REPO_WORK_DIR}" HEAD origin/main
     [ "${status}" -eq 0 ]
@@ -6417,7 +6422,6 @@ setup_local_git_remote() {
 @test "git_commits_behind reports the count when origin/main has advanced" {
     local remote_dir
     remote_dir=$(setup_local_git_remote)
-    git -C "${REPO_WORK_DIR}" fetch -q origin
 
     # Advance the remote via a second, independent clone — REPO_WORK_DIR (the one under test)
     # must NOT itself merge these commits, only fetch, so its own HEAD stays behind.
@@ -6440,10 +6444,6 @@ setup_local_git_remote() {
 @test "git_commits_behind returns 1 with no output when upstream does not exist (a fetch has never succeeded)" {
     local clone="${TEST_TMP}/behind-clone-no-remote"
     git init -q "${clone}"
-    git -C "${clone}" config user.email "test@example.com"
-    git -C "${clone}" config user.name "Test"
-    git -C "${clone}" config core.hooksPath /dev/null
-    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
 
     run git_commits_behind "${clone}" HEAD origin/main
     [ "${status}" -ne 0 ]
@@ -8718,8 +8718,9 @@ STUBEOF
 
 # --- main: self-update staleness check (#1298) --------------------------------
 
-@test "main refuses to run and notifies Discord when the checkout is behind origin/main" {
+@test "main refuses to run and notifies Discord when systemd-invoked and the checkout is behind origin/main" {
     setup_main_mocks
+    export INVOCATION_ID="test-invocation"
     git_commits_behind() { printf '3'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -8736,8 +8737,29 @@ STUBEOF
     [ ! -f "${claude_log}" ]
 }
 
-@test "main proceeds normally when the checkout is up to date with origin/main" {
+@test "main does not refuse to run when INVOCATION_ID is unset, even when the checkout is behind origin/main (#1298 review — loop/manual invocation must not be gated by the systemd-only policy)" {
     setup_main_mocks
+    # INVOCATION_ID deliberately left unset by setup_main_mocks — this is loop's or a manual
+    # invocation's shape, neither of which install-timer's ExecStartPre ran ahead of.
+    git_commits_behind() { printf '3'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_self_update_stale() { printf 'notified\n' >> "${discord_log}"; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
+    [ ! -f "${discord_log}" ]
+}
+
+@test "main proceeds normally when systemd-invoked and the checkout is up to date with origin/main" {
+    setup_main_mocks
+    export INVOCATION_ID="test-invocation"
     git_commits_behind() { printf '0'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -8751,8 +8773,9 @@ STUBEOF
     [[ "${output}" != *"behind origin/main"* ]]
 }
 
-@test "main proceeds normally when git_commits_behind is inconclusive (e.g. origin/main does not exist yet)" {
+@test "main proceeds normally when systemd-invoked and git_commits_behind is inconclusive (e.g. origin/main does not exist yet)" {
     setup_main_mocks
+    export INVOCATION_ID="test-invocation"
     git_commits_behind() { return 1; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'

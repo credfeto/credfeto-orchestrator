@@ -179,7 +179,17 @@ main() {
     # needs DISCORD_WEBHOOK_URL), rather than later: a stale checkout should refuse before paying
     # for the gpg keyring probe, ssh-agent preload, cgroup setup, and disk-space check below, only
     # to throw all of that away on this exit anyway.
-    if behind_count=$(git_commits_behind "${oneshot_dir}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
+    #
+    # Scoped to the systemd path only, via INVOCATION_ID (set by systemd for every unit's main
+    # process since systemd 232 — its presence is exactly the signal that install-timer's
+    # ExecStartPre self-update ran immediately before this process started). loop has its own,
+    # deliberately looser recovery policy for the same underlying condition: a failed/stale git
+    # pull there just warns and keeps going, since loop's own retry cadence recovers it on a later
+    # iteration (loop:19-23, #1104) rather than being wedged forever the way a stale ExecStartPre
+    # lock is — this check must not override that decision. A manual/interactive invocation may
+    # also legitimately be on a different commit for reasons unrelated to a wedged self-update.
+    if [ -n "${INVOCATION_ID:-}" ] \
+        && behind_count=$(git_commits_behind "${oneshot_dir}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
         warn "This checkout is ${behind_count} commit(s) behind origin/main — the self-update step did not converge (see ai/local/debugging.instructions.md State Inventory #1)"
         notify_discord_self_update_stale "${owner_filter}" "${head_sha}" "${behind_count}"
         exit 1

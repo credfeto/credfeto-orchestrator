@@ -54,7 +54,7 @@ teardown() {
 assert_selfupdate_execstartpre() {
     local svc="$1"
     grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C .* merge --ff-only origin/main \|\| \{ rm -f .*/\.git/\*\.lock; git -C .* merge --ff-only origin/main; \}'\$" "${svc}"
+    grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
 }
 
 @test "sourcing install-timer defines main without executing it" {
@@ -89,6 +89,58 @@ assert_selfupdate_execstartpre() {
     run check_required_tools
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Required tool not found"* ]]
+}
+
+@test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
+    # Reproduces the exact failure the retry exists to recover from: a merge killed while
+    # updating the branch ref leaves its lock at .git/refs/heads/<branch>.lock, not directly
+    # under .git/ — a flat .git/*.lock glob (round 1 of this fix) would miss it entirely.
+    local remote="${TEST_TMP}/retry-remote.git"
+    local repo="${TEST_TMP}/retry-repo"
+    git init --bare -q "${remote}"
+    git -C "${remote}" symbolic-ref HEAD refs/heads/main
+    git clone -q "${remote}" "${repo}"
+    git -C "${repo}" config user.email "test@example.com"
+    git -C "${repo}" config user.name "Test"
+    git -C "${repo}" config core.hooksPath /dev/null
+    git -C "${repo}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+    git -C "${repo}" push -q origin main
+
+    local second_clone="${TEST_TMP}/retry-second-clone"
+    git clone -q "${remote}" "${second_clone}"
+    git -C "${second_clone}" config user.email "test@example.com"
+    git -C "${second_clone}" config user.name "Test"
+    git -C "${second_clone}" config core.hooksPath /dev/null
+    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "second" >/dev/null 2>&1
+    git -C "${second_clone}" push -q origin main
+    git -C "${repo}" fetch -q origin
+
+    touch "${repo}/.git/refs/heads/main.lock"
+
+    # Generate the unit AGAINST this fixture repo — REPO_DIR is a plain global create_service_unit
+    # reads, so overriding it here means the extracted ExecStartPre line already targets the
+    # fixture directly; no text-surgery/retargeting needed.
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    REPO_DIR="${repo}"
+    run main
+    [ "${status}" -eq 0 ]
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+
+    # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent
+    # socket step a few lines below also matches a bare "/bin/sh -c '".
+    local retry_cmd
+    retry_cmd=$(grep -F "timeout 30 /bin/sh -c '" "${svc}")
+    retry_cmd="${retry_cmd#*-c \'}"
+    retry_cmd="${retry_cmd%\'}"
+
+    run /bin/sh -c "${retry_cmd}"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${repo}/.git/refs/heads/main.lock" ]
+
+    run git -C "${repo}" rev-parse HEAD
+    local head="${output}"
+    run git -C "${repo}" rev-parse origin/main
+    [ "${head}" = "${output}" ]
 }
 
 @test "install-timer creates unit files and invokes systemctl correctly" {
