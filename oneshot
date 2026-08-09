@@ -162,19 +162,6 @@ main() {
 
     check_required_tools
     load_env_config
-    validate_config "${owner_filter}"
-    if [ -n "${GIT_SIGNING_KEY}" ]; then
-        gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
-            || die "Signing key ${GIT_SIGNING_KEY} is set in .env but not found in the GPG keyring — import it with 'gpg --import <key-file>'"
-    fi
-    preload_ssh_keys
-    setup_cgroup_leaf
-
-    if ! check_disk_space; then
-        notify_discord_low_disk_space "${owner_filter}"
-        warn "Insufficient disk space — skipping all work this cycle"
-        exit 0
-    fi
 
     local head_sha oneshot_dir behind_count
     oneshot_dir="$(dirname "$(realpath "$0")")"
@@ -187,11 +174,29 @@ main() {
     # surfacing it short of manually reading journalctl (#1298). A confirmed positive count here
     # means this checkout is definitely stale; refuse to run this tick on stale code rather than
     # silently continuing. An inconclusive result (git_commits_behind returns 1 — e.g. origin/main
-    # doesn't exist yet because a fetch has never succeeded) must never block a run.
+    # doesn't exist yet because a fetch has never succeeded) must never block a run. Checked here,
+    # right after load_env_config (the only earlier dependency — notify_discord_self_update_stale
+    # needs DISCORD_WEBHOOK_URL), rather than later: a stale checkout should refuse before paying
+    # for the gpg keyring probe, ssh-agent preload, cgroup setup, and disk-space check below, only
+    # to throw all of that away on this exit anyway.
     if behind_count=$(git_commits_behind "${oneshot_dir}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
         warn "This checkout is ${behind_count} commit(s) behind origin/main — the self-update step did not converge (see ai/local/debugging.instructions.md State Inventory #1)"
         notify_discord_self_update_stale "${owner_filter}" "${head_sha}" "${behind_count}"
         exit 1
+    fi
+
+    validate_config "${owner_filter}"
+    if [ -n "${GIT_SIGNING_KEY}" ]; then
+        gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+            || die "Signing key ${GIT_SIGNING_KEY} is set in .env but not found in the GPG keyring — import it with 'gpg --import <key-file>'"
+    fi
+    preload_ssh_keys
+    setup_cgroup_leaf
+
+    if ! check_disk_space; then
+        notify_discord_low_disk_space "${owner_filter}"
+        warn "Insufficient disk space — skipping all work this cycle"
+        exit 0
     fi
 
     # Acquire an exclusive per-owner lock so concurrent invocations (e.g. two

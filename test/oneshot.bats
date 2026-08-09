@@ -6406,42 +6406,23 @@ setup_local_git_remote() {
 # --- git_commits_behind unit tests (#1298) --------------------------------------
 
 @test "git_commits_behind reports 0 when ref and upstream are the same commit" {
-    local remote="${TEST_TMP}/behind-remote.git"
-    local clone="${TEST_TMP}/behind-clone"
-    git init --bare -q "${remote}"
-    git -C "${remote}" symbolic-ref HEAD refs/heads/main
-    git init -q "${clone}"
-    git -C "${clone}" config user.email "test@example.com"
-    git -C "${clone}" config user.name "Test"
-    git -C "${clone}" config core.hooksPath /dev/null
-    git -C "${clone}" remote add origin "${remote}"
-    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
-    git -C "${clone}" push -q origin HEAD:refs/heads/main
-    git -C "${clone}" fetch -q origin
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" fetch -q origin
 
-    run git_commits_behind "${clone}" HEAD origin/main
+    run git_commits_behind "${REPO_WORK_DIR}" HEAD origin/main
     [ "${status}" -eq 0 ]
     [ "${output}" = "0" ]
 }
 
 @test "git_commits_behind reports the count when origin/main has advanced" {
-    local remote="${TEST_TMP}/behind-remote.git"
-    local clone="${TEST_TMP}/behind-clone"
-    git init --bare -q "${remote}"
-    git -C "${remote}" symbolic-ref HEAD refs/heads/main
-    git init -q "${clone}"
-    git -C "${clone}" config user.email "test@example.com"
-    git -C "${clone}" config user.name "Test"
-    git -C "${clone}" config core.hooksPath /dev/null
-    git -C "${clone}" remote add origin "${remote}"
-    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
-    git -C "${clone}" push -q origin HEAD:refs/heads/main
-    git -C "${clone}" fetch -q origin
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" fetch -q origin
 
-    # Advance the remote via a second, independent clone — "${clone}" (the one under test) must
-    # NOT itself merge these commits, only fetch, so its own HEAD stays behind.
+    # Advance the remote via a second, independent clone — REPO_WORK_DIR (the one under test)
+    # must NOT itself merge these commits, only fetch, so its own HEAD stays behind.
     local second_clone="${TEST_TMP}/behind-second-clone"
-    git clone -q "${remote}" "${second_clone}"
+    git clone -q "${remote_dir}" "${second_clone}"
     git -C "${second_clone}" config user.email "test@example.com"
     git -C "${second_clone}" config user.name "Test"
     git -C "${second_clone}" config core.hooksPath /dev/null
@@ -6449,9 +6430,9 @@ setup_local_git_remote() {
     git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "third" >/dev/null 2>&1
     git -C "${second_clone}" push -q origin main
 
-    git -C "${clone}" fetch -q origin
+    git -C "${REPO_WORK_DIR}" fetch -q origin
 
-    run git_commits_behind "${clone}" HEAD origin/main
+    run git_commits_behind "${REPO_WORK_DIR}" HEAD origin/main
     [ "${status}" -eq 0 ]
     [ "${output}" = "2" ]
 }
