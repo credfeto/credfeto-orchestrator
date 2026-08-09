@@ -182,7 +182,7 @@ fetch_pr_fields_json() {
 # general "trusted emails" list, so this is not a substitute for the login check, only a
 # lag-immune addition to it for the one identity callers can supply an email for. Single
 # definition shared by the pivot and human-driven predicates so they cannot diverge (#1134).
-json_has_commit_author_login() {
+json_has_commit_author_identity() {
     local me="$1" my_email="${2:-}"
     jq -e --arg me "${me}" --arg my_email "${my_email}" '
         [(.commits // [])[] | (.authors // [])[]]
@@ -236,7 +236,7 @@ find_open_nonblocked_pr_for_repo() {
 pr_has_bot_authored_commit() {
     local repo_full="$1" pr_number="$2" commits_json
     commits_json=$(fetch_pr_fields_json "${pr_number}" commits "${repo_full}") || return 2
-    printf '%s' "${commits_json}" | json_has_commit_author_login "${_GH_ME}" "${GIT_USER_EMAIL}"
+    printf '%s' "${commits_json}" | json_has_commit_author_identity "${_GH_ME}" "${GIT_USER_EMAIL}"
 }
 
 # Finds an open, non-blocked PR that the bot created but a human has since taken over (zero
@@ -358,7 +358,7 @@ pr_is_human_driven() {
 
     resolve_gh_me || return 2
 
-    if printf '%s' "${pr_json}" | json_has_commit_author_login "${_GH_ME}" "${GIT_USER_EMAIL}"; then
+    if printf '%s' "${pr_json}" | json_has_commit_author_identity "${_GH_ME}" "${GIT_USER_EMAIL}"; then
         return 1
     fi
 

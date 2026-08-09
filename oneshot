@@ -65,7 +65,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # host_to_container_path and set_repo_context are declared in lib/git.
 
 # _fetch_repo_collaborators, get_trusted_logins, require_trusted_logins, fetch_all_priorities,
-# resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_login,
+# resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_identity,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
 # resolve_resumable_issue_branch, pr_has_depends_branch, pr_has_dependency_label, and
 # pr_is_human_driven are declared in lib/github. ensure_rules_current,

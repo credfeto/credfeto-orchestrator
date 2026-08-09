@@ -3390,37 +3390,37 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
-# --- json_has_commit_author_login (#1294) --------------------------------------
+# --- json_has_commit_author_identity (#1294) --------------------------------------
 
-@test "json_has_commit_author_login matches on resolved login" {
-    run json_has_commit_author_login "testuser" <<< '{"commits":[{"authors":[{"login":"testuser"}]}]}'
+@test "json_has_commit_author_identity matches on resolved login" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":"testuser"}]}]}'
     [ "${status}" -eq 0 ]
 }
 
-@test "json_has_commit_author_login fails when neither login nor email is given/matches" {
-    run json_has_commit_author_login "testuser" <<< '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+@test "json_has_commit_author_identity fails when neither login nor email is given/matches" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     [ "${status}" -ne 0 ]
 }
 
-@test "json_has_commit_author_login matches on email when login is null (#1294)" {
-    run json_has_commit_author_login "testuser" "bot@example.com" \
+@test "json_has_commit_author_identity matches on email when login is null (#1294)" {
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
         <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
     [ "${status}" -eq 0 ]
 }
 
-@test "json_has_commit_author_login ignores email match when the email argument is empty (#1294)" {
-    run json_has_commit_author_login "testuser" "" \
+@test "json_has_commit_author_identity ignores email match when the email argument is empty (#1294)" {
+    run json_has_commit_author_identity "testuser" "" \
         <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
     [ "${status}" -ne 0 ]
 }
 
-@test "json_has_commit_author_login ignores email match when the email argument is omitted (#1294)" {
-    run json_has_commit_author_login "testuser" <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+@test "json_has_commit_author_identity ignores email match when the email argument is omitted (#1294)" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
     [ "${status}" -ne 0 ]
 }
 
-@test "json_has_commit_author_login does not match a different email (#1294)" {
-    run json_has_commit_author_login "testuser" "bot@example.com" \
+@test "json_has_commit_author_identity does not match a different email (#1294)" {
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
         <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"}]}]}'
     [ "${status}" -ne 0 ]
 }
