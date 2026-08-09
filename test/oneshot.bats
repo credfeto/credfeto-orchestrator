@@ -4969,40 +4969,49 @@ STUBEOF
     [ ! -f "${args_log2}" ]
 }
 
-@test "notify_discord_no_work resends same message after one hour has elapsed" {
+@test "notify_discord_no_work resends same content after one hour has elapsed" {
+    # Two sequential real calls with IDENTICAL args, so the second call's dedup_hash genuinely
+    # matches the state file the first call wrote — this is what actually exercises the
+    # elapsed-time branch (elapsed > 3600), rather than a placeholder hash that can never match
+    # regardless of timing (#1291 review: the prior version of this test used a hand-seeded
+    # placeholder hash and would still pass even if the elapsed-time check were broken).
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub date "echo 1700003601"
 
-    # The dedup key is now a hash of title+description (#1291), not the raw text — the exact
-    # hash value does not matter here, only that it is stale enough (elapsed > 3600) to resend
-    # regardless of whether it happens to match.
-    local state_file="${HOME}/.orchestrator/.no_work__global.state"
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n%s\n' "$(printf '0%.0s' $(seq 1 64))" "1700000000" > "${state_file}"
-
+    make_stub date "echo 1700000000"
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
     run notify_discord_no_work "" 0 0 0 0
     [ "${status}" -eq 0 ]
-    grep -q "No actionable work items found" "${args_log}"
+    [ -f "${args_log1}" ]
+
+    make_stub date "echo 1700003601"   # 3601s later — just past the one-hour window
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log2}" ]
+    grep -q "No actionable work items found" "${args_log2}"
 }
 
-@test "notify_discord_no_work sends different message immediately even within the last hour" {
+@test "notify_discord_no_work sends different content immediately even within the last hour" {
+    # Two sequential real calls with DIFFERENT args at the SAME timestamp, so the second call's
+    # dedup_hash genuinely differs from the state file the first call wrote (#1291 review — see
+    # rationale on the sibling elapsed-time test above).
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
     make_stub date "echo 1700000000"
 
-    # A placeholder hash that cannot match this call's real (title+description) hash, so the
-    # dedup comparison falls through to "different content — send immediately" regardless of
-    # the elapsed time.
-    local state_file="${HOME}/.orchestrator/.no_work__global.state"
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n%s\n' "$(printf '0%.0s' $(seq 1 64))" "1700000000" > "${state_file}"
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
 
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
     run notify_discord_no_work "" 0 5 0 0
     [ "${status}" -eq 0 ]
-    grep -q "unchanged: 5" "${args_log}"
+    [ -f "${args_log2}" ]
+    grep -q "unchanged: 5" "${args_log2}"
 }
 
 @test "notify_discord_no_work saves a hash (not raw text) to disk after sending" {
@@ -5173,6 +5182,17 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"more (see the journal for full detail)"* ]]
     [[ "${output}" != *"Issue #399"* ]]
+
+    # Assert the trailer's stated count and kept-item count actually add up to 400, and that a
+    # substantial number of items were kept (not just one) — an off-by-one in the trailer count,
+    # or a budget/line-length regression that keeps far fewer items than expected, would both
+    # still pass the substring-only assertions above (#1291 review).
+    local kept_count trailer_count
+    kept_count=$(printf '%s\n' "${output}" | grep -c '^- \[Issue #')
+    trailer_count=$(printf '%s\n' "${output}" | sed -n 's/^\.\.\. and \([0-9]\+\) more.*/\1/p')
+    [ -n "${trailer_count}" ]
+    [ "$(( kept_count + trailer_count ))" -eq 400 ]
+    [ "${kept_count}" -gt 30 ]
 }
 
 # --- build_item_url: repo override (#1291) --------------------------------------

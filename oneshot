@@ -1071,7 +1071,13 @@ main() {
             fi
             warn "${item_type} #${item_id} in ${item_repo}: agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) — not counted against the invocation budget"
             count_error=$((count_error + 1))
-            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure, ${new_infra_failures}/${MAX_CONSECUTIVE_INFRA_FAILURES}) - not counted against the invocation budget")")
+            # Deliberately omits new_infra_failures/MAX_CONSECUTIVE_INFRA_FAILURES from the
+            # recorded reason (unlike the warn line above): this site recurs every tick while
+            # below the threshold, so a strictly-increasing counter baked into the Discord
+            # breakdown text would change notify_discord_no_work's dedup hash every tick,
+            # defeating the documented at-most-once-per-hour suppression for a situation that
+            # has not actually changed in kind (#1291 review).
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "agent container failed before Claude started (pre-flight/infra failure) - not counted against the invocation budget")")
             continue
         fi
         # No other invoke_claude_exit value is reachable here: invoke_claude either dies

@@ -118,10 +118,13 @@ notify_discord_work_item() {
 # Outputs nothing (not even a trailing newline) when items_json is empty or "[]".
 _build_no_work_item_breakdown() {
     local items_json="$1"
+    # Single jq pass over items_json: the total item count is derived from counting these rows
+    # rather than a separate `jq length` call (#1291 review).
+    local tsv_rows
+    tsv_rows=$(printf '%s' "${items_json}" | jq -r '.[] | [.type, .id, .repo, .reason] | @tsv' 2>/dev/null)
+    [ -n "${tsv_rows}" ] || return 0
     local total
-    total=$(printf '%s' "${items_json}" | jq 'length' 2>/dev/null)
-    [[ "${total}" =~ ^[0-9]+$ ]] || total=0
-    [ "${total}" -gt 0 ] || return 0
+    total=$(printf '%s\n' "${tsv_rows}" | wc -l)
 
     # Budget leaves headroom under Discord's 4096-char cap for the trailer line below.
     local budget=3900
@@ -134,7 +137,7 @@ _build_no_work_item_breakdown() {
         [ "$(( used + line_len ))" -le "${budget}" ] || break
         kept_lines+=("${line}")
         used=$(( used + line_len ))
-    done < <(printf '%s' "${items_json}" | jq -r '.[] | [.type, .id, .repo, .reason] | @tsv')
+    done <<< "${tsv_rows}"
 
     local description
     description=$(printf '%s\n' "${kept_lines[@]+"${kept_lines[@]}"}")
