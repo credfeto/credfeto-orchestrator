@@ -171,13 +171,51 @@ fetch_pr_fields_json() {
     return 1
 }
 
-# Reads JSON with a .commits array on stdin and succeeds when any commit author or co-author
-# login equals the given login.  GitHub maps commit author emails to logins; commits whose
-# email maps to no account have no login and are ignored.  Single definition shared by the
-# pivot and human-driven predicates so they cannot diverge (#1134).
-json_has_commit_author_login() {
-    jq -e --arg me "$1" '
-        [(.commits // [])[] | (.authors // [])[] | .login // empty] | index($me) != null
+# Reads JSON with a .commits array on stdin and succeeds when any commit matches the given
+# identity — by resolved GitHub login (of that commit's author OR co-author), or, ONLY when that
+# ENTIRE COMMIT has no resolved login at all (neither author nor any co-author), by raw
+# commit-author email. GitHub maps commit author emails to logins asynchronously after a push; a
+# freshly-pushed commit's login can be temporarily empty even though the raw email (whatever the
+# committer's git identity actually wrote) is present immediately (#1294 — confirmed live: a
+# genuinely bot-authored PR was misclassified as human-driven for ~1h48m purely because the login
+# resolution for its latest commit hadn't landed yet).
+#
+# The email match is deliberately gated per COMMIT, not per individual author entry (#1294
+# review, round 2): raw commit-author email is unauthenticated — anyone with push access can set
+# `git config user.email`, or add a free-text `Co-authored-by:` trailer, to any string, including
+# a value copied from the bot's own commit history (it is literally the author email on every
+# commit the bot makes). Gating per author-entry instead of per commit was itself found to be
+# bypassable: a commit resolved to a genuine human primary author, plus an attacker-added
+# co-author trailer whose email matched, still matched via that co-author entry even though the
+# commit as a whole was unambiguously human-authored. Grouping by commit and requiring NONE of
+# that commit's authors to have a resolved login before trusting any of their emails closes that
+# gap: a commit whose primary author OR any co-author DOES resolve — to the bot, to a human
+# taking over, or to anyone else — is decided by that verified signal alone; email only ever
+# fills the gap when GitHub has told us nothing at all about that commit's identity, never
+# overrides what GitHub has already told us about it.
+#
+# Comparison is case-insensitive on the email side: a commit's raw author email can be recorded
+# in different case than GIT_USER_EMAIL depending on how it was set, and this is not a security
+# boundary (unlike the login match, which is exact) — it only ever fires for the one identity we
+# supply statically in advance, so any is-obviously-a-different-string values still stay refused.
+#
+# The email match exists only for identities we know statically in advance (the bot's own
+# GIT_USER_EMAIL) — there is no general "trusted emails" list, so this is not a substitute for
+# the login check for OTHER (non-bot) trusted identities, only a lag-immune addition to it for
+# the one identity callers can supply an email for. Single definition shared by the pivot and
+# human-driven predicates so they cannot diverge (#1134).
+json_has_commit_author_identity() {
+    local me="$1" my_email="${2:-}"
+    jq -e --arg me "${me}" --arg my_email "${my_email}" '
+        [(.commits // [])[] |
+            ((.authors // []) | map(.login // "") | map(select(. != ""))) as $resolved_logins
+            | ($resolved_logins | index($me) != null)
+              or (
+                  ($my_email != "")
+                  and ($resolved_logins | length == 0)
+                  and ((.authors // []) | any((.email // "" | ascii_downcase) == ($my_email | ascii_downcase)))
+              )
+        ] | any
     ' > /dev/null 2>&1
 }
 
@@ -227,7 +265,7 @@ find_open_nonblocked_pr_for_repo() {
 pr_has_bot_authored_commit() {
     local repo_full="$1" pr_number="$2" commits_json
     commits_json=$(fetch_pr_fields_json "${pr_number}" commits "${repo_full}") || return 2
-    printf '%s' "${commits_json}" | json_has_commit_author_login "${_GH_ME}"
+    printf '%s' "${commits_json}" | json_has_commit_author_identity "${_GH_ME}" "${GIT_USER_EMAIL}"
 }
 
 # Finds an open, non-blocked PR that the bot created but a human has since taken over (zero
@@ -349,7 +387,7 @@ pr_is_human_driven() {
 
     resolve_gh_me || return 2
 
-    if printf '%s' "${pr_json}" | json_has_commit_author_login "${_GH_ME}"; then
+    if printf '%s' "${pr_json}" | json_has_commit_author_identity "${_GH_ME}" "${GIT_USER_EMAIL}"; then
         return 1
     fi
 
@@ -365,6 +403,12 @@ pr_is_human_driven() {
         return 1
     fi
 
+    # NOTE: this scan keys on resolved .login only, unlike the bot's own identity check above —
+    # a trusted human's commit whose login hasn't resolved yet is invisible here, reintroducing
+    # the #1294 lag window for non-bot trusted identities (#1294 review). Not fixed here: unlike
+    # the bot's own GIT_USER_EMAIL, there is no "trusted emails" list anywhere in this codebase
+    # to fall back to (get_trusted_logins/WHITELISTED_USERS only ever carry logins) - closing
+    # this gap would need a genuinely new data source, not a threading-through of an existing one.
     if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" --argjson trusted "${trusted_logins}" '
         [(.commits // [])[] | (.authors // [])[] | .login // empty]
         | any(. as $l | $l != $me and (($trusted | index($l)) != null))

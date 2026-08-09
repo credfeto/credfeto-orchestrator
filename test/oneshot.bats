@@ -3390,6 +3390,77 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# --- json_has_commit_author_identity (#1294) --------------------------------------
+
+@test "json_has_commit_author_identity matches on resolved login" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":"testuser"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "json_has_commit_author_identity fails when neither login nor email is given/matches" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity matches on email when login is null (#1294)" {
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "json_has_commit_author_identity ignores email match when the email argument is empty (#1294)" {
+    run json_has_commit_author_identity "testuser" "" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity ignores email match when the email argument is omitted (#1294)" {
+    run json_has_commit_author_identity "testuser" <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity ignores an email match when login is resolved to someone else (spoofing guard, #1294 review)" {
+    # Security regression guard: a resolved (verified) login that is NOT the bot must win over a
+    # spoofable raw email that happens to equal GIT_USER_EMAIL — otherwise anyone with push access
+    # could claim bot authorship just by setting their commit-author email to a value copied from
+    # the bot's own commit history, defeating the human-takeover check (#1131/#1134).
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":"humanuser","email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity email match is case-insensitive (#1294 review)" {
+    run json_has_commit_author_identity "testuser" "Bot@Example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "json_has_commit_author_identity ignores a co-author email spoof when the same commit's primary author already resolved to a human (spoofing guard round 2, #1294 review)" {
+    # A resolved GitHub identity anywhere on a commit (author or co-author) must gate the email
+    # fallback for that WHOLE commit, not just the individual author entry it appears on —
+    # otherwise a human could take over with their own resolved commit and add a free-text
+    # "Co-authored-by: <name> <bot's email>" trailer to flip the commit back to "bot-authored"
+    # even though GitHub has already unambiguously attributed the commit to them.
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":"humanuser","email":"human@example.com"},{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "json_has_commit_author_identity still matches email when every author entry on the commit is unresolved (#1294 review)" {
+    # Companion to the above: a commit where NEITHER author nor co-author has a resolved login
+    # yet must still get the lag-fix benefit of the doubt via email — the per-commit gate must
+    # not become so strict it stops matching the original #1294 scenario.
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"},{"login":null,"email":"bot@example.com"}]}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "json_has_commit_author_identity does not match a different email (#1294)" {
+    run json_has_commit_author_identity "testuser" "bot@example.com" \
+        <<< '{"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"}]}]}'
+    [ "${status}" -ne 0 ]
+}
+
 # --- pr_has_bot_authored_commit (#1131) ----------------------------------------
 
 @test "pr_has_bot_authored_commit returns 0 when the bot authored a commit" {
@@ -3416,6 +3487,48 @@ STUBEOF
 @test "pr_has_bot_authored_commit ignores commits whose author has no mapped login" {
     _GH_ME="testuser"
     make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":null}]},{"authors":[]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit falls back to matching GIT_USER_EMAIL when login is unresolved (#1294)" {
+    # Simulates GitHub's commit-author login resolution lagging right after a push: the login is
+    # still null, but the raw commit-author email (present immediately, not GitHub-derived) is
+    # the bot's own — this must still classify as bot-authored.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_has_bot_authored_commit does not match on email when GIT_USER_EMAIL is unset" {
+    # Regression guard for the pre-#1294 behaviour: no email means no email-based match, so this
+    # falls back to login-only, matching every other pr_has_bot_authored_commit test in this file.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL=""
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit still returns 1 when neither login nor GIT_USER_EMAIL match (#1294)" {
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser","email":"human@example.com"}]}]}\n'"'"
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_bot_authored_commit returns 1 for a resolved human commit even with a spoofed matching email (#1294 review)" {
+    # Security regression guard: find_human_taken_over_pr_for_issue relies on this returning 1
+    # (not bot-authored) to detect a genuine takeover. A resolved, non-bot login must win over an
+    # unauthenticated commit-author email that happens to equal GIT_USER_EMAIL - otherwise a
+    # takeover is invisible to the stand-off logic and oneshot opens a duplicate branch/PR
+    # alongside the human's already-in-progress work.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    make_stub gh 'printf '"'"'{"commits":[{"authors":[{"login":"humanuser","email":"bot@example.com"}]}]}\n'"'"
     run pr_has_bot_authored_commit "org/repo" 5
     [ "${status}" -eq 1 ]
 }
@@ -3659,6 +3772,35 @@ STUBEOF
     _GH_ME="testuser"
     run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"testuser"}]}]}' '["credfeto"]'
     [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven returns 1 when login is unresolved but GIT_USER_EMAIL matches (#1294)" {
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":null,"email":"bot@example.com"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_is_human_driven still returns 0 for a human takeover even if a co-author email matches GIT_USER_EMAIL (spoofing guard, #1294 review)" {
+    # A human taking over a bot-created PR could add a "Co-Authored-By" trailer carrying the
+    # bot's own commit-author email (trivially copyable from the bot's git history) without ever
+    # controlling the bot's GitHub account. The resolved login on that commit is genuinely the
+    # human's own — the human-takeover verdict must not flip back to "still bot-driven" just
+    # because an unauthenticated email string happens to match.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"humanuser","email":"someone@example.com"},{"login":"humanuser","email":"bot@example.com"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_is_human_driven still detects a bot-created taken-over PR when the sole commit's email does not match GIT_USER_EMAIL (#1294)" {
+    # Regression guard: the email fallback must not swallow the existing "zero bot commits"
+    # takeover signal (author.login == bot, but no commit — bot or otherwise-matching-email —
+    # was ever authored by the bot) into a false "still bot-driven" verdict.
+    _GH_ME="testuser"
+    GIT_USER_EMAIL="bot@example.com"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":null,"email":"someone-else@example.com"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
 }
 
 @test "pr_is_human_driven returns 0 for a bot-created PR with zero bot commits (taken over)" {
