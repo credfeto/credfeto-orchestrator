@@ -54,6 +54,8 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Discord notification when a settled PR (auto-merge armed, all required checks green) has no approving review, so a human is alerted instead of the PR sitting invisibly mergeable-but-unapproved indefinitely (#1278)
 - Install python3-venv in the development-tools base image, so python3 -m venv no longer fails with ensurepip missing (#1289)
 - Bot-authored PRs and issues no longer briefly misclassified as human-driven when GitHub's commit-author identity resolution lags right after a push - the bot-authorship check now also matches the raw commit-author email against the orchestrator's own configured GIT_USER_EMAIL, which needs no GitHub-side resolution and is present immediately
+- Container-facing instructions now explain that a PreToolUse hook denial means a command never ran (retry immediately) instead of leaving agents to misread it as accepted and wait for a completion notification that a single-shot session can never receive - includes a concrete combined git -C <dir> commit / run_in_background: true example
+- recover_orphaned_branch now warns with a status summary before discarding uncommitted or untracked changes on an orphaned branch, instead of silently force-checking-out main with no trace of what was lost
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement

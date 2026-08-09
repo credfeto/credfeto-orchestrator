@@ -67,8 +67,11 @@ COMMAND_ALLOWLIST="${HOOK_DIR}/command-allowlist"
 COMMAND_BLOCKLIST="${HOOK_DIR}/command-blocklist"
 ENV_VAR_BLOCKLIST="${HOOK_DIR}/env-var-blocklist"
 
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
 block() {
-  printf 'Blocked: %s\n' "$1" >&2
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
   exit 2
 }
 

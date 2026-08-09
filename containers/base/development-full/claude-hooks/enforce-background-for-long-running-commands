@@ -30,8 +30,12 @@
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
 
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281). Especially relevant here: this hook exists specifically to
+# force backgrounding, so its own denial is exactly where that misread has been observed live.
 block() {
-  printf 'Blocked: %s\n' "$1" >&2
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
   exit 2
 }
 

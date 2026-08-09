@@ -147,6 +147,15 @@ recover_orphaned_branch() {
     git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1 \
         && return 1
 
+    # checkout -f below has no dirty-tree check of its own — warn first so a discarded branch's
+    # work leaves a trace a human could search for (#1281).
+    local dirty_status
+    dirty_status=$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=normal 2>/dev/null)
+    if [ -n "${dirty_status}" ]; then
+        warn "Branch '${current_branch}' for ${REPO_FULL} is orphaned (no longer exists on origin) AND has uncommitted changes that are about to be discarded by the recovery below — this usually means a prior session's commit never landed (e.g. its backgrounding attempt was denied by a container hook and misread as still running, #1281). Files affected:
+$(printf '%s' "${dirty_status}" | head -20)"
+    fi
+
     warn "Branch '${current_branch}' no longer exists on origin for ${REPO_FULL} — returning to main"
     git -C "${REPO_WORK_DIR}" checkout -f main \
         || die "Failed to switch to main after orphaned branch '${current_branch}' for ${REPO_FULL}"
