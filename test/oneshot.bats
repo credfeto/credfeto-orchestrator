@@ -147,6 +147,15 @@ teardown() {
     [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]
 }
 
+@test "build_issue_claude_md instructs that a denied tool call never started and must be retried, not waited for (#1281)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"never ran at all"* ]]
+    [[ "${output}" == *"never started, try again correctly"* ]]
+    [[ "${output}" == *'git -C <dir> commit -m "..." with run_in_background: true'* ]]
+    [[ "${output}" == *"never a shell-level"* ]]
+}
+
 @test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" ""
     [ "${status}" -eq 0 ]
@@ -404,6 +413,15 @@ teardown() {
     [[ "${output}" == *"npm test"* ]]
     [[ "${output}" == *"bun test"* ]]
     [[ "${output}" == *"git push and other bounded git operations are NOT covered by this rule"* ]]
+}
+
+@test "build_pr_claude_md instructs that a denied tool call never started and must be retried, not waited for (#1281)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"never ran at all"* ]]
+    [[ "${output}" == *"never started, try again correctly"* ]]
+    [[ "${output}" == *'git -C <dir> commit -m "..." with run_in_background: true'* ]]
+    [[ "${output}" == *"never a shell-level"* ]]
 }
 
 @test "build_pr_claude_md states the container-vs-GitHub survival rule" {
@@ -6304,6 +6322,22 @@ setup_local_git_remote() {
     [ "${current_branch}" = "main" ]
 }
 
+@test "recover_orphaned_branch does not warn about discarded work when the tree is clean (#1281)" {
+    # Regression guard: the #1281 discard-visibility warning must only fire when there is
+    # actually something about to be lost — the overwhelmingly common case (a branch merged and
+    # deleted, working tree clean) must stay exactly as quiet as before.
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/clean-merged >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/clean-merged >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/clean-merged >/dev/null 2>&1
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"uncommitted changes"* ]]
+}
+
 @test "recover_orphaned_branch output warns about the orphaned branch name" {
     local remote_dir
     remote_dir=$(setup_local_git_remote)
@@ -6332,6 +6366,41 @@ setup_local_git_remote() {
     local current_branch
     current_branch=$(git -C "${REPO_WORK_DIR}" branch --show-current)
     [ "${current_branch}" = "main" ]
+}
+
+@test "recover_orphaned_branch warns before discarding uncommitted changes on an orphaned branch (#1281)" {
+    # The actual silent-discard mechanism #1281 documents: checkout -f below has no dirty-tree
+    # check of its own, so a session whose commit never landed (e.g. its backgrounding attempt
+    # was denied and misread as still running) loses real work with no trace. This asserts the
+    # trace now exists — the branch name, the reason, and the affected file are all named.
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/dirty-warned >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/dirty-warned >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/dirty-warned >/dev/null 2>&1
+    printf 'unstaged change\n' >> "${REPO_WORK_DIR}/CHANGELOG.md"
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"feature/dirty-warned"* ]]
+    [[ "${output}" == *"uncommitted changes"* ]]
+    [[ "${output}" == *"CHANGELOG.md"* ]]
+}
+
+@test "recover_orphaned_branch warns before discarding an untracked (never-added) file on an orphaned branch (#1281)" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+    git -C "${REPO_WORK_DIR}" checkout -b feature/untracked-warned >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "work" >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" push origin feature/untracked-warned >/dev/null 2>&1
+    git -C "${remote_dir}" branch -D feature/untracked-warned >/dev/null 2>&1
+    printf 'new file\n' > "${REPO_WORK_DIR}/new-untracked-file.txt"
+
+    run recover_orphaned_branch
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"uncommitted changes"* ]]
+    [[ "${output}" == *"new-untracked-file.txt"* ]]
 }
 
 # --- find_stale_issue_branch unit tests (#1262) ---------------------------------
