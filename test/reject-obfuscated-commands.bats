@@ -566,3 +566,9 @@ run_hook() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'eval used for indirect'* ]]
 }
+
+@test "the denial message states the command never ran (#1281)" {
+    run_hook 'while true; do eval "git push"; break; done'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command did not run'* ]]
+}

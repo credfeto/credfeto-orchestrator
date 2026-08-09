@@ -200,3 +200,9 @@ run_hook() {
     run_hook ""
     [ "${status}" -eq 0 ]
 }
+
+@test "the denial message states the command never ran (#1281)" {
+    run_hook "git -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command did not run'* ]]
+}

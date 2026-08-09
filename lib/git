@@ -147,15 +147,8 @@ recover_orphaned_branch() {
     git -C "${REPO_WORK_DIR}" rev-parse --verify "refs/remotes/origin/${current_branch}" >/dev/null 2>&1 \
         && return 1
 
-    # checkout -f below discards any uncommitted changes with no dirty-tree check at all, unlike
-    # ensure_repo_current's separate, later dirty-tree handling (which warns and hands off to the
-    # agent instead of discarding). A session whose git commit never landed - most commonly
-    # because the backgrounding attempt itself was denied by a container hook and misread as
-    # "still running" rather than retried (#1281) - leaves exactly this: real, uncommitted work
-    # on a branch that was never pushed, so it looks orphaned on the very next tick. The discard
-    # here is still correct (there is no safe way to auto-resume an orphaned branch), but doing
-    # it silently left no trace a human could ever find. This only adds a warning; it does not
-    # change what gets discarded or this function's control flow.
+    # checkout -f below has no dirty-tree check of its own — warn first so a discarded branch's
+    # work leaves a trace a human could search for (#1281).
     local dirty_status
     dirty_status=$(git -C "${REPO_WORK_DIR}" status --porcelain --untracked-files=normal 2>/dev/null)
     if [ -n "${dirty_status}" ]; then

@@ -91,12 +91,8 @@ CVGNOTE
 # now blocks that outright; see _build_container_vs_github_note above for why waiting for it to
 # finish still matters even when it is backgrounded.
 #
-# The "a denial means it never started" paragraph exists because every documented occurrence of
-# real work getting silently lost (#1281 — 4 live incidents across 3 repos) was a session that
-# got a hook DENIAL on the backgrounding attempt itself, then ended its turn saying it was
-# "waiting for it to finish" or "waiting for a completion notification" anyway. This rule's
-# existing text only ever covered what to do once a command was genuinely accepted and running;
-# it said nothing about the denied case, which is exactly the gap those sessions fell into.
+# The "a denial means it never started" paragraph closes a gap this rule's existing text didn't
+# cover — what a genuinely accepted, running command needs, not what a denied one means (#1281).
 _build_background_commands_rule() {
     cat <<'BGRULE'
 MANDATORY: git commit, pre-commit (direct invocation), dotnet build, dotnet test, npm test, and bun test must always be run with run_in_background: true — this is unconditional, not a per-invocation judgement call, and the container hook blocks any other way of running them regardless of how fast the run is expected to be. Immediately after starting one, poll with the Monitor tool for its completion string and WAIT for it to actually finish before doing anything else or ending your turn (see the container-vs-GitHub rule above and the Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings and the 30-minute deadline) — a long stretch with no new output is normal, not a hang; only the poll tool's own timeout or the 30-minute deadline firing is a valid reason to stop waiting. A killed run does not just fail — it skips the target process's own cleanup (a bash EXIT trap, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs. git push and other bounded git operations are NOT covered by this rule and may run in the foreground as normal, with an explicit maximum timeout (e.g. 600000ms) rather than the tool's 2-minute default. If you use the Monitor tool, never construct the poll pattern from the branch name or branch-type prefix: branch names contain slashes (e.g. perf/my-branch produces git output [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match and the loop would hang forever — use a branch-agnostic string from the command's actual output instead.

@@ -155,3 +155,9 @@ run_hook() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'could not be parsed'* ]]
 }
+
+@test "the denial message states the command never ran (#1281)" {
+    run_hook "git worktree add"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command did not run'* ]]
+}
