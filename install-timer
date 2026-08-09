@@ -109,6 +109,12 @@ Delegate=cpu memory pids io
 Environment=XDG_RUNTIME_DIR=/run/user/${owner_uid}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${owner_uid}/bus
 Environment=SSH_AUTH_SOCK=${ssh_socket}
+# Declared explicitly, rather than relying on systemd's generic INVOCATION_ID, so oneshot's
+# self-update staleness check (#1298) has an unambiguous, unit-specific signal that the
+# ExecStartPre self-update below actually ran immediately before it — INVOCATION_ID is set for
+# ANY systemd unit's main process, including a manual shell that happens to be a descendant of an
+# unrelated systemd --user session, which would otherwise wrongly gate a manual/interactive run.
+Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1
 WorkingDirectory=${REPO_DIR}
 # Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
 # unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the

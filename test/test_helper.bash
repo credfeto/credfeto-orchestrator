@@ -192,3 +192,21 @@ make_stub_multiline() {
     } > "${script}"
     chmod +x "${script}"
 }
+
+# Advances remote_dir's main branch by pushing `commits` empty commits from a fresh, independent
+# clone under TEST_TMP — used to simulate "origin/main moved on without this checkout" scenarios
+# (e.g. a stale/behind checkout) without touching whichever clone is actually under test.
+advance_remote_main() {
+    local remote_dir="$1" commits="${2:-1}"
+    local clone_dir="${TEST_TMP}/advance-remote-clone"
+    git clone -q "${remote_dir}" "${clone_dir}"
+    git -C "${clone_dir}" config user.email "test@example.com"
+    git -C "${clone_dir}" config user.name "Test"
+    git -C "${clone_dir}" config core.hooksPath /dev/null
+    local i=1
+    while [ "${i}" -le "${commits}" ]; do
+        git -C "${clone_dir}" -c commit.gpgsign=false commit --allow-empty -m "advance ${i}" >/dev/null 2>&1
+        i=$((i + 1))
+    done
+    git -C "${clone_dir}" push -q origin main >/dev/null 2>&1
+}

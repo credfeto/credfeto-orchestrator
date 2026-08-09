@@ -163,9 +163,8 @@ main() {
     check_required_tools
     load_env_config
 
-    local head_sha oneshot_dir behind_count
-    oneshot_dir="$(dirname "$(realpath "$0")")"
-    head_sha=$(git -C "${oneshot_dir}" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
+    local head_sha behind_count
+    head_sha=$(git -C "${ONESHOT_DIR}" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
     info "oneshot version: ${head_sha}"
 
     # install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate failure, #1098) so
@@ -180,16 +179,18 @@ main() {
     # for the gpg keyring probe, ssh-agent preload, cgroup setup, and disk-space check below, only
     # to throw all of that away on this exit anyway.
     #
-    # Scoped to the systemd path only, via INVOCATION_ID (set by systemd for every unit's main
-    # process since systemd 232 — its presence is exactly the signal that install-timer's
-    # ExecStartPre self-update ran immediately before this process started). loop has its own,
-    # deliberately looser recovery policy for the same underlying condition: a failed/stale git
-    # pull there just warns and keeps going, since loop's own retry cadence recovers it on a later
-    # iteration (loop:19-23, #1104) rather than being wedged forever the way a stale ExecStartPre
-    # lock is — this check must not override that decision. A manual/interactive invocation may
-    # also legitimately be on a different commit for reasons unrelated to a wedged self-update.
-    if [ -n "${INVOCATION_ID:-}" ] \
-        && behind_count=$(git_commits_behind "${oneshot_dir}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
+    # Scoped to the systemd path only, via ORCHESTRATOR_SELF_UPDATE_MANAGED (a variable
+    # install-timer's own generated unit declares explicitly, alongside its other Environment=
+    # lines) — NOT systemd's generic INVOCATION_ID, which is set for ANY unit's main process and
+    # would also wrongly catch a manual shell descended from an unrelated systemd --user session.
+    # loop has its own, deliberately looser recovery policy for the same underlying condition: a
+    # failed/stale git pull there just warns and keeps going, since loop's own retry cadence
+    # recovers it on a later iteration (loop:19-23, #1104) rather than being wedged forever the
+    # way a stale ExecStartPre lock is — this check must not override that decision. A manual/
+    # interactive invocation may also legitimately be on a different commit for reasons unrelated
+    # to a wedged self-update.
+    if [ -n "${ORCHESTRATOR_SELF_UPDATE_MANAGED:-}" ] \
+        && behind_count=$(git_commits_behind "${ONESHOT_DIR}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
         warn "This checkout is ${behind_count} commit(s) behind origin/main — the self-update step did not converge (see ai/local/debugging.instructions.md State Inventory #1)"
         notify_discord_self_update_stale "${owner_filter}" "${head_sha}" "${behind_count}"
         exit 1

@@ -106,13 +106,7 @@ assert_selfupdate_execstartpre() {
     git -C "${repo}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
     git -C "${repo}" push -q origin main
 
-    local second_clone="${TEST_TMP}/retry-second-clone"
-    git clone -q "${remote}" "${second_clone}"
-    git -C "${second_clone}" config user.email "test@example.com"
-    git -C "${second_clone}" config user.name "Test"
-    git -C "${second_clone}" config core.hooksPath /dev/null
-    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "second" >/dev/null 2>&1
-    git -C "${second_clone}" push -q origin main
+    advance_remote_main "${remote}" 1
     git -C "${repo}" fetch -q origin
 
     touch "${repo}/.git/refs/heads/main.lock"
@@ -159,6 +153,7 @@ assert_selfupdate_execstartpre() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
+    grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
@@ -227,6 +222,7 @@ assert_selfupdate_execstartpre() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
+    grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"

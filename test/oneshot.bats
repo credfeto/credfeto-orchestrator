@@ -3972,9 +3972,10 @@ STUBEOF
 # replace every function that performs real I/O.
 setup_main_mocks() {
     # Deterministic baseline for the self-update staleness gate (#1298): never inherit a real
-    # INVOCATION_ID from whatever environment is actually running these tests. Individual tests
-    # opt into the "systemd-invoked" path by exporting it themselves.
-    unset INVOCATION_ID
+    # ORCHESTRATOR_SELF_UPDATE_MANAGED from whatever environment is actually running these tests.
+    # Individual tests opt into the "systemd-managed self-update ran" path by exporting it
+    # themselves.
+    unset ORCHESTRATOR_SELF_UPDATE_MANAGED
     make_stub flock 'exit 0'
     check_required_tools()      { return 0; }
     set_repo_context()          { return 0; }
@@ -6425,14 +6426,7 @@ setup_local_git_remote() {
 
     # Advance the remote via a second, independent clone — REPO_WORK_DIR (the one under test)
     # must NOT itself merge these commits, only fetch, so its own HEAD stays behind.
-    local second_clone="${TEST_TMP}/behind-second-clone"
-    git clone -q "${remote_dir}" "${second_clone}"
-    git -C "${second_clone}" config user.email "test@example.com"
-    git -C "${second_clone}" config user.name "Test"
-    git -C "${second_clone}" config core.hooksPath /dev/null
-    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "second" >/dev/null 2>&1
-    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "third" >/dev/null 2>&1
-    git -C "${second_clone}" push -q origin main
+    advance_remote_main "${remote_dir}" 2
 
     git -C "${REPO_WORK_DIR}" fetch -q origin
 
@@ -8720,7 +8714,7 @@ STUBEOF
 
 @test "main refuses to run and notifies Discord when systemd-invoked and the checkout is behind origin/main" {
     setup_main_mocks
-    export INVOCATION_ID="test-invocation"
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
     git_commits_behind() { printf '3'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -8737,10 +8731,13 @@ STUBEOF
     [ ! -f "${claude_log}" ]
 }
 
-@test "main does not refuse to run when INVOCATION_ID is unset, even when the checkout is behind origin/main (#1298 review — loop/manual invocation must not be gated by the systemd-only policy)" {
+@test "main does not refuse to run when ORCHESTRATOR_SELF_UPDATE_MANAGED is unset, even when the checkout is behind origin/main (#1298 review — loop/manual invocation must not be gated by the systemd-only policy)" {
     setup_main_mocks
-    # INVOCATION_ID deliberately left unset by setup_main_mocks — this is loop's or a manual
-    # invocation's shape, neither of which install-timer's ExecStartPre ran ahead of.
+    # ORCHESTRATOR_SELF_UPDATE_MANAGED deliberately left unset by setup_main_mocks — this is
+    # loop's or a manual invocation's shape, neither of which install-timer's ExecStartPre ran
+    # ahead of. Deliberately NOT testing this via systemd's generic INVOCATION_ID: a manual shell
+    # descended from an unrelated systemd --user session would have that set too, which is
+    # exactly the false-positive this variable exists to avoid (#1298 review, round 3).
     git_commits_behind() { printf '3'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -8759,7 +8756,7 @@ STUBEOF
 
 @test "main proceeds normally when systemd-invoked and the checkout is up to date with origin/main" {
     setup_main_mocks
-    export INVOCATION_ID="test-invocation"
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
     git_commits_behind() { printf '0'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -8775,7 +8772,7 @@ STUBEOF
 
 @test "main proceeds normally when systemd-invoked and git_commits_behind is inconclusive (e.g. origin/main does not exist yet)" {
     setup_main_mocks
-    export INVOCATION_ID="test-invocation"
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
     git_commits_behind() { return 1; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
