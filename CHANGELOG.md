@@ -64,7 +64,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Simplify phase (PHASE D) no longer shares MAX_REVIEW_ITERATIONS with the other review phases and no longer blocks the PR on non-convergence: it now uses dedicated MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT budgets, and gives up by posting a PR comment and advancing to code review instead of adding the Blocked label
 - Allowed cd and scp in the development agent container's baked-in claude-settings.json permissions and the reject-obfuscated-commands hook's command-allowlist
 - No-work Discord notification now lists every skipped item individually (repo, issue/PR number and link, and status), not just the aggregate counts, so a human can see exactly what was skipped without checking the journal
-- Discord no-work item breakdown: record_item_status and serialize_item_status_log now use explicit arguments/return values instead of bash dynamic scoping across sourced files, removing a shellcheck suppression and making the data flow visible at each call site
 ### Deprecated
 ### Removed
 ### Deployment Changes
