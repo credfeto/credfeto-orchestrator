@@ -85,4 +85,10 @@ Common reasons an item gets `Blocked` automatically:
   nothing here supports a differently-named or differently-configured escalation label.
 - Commit authorship, as reported by GitHub's own commit-to-account mapping, is a reliable enough
   signal for "who wrote this" — a commit whose author email maps to no GitHub account at all is
-  simply not counted as anyone's, rather than guessed at.
+  simply not counted as anyone's, rather than guessed at. One narrow exception: detecting the
+  bot's *own* commits also accepts a raw commit-author email match against the orchestrator's
+  configured `GIT_USER_EMAIL`, but only for a commit where GitHub's mapping hasn't resolved
+  *any* author on that commit yet — a resolved login (the bot's, a human's, or anyone else's)
+  always wins over an email match on that same commit. This closes a real lag window (GitHub's
+  mapping is asynchronous and can take over an hour after a push) without weakening the
+  commit-to-account trust model for any identity other than the bot's own (#1294).
