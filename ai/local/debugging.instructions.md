@@ -72,6 +72,8 @@ sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/
 
 Confirms which version of `oneshot`/`lib/*` is deployed for that owner. This checkout self-updates via the systemd unit's own `ExecStartPre` (`git fetch` + `merge --ff-only origin/main`) immediately before every run, not via `loop`'s self-update path — a dirty tree or a commit behind `origin/main` right after a service run means that `ExecStartPre` step itself failed; check the service's own log (Section 2) for the exact fetch/merge error.
 
+Since #1298, staleness is largely self-reported rather than something you need to go hunting for: the merge step retries once, clearing well-known stale git lock files (`ORIG_HEAD.lock`, `HEAD.lock`, `MERGE_HEAD.lock`, `index.lock`) first, if the first attempt fails — the exact failure seen in that incident, a lock left by a previous merge killed mid-write by the step's own `timeout`. If the checkout is still behind `origin/main` after that, `oneshot` itself detects it (`git_commits_behind` in `lib/git`), posts a Discord alert (`docs/discord-notifications.md`), and exits non-zero — so `systemctl status`/`journalctl` also show the unit as `failed`, not a normal successful run. The commands above remain the fallback for diagnosing *why* a merge keeps failing (a genuinely diverged branch, an auth/network failure, or some other stale lock not yet in the known list) once the alert or a failed unit points you here.
+
 ### 2 — Orchestrator service
 
 ```bash

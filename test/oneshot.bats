@@ -6403,6 +6403,78 @@ setup_local_git_remote() {
     [[ "${output}" == *"new-untracked-file.txt"* ]]
 }
 
+# --- git_commits_behind unit tests (#1298) --------------------------------------
+
+@test "git_commits_behind reports 0 when ref and upstream are the same commit" {
+    local remote="${TEST_TMP}/behind-remote.git"
+    local clone="${TEST_TMP}/behind-clone"
+    git init --bare -q "${remote}"
+    git -C "${remote}" symbolic-ref HEAD refs/heads/main
+    git init -q "${clone}"
+    git -C "${clone}" config user.email "test@example.com"
+    git -C "${clone}" config user.name "Test"
+    git -C "${clone}" config core.hooksPath /dev/null
+    git -C "${clone}" remote add origin "${remote}"
+    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+    git -C "${clone}" push -q origin HEAD:refs/heads/main
+    git -C "${clone}" fetch -q origin
+
+    run git_commits_behind "${clone}" HEAD origin/main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "0" ]
+}
+
+@test "git_commits_behind reports the count when origin/main has advanced" {
+    local remote="${TEST_TMP}/behind-remote.git"
+    local clone="${TEST_TMP}/behind-clone"
+    git init --bare -q "${remote}"
+    git -C "${remote}" symbolic-ref HEAD refs/heads/main
+    git init -q "${clone}"
+    git -C "${clone}" config user.email "test@example.com"
+    git -C "${clone}" config user.name "Test"
+    git -C "${clone}" config core.hooksPath /dev/null
+    git -C "${clone}" remote add origin "${remote}"
+    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+    git -C "${clone}" push -q origin HEAD:refs/heads/main
+    git -C "${clone}" fetch -q origin
+
+    # Advance the remote via a second, independent clone — "${clone}" (the one under test) must
+    # NOT itself merge these commits, only fetch, so its own HEAD stays behind.
+    local second_clone="${TEST_TMP}/behind-second-clone"
+    git clone -q "${remote}" "${second_clone}"
+    git -C "${second_clone}" config user.email "test@example.com"
+    git -C "${second_clone}" config user.name "Test"
+    git -C "${second_clone}" config core.hooksPath /dev/null
+    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "second" >/dev/null 2>&1
+    git -C "${second_clone}" -c commit.gpgsign=false commit --allow-empty -m "third" >/dev/null 2>&1
+    git -C "${second_clone}" push -q origin main
+
+    git -C "${clone}" fetch -q origin
+
+    run git_commits_behind "${clone}" HEAD origin/main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2" ]
+}
+
+@test "git_commits_behind returns 1 with no output when upstream does not exist (a fetch has never succeeded)" {
+    local clone="${TEST_TMP}/behind-clone-no-remote"
+    git init -q "${clone}"
+    git -C "${clone}" config user.email "test@example.com"
+    git -C "${clone}" config user.name "Test"
+    git -C "${clone}" config core.hooksPath /dev/null
+    git -C "${clone}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+
+    run git_commits_behind "${clone}" HEAD origin/main
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+}
+
+@test "git_commits_behind returns 1 with no output when repo_dir does not exist" {
+    run git_commits_behind "${TEST_TMP}/behind-nonexistent" HEAD origin/main
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+}
+
 # --- find_stale_issue_branch unit tests (#1262) ---------------------------------
 
 @test "find_stale_issue_branch returns 1 when repo directory does not exist" {
@@ -8661,6 +8733,56 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Insufficient disk space"* ]]
+}
+
+# --- main: self-update staleness check (#1298) --------------------------------
+
+@test "main refuses to run and notifies Discord when the checkout is behind origin/main" {
+    setup_main_mocks
+    git_commits_behind() { printf '3'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_self_update_stale() { printf 'notified\n' >> "${discord_log}"; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf 'called\n' >> "${claude_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"3 commit(s) behind origin/main"* ]]
+    [ -f "${discord_log}" ]
+    [ ! -f "${claude_log}" ]
+}
+
+@test "main proceeds normally when the checkout is up to date with origin/main" {
+    setup_main_mocks
+    git_commits_behind() { printf '0'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
+}
+
+@test "main proceeds normally when git_commits_behind is inconclusive (e.g. origin/main does not exist yet)" {
+    setup_main_mocks
+    git_commits_behind() { return 1; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
 }
 
 # --- MAX_REVIEW_ITERATIONS constant -------------------------------------------

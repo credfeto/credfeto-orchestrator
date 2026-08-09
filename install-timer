@@ -113,9 +113,14 @@ WorkingDirectory=${REPO_DIR}
 # Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
 # unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the
 # orchestrator from running with whatever was last successfully pulled (#1098). Genuine repo
-# corruption still surfaces via oneshot's own git error handling once it starts.
+# corruption still surfaces via oneshot's own git error handling once it starts. The merge step
+# retries once, clearing well-known stale git lock files first, if the first attempt fails — a
+# lock left by a previous merge killed mid-write (e.g. by this same timeout) otherwise wedges
+# every subsequent merge identically, forever, since git never clears a stale lock on its own
+# (#1298). oneshot's own git_commits_behind check (lib/git) is the backstop if even the retry
+# does not converge.
 ExecStartPre=-/usr/bin/timeout 60 /usr/bin/git -C \"${REPO_DIR}\" fetch origin
-ExecStartPre=-/usr/bin/timeout 30 /usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
+ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C \"${REPO_DIR}\" merge --ff-only origin/main || { rm -f \"${REPO_DIR}\"/.git/ORIG_HEAD.lock \"${REPO_DIR}\"/.git/HEAD.lock \"${REPO_DIR}\"/.git/MERGE_HEAD.lock \"${REPO_DIR}\"/.git/index.lock; git -C \"${REPO_DIR}\" merge --ff-only origin/main; }'
 # -f scopes this to the ssh-agent bound to THIS instance's own socket, not every ssh-agent
 # belonging to this user — an unscoped 'pkill -u <user> ssh-agent' kills the agent of any other
 # concurrently-running instance (--owner variants share the same User=) or interactive session

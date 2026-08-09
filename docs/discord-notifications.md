@@ -21,6 +21,7 @@ rule, matched to what actually makes sense for that alert:
 | Priorities API unreachable | The priorities feed itself could not be reached after retrying (see [oneshot.md](oneshot.md)) — distinct from the feed answering with something that failed to parse, which is not treated as a connectivity problem. | At most one per hour, shared across all owners (see below). |
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
 | PR needs approval | A Pull Request is "settled" (auto-merge armed, nothing failed/pending) but GitHub's `reviewDecision` is `REVIEW_REQUIRED` — it cannot merge purely because no approving review exists, whether one was dismissed by a later force-push or never requested at all. | At most one per hour, per repo-and-PR (not per owner, so the same PR number in two different repos never suppresses each other's alert). |
+| Self-update stale | This checkout's own `HEAD` is behind `origin/main` — the systemd unit's self-update `ExecStartPre` steps did not converge (a stalled/unreachable remote is tolerated by design, but a permanently wedged merge, e.g. a stale git lock left by a killed process, previously had nothing surfacing it). The run refuses to continue this tick and exits non-zero, so `systemctl`/`journalctl` also show the unit as failed. | At most one per hour, per owner. |
 | Claude error | The agent session itself returned an application-level error. | None — fires every time, every tick. |
 | Rate limited | The Claude API rate-limited the current owner; work pauses until the reported reset time. | None — fires every time, every tick. |
 
@@ -40,8 +41,9 @@ Three different suppression shapes are in play, not one universal rule:
 
 For the rolling-window alerts, whether a **failed** attempt to reach Discord counts as "sent"
 differs by alert, and this is a real, known gap rather than a settled guarantee: low disk space,
-priorities-unreachable, and PR-needs-approval all use a shared helper that only records the send
-after a *successful* POST, so a Discord outage at the exact moment any of them fires means the
+priorities-unreachable, PR-needs-approval, and self-update-stale all use a shared helper that
+only records the send after a *successful* POST, so a Discord outage at the exact moment any of
+them fires means the
 next tick retries immediately. The no-work and item-blocked alerts do **not** have this protection — both
 write their state/marker file unconditionally, even when the `curl` call itself failed — so a
 Discord outage at the exact moment either of those fires can silently suppress the next

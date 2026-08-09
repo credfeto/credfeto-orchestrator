@@ -99,7 +99,14 @@ teardown() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    # The merge step retries once, clearing well-known stale git lock files first, if the first
+    # attempt fails (#1298) — see install-timer's own comment above these ExecStartPre lines.
+    grep -qE "ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C .* merge --ff-only origin/main \|\|" "${svc}"
+    grep -qF "ORIG_HEAD.lock" "${svc}"
+    grep -qF "HEAD.lock" "${svc}"
+    grep -qF "MERGE_HEAD.lock" "${svc}"
+    grep -qF "index.lock" "${svc}"
+    grep -qE "git -C .* merge --ff-only origin/main; \}'\$" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket$" "${svc}"
@@ -168,7 +175,14 @@ teardown() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    # The merge step retries once, clearing well-known stale git lock files first, if the first
+    # attempt fails (#1298) — see install-timer's own comment above these ExecStartPre lines.
+    grep -qE "ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C .* merge --ff-only origin/main \|\|" "${svc}"
+    grep -qF "ORIG_HEAD.lock" "${svc}"
+    grep -qF "HEAD.lock" "${svc}"
+    grep -qF "MERGE_HEAD.lock" "${svc}"
+    grep -qF "index.lock" "${svc}"
+    grep -qE "git -C .* merge --ff-only origin/main; \}'\$" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket$" "${svc}"
