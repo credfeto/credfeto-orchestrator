@@ -4969,37 +4969,52 @@ STUBEOF
     [ ! -f "${args_log2}" ]
 }
 
-@test "notify_discord_no_work resends same message after one hour has elapsed" {
+@test "notify_discord_no_work resends same content after one hour has elapsed" {
+    # Two sequential real calls with IDENTICAL args, so the second call's dedup_hash genuinely
+    # matches the state file the first call wrote — this is what actually exercises the
+    # elapsed-time branch (elapsed > 3600), rather than a placeholder hash that can never match
+    # regardless of timing (#1291 review: the prior version of this test used a hand-seeded
+    # placeholder hash and would still pass even if the elapsed-time check were broken).
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    make_stub date "echo 1700003601"
 
-    local state_file="${HOME}/.orchestrator/.no_work__global.state"
-    mkdir -p "${HOME}/.orchestrator"
-    printf 'No actionable work items found.\n1700000000\n' > "${state_file}"
-
+    make_stub date "echo 1700000000"
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
     run notify_discord_no_work "" 0 0 0 0
     [ "${status}" -eq 0 ]
-    grep -q "No actionable work items found" "${args_log}"
+    [ -f "${args_log1}" ]
+
+    make_stub date "echo 1700003601"   # 3601s later — just past the one-hour window
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log2}" ]
+    grep -q "No actionable work items found" "${args_log2}"
 }
 
-@test "notify_discord_no_work sends different message immediately even within the last hour" {
+@test "notify_discord_no_work sends different content immediately even within the last hour" {
+    # Two sequential real calls with DIFFERENT args at the SAME timestamp, so the second call's
+    # dedup_hash genuinely differs from the state file the first call wrote (#1291 review — see
+    # rationale on the sibling elapsed-time test above).
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
-    local args_log="${TEST_TMP}/curl_args"
-    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
     make_stub date "echo 1700000000"
 
-    local state_file="${HOME}/.orchestrator/.no_work__global.state"
-    mkdir -p "${HOME}/.orchestrator"
-    printf 'No actionable work items found. (blocked: 1)\n1700000000\n' > "${state_file}"
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "" 0 0 0 0
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
 
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
     run notify_discord_no_work "" 0 5 0 0
     [ "${status}" -eq 0 ]
-    grep -q "unchanged: 5" "${args_log}"
+    [ -f "${args_log2}" ]
+    grep -q "unchanged: 5" "${args_log2}"
 }
 
-@test "notify_discord_no_work saves state to disk after sending" {
+@test "notify_discord_no_work saves a hash (not raw text) to disk after sending" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     make_stub curl "exit 0"
     make_stub date "echo 1700000000"
@@ -5009,7 +5024,11 @@ STUBEOF
 
     local state_file="${HOME}/.orchestrator/.no_work__global.state"
     [ -f "${state_file}" ]
-    grep -q "No actionable work items found" "${state_file}"
+    local stored_hash
+    stored_hash=$(sed -n '1p' "${state_file}")
+    # sha256 hex digest: 64 lowercase hex characters — the dedup key, not the message text
+    # (#1291: the breakdown can now be multi-line and much larger than a single content string).
+    [[ "${stored_hash}" =~ ^[0-9a-f]{64}$ ]]
     grep -q "1700000000" "${state_file}"
 }
 
@@ -5036,6 +5055,154 @@ STUBEOF
     run notify_discord_no_work "otherorg" 0 5 0 0
     [ "${status}" -eq 0 ]
     grep -q "otherorg" "${args_log3}"
+}
+
+# --- notify_discord_no_work: per-item breakdown (#1291) ------------------------
+
+@test "notify_discord_no_work includes item breakdown lines with a working link" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    local items='[{"type":"Issue","id":"42","repo":"org/repo","reason":"blocked - skipping"}]'
+    run notify_discord_no_work "" 1 0 0 0 0 0 "${items}"
+    [ "${status}" -eq 0 ]
+    grep -q "Issue #42 in org/repo" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "blocked - skipping" "${args_log}"
+}
+
+@test "notify_discord_no_work omits breakdown lines when items_json is empty" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work
+    [ "${status}" -eq 0 ]
+    run grep -q ' in .*):' "${args_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "notify_discord_no_work defaults items_json to an empty breakdown when omitted" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_no_work "" 1 0 0 0 0 0
+    [ "${status}" -eq 0 ]
+    grep -q "blocked: 1" "${args_log}"
+}
+
+@test "notify_discord_no_work suppresses identical items within the last hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    make_stub date "echo 1700000000"
+    local items='[{"type":"Issue","id":"1","repo":"org/repo","reason":"unchanged - skipping"}]'
+
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "" 0 1 0 0 0 0 "${items}"
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
+
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "" 0 1 0 0 0 0 "${items}"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log2}" ]
+}
+
+@test "notify_discord_no_work resends immediately when a single item's reason changes" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    make_stub date "echo 1700000000"
+
+    local args_log1="${TEST_TMP}/curl_first"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log1}'"
+    run notify_discord_no_work "" 0 1 0 0 0 0 '[{"type":"Issue","id":"1","repo":"org/repo","reason":"unchanged - skipping"}]'
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log1}" ]
+
+    local args_log2="${TEST_TMP}/curl_second"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log2}'"
+    run notify_discord_no_work "" 0 1 0 0 0 0 '[{"type":"Issue","id":"1","repo":"org/repo","reason":"blocked - skipping"}]'
+    [ "${status}" -eq 0 ]
+    [ -f "${args_log2}" ]
+    grep -q "blocked - skipping" "${args_log2}"
+}
+
+# --- record_item_status / serialize_item_status_log unit tests -----------------
+# record_item_status is a pure function (outputs JSON, does not mutate a caller array) and
+# serialize_item_status_log takes its entries as positional arguments (#1291 review: makes the
+# data flow explicit at every call site instead of relying on bash's dynamic scoping).
+
+@test "record_item_status outputs a compact JSON object for the given fields" {
+    local obj
+    obj=$(record_item_status "Issue" "42" "org/repo" "blocked - skipping")
+    [ "$(printf '%s' "${obj}" | jq -r '.type')" = "Issue" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.id')" = "42" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.repo')" = "org/repo" ]
+    [ "$(printf '%s' "${obj}" | jq -r '.reason')" = "blocked - skipping" ]
+}
+
+@test "serialize_item_status_log returns an empty JSON array when given no arguments" {
+    [ "$(serialize_item_status_log)" = "[]" ]
+}
+
+@test "serialize_item_status_log combines multiple entries into one JSON array, in order" {
+    local -a item_status_log=()
+    item_status_log+=("$(record_item_status "Issue" "1" "org/repo" "reason one")")
+    item_status_log+=("$(record_item_status "PullRequest" "2" "org/repo2" "reason two")")
+    local combined
+    combined=$(serialize_item_status_log "${item_status_log[@]}")
+    [ "$(printf '%s' "${combined}" | jq 'length')" -eq 2 ]
+    [ "$(printf '%s' "${combined}" | jq -r '.[0].id')" = "1" ]
+    [ "$(printf '%s' "${combined}" | jq -r '.[1].id')" = "2" ]
+}
+
+# --- _build_no_work_item_breakdown unit tests -----------------------------------
+
+@test "_build_no_work_item_breakdown returns empty for an empty items array" {
+    [ -z "$(_build_no_work_item_breakdown '[]')" ]
+}
+
+@test "_build_no_work_item_breakdown builds one markdown line per item with a working link" {
+    local items='[{"type":"Issue","id":"42","repo":"org/repo","reason":"blocked - skipping"}]'
+    run _build_no_work_item_breakdown "${items}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "- [Issue #42 in org/repo](https://github.com/org/repo/issues/42): blocked - skipping" ]
+}
+
+@test "_build_no_work_item_breakdown uses each item's own repo for its link" {
+    local items='[{"type":"PullRequest","id":"7","repo":"owner/other-repo","reason":"CI checks pending"}]'
+    run _build_no_work_item_breakdown "${items}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"https://github.com/owner/other-repo/pull/7"* ]]
+}
+
+@test "_build_no_work_item_breakdown truncates and appends a trailer when over budget" {
+    local items
+    items=$(jq -cn '[range(0;400) | {type:"Issue", id:(.|tostring), repo:"org/repo", reason:"unchanged - skipping"}]')
+    run _build_no_work_item_breakdown "${items}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"more (see the journal for full detail)"* ]]
+    [[ "${output}" != *"Issue #399"* ]]
+
+    # Assert the trailer's stated count and kept-item count actually add up to 400, and that a
+    # substantial number of items were kept (not just one) — an off-by-one in the trailer count,
+    # or a budget/line-length regression that keeps far fewer items than expected, would both
+    # still pass the substring-only assertions above (#1291 review).
+    local kept_count trailer_count
+    kept_count=$(printf '%s\n' "${output}" | grep -c '^- \[Issue #')
+    trailer_count=$(printf '%s\n' "${output}" | sed -n 's/^\.\.\. and \([0-9]\+\) more.*/\1/p')
+    [ -n "${trailer_count}" ]
+    [ "$(( kept_count + trailer_count ))" -eq 400 ]
+    [ "${kept_count}" -gt 30 ]
+}
+
+# --- build_item_url: repo override (#1291) --------------------------------------
+
+@test "build_item_url uses the explicit repo argument over REPO_FULL when given" {
+    [ "$(build_item_url "Issue" "42" "other/repo")" = "https://github.com/other/repo/issues/42" ]
+}
+
+@test "build_item_url falls back to REPO_FULL when no repo argument is given" {
+    [ "$(build_item_url "PullRequest" "17")" = "https://github.com/${REPO_FULL}/pull/17" ]
 }
 
 # --- main() Discord notification integration ----------------------------------
@@ -5155,6 +5322,31 @@ STUBEOF
     [ "${status}" -eq 0 ]
     grep -q 'unchanged=1' "${_notif_log}"
     grep -q 'active=1' "${_notif_log}"
+}
+
+@test "main's no-work Discord payload includes the blocked issue in the item breakdown (#1291)" {
+    # End-to-end: unlike the notify_discord_no_work-stubbing tests above, this leaves the real
+    # notifier and curl call in place to verify the item_status_log wiring actually reaches the
+    # Discord payload, not just the count arguments. setup_main_mocks stubs notify_discord_no_work
+    # to a no-op along with everything else, so re-source lib/discord afterward to restore the
+    # real implementation while keeping every other stub in place.
+    setup_main_mocks
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/lib/discord"
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "Issue #10 in org/repo" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/10" "${args_log}"
+    grep -q "blocked - skipping" "${args_log}"
 }
 
 @test "main does not block same-repo Issue after a successful non-agentic rebase of a direct PR (#1114)" {

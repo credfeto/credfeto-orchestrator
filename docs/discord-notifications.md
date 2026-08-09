@@ -16,7 +16,7 @@ rule, matched to what actually makes sense for that alert:
 | Event | Notified when | Repeat suppression |
 | --- | --- | --- |
 | Work started/resumed | An agent invocation is about to begin on an Issue or Pull Request. | None — fires every time, every tick. |
-| No work found | An entire tick found nothing actionable to do (includes a breakdown: how many were unchanged, blocked, already-active, not-open, errored, or standing off for a human). | At most one per hour per owner, but only while the message text stays identical — a *changed* message (a different breakdown) is always sent immediately regardless of timing. |
+| No work found | An entire tick found nothing actionable to do. The embed title carries the same count breakdown as before (how many were unchanged, blocked, already-active, not-open, errored, or standing off for a human); the embed description now also lists every skipped item individually — `<Type> #<id> in <repo>` as a link to the Issue/PR, followed by the same status text already used in the run's own log for that item (see [oneshot.md](oneshot.md)). The per-item list is truncated (with a stated count of how many more were dropped) if it would otherwise exceed Discord's embed-description size limit. | At most one per hour per owner, but only while the content (title and item breakdown) stays identical — any change is always sent immediately regardless of timing. |
 | Low disk space | Available disk space drops below a configured threshold before launching a container. | At most one per hour, per owner. |
 | Priorities API unreachable | The priorities feed itself could not be reached after retrying (see [oneshot.md](oneshot.md)) — distinct from the feed answering with something that failed to parse, which is not treated as a connectivity problem. | At most one per hour, shared across all owners (see below). |
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
@@ -30,8 +30,10 @@ Three different suppression shapes are in play, not one universal rule:
    or already self-limiting (a rate limit, once hit, stops further work — and further alerts —
    until it clears), so nothing extra is layered on top.
 2. **A rolling one-hour window** (low disk space, priorities unreachable, PR needs approval, and
-   no-work *when the message is unchanged*) — a small state file records the last time this
-   alert actually sent, and a repeat within the hour is dropped.
+   no-work *when the content is unchanged*) — a small state file records the last time this
+   alert actually sent, and a repeat within the hour is dropped. The no-work alert compares a
+   hash of its title and item breakdown rather than the raw text, since the breakdown can now be
+   long and multi-line.
 3. **A persistent latch** (item blocked) — not time-based at all: exactly one notification per
    *episode* of being blocked, however long that episode lasts, re-armed only when the item is
    later seen open and un-blocked again.

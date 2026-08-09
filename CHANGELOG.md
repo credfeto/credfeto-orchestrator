@@ -63,6 +63,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Pinned all GitHub Actions workflow and composite-action uses: references to full commit SHAs so upstream tag repointing cannot inject unreviewed action code
 - Simplify phase (PHASE D) no longer shares MAX_REVIEW_ITERATIONS with the other review phases and no longer blocks the PR on non-convergence: it now uses dedicated MAX_SIMPLIFY_ITERATIONS and SIMPLIFY_THRASH_LIMIT budgets, and gives up by posting a PR comment and advancing to code review instead of adding the Blocked label
 - Allowed cd and scp in the development agent container's baked-in claude-settings.json permissions and the reject-obfuscated-commands hook's command-allowlist
+- No-work Discord notification now lists every skipped item individually (repo, issue/PR number and link, and status), not just the aggregate counts, so a human can see exactly what was skipped without checking the journal
 ### Deprecated
 ### Removed
 ### Deployment Changes

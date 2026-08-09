@@ -4,14 +4,51 @@
 # rate-limited notices. Also the shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
-# item_id. Falls back to the bare repo URL for an unrecognised/empty item_type.
+# item_id, repo (optional, defaults to REPO_FULL). Falls back to the bare repo URL for an
+# unrecognised/empty item_type.
+# The repo argument exists for notify_discord_no_work's per-item breakdown (#1291): by the time
+# that notifier runs, REPO_FULL holds whatever the last-processed item's repo was, not the right
+# value for linking items that span many different repos across one tick. Every other caller
+# omits it and keeps using REPO_FULL as before.
 build_item_url() {
     local item_type="$1" item_id="$2"
+    local repo="${3:-${REPO_FULL:-}}"
     case "${item_type}" in
-        Issue)       printf '%s' "https://github.com/${REPO_FULL}/issues/${item_id}" ;;
-        PullRequest) printf '%s' "https://github.com/${REPO_FULL}/pull/${item_id}" ;;
-        *)           printf '%s' "https://github.com/${REPO_FULL}" ;;
+        Issue)       printf '%s' "https://github.com/${repo}/issues/${item_id}" ;;
+        PullRequest) printf '%s' "https://github.com/${repo}/pull/${item_id}" ;;
+        *)           printf '%s' "https://github.com/${repo}" ;;
     esac
+}
+
+# Builds one work-item's terminal-status JSON object for this tick, for notify_discord_no_work's
+# per-item breakdown (#1291). Arguments: item_type, item_id, item_repo, reason (derived from the
+# reason already given to info/warn at the call site — the redundant "<Type> #<id> in <repo>"
+# prefix stripped, since those are captured as separate fields here, but otherwise not
+# reinvented). Outputs the compact JSON object on stdout; the caller (oneshot's main loop)
+# appends it to its own item_status_log array — kept a pure function, not a caller-array
+# mutator, so the data flow is an explicit argument/return at every call site rather than bash's
+# dynamic scoping (a rename of item_status_log in oneshot would otherwise silently break this
+# with no error, per #1291 review).
+record_item_status() {
+    local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
+    jq -cn \
+        --arg type "${item_type}" --arg id "${item_id}" --arg repo "${item_repo}" --arg reason "${reason}" \
+        '{type:$type,id:$id,repo:$repo,reason:$reason}'
+}
+
+# Serializes the caller's item_status_log entries (each produced by record_item_status) into a
+# single compact JSON array, for notify_discord_no_work's items_json argument. Takes the array
+# elements as positional arguments ("${item_status_log[@]}") rather than reading a same-named
+# variable by dynamic scope, matching record_item_status's explicit-data-flow convention (#1291
+# review). Guards the no-arguments case explicitly rather than piping a possibly-empty expansion
+# into jq -s — an empty `printf` still succeeds and jq -s on empty stdin already yields "[]", but
+# the explicit check avoids depending on that behaviour and keeps this readable as "nothing to do".
+serialize_item_status_log() {
+    if [ "$#" -eq 0 ]; then
+        printf '[]'
+        return 0
+    fi
+    printf '%s\n' "$@" | jq -s -c '.'
 }
 
 # Sends a Discord embed notification when starting or resuming work on an item.
@@ -69,12 +106,56 @@ notify_discord_work_item() {
         || warn "Discord webhook notification failed"
 }
 
+# Builds the markdown item-breakdown for notify_discord_no_work's embed description: one line
+# per item, e.g. "- [Issue #42 in owner/repo](url): unchanged - skipping", truncated to stay
+# under Discord's 4096-character embed-description cap (#1291). Arguments: items_json (JSON
+# array of {type,id,repo,reason} objects, as produced by serialize_item_status_log). Reserves
+# headroom below the cap for a trailer line so any dropped tail is stated, never silently
+# dropped ("... and N more (see the journal for full detail)"). Stops building lines (including
+# skipping the build_item_url call) as soon as the budget is exhausted, rather than building
+# every line up front and discarding the tail, so a large items_json does not pay for work whose
+# result is guaranteed to be thrown away (#1291 review).
+# Outputs nothing (not even a trailing newline) when items_json is empty or "[]".
+_build_no_work_item_breakdown() {
+    local items_json="$1"
+    # Single jq pass over items_json: the total item count is derived from counting these rows
+    # rather than a separate `jq length` call (#1291 review).
+    local tsv_rows
+    tsv_rows=$(printf '%s' "${items_json}" | jq -r '.[] | [.type, .id, .repo, .reason] | @tsv' 2>/dev/null)
+    [ -n "${tsv_rows}" ] || return 0
+    local total
+    total=$(printf '%s\n' "${tsv_rows}" | wc -l)
+
+    # Budget leaves headroom under Discord's 4096-char cap for the trailer line below.
+    local budget=3900
+    local -a kept_lines=()
+    local type id repo reason url line used=0 line_len
+    while IFS=$'\t' read -r type id repo reason; do
+        url="$(build_item_url "${type}" "${id}" "${repo}")"
+        line="- [${type} #${id} in ${repo}](${url}): ${reason}"
+        line_len=$(( ${#line} + 1 ))   # +1 for the joining newline
+        [ "$(( used + line_len ))" -le "${budget}" ] || break
+        kept_lines+=("${line}")
+        used=$(( used + line_len ))
+    done <<< "${tsv_rows}"
+
+    local description
+    description=$(printf '%s\n' "${kept_lines[@]+"${kept_lines[@]}"}")
+    if [ "${#kept_lines[@]}" -lt "${total}" ]; then
+        description="${description}
+... and $(( total - ${#kept_lines[@]} )) more (see the journal for full detail)"
+    fi
+    printf '%s' "${description}"
+}
+
 # Sends a Discord notification when no actionable work items are found.
-# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open, count_error, count_human_driven
+# Arguments: owner (optional), count_blocked, count_unchanged, count_active_repo, count_not_open,
+# count_error, count_human_driven, items_json (optional, JSON array of {type,id,repo,reason}
+# objects from serialize_item_status_log — defaults to "[]")
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
-# Suppresses duplicate messages: if the same message was sent within the last hour, it is
-# silently dropped.  A changed message is always sent immediately.  At most one send per hour
-# per owner even when the message is identical.
+# Suppresses duplicate messages: if the same title+breakdown was sent within the last hour, it is
+# silently dropped.  A changed title or breakdown is always sent immediately.  At most one send
+# per hour per owner even when the content is identical.
 notify_discord_no_work() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local owner="${1:-}"
@@ -84,13 +165,14 @@ notify_discord_no_work() {
     local count_not_open="${5:-0}"
     local count_error="${6:-0}"
     local count_human_driven="${7:-0}"
-    local prefix message detail payload
+    local items_json="${8:-[]}"
+    local prefix title detail description payload
     if [ -n "${owner}" ]; then
         prefix="[${owner}] "
     else
         prefix=""
     fi
-    message="${prefix}No actionable work items found."
+    title="${prefix}No actionable work items found."
     detail=""
     [ "${count_blocked}" -gt 0 ]     && detail="${detail:+${detail}, }blocked: ${count_blocked}"
     [ "${count_unchanged}" -gt 0 ]   && detail="${detail:+${detail}, }unchanged: ${count_unchanged}"
@@ -98,23 +180,35 @@ notify_discord_no_work() {
     [ "${count_not_open}" -gt 0 ]    && detail="${detail:+${detail}, }not-open: ${count_not_open}"
     [ "${count_error}" -gt 0 ]       && detail="${detail:+${detail}, }errors: ${count_error}"
     [ "${count_human_driven}" -gt 0 ] && detail="${detail:+${detail}, }human-driven: ${count_human_driven}"
-    [ -n "${detail}" ] && message="${message} (${detail})"
+    [ -n "${detail}" ] && title="${title} (${detail})"
 
-    # Dedup: suppress if the same message was sent within the last hour.
-    local state_file now last_message last_sent elapsed
+    description="$(_build_no_work_item_breakdown "${items_json}")"
+
+    # Dedup key is a hash of title+description, not the raw text (#1291): the breakdown can now
+    # be multi-line and much larger than the old single-line content message, so storing it
+    # verbatim in the state file would be wasteful and harder to compare reliably.
+    local dedup_hash
+    dedup_hash=$(printf '%s\n%s' "${title}" "${description}" | hash_sha256) \
+        || { warn "Discord: failed to hash no-work notification for dedup"; return 0; }
+
+    local state_file now last_hash last_sent elapsed
     state_file=$(_discord_dedup_state_file no_work "${owner}")
     now=$(date +%s)
     if [ -f "${state_file}" ]; then
-        last_message=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
+        last_hash=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
         last_sent=$(sed -n '2p' "${state_file}" 2>/dev/null || true)
-        if [ "${last_message}" = "${message}" ] && \
+        if [ "${last_hash}" = "${dedup_hash}" ] && \
            printf '%s' "${last_sent}" | grep -qE '^[0-9]+$'; then
             elapsed=$(( now - last_sent ))
             [ "${elapsed}" -lt 3600 ] && return 0
         fi
     fi
 
-    payload=$(jq --null-input --arg msg "${message}" '{"content":$msg}') \
+    payload=$(jq --null-input \
+        --argjson color 3447003 \
+        --arg title "${title}" \
+        --arg description "${description}" \
+        '{embeds:[{title:$title,description:$description,color:$color}]}') \
         || { warn "Discord: failed to build no-work payload"; return 0; }
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
@@ -123,7 +217,7 @@ notify_discord_no_work() {
         || warn "Discord webhook notification failed"
 
     mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-    printf '%s\n%s\n' "${message}" "${now}" > "${state_file}"
+    printf '%s\n%s\n' "${dedup_hash}" "${now}" > "${state_file}"
 }
 
 # disk_space_available_kb and check_disk_space are declared in lib/core.
