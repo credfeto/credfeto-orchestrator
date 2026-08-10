@@ -44,10 +44,23 @@ it) rather than a symptom of anything broken.
 - **Inspecting another owner's checkout as `markr`**: their home directory is typically only
   readable via `sudo`, and `git` will refuse with "detected dubious ownership" if you `sudo git -C`
   a directory owned by a different user. Use a scoped override rather than a persistent global
-  config change: `sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status`.
+  config change: `sudo env GIT_OPTIONAL_LOCKS=0 git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status`.
   Prefer this over `sudo -u <owner> git ...` — some sessions have a permission rule that denies
   `sudo -u` specifically (routing a sudo invocation through a different effective user is treated
   as more sensitive than running a read-only command as root).
+  `GIT_OPTIONAL_LOCKS=0` is **mandatory** here, not optional hygiene: `git status` is not actually
+  read-only — it opportunistically rewrites `.git/index` with a refreshed stat cache as a side
+  effect. Run as root without it, that rewrite reowns `.git/index` to `root:root`, which the real
+  owner then cannot read or write — the next `sudo -u <owner> git ... pull` (e.g. from
+  `setup-owner`'s `clone_or_pull_repo`) fails with `index file open failed: Permission denied`
+  (#1300, live incident against `funfair-tech`'s checkout, traced to exactly this command run
+  without the guard). Put `GIT_OPTIONAL_LOCKS=0` **before** `sudo`, not between `sudo` and `git`:
+  `sudo` resets the environment (`env_reset`), so `GIT_OPTIONAL_LOCKS=0 sudo git ...` silently
+  drops the variable and rewrites the index exactly as if it were absent — `sudo env
+  GIT_OPTIONAL_LOCKS=0 git ...` is the only form that actually survives the privilege switch.
+  If a checkout's `.git/index` is ever found owned by someone other than that checkout's owner,
+  that is this exact corruption; `chown` it back to the owner (verify with `git -C <dir> pull`
+  as that owner) — do not delete/regenerate it, which would discard any staged state.
 
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
 
@@ -67,8 +80,11 @@ Run per owner (see Real Deployment Layout above for why the path/sudo form is ne
 
 ```bash
 sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator rev-parse --short HEAD
-sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status
+sudo env GIT_OPTIONAL_LOCKS=0 git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status
 ```
+
+(`rev-parse` is plumbing and never touches `.git/index`, so it needs no guard; `status` does — see
+the `GIT_OPTIONAL_LOCKS=0` explanation under "Inspecting another owner's checkout" above.)
 
 Confirms which version of `oneshot`/`lib/*` is deployed for that owner. This checkout self-updates via the systemd unit's own `ExecStartPre` (`git fetch` + `merge --ff-only origin/main`) immediately before every run, not via `loop`'s self-update path — a dirty tree or a commit behind `origin/main` right after a service run means that `ExecStartPre` step itself failed; check the service's own log (Section 2) for the exact fetch/merge error.
 

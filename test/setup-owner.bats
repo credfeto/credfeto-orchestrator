@@ -594,6 +594,40 @@ stub_sudo_for_copy_dotdir() {
     [[ "${output}" == "accumulated-host-key" ]]
 }
 
+@test "clone_or_pull_repo reasserts ownership before pulling an already-cloned checkout" {
+    local test_home="${TEST_TMP}/owner_home"
+    mkdir -p "${test_home}/credfeto-orchestrator/.git"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+
+    # shellcheck disable=SC2329
+    sudo() {
+        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
+        case "$1" in
+            -u)    shift; shift; "$@" ;;
+            chown) true ;;
+        esac
+    }
+    export -f sudo
+
+    run clone_or_pull_repo "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Repository ready at ${test_home}/credfeto-orchestrator"* ]]
+
+    local clone_dir="${test_home}/credfeto-orchestrator"
+    grep -qF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/sudo.log"
+    grep -qF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log"
+
+    # The chown must run before the pull, so a root-owned .git/index left by an
+    # earlier diagnostic command (#1300) is fixed before git needs to open it.
+    local chown_line pull_line
+    chown_line=$(grep -nF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/sudo.log" | head -1 | cut -d: -f1)
+    pull_line=$(grep -nF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log" | head -1 | cut -d: -f1)
+    [ "${chown_line}" -lt "${pull_line}" ]
+}
+
 @test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
     local test_home="${TEST_TMP}/owner_home"
     mkdir -p "${test_home}"
