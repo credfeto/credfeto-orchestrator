@@ -113,7 +113,7 @@ selfupdate_retry_cmd_for() {
 @test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
     # Reproduces the exact failure the retry exists to recover from: a merge killed while
     # updating the branch ref leaves its lock at .git/refs/heads/<branch>.lock, not directly
-    # under .git/ — a flat .git/*.lock glob (round 1 of this fix) would miss it entirely.
+    # under .git/ — a flat .git/*.lock glob would miss it entirely.
     local repo="${TEST_TMP}/retry-repo"
     local remote
     remote=$(setup_local_git_remote "${repo}")

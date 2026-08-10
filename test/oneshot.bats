@@ -8721,7 +8721,7 @@ STUBEOF
     # loop's or a manual invocation's shape, neither of which install-timer's ExecStartPre ran
     # ahead of. Deliberately NOT testing this via systemd's generic INVOCATION_ID: a manual shell
     # descended from an unrelated systemd --user session would have that set too, which is
-    # exactly the false-positive this variable exists to avoid (#1298 review, round 3).
+    # exactly the false-positive this variable exists to avoid (#1298 review).
     git_commits_behind() { printf '3'; return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
