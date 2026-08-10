@@ -8455,6 +8455,96 @@ STUBEOF
     [ -f "${curl_log}" ]
 }
 
+# --- notify_discord_self_update_stale (#1298) ---------------------------------
+
+@test "notify_discord_self_update_stale does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale sends embed with the commit sha and behind count when webhook is set" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+    grep -q "abc1234" "${curl_log}"
+}
+
+@test "notify_discord_self_update_stale includes owner in title when owner is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "myowner" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "myowner" "${curl_log}"
+}
+
+@test "notify_discord_self_update_stale suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 30 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 90 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale does not record dedup state when the curl POST fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.self_update_stale__global.state" ]
+}
+
+@test "notify_discord_self_update_stale uses owner-scoped state file" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file for a different owner — should not suppress this call.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale_other_owner.state"
+
+    run notify_discord_self_update_stale "myowner" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
 # --- notify_discord_priorities_unreachable --------------------------------------------
 
 @test "notify_discord_priorities_unreachable does nothing when DISCORD_WEBHOOK_URL is unset" {
