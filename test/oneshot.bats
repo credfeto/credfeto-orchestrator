@@ -6268,22 +6268,6 @@ STUBEOF
 
 # Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
 # recover_orphaned_branch can perform real git operations without network calls.
-setup_local_git_remote() {
-    local remote_dir="${TEST_TMP}/remote.git"
-    git init --bare "${remote_dir}" >/dev/null 2>&1
-    git -C "${remote_dir}" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
-
-    mkdir -p "$(dirname "${REPO_WORK_DIR}")"
-    git clone "${remote_dir}" "${REPO_WORK_DIR}" >/dev/null 2>&1
-    git -C "${REPO_WORK_DIR}" config user.email "test@example.com"
-    git -C "${REPO_WORK_DIR}" config user.name "Test"
-    git -C "${REPO_WORK_DIR}" config core.hooksPath /dev/null
-    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
-    git -C "${REPO_WORK_DIR}" push origin main >/dev/null 2>&1
-
-    printf '%s\n' "${remote_dir}"
-}
-
 @test "recover_orphaned_branch returns 1 when repo directory does not exist" {
     REPO_WORK_DIR="${TEST_TMP}/nonexistent/repo"
     run recover_orphaned_branch

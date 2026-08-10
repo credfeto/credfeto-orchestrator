@@ -54,7 +54,7 @@ teardown() {
 assert_selfupdate_execstartpre() {
     local svc="$1"
     grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
+    grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -mmin \+1 -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
 }
 
 @test "sourcing install-timer defines main without executing it" {
@@ -91,43 +91,40 @@ assert_selfupdate_execstartpre() {
     [[ "${output}" == *"Required tool not found"* ]]
 }
 
-@test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
-    # Reproduces the exact failure the retry exists to recover from: a merge killed while
-    # updating the branch ref leaves its lock at .git/refs/heads/<branch>.lock, not directly
-    # under .git/ — a flat .git/*.lock glob (round 1 of this fix) would miss it entirely.
-    local remote="${TEST_TMP}/retry-remote.git"
-    local repo="${TEST_TMP}/retry-repo"
-    git init --bare -q "${remote}"
-    git -C "${remote}" symbolic-ref HEAD refs/heads/main
-    git clone -q "${remote}" "${repo}"
-    git -C "${repo}" config user.email "test@example.com"
-    git -C "${repo}" config user.name "Test"
-    git -C "${repo}" config core.hooksPath /dev/null
-    git -C "${repo}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
-    git -C "${repo}" push -q origin main
-
-    advance_remote_main "${remote}" 1
-    git -C "${repo}" fetch -q origin
-
-    touch "${repo}/.git/refs/heads/main.lock"
-
-    # Generate the unit AGAINST this fixture repo — REPO_DIR is a plain global create_service_unit
-    # reads, so overriding it here means the extracted ExecStartPre line already targets the
-    # fixture directly; no text-surgery/retargeting needed.
+# Generates the systemd unit for repo_dir and extracts the merge-retry ExecStartPre command as a
+# plain string, ready for `run /bin/sh -c "$(...)"`. Shared by the two regression tests below.
+# REPO_DIR is a plain global create_service_unit reads, so overriding it here means the extracted
+# line already targets repo_dir directly — no text-surgery/retargeting needed.
+selfupdate_retry_cmd_for() {
+    local repo_dir="$1"
     # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
-    REPO_DIR="${repo}"
-    run main
-    [ "${status}" -eq 0 ]
+    REPO_DIR="${repo_dir}"
+    main >/dev/null
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
-
-    # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent
-    # socket step a few lines below also matches a bare "/bin/sh -c '".
+    # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent socket
+    # step a few lines below also matches a bare "/bin/sh -c '".
     local retry_cmd
     retry_cmd=$(grep -F "timeout 30 /bin/sh -c '" "${svc}")
     retry_cmd="${retry_cmd#*-c \'}"
     retry_cmd="${retry_cmd%\'}"
+    printf '%s' "${retry_cmd}"
+}
 
-    run /bin/sh -c "${retry_cmd}"
+@test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
+    # Reproduces the exact failure the retry exists to recover from: a merge killed while
+    # updating the branch ref leaves its lock at .git/refs/heads/<branch>.lock, not directly
+    # under .git/ — a flat .git/*.lock glob (round 1 of this fix) would miss it entirely.
+    local repo="${TEST_TMP}/retry-repo"
+    local remote
+    remote=$(setup_local_git_remote "${repo}")
+    advance_remote_main "${remote}" 1
+    git -C "${repo}" fetch -q origin
+
+    # A lock from a process killed well before this tick — old enough that the age gate (-mmin
+    # +1, comfortably above the step's own 30-second timeout) must treat it as safe to clear.
+    touch -d '-10 minutes' "${repo}/.git/refs/heads/main.lock"
+
+    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
     [ "${status}" -eq 0 ]
     [ ! -f "${repo}/.git/refs/heads/main.lock" ]
 
@@ -135,6 +132,31 @@ assert_selfupdate_execstartpre() {
     local head="${output}"
     run git -C "${repo}" rev-parse origin/main
     [ "${head}" = "${output}" ]
+}
+
+@test "the merge ExecStartPre retry does NOT clear a fresh lock (#1298 review — must not race a sibling --owner unit's in-flight merge)" {
+    # REPO_DIR is the SAME checkout for every --owner variant installed for this user (#1298
+    # review). Without the age gate, this retry would delete a lock a DIFFERENT, concurrently-
+    # running unit's merge is still legitimately holding, racing it. A fresh-mtime lock here
+    # stands in for exactly that in-flight-elsewhere case.
+    local repo="${TEST_TMP}/retry-fresh-repo"
+    local remote
+    remote=$(setup_local_git_remote "${repo}")
+    advance_remote_main "${remote}" 1
+    git -C "${repo}" fetch -q origin
+
+    touch "${repo}/.git/refs/heads/main.lock"
+
+    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    [ "${status}" -ne 0 ]
+    [ -f "${repo}/.git/refs/heads/main.lock" ]
+
+    # The merge itself must still be reported as failed (tolerated by the '-' ExecStartPre
+    # prefix), not silently swallowed, and origin/main must NOT have been merged in.
+    run git -C "${repo}" rev-parse HEAD
+    local head="${output}"
+    run git -C "${repo}" rev-parse origin/main
+    [ "${head}" != "${output}" ]
 }
 
 @test "install-timer creates unit files and invokes systemctl correctly" {
