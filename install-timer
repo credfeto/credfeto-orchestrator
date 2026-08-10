@@ -109,13 +109,31 @@ Delegate=cpu memory pids io
 Environment=XDG_RUNTIME_DIR=/run/user/${owner_uid}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${owner_uid}/bus
 Environment=SSH_AUTH_SOCK=${ssh_socket}
+# Declared explicitly, rather than relying on systemd's generic INVOCATION_ID, so oneshot's
+# self-update staleness check (#1298) has an unambiguous, unit-specific signal that the
+# ExecStartPre self-update below actually ran immediately before it — INVOCATION_ID is set for
+# ANY systemd unit's main process, including a manual shell that happens to be a descendant of an
+# unrelated systemd --user session, which would otherwise wrongly gate a manual/interactive run.
+Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1
 WorkingDirectory=${REPO_DIR}
 # Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
 # unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the
 # orchestrator from running with whatever was last successfully pulled (#1098). Genuine repo
-# corruption still surfaces via oneshot's own git error handling once it starts.
+# corruption still surfaces via oneshot's own git error handling once it starts. The merge step
+# retries once, clearing any stale *.lock file anywhere under .git first, if the first attempt
+# fails — a lock left by a previous merge killed mid-write (e.g. by this same timeout) otherwise
+# wedges every subsequent merge identically, forever, since git never clears a stale lock on its
+# own (#1298). A merge killed while updating the branch ref leaves its lock at
+# .git/refs/heads/<branch>.lock, not directly under .git/, so this must search recursively rather
+# than glob only the top level. Deletion is age-gated (-mmin +1, comfortably above this step's own
+# 30-second timeout): REPO_DIR is the SAME checkout for every --owner variant installed for this
+# user, so an unconditional delete could remove a lock a DIFFERENT concurrently-running unit's
+# merge is still legitimately holding, not just one left by a killed process — the age gate is
+# what tells a genuinely stale lock (older than any merge this step could still be running) apart
+# from a sibling unit's merge being in flight right now (#1298 review). oneshot's own
+# git_commits_behind check (lib/git) is the backstop if even the retry does not converge.
 ExecStartPre=-/usr/bin/timeout 60 /usr/bin/git -C \"${REPO_DIR}\" fetch origin
-ExecStartPre=-/usr/bin/timeout 30 /usr/bin/git -C \"${REPO_DIR}\" merge --ff-only origin/main
+ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C \"${REPO_DIR}\" merge --ff-only origin/main || { find \"${REPO_DIR}\"/.git -name \"*.lock\" -mmin +1 -delete; git -C \"${REPO_DIR}\" merge --ff-only origin/main; }'
 # -f scopes this to the ssh-agent bound to THIS instance's own socket, not every ssh-agent
 # belonging to this user — an unscoped 'pkill -u <user> ssh-agent' kills the agent of any other
 # concurrently-running instance (--owner variants share the same User=) or interactive session

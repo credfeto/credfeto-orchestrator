@@ -192,3 +192,40 @@ make_stub_multiline() {
     } > "${script}"
     chmod +x "${script}"
 }
+
+# Sets up a local bare "remote" and clones it into clone_dir (defaults to REPO_WORK_DIR) so tests
+# can perform real git operations without network calls. Outputs the bare remote's path on stdout.
+setup_local_git_remote() {
+    local clone_dir="${1:-${REPO_WORK_DIR}}"
+    local remote_dir="${TEST_TMP}/remote.git"
+    git init --bare "${remote_dir}" >/dev/null 2>&1
+    git -C "${remote_dir}" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
+
+    mkdir -p "$(dirname "${clone_dir}")"
+    git clone "${remote_dir}" "${clone_dir}" >/dev/null 2>&1
+    git -C "${clone_dir}" config user.email "test@example.com"
+    git -C "${clone_dir}" config user.name "Test"
+    git -C "${clone_dir}" config core.hooksPath /dev/null
+    git -C "${clone_dir}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
+    git -C "${clone_dir}" push origin main >/dev/null 2>&1
+
+    printf '%s\n' "${remote_dir}"
+}
+
+# Advances remote_dir's main branch by pushing `commits` empty commits from a fresh, independent
+# clone under TEST_TMP — used to simulate "origin/main moved on without this checkout" scenarios
+# (e.g. a stale/behind checkout) without touching whichever clone is actually under test.
+advance_remote_main() {
+    local remote_dir="$1" commits="${2:-1}"
+    local clone_dir="${TEST_TMP}/advance-remote-clone"
+    git clone -q "${remote_dir}" "${clone_dir}"
+    git -C "${clone_dir}" config user.email "test@example.com"
+    git -C "${clone_dir}" config user.name "Test"
+    git -C "${clone_dir}" config core.hooksPath /dev/null
+    local i=1
+    while [ "${i}" -le "${commits}" ]; do
+        git -C "${clone_dir}" -c commit.gpgsign=false commit --allow-empty -m "advance ${i}" >/dev/null 2>&1
+        i=$((i + 1))
+    done
+    git -C "${clone_dir}" push -q origin main >/dev/null 2>&1
+}

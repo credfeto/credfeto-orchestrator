@@ -3971,6 +3971,11 @@ STUBEOF
 # Call this inside each test after sourcing (i.e. after setup has run) to
 # replace every function that performs real I/O.
 setup_main_mocks() {
+    # Deterministic baseline for the self-update staleness gate (#1298): never inherit a real
+    # ORCHESTRATOR_SELF_UPDATE_MANAGED from whatever environment is actually running these tests.
+    # Individual tests opt into the "systemd-managed self-update ran" path by exporting it
+    # themselves.
+    unset ORCHESTRATOR_SELF_UPDATE_MANAGED
     make_stub flock 'exit 0'
     check_required_tools()      { return 0; }
     set_repo_context()          { return 0; }
@@ -6263,22 +6268,6 @@ STUBEOF
 
 # Sets up a local bare "remote" and clones it into REPO_WORK_DIR so that
 # recover_orphaned_branch can perform real git operations without network calls.
-setup_local_git_remote() {
-    local remote_dir="${TEST_TMP}/remote.git"
-    git init --bare "${remote_dir}" >/dev/null 2>&1
-    git -C "${remote_dir}" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
-
-    mkdir -p "$(dirname "${REPO_WORK_DIR}")"
-    git clone "${remote_dir}" "${REPO_WORK_DIR}" >/dev/null 2>&1
-    git -C "${REPO_WORK_DIR}" config user.email "test@example.com"
-    git -C "${REPO_WORK_DIR}" config user.name "Test"
-    git -C "${REPO_WORK_DIR}" config core.hooksPath /dev/null
-    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit --allow-empty -m "init" >/dev/null 2>&1
-    git -C "${REPO_WORK_DIR}" push origin main >/dev/null 2>&1
-
-    printf '%s\n' "${remote_dir}"
-}
-
 @test "recover_orphaned_branch returns 1 when repo directory does not exist" {
     REPO_WORK_DIR="${TEST_TMP}/nonexistent/repo"
     run recover_orphaned_branch
@@ -6401,6 +6390,48 @@ setup_local_git_remote() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"uncommitted changes"* ]]
     [[ "${output}" == *"new-untracked-file.txt"* ]]
+}
+
+# --- git_commits_behind unit tests (#1298) --------------------------------------
+
+@test "git_commits_behind reports 0 when ref and upstream are the same commit" {
+    # setup_local_git_remote's own push already updates REPO_WORK_DIR's origin/main tracking ref
+    # locally — no separate fetch needed to observe it.
+    setup_local_git_remote >/dev/null
+
+    run git_commits_behind "${REPO_WORK_DIR}" HEAD origin/main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "0" ]
+}
+
+@test "git_commits_behind reports the count when origin/main has advanced" {
+    local remote_dir
+    remote_dir=$(setup_local_git_remote)
+
+    # Advance the remote via a second, independent clone — REPO_WORK_DIR (the one under test)
+    # must NOT itself merge these commits, only fetch, so its own HEAD stays behind.
+    advance_remote_main "${remote_dir}" 2
+
+    git -C "${REPO_WORK_DIR}" fetch -q origin
+
+    run git_commits_behind "${REPO_WORK_DIR}" HEAD origin/main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2" ]
+}
+
+@test "git_commits_behind returns 1 with no output when upstream does not exist (a fetch has never succeeded)" {
+    local clone="${TEST_TMP}/behind-clone-no-remote"
+    git init -q "${clone}"
+
+    run git_commits_behind "${clone}" HEAD origin/main
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
+}
+
+@test "git_commits_behind returns 1 with no output when repo_dir does not exist" {
+    run git_commits_behind "${TEST_TMP}/behind-nonexistent" HEAD origin/main
+    [ "${status}" -ne 0 ]
+    [ -z "${output}" ]
 }
 
 # --- find_stale_issue_branch unit tests (#1262) ---------------------------------
@@ -8424,6 +8455,96 @@ STUBEOF
     [ -f "${curl_log}" ]
 }
 
+# --- notify_discord_self_update_stale (#1298) ---------------------------------
+
+@test "notify_discord_self_update_stale does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale sends embed with the commit sha and behind count when webhook is set" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+    grep -q "abc1234" "${curl_log}"
+}
+
+@test "notify_discord_self_update_stale includes owner in title when owner is provided" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_self_update_stale "myowner" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "myowner" "${curl_log}"
+}
+
+@test "notify_discord_self_update_stale suppresses duplicate notification within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 30 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file with a timestamp from 90 minutes ago.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_self_update_stale does not record dedup state when the curl POST fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_self_update_stale "" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.self_update_stale__global.state" ]
+}
+
+@test "notify_discord_self_update_stale uses owner-scoped state file" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # Write a state file for a different owner — should not suppress this call.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale_other_owner.state"
+
+    run notify_discord_self_update_stale "myowner" "abc1234" "3"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
 # --- notify_discord_priorities_unreachable --------------------------------------------
 
 @test "notify_discord_priorities_unreachable does nothing when DISCORD_WEBHOOK_URL is unset" {
@@ -8661,6 +8782,82 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"Insufficient disk space"* ]]
+}
+
+# --- main: self-update staleness check (#1298) --------------------------------
+
+@test "main refuses to run and notifies Discord when systemd-invoked and the checkout is behind origin/main" {
+    setup_main_mocks
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
+    git_commits_behind() { printf '3'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_self_update_stale() { printf 'notified\n' >> "${discord_log}"; }
+    local claude_log="${TEST_TMP}/claude_log"
+    invoke_claude() { printf 'called\n' >> "${claude_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"3 commit(s) behind origin/main"* ]]
+    [ -f "${discord_log}" ]
+    [ ! -f "${claude_log}" ]
+}
+
+@test "main does not refuse to run when ORCHESTRATOR_SELF_UPDATE_MANAGED is unset, even when the checkout is behind origin/main (#1298 review — loop/manual invocation must not be gated by the systemd-only policy)" {
+    setup_main_mocks
+    # ORCHESTRATOR_SELF_UPDATE_MANAGED deliberately left unset by setup_main_mocks — this is
+    # loop's or a manual invocation's shape, neither of which install-timer's ExecStartPre ran
+    # ahead of. Deliberately NOT testing this via systemd's generic INVOCATION_ID: a manual shell
+    # descended from an unrelated systemd --user session would have that set too, which is
+    # exactly the false-positive this variable exists to avoid (#1298 review).
+    git_commits_behind() { printf '3'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_self_update_stale() { printf 'notified\n' >> "${discord_log}"; }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
+    [ ! -f "${discord_log}" ]
+}
+
+@test "main proceeds normally when systemd-invoked and the checkout is up to date with origin/main" {
+    setup_main_mocks
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
+    git_commits_behind() { printf '0'; return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
+}
+
+@test "main proceeds normally when systemd-invoked and git_commits_behind is inconclusive (e.g. origin/main does not exist yet)" {
+    setup_main_mocks
+    export ORCHESTRATOR_SELF_UPDATE_MANAGED="1"
+    git_commits_behind() { return 1; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":1,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"behind origin/main"* ]]
 }
 
 # --- MAX_REVIEW_ITERATIONS constant -------------------------------------------

@@ -48,6 +48,15 @@ teardown() {
     cleanup_stubs
 }
 
+# Asserts the self-update ExecStartPre lines: the fetch step, and the merge step's
+# retry-with-stale-lock-cleanup (#1298) — shared by both the default and --owner unit tests so
+# the assertion is written once, not duplicated per test.
+assert_selfupdate_execstartpre() {
+    local svc="$1"
+    grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
+    grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -mmin \+1 -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
+}
+
 @test "sourcing install-timer defines main without executing it" {
     run declare -F main
     [ "${status}" -eq 0 ]
@@ -82,6 +91,74 @@ teardown() {
     [[ "${output}" == *"Required tool not found"* ]]
 }
 
+# Generates the systemd unit for repo_dir and extracts the merge-retry ExecStartPre command as a
+# plain string, ready for `run /bin/sh -c "$(...)"`. Shared by the two regression tests below.
+# REPO_DIR is a plain global create_service_unit reads, so overriding it here means the extracted
+# line already targets repo_dir directly — no text-surgery/retargeting needed.
+selfupdate_retry_cmd_for() {
+    local repo_dir="$1"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    REPO_DIR="${repo_dir}"
+    main >/dev/null
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent socket
+    # step a few lines below also matches a bare "/bin/sh -c '".
+    local retry_cmd
+    retry_cmd=$(grep -F "timeout 30 /bin/sh -c '" "${svc}")
+    retry_cmd="${retry_cmd#*-c \'}"
+    retry_cmd="${retry_cmd%\'}"
+    printf '%s' "${retry_cmd}"
+}
+
+@test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
+    # Reproduces the exact failure the retry exists to recover from: a merge killed while
+    # updating the branch ref leaves its lock at .git/refs/heads/<branch>.lock, not directly
+    # under .git/ — a flat .git/*.lock glob would miss it entirely.
+    local repo="${TEST_TMP}/retry-repo"
+    local remote
+    remote=$(setup_local_git_remote "${repo}")
+    advance_remote_main "${remote}" 1
+    git -C "${repo}" fetch -q origin
+
+    # A lock from a process killed well before this tick — old enough that the age gate (-mmin
+    # +1, comfortably above the step's own 30-second timeout) must treat it as safe to clear.
+    touch -d '-10 minutes' "${repo}/.git/refs/heads/main.lock"
+
+    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${repo}/.git/refs/heads/main.lock" ]
+
+    run git -C "${repo}" rev-parse HEAD
+    local head="${output}"
+    run git -C "${repo}" rev-parse origin/main
+    [ "${head}" = "${output}" ]
+}
+
+@test "the merge ExecStartPre retry does NOT clear a fresh lock (#1298 review — must not race a sibling --owner unit's in-flight merge)" {
+    # REPO_DIR is the SAME checkout for every --owner variant installed for this user (#1298
+    # review). Without the age gate, this retry would delete a lock a DIFFERENT, concurrently-
+    # running unit's merge is still legitimately holding, racing it. A fresh-mtime lock here
+    # stands in for exactly that in-flight-elsewhere case.
+    local repo="${TEST_TMP}/retry-fresh-repo"
+    local remote
+    remote=$(setup_local_git_remote "${repo}")
+    advance_remote_main "${remote}" 1
+    git -C "${repo}" fetch -q origin
+
+    touch "${repo}/.git/refs/heads/main.lock"
+
+    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    [ "${status}" -ne 0 ]
+    [ -f "${repo}/.git/refs/heads/main.lock" ]
+
+    # The merge itself must still be reported as failed (tolerated by the '-' ExecStartPre
+    # prefix), not silently swallowed, and origin/main must NOT have been merged in.
+    run git -C "${repo}" rev-parse HEAD
+    local head="${output}"
+    run git -C "${repo}" rev-parse origin/main
+    [ "${head}" != "${output}" ]
+}
+
 @test "install-timer creates unit files and invokes systemctl correctly" {
     run main
     [ "${status}" -eq 0 ]
@@ -98,8 +175,8 @@ teardown() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket$" "${svc}"
@@ -167,8 +244,8 @@ teardown() {
     grep -q "Environment=XDG_RUNTIME_DIR=/run/user/1001" "${svc}"
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 60 .*/git -C .* fetch origin$" "${svc}"
-    grep -qE "ExecStartPre=-/usr/bin/timeout 30 .*/git -C .* merge --ff-only origin/main$" "${svc}"
+    grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -qE "ExecStartPre=.*/ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket$" "${svc}"

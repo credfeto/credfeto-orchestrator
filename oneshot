@@ -162,6 +162,40 @@ main() {
 
     check_required_tools
     load_env_config
+
+    local head_sha behind_count
+    head_sha=$(git -C "${ONESHOT_DIR}" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
+    info "oneshot version: ${head_sha}"
+
+    # install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate failure, #1098) so
+    # a bad network day never blocks a run — but that also means a permanently wedged merge (e.g.
+    # a stale git lock left by a killed process) is swallowed silently forever, with nothing ever
+    # surfacing it short of manually reading journalctl (#1298). A confirmed positive count here
+    # means this checkout is definitely stale; refuse to run this tick on stale code rather than
+    # silently continuing. An inconclusive result (git_commits_behind returns 1 — e.g. origin/main
+    # doesn't exist yet because a fetch has never succeeded) must never block a run. Checked here,
+    # right after load_env_config (the only earlier dependency — notify_discord_self_update_stale
+    # needs DISCORD_WEBHOOK_URL), rather than later: a stale checkout should refuse before paying
+    # for the gpg keyring probe, ssh-agent preload, cgroup setup, and disk-space check below, only
+    # to throw all of that away on this exit anyway.
+    #
+    # Scoped to the systemd path only, via ORCHESTRATOR_SELF_UPDATE_MANAGED (a variable
+    # install-timer's own generated unit declares explicitly, alongside its other Environment=
+    # lines) — NOT systemd's generic INVOCATION_ID, which is set for ANY unit's main process and
+    # would also wrongly catch a manual shell descended from an unrelated systemd --user session.
+    # loop has its own, deliberately looser recovery policy for the same underlying condition: a
+    # failed/stale git pull there just warns and keeps going, since loop's own retry cadence
+    # recovers it on a later iteration (loop:19-23, #1104) rather than being wedged forever the
+    # way a stale ExecStartPre lock is — this check must not override that decision. A manual/
+    # interactive invocation may also legitimately be on a different commit for reasons unrelated
+    # to a wedged self-update.
+    if [ -n "${ORCHESTRATOR_SELF_UPDATE_MANAGED:-}" ] \
+        && behind_count=$(git_commits_behind "${ONESHOT_DIR}" HEAD origin/main) && [ "${behind_count}" -gt 0 ]; then
+        warn "This checkout is ${behind_count} commit(s) behind origin/main — the self-update step did not converge (see ai/local/debugging.instructions.md State Inventory #1)"
+        notify_discord_self_update_stale "${owner_filter}" "${head_sha}" "${behind_count}"
+        exit 1
+    fi
+
     validate_config "${owner_filter}"
     if [ -n "${GIT_SIGNING_KEY}" ]; then
         gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
@@ -175,10 +209,6 @@ main() {
         warn "Insufficient disk space — skipping all work this cycle"
         exit 0
     fi
-
-    local head_sha
-    head_sha=$(git -C "$(dirname "$(realpath "$0")")" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
-    info "oneshot version: ${head_sha}"
 
     # Acquire an exclusive per-owner lock so concurrent invocations (e.g. two
     # systemd timer firings) do not race on the same git working directories.

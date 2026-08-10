@@ -294,6 +294,36 @@ notify_discord_low_disk_space() {
     _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
+# Sends a Discord embed notification when oneshot detects its OWN checkout is behind
+# origin/main — install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate
+# failure, #1098), so a permanently wedged merge (e.g. a stale git lock left by a killed process,
+# #1298) is otherwise swallowed silently forever. Deduplicates per owner: at most one
+# notification per hour, same as notify_discord_low_disk_space.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_self_update_stale() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}" head_sha="${2}" behind_count="${3}"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file self_update_stale "${owner}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Self-Update Stale${owner:+ [${owner}]}" \
+        --arg head_sha "${head_sha}" \
+        --argjson behind "${behind_count}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"Running commit",value:$head_sha,inline:true},
+            {name:"Commits behind origin/main",value:($behind|tostring),inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build self-update-stale payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+}
+
 # Sends a Discord embed notification when fetch_all_priorities exhausts all retry attempts,
 # i.e. the priorities API itself is unreachable, distinct from a single item's GitHub calls
 # failing. Without this, a sustained priorities-API outage dies loudly in the journal but

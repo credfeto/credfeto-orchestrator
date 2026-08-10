@@ -253,3 +253,19 @@ find_ai_instructions() {
         return 1
     fi
 }
+
+# Returns the number of commits `upstream` has that `ref` doesn't (git rev-list --count
+# ref..upstream) on stdout. Used by oneshot to detect its OWN checkout falling behind
+# origin/main — install-timer's ExecStartPre self-update steps are deliberately '-'-prefixed
+# (tolerate failure, #1098), so a merge that gets permanently wedged (e.g. a stale lock file left
+# by a killed git process, #1298) is otherwise swallowed silently forever with nothing surfacing
+# it. Returns 1 with no output if the count could not be determined — e.g. `upstream` doesn't
+# exist because a fetch has never succeeded — callers must treat that as INCONCLUSIVE, never as
+# "definitely stale", so a checkout that has simply never fetched yet is not wrongly refused.
+git_commits_behind() {
+    local repo_dir="$1" ref="$2" upstream="$3"
+    local count
+    count=$(git -C "${repo_dir}" rev-list --count "${ref}..${upstream}" 2>/dev/null) || return 1
+    [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "${count}"
+}
