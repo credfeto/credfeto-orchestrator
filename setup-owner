@@ -472,6 +472,13 @@ clone_or_pull_repo() {
     if sudo -u "${owner}" test -d "${clone_dir}"; then
         if sudo -u "${owner}" test -d "${clone_dir}/.git"; then
             info "Repository already cloned — pulling..."
+            # A prior root-run git command against this checkout (e.g. a diagnostic
+            # `sudo git ... status`, whose optional index-refresh side effect reowns
+            # .git/index to root) can leave files owned by someone other than ${owner},
+            # which then makes the pull below fail with "index file open failed:
+            # Permission denied" (#1300). Reassert ownership before every pull so the
+            # checkout self-heals instead of requiring a manual chown.
+            sudo chown -R "${owner}:${owner}" "${clone_dir}" || die "Failed to chown ${clone_dir}"
             sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
                 || die "Failed to pull repository in ${clone_dir}"
         else
