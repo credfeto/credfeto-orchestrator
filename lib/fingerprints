@@ -226,6 +226,49 @@ clear_pr_ci_pending_state() {
     rm -f "${state_file}" 2>/dev/null || true
 }
 
+# Returns the path to the per-PR "last agent-seen comment" state file.
+pr_last_agent_comment_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.last-agent-comment-seen' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Writes the newest trusted top-level PR comment timestamp a real agent invocation actually saw.
+# Deliberately never called by the non-agentic-rebase path or the terminal/"settled" skip in
+# oneshot — only a genuine agent turn is allowed to advance this, so a trusted comment left while
+# a PR is BEHIND or already "settled" still forces a real invocation instead of being silently
+# folded into the general PR fingerprint by one of those free paths (#1307).
+save_pr_last_agent_comment_seen() {
+    local item_id="$1" timestamp="$2"
+    local state_file
+    state_file=$(pr_last_agent_comment_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${timestamp}" \
+        > "${state_file}" \
+        || die "Failed to write last-agent-comment-seen state file: ${state_file}"
+}
+
+# Reads and outputs the saved "last agent-seen comment" timestamp for a given PR, or empty
+# string if an agent has never recorded one (a brand-new PR, or one predating #1307).
+load_pr_last_agent_comment_seen() {
+    local item_id="$1"
+    local state_file
+    state_file=$(pr_last_agent_comment_file_path "${item_id}")
+    if [ -f "${state_file}" ]; then
+        cat "${state_file}"
+    fi
+}
+
+# Fetches fresh PR state and returns the newest trusted top-level comment timestamp in it, for
+# saving via save_pr_last_agent_comment_seen once a real agent invocation completes (#1307).
+# Mirrors compute_pr_fingerprint's own fetch-then-derive pattern.
+compute_pr_last_agent_comment_seen() {
+    local item_id="$1"
+    local pr_json trusted
+    pr_json=$(fetch_pr_json "${item_id}") || return 1
+    trusted=$(get_trusted_logins) || return 1
+    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}"
+}
+
 # Returns the path to the fingerprint file for a given Issue ID.
 issue_fingerprint_file_path() {
     local item_id="$1"
