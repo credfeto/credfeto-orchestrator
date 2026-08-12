@@ -226,6 +226,55 @@ clear_pr_ci_pending_state() {
     rm -f "${state_file}" 2>/dev/null || true
 }
 
+# Returns the path to the per-PR "last agent-seen comment" state file.
+pr_last_agent_comment_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.last-agent-comment-seen' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Writes the newest trusted top-level PR comment timestamp a real agent invocation actually saw.
+# Deliberately never called by the non-agentic-rebase path or the terminal/"settled" skip in
+# oneshot — only a genuine agent turn is allowed to advance this, so a trusted comment left while
+# a PR is BEHIND or already "settled" still forces a real invocation instead of being silently
+# folded into the general PR fingerprint by one of those free paths (#1307).
+save_pr_last_agent_comment_seen() {
+    local item_id="$1" timestamp="$2"
+    local state_file
+    state_file=$(pr_last_agent_comment_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${timestamp}" \
+        > "${state_file}" \
+        || die "Failed to write last-agent-comment-seen state file: ${state_file}"
+}
+
+# Reads and outputs the saved "last agent-seen comment" timestamp for a given PR, or empty
+# string if an agent has never recorded one (a brand-new PR, or one predating #1307).
+load_pr_last_agent_comment_seen() {
+    local item_id="$1"
+    local state_file
+    state_file=$(pr_last_agent_comment_file_path "${item_id}")
+    if [ -f "${state_file}" ]; then
+        cat "${state_file}"
+    fi
+}
+
+# Fetches fresh PR state and returns the newest trusted-activity timestamp in it (top-level
+# comments, reviews, and inline review comments — mirrors compute_pr_fingerprint's own
+# fetch-then-derive pattern and its three data sources exactly). Deliberately re-fetches rather
+# than reusing this tick's pre-invocation pr_json/pr_review_comments: the whole point of this call
+# is to capture state AFTER the agent's session, including any top-level comment the agent itself
+# just posted with its own (trusted) login — reusing stale pre-invocation data would leave that
+# comment (or one a human posted mid-session) permanently unaccounted for, forcing a spurious
+# re-invocation every subsequent tick until the PR's total-invocation cap trips (#1307 review).
+compute_pr_last_agent_comment_seen() {
+    local item_id="$1"
+    local pr_json trusted review_comments
+    pr_json=$(fetch_pr_json "${item_id}") || return 1
+    trusted=$(get_trusted_logins) || return 1
+    review_comments=$(fetch_pr_review_comments "${item_id}") || return 1
+    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}" "${review_comments}"
+}
+
 # Returns the path to the fingerprint file for a given Issue ID.
 issue_fingerprint_file_path() {
     local item_id="$1"
