@@ -43,6 +43,20 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN pip3 install --break-system-packages --no-cache-dir --ignore-installed \
         cfn-lint
 
+# ---- Installed-versions report ------------------------------------------------
+# Overwrites (not appends) the report inherited from development-node, so
+# this stage's report covers only what development-python itself adds. Read
+# back post-build by .github/actions/report-installed-versions.
+RUN { \
+      echo "uv: $(uv --version || echo 'version unknown')"; \
+      echo "ruff: $(ruff --version || echo 'version unknown')"; \
+      echo "sqlfluff: $(sqlfluff --version || echo 'version unknown')"; \
+      echo "cfn-lint: $(cfn-lint --version || echo 'version unknown')"; \
+      echo "pre-commit-hooks: present-only, no --version support"; \
+    } > /opt/installed-versions.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
+
 # ---- Build-time sanity check -------------------------------------------------
 # Verifies all stage 1 (development-tools) + stage 2 (development-node) +
 # stage 3 (development-python) binaries are present and callable.

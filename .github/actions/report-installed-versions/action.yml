@@ -1,0 +1,40 @@
+--- # Read back the /opt/installed-versions.txt report baked into a just-built image
+name: "Report installed tool versions"
+description: "Reads /opt/installed-versions.txt out of a container image and returns it as an output for the job summary"
+inputs:
+  image-ref:
+    description: "Fully-qualified container image reference to inspect (e.g. ghcr.io/owner/image:latest)"
+    required: true
+
+outputs:
+  versions:
+    description: "Contents of /opt/installed-versions.txt from the image, or a fallback line if absent"
+    value: "${{steps.report.outputs.versions}}"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Read installed-versions report from image"
+      id: "report"
+      shell: "bash"
+      run: |
+        IMAGE_REF="${{inputs.image-ref}}"
+
+        # A pull_request run has the image already loaded locally (load: true,
+        # push: false) — a push run has it in the registry only. Prefer the
+        # local copy so pull_request runs don't fetch the previous push's tag.
+        if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+          docker pull "$IMAGE_REF"
+        fi
+
+        VERSIONS=$(docker run --rm "$IMAGE_REF" cat /opt/installed-versions.txt 2>/dev/null || true)
+        if [ -z "$VERSIONS" ]; then
+          VERSIONS="(no /opt/installed-versions.txt found in this image)"
+        fi
+
+        DELIMITER="VERSIONS_EOF_${GITHUB_RUN_ID}_${GITHUB_JOB}"
+        {
+          echo "versions<<${DELIMITER}"
+          echo "$VERSIONS"
+          echo "${DELIMITER}"
+        } >> "$GITHUB_OUTPUT"

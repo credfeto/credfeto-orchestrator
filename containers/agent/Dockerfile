@@ -125,6 +125,18 @@ RUN : "${GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST}"; \
         || { echo "FATAL: ssh-keyscan for github.com produced no output during image build" >&2; exit 1; }; \
     printf '%s\n' "${scanned}" >> /etc/ssh/ssh_known_hosts
 
+# ---- Installed-versions report ------------------------------------------------
+# Overwrites (not appends) the report inherited from development-full. This
+# stage installs no new tools (it removes package managers and adds the agent
+# entrypoint), so the report just says so rather than repeating development-full's
+# entries. Read back post-build by .github/actions/report-installed-versions.
+RUN { \
+      echo "(no new tools installed at this stage — package managers/privilege-escalation binaries removed, agent entrypoint added)"; \
+      echo "GitHub SSH host key refresh cache-bust: ${GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST}"; \
+    } > /opt/installed-versions.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
+
 # ---- Build-time sanity check -------------------------------------------------
 # Fails the build if:
 #   - any of the removed package-management or escalation binaries are still

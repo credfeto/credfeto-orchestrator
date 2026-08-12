@@ -337,10 +337,26 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # invoke them without root. The PATH ENV below and the profile.d snippet
 # ensure the tools directory is visible to login shells and non-login shells
 # started by the entrypoint.
-RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+# LTS/STS versions are captured right after each individual install — before
+# the next install adds another folder under /usr/share/dotnet/sdk — so the
+# report in /opt/installed-versions.txt attributes each version to the
+# correct channel rather than guessing from a combined listing afterwards.
+RUN mkdir -p /opt \
+    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --channel LTS --install-dir /usr/share/dotnet \
+    && LTS_SDK_VERSION="" \
+    && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
+         LTS_SDK_VERSION="$(basename "$sdk_dir")"; \
+       done \
     && /tmp/dotnet-install.sh --channel STS --install-dir /usr/share/dotnet \
+    && STS_SDK_VERSION="" \
+    && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
+         sdk_version="$(basename "$sdk_dir")"; \
+         [ "$sdk_version" = "${LTS_SDK_VERSION}" ] || STS_SDK_VERSION="$sdk_version"; \
+       done \
+    && printf 'dotnet SDK (LTS): %s\ndotnet SDK (STS): %s\n' \
+        "${LTS_SDK_VERSION}" "${STS_SDK_VERSION}" > /opt/installed-versions.txt \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm /tmp/dotnet-install.sh
 
@@ -373,6 +389,24 @@ RUN { \
       echo 'export PATH'; \
     } > /etc/profile.d/development-tools-paths.sh \
     && chmod 644 /etc/profile.d/development-tools-paths.sh
+
+# ---- Installed-versions report ------------------------------------------------
+# Appends this stage's remaining explicitly-installed tool versions to the
+# report started by the dotnet SDK install above. Read back post-build by
+# .github/actions/report-installed-versions for the workflow job summary.
+# Locked down root:root 0444 once complete, matching other baked-in artefacts.
+RUN { \
+      echo "hadolint: $(hadolint --version || echo 'version unknown')"; \
+      echo "dotenv-linter: $(dotenv-linter --version || echo 'version unknown')"; \
+      echo "sqlcmd: $(sqlcmd --version | grep '^Version:' || echo 'version unknown')"; \
+      echo "actionlint: $(actionlint -version | head -n1 || echo 'version unknown')"; \
+      echo "trufflehog: $(trufflehog --version || echo 'version unknown')"; \
+      echo "trivy: $(trivy --version | head -n1 || echo 'version unknown')"; \
+      echo "composite-action-lint: bettermarks/composite-action-lint @ $(grep '^HEAD=' /opt/composite-action-lint/.env | cut -d= -f2 || echo 'unknown')"; \
+      echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
+    } >> /opt/installed-versions.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
 
 # ---- Build-time sanity check -------------------------------------------------
 # Fails the build (not the consumer at runtime) if:
