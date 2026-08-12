@@ -26,6 +26,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Re-verify dotnet-reportgenerator-globaltool in development-full's build-time sanity check now that the registry chain has republished with the tool present
 - Added a PreToolUse hook (enforce-background-for-long-running-commands) to the development-full container that blocks git commit, a directly-invoked pre-commit, dotnet build, dotnet test, npm test, and bun test unless the Bash tool call sets run_in_background: true, since these five commands have no bounded duration and a foreground run that outlives the tool's own timeout is killed mid-run, skipping the target process's own cleanup (#1251)
 - Trust GitHub's Advanced Security (code scanning) bot as an automated reviewer/commenter, alongside the existing Copilot review bot
+- Container-build workflow job summaries now show the versions of each explicitly-installed tool (e.g. dotnet SDK LTS/STS versions), not just the pushed image tag.
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check

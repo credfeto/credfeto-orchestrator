@@ -151,6 +151,12 @@ jobs:
             echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: "Summarise (installed versions)"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        uses: ./.github/actions/report-installed-versions
+        with:
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
       - name: "Summarise (skipped — no relevant changes)"
         if: ${{ steps.relevance.outputs.relevant != 'true' }}
         shell: "bash"

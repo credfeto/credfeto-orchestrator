@@ -115,6 +115,26 @@ RUN su developer -c '\
 RUN su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command \
     "Install-PSResource -Name PSScriptAnalyzer -Scope CurrentUser -TrustRepository -ErrorAction Stop"'
 
+# ---- Installed-versions report ------------------------------------------------
+# Overwrites (not appends) the report inherited from development-python, so
+# this stage's report covers only what development-dotnet-tools itself adds.
+# Tool versions come straight from `dotnet tool list -g`, which already
+# reports the exact version NuGet resolved at install time. Read back
+# post-build by .github/actions/report-installed-versions.
+RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
+    && { \
+      claude_version="$(claude --version 2>&1)" || claude_version="version unknown"; \
+      echo "claude-code: ${claude_version}"; \
+      for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script dotnet-reportgenerator-globaltool; do \
+        awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
+      done; \
+      psa_version=$(su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "(Get-InstalledPSResource -Name PSScriptAnalyzer).Version.ToString()"' 2>/dev/null | tr -d '\r') || psa_version="version unknown"; \
+      echo "PSScriptAnalyzer: ${psa_version:-version unknown}"; \
+    } > /opt/installed-versions.txt \
+    && rm /tmp/dotnet-tools-list.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
+
 # ---- Build-time sanity check ------------------------------------------------
 # Fails the build (not the agent at runtime) if claude-code or any tool this
 # image installs is missing — fails fast at this layer instead of surfacing

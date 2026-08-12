@@ -85,6 +85,17 @@ Every Dockerfile MUST end with a `RUN set -e; ...` self-check block that:
 4. Includes a live HTTPS `git clone --depth 1` against a sacrificial public repo (`dnyw4l3n13/scratch`) with `GIT_CONFIG_SYSTEM=/dev/null` to bypass the url.https→ssh rewrite
 5. Fails the build (not runtime) if any check fails — a broken image must never be pushed
 
+## Installed-Versions Report (MANDATORY)
+
+Every `containers/base/*/Dockerfile` and `containers/agent/Dockerfile` MUST write `/opt/installed-versions.txt`, one `<tool>: <version>` line per tool that stage explicitly installs (a resolved version, a pinned commit SHA, or `present-only, no --version support` for tools with no version flag). `.github/actions/report-installed-versions` reads this file out of the pushed/loaded image after build so each `build-development-*.yml` workflow's job summary can show it.
+
+Rules:
+
+- **Overwrite, never append, across stages.** The *first* `RUN` in a stage that touches this file must create it fresh (`>`, not `>>`), so it ends up containing only that stage's own additions — a downstream image inherits the file via `FROM` but immediately replaces it with its own content, never carrying forward a previous stage's entries. A stage that genuinely adds no new tools (e.g. `development-agent`, which only removes package managers) still overwrites it with an explanatory line rather than leaving the inherited file in place. Within a single stage, if the tools it installs are spread across more than one `RUN` (e.g. `development-tools`' dotnet SDK install followed by its static-binary linters), the first such `RUN` uses `>` and any subsequent ones in that same stage use `>>` to append to what that stage itself already started — this is not the cross-stage case the rule forbids.
+- **Lock down like any other baked artefact**: `chown root:root /opt/installed-versions.txt && chmod 0444 /opt/installed-versions.txt`, per the Lock-Down Requirements above.
+- **Attribute at the point of installation, not afterwards.** Where two installs of the same kind land in the same location (e.g. the dotnet SDK's `--channel LTS` then `--channel STS` both extracting into `/usr/share/dotnet/sdk`), capture each one's resolved version immediately after that specific install call — before the next one runs — rather than trying to reconstruct which version came from which channel afterwards.
+- **Prefer values already known exactly** — a pinned `ARG` version, a `dotnet tool list -g` row, a captured commit SHA — over re-deriving them from a floating install. When only a `--version`/`-version`/`-h` probe is available, capture its actual output rather than assuming a single-line format (e.g. `sqlcmd --version` prints a multi-line banner; the real version is on the `Version:` line, not the first line).
+
 ## ARG Cache-Busting Pattern
 
 For every layer that clones an external git repo or installs a versioned tool, use the no-op shell `: "$ARG_VALUE"` trick to embed the ARG in the layer cache key:

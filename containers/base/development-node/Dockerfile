@@ -98,6 +98,24 @@ RUN npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
         "eslint@${ESLINT_VERSION}" \
     && npm install -g "block-no-verify@${BLOCK_NO_VERIFY_VERSION}"
 
+# ---- Installed-versions report ------------------------------------------------
+# Overwrites (not appends) the report inherited from development-tools, so
+# this stage's report covers only what development-node itself adds. Read
+# back post-build by .github/actions/report-installed-versions.
+RUN mdl2_out="$(markdownlint-cli2 --version 2>&1 || echo 'version unknown')" \
+    && { \
+      echo "node: $(node --version || echo 'version unknown')"; \
+      echo "npm: $(npm --version || echo 'version unknown')"; \
+      echo "bun: $(bun --version || echo 'version unknown')"; \
+      echo "markdownlint-cli2: $(printf '%s\n' "$mdl2_out" | head -n1)"; \
+      echo "markdownlint-cli: $(markdownlint --version || echo 'version unknown')"; \
+      echo "stylelint: $(stylelint --version || echo 'version unknown')"; \
+      echo "eslint: $(eslint --version || echo 'version unknown')"; \
+      echo "block-no-verify: ${BLOCK_NO_VERIFY_VERSION} (present-only, no --version support)"; \
+    } > /opt/installed-versions.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
+
 # ---- Build-time sanity check ------------------------------------------------
 # hadolint ignore=DL3001
 RUN set -e; \

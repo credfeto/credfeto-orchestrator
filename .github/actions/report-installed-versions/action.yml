@@ -1,0 +1,68 @@
+--- # Read back the /opt/installed-versions.txt report baked into a just-built image
+name: "Report installed tool versions"
+description: "Reads /opt/installed-versions.txt out of a container image and appends it to the job summary"
+inputs:
+  image-ref:
+    description: "Fully-qualified container image reference to inspect (e.g. ghcr.io/owner/image:latest)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Read installed-versions report from image"
+      shell: "bash"
+      run: |
+        IMAGE_REF="${{inputs.image-ref}}"
+
+        # A pull_request run has the image already loaded locally (load: true,
+        # push: false) — a push run has it in the registry only. Prefer the
+        # local copy so pull_request runs don't fetch the previous push's tag.
+        # A pull failure (registry hiccup, rate limit) must not fail this
+        # purely informational step — composite action bash steps run with
+        # -eo pipefail, so an unguarded "docker pull" would fail the whole
+        # job over a transient blip despite the image itself having built
+        # and pushed successfully. Let it fall through to the "not found"
+        # fallback below instead, same as an unreadable local image would.
+        if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+          docker pull "$IMAGE_REF" || true
+        fi
+
+        # --entrypoint overrides any ENTRYPOINT baked into the image (e.g.
+        # development-agent's agent-entrypoint) — without it, "cat ..." is
+        # passed as arguments to that entrypoint instead of replacing it, and
+        # this silently falls through to the "not found" fallback below.
+        VERSIONS=$(docker run --rm --entrypoint cat "$IMAGE_REF" /opt/installed-versions.txt 2>/dev/null || true)
+        if [ -z "$VERSIONS" ]; then
+          VERSIONS="(no /opt/installed-versions.txt found in this image)"
+        fi
+
+        # Render as a "Tool/Component | Version" table when every line is a
+        # clean "name: value" pair; otherwise (e.g. development-agent's
+        # report, which is prose rather than tool:version pairs) fall back to
+        # a fenced code block of the raw report.
+        if printf '%s\n' "$VERSIONS" | awk '{ if ($0 != "" && $0 !~ /^[^:]+: .+/) exit 1 }'; then
+          VERSIONS=$(printf '%s\n' "$VERSIONS" | awk -F': ' '
+            BEGIN { print "| Tool/Component | Version |"; print "| --- | --- |" }
+            NF >= 2 {
+              name = $1
+              value = substr($0, length($1) + 3)
+              gsub(/\|/, "\\|", name)
+              gsub(/\|/, "\\|", value)
+              print "| " name " | " value " |"
+            }
+          ')
+        else
+          VERSIONS=$(printf '```\n%s\n```' "$VERSIONS")
+        fi
+
+        # Written directly here (rather than left to each of the 7 calling
+        # workflows to re-echo under their own "### Installed versions"
+        # step) so the formatting logic above has exactly one caller to stay
+        # in sync with. Callers just need to run this step after whichever
+        # header step they want it to follow.
+        {
+          echo ""
+          echo "### Installed versions"
+          echo ""
+          echo "$VERSIONS"
+        } >> "$GITHUB_STEP_SUMMARY"

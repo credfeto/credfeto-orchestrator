@@ -53,6 +53,22 @@ RUN su developer -c '\
     ln -sf changelog     /home/developer/.dotnet/tools/dotnet-changelog && \
     ln -sf code-analysis /home/developer/.dotnet/tools/dotnet-code-analysis'
 
+# ---- Installed-versions report ------------------------------------------------
+# Overwrites (not appends) the report inherited from development-dotnet-tools,
+# so this stage's report covers only what development-credfeto-tools itself
+# adds. Tool versions come straight from `dotnet tool list -g`, which already
+# reports the exact version NuGet resolved at install time. Read back
+# post-build by .github/actions/report-installed-versions.
+RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
+    && { \
+      for tool in credfeto.changelog.cmd credfeto.dotnet.code.analysis.overrides.cmd funfair.buildcheck funfair.buildversion credfeto.dotnet.repo.formatter; do \
+        awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
+      done; \
+    } > /opt/installed-versions.txt \
+    && rm /tmp/dotnet-tools-list.txt \
+    && chown root:root /opt/installed-versions.txt \
+    && chmod 0444 /opt/installed-versions.txt
+
 # ---- Build-time sanity check ------------------------------------------------
 # Fails the build (not the agent at runtime) if any tool this image installs
 # is missing — fails fast at this layer instead of surfacing two images
