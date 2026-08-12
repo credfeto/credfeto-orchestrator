@@ -6,8 +6,6 @@
   "permissions": {
     "defaultMode": "auto",
     "allow": [
-
-
       "Bash(bun add *)",
       "Bash(bun install *)",
       "Bash(bun run *)",
@@ -79,7 +77,9 @@
       "Bash(podman *)",
       "Bash(pre-commit *)",
       "Bash(python3 *)",
+      "Bash(querydb *)",
       "Bash(scp *)",
+      "Bash(testdb *)",
       "Edit",
       "Read",
       "Write"
@@ -102,7 +102,17 @@
       "Bash(git config --global user.signingkey *)",
       "Bash(git config --replace-all*)",
       "Bash(git config --unset*)",
-      "Bash(sudo *)"
+      "Bash(sudo *)",
+      "Bash(sqlcmd *)",
+      "Bash(cat *.database*)",
+      "Bash(grep *.database*)",
+      "Bash(find *.database*)",
+      "Read(~/.database)",
+      "Read(**/.database)",
+      "Write(~/.database)",
+      "Write(**/.database)",
+      "Edit(~/.database)",
+      "Edit(**/.database)"
     ]
   },
   "advisorModel": "opus",
