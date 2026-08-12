@@ -179,6 +179,21 @@ rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.fingerprint
 rm ~/.orchestrator/<owner>/<repo>/Issue_<n>.fingerprint
 ```
 
+A separate `PullRequest_<n>.last-agent-comment-seen` file (#1307) tracks the newest trusted top-
+level PR comment a genuine agent invocation has actually read — distinct from the general PR
+fingerprint above, which the non-agentic-rebase path is still allowed to update on its own. If a
+human's PR comment is being ignored despite `.fingerprint` looking current, check this file:
+
+```bash
+cat ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.last-agent-comment-seen 2>/dev/null || echo "(none recorded)"
+```
+
+A missing or stale value here (older than the comment's own timestamp) means no real agent turn
+has read it yet — `pr_json_has_unaddressed_trusted_comment` (`lib/github-status`) should force one
+on the next tick regardless of the general fingerprint or a "settled"/terminal PR state; if it
+doesn't, that predicate itself is the place to check first. Delete the file to force this state
+back to "nothing seen yet" (same idea as deleting `.fingerprint`, above).
+
 ### 7 — Podman containers
 
 Containers run as **rootless Podman** under the owner's own user namespace (Docker was replaced

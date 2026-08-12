@@ -25,7 +25,8 @@ The orchestrator workflow is defined in [agent-roles.instructions.md](../global/
 3. Run `/simplify` against the diff (up to `MAX_SIMPLIFY_ITERATIONS` rounds, exiting early at `SIMPLIFY_THRASH_LIMIT` rounds onwards if thrashing; board status **AI Simplify**). If it changed any files: run Changelog (correction) again against the resulting diff, commit code and (if the entry changed) `CHANGELOG.md` separately, push, re-run.
 4. Run `/code-review --comment` (up to `MAX_REVIEW_ITERATIONS` rounds; board status **AI Review**); fix each inline finding in its own commit. After each fix, run Changelog (correction) and commit `CHANGELOG.md` separately if the entry changed, then push.
 5. Run `/security-review` (up to `MAX_REVIEW_ITERATIONS` rounds; board status **AI Security Review**); fix each finding in its own commit. After each fix, run Changelog (correction) and commit `CHANGELOG.md` separately if the entry changed, then push.
-6. Set Workflow board to **Human Review** and enable auto-merge:
+6. Verify the PR title and description accurately reflect the final change (a placeholder title created before implementation started must not survive to this point) — see `task-workflow.instructions.md` § "PR Title, Body, and Label Sync (MANDATORY)". Note this is defense-in-depth only: that rule already applies on every agent run, so this step only ever has anything to fix if it was somehow missed earlier.
+7. Set Workflow board to **Human Review** and enable auto-merge:
 
    ```bash
    gh pr merge --auto --merge <number> --repo <owner/repo>
