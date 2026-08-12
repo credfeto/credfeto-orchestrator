@@ -150,9 +150,7 @@ jobs:
             echo ""
             echo "### Installed versions"
             echo ""
-            echo '```'
             echo "$INSTALLED_VERSIONS"
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (skipped — no relevant changes)"

@@ -402,10 +402,10 @@ RUN { \
 RUN { \
       echo "hadolint: $(hadolint --version || echo 'version unknown')"; \
       echo "dotenv-linter: $(dotenv-linter --version || echo 'version unknown')"; \
-      echo "sqlcmd: $(sqlcmd --version | grep '^Version:' || echo 'version unknown')"; \
+      echo "sqlcmd: $(sqlcmd --version | grep '^Version:' | sed 's/^Version: *//' || echo 'version unknown')"; \
       echo "actionlint: $(actionlint -version | head -n1 || echo 'version unknown')"; \
       echo "trufflehog: $(trufflehog --version || echo 'version unknown')"; \
-      echo "trivy: $(trivy --version | head -n1 || echo 'version unknown')"; \
+      echo "trivy: $(trivy --version | head -n1 | sed 's/^Version: *//' || echo 'version unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
