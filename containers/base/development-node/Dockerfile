@@ -102,11 +102,12 @@ RUN npm install -g "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" \
 # Overwrites (not appends) the report inherited from development-tools, so
 # this stage's report covers only what development-node itself adds. Read
 # back post-build by .github/actions/report-installed-versions.
-RUN { \
+RUN mdl2_out="$(markdownlint-cli2 --version 2>&1 || echo 'version unknown')" \
+    && { \
       echo "node: $(node --version || echo 'version unknown')"; \
       echo "npm: $(npm --version || echo 'version unknown')"; \
       echo "bun: $(bun --version || echo 'version unknown')"; \
-      echo "markdownlint-cli2: $(markdownlint-cli2 --version || echo 'version unknown')"; \
+      echo "markdownlint-cli2: $(printf '%s\n' "$mdl2_out" | head -n1)"; \
       echo "markdownlint-cli: $(markdownlint --version || echo 'version unknown')"; \
       echo "stylelint: $(stylelint --version || echo 'version unknown')"; \
       echo "eslint: $(eslint --version || echo 'version unknown')"; \

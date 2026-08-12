@@ -394,6 +394,10 @@ RUN { \
 # Appends this stage's remaining explicitly-installed tool versions to the
 # report started by the dotnet SDK install above. Read back post-build by
 # .github/actions/report-installed-versions for the workflow job summary.
+# composite-action-lint's version is deliberately not repeated here — the
+# workflow's own "Summarise" step already prints it from the pre-build
+# git ls-remote resolution, and showing both risks confusing readers if the
+# two (independently resolved, moments apart) values ever disagree.
 # Locked down root:root 0444 once complete, matching other baked-in artefacts.
 RUN { \
       echo "hadolint: $(hadolint --version || echo 'version unknown')"; \
@@ -402,7 +406,6 @@ RUN { \
       echo "actionlint: $(actionlint -version | head -n1 || echo 'version unknown')"; \
       echo "trufflehog: $(trufflehog --version || echo 'version unknown')"; \
       echo "trivy: $(trivy --version | head -n1 || echo 'version unknown')"; \
-      echo "composite-action-lint: bettermarks/composite-action-lint @ $(grep '^HEAD=' /opt/composite-action-lint/.env | cut -d= -f2 || echo 'unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \

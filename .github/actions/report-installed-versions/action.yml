@@ -27,7 +27,11 @@ runs:
           docker pull "$IMAGE_REF"
         fi
 
-        VERSIONS=$(docker run --rm "$IMAGE_REF" cat /opt/installed-versions.txt 2>/dev/null || true)
+        # --entrypoint overrides any ENTRYPOINT baked into the image (e.g.
+        # development-agent's agent-entrypoint) — without it, "cat ..." is
+        # passed as arguments to that entrypoint instead of replacing it, and
+        # this silently falls through to the "not found" fallback below.
+        VERSIONS=$(docker run --rm --entrypoint cat "$IMAGE_REF" /opt/installed-versions.txt 2>/dev/null || true)
         if [ -z "$VERSIONS" ]; then
           VERSIONS="(no /opt/installed-versions.txt found in this image)"
         fi

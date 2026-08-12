@@ -211,15 +211,17 @@ RUN ln -sf /usr/bin/gpg /usr/bin/gpg2
 # Overwrites (not appends) the report inherited from development-credfeto-tools,
 # so this stage's report covers only what development-full itself adds: the
 # pinned/resolved refs for each cloned repo (ARGs for the pinned third-party
-# ones, the resolved HEAD for the live-tracked credfeto ones) plus the linked
-# skill count. Read back post-build by .github/actions/report-installed-versions.
+# ones) plus the linked skill count. credfeto-ai-skills and
+# credfeto-global-pre-commit are deliberately not repeated here — the
+# workflow's own "Summarise" step already prints both from the pre-build
+# git ls-remote resolution, and showing both risks confusing readers if the
+# two (independently resolved, moments apart) values ever disagree. Read back
+# post-build by .github/actions/report-installed-versions.
 RUN { \
       echo "dotnet-claude-kit: ${DOTNET_CLAUDE_KIT_COMMIT}"; \
       echo "wshobson-agents: ${WSHOBSON_AGENTS_COMMIT}"; \
       echo "cc-devops-skills: ${CC_DEVOPS_SKILLS_REF} @ ${CC_DEVOPS_SKILLS_COMMIT}"; \
       echo "markdown-linter-fixer: ${MARKDOWN_LINTER_FIXER_REF} @ ${MARKDOWN_LINTER_FIXER_COMMIT}"; \
-      echo "credfeto-ai-skills: $(git -C /opt/credfeto-ai-skills rev-parse HEAD || echo 'unknown')"; \
-      echo "credfeto-global-pre-commit: $(grep '^SHA=' /opt/pre-commit/.env | cut -d= -f2 || echo 'unknown')"; \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
     } > /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \

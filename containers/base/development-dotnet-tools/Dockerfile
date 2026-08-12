@@ -128,7 +128,7 @@ RUN su developer -c "dotnet tool list -g" > /tmp/dotnet-tools-list.txt \
       for tool in tsqllint cwm.roslynnavigator dotnet-ef ilspycmd microsoft.sqlpackage powershell dotnet-script dotnet-reportgenerator-globaltool; do \
         awk -v t="$tool" '{if (tolower($1)==t) print $1": "$2}' /tmp/dotnet-tools-list.txt; \
       done; \
-      psa_version=$(su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "(Get-InstalledPSResource -Name PSScriptAnalyzer).Version"' 2>/dev/null | tr -d '\r') || psa_version="version unknown"; \
+      psa_version=$(su developer -c 'dotnet pwsh -NoProfile -NonInteractive -Command "(Get-InstalledPSResource -Name PSScriptAnalyzer).Version.ToString()"' 2>/dev/null | tr -d '\r') || psa_version="version unknown"; \
       echo "PSScriptAnalyzer: ${psa_version:-version unknown}"; \
     } > /opt/installed-versions.txt \
     && rm /tmp/dotnet-tools-list.txt \

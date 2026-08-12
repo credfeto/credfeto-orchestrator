@@ -143,8 +143,6 @@ jobs:
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
-        env:
-          INSTALLED_VERSIONS: "${{ steps.versions.outputs.versions }}"
         run: |
           {
             echo "## development-full image pushed"
@@ -155,24 +153,25 @@ jobs:
             echo ""
             echo "credfeto/credfeto-global-pre-commit @ \`${{ steps.cb.outputs.credfeto_sha }}\`"
             echo "credfeto/credfeto-ai-skills @ \`${{ steps.cb.outputs.credfeto_ai_skills_sha }}\`"
-            echo ""
-            echo "### Installed versions"
-            echo ""
-            echo '```'
-            echo "$INSTALLED_VERSIONS"
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
         if: ${{ github.event_name == 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
-        env:
-          INSTALLED_VERSIONS: "${{ steps.versions.outputs.versions }}"
         run: |
           {
             echo "## development-full image built (not pushed — pull_request run)"
             echo ""
             echo "Verified the Dockerfile builds; nothing was pushed to \`${{ env.REGISTRY }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Summarise (installed versions)"
+        if: ${{ steps.relevance.outputs.relevant == 'true' }}
+        shell: "bash"
+        env:
+          INSTALLED_VERSIONS: "${{ steps.versions.outputs.versions }}"
+        run: |
+          {
             echo ""
             echo "### Installed versions"
             echo ""
