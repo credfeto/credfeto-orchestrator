@@ -275,7 +275,7 @@ main() {
     local issue_json issue_state issue_fp saved_issue_fp plan_approved
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_last_seen_comment pr_has_unaddressed_comment post_comment_seen
+    local pr_has_unaddressed_comment
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
@@ -476,10 +476,7 @@ main() {
                 # invocation has read yet. Overrides both the terminal/"settled" skip below and
                 # the general-fingerprint "unchanged" skip further down — neither would otherwise
                 # ever let a plain PR comment reach a real agent (#1307).
-                pr_last_seen_comment=$(load_pr_last_agent_comment_seen "${open_pr}")
-                pr_has_unaddressed_comment=false
-                pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${pr_last_seen_comment}" \
-                    && pr_has_unaddressed_comment=true
+                set_pr_has_unaddressed_comment "${open_pr}"
 
                 # These two checks run regardless of whether the fingerprint changed since last
                 # tick — see the matching comment on the direct-PR path above (#1256) for why:
@@ -834,10 +831,7 @@ main() {
             # recomputed every iteration, overrides both the terminal/"settled" skip and the
             # general-fingerprint "unchanged" skip below when a trusted comment has arrived that
             # no real agent invocation has read yet.
-            pr_last_seen_comment=$(load_pr_last_agent_comment_seen "${item_id}")
-            pr_has_unaddressed_comment=false
-            pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${pr_last_seen_comment}" \
-                && pr_has_unaddressed_comment=true
+            set_pr_has_unaddressed_comment "${item_id}"
 
             # These two checks run regardless of whether the fingerprint changed since last tick:
             # mergeStateStatus/statusCheckRollup feed the fingerprint (lib/fingerprints) and GitHub
@@ -1181,15 +1175,15 @@ main() {
             else
                 warn "Failed to compute post-run fingerprint(s) for ${item_type} #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
             fi
-            # Only a real agent turn (this point) is allowed to advance what counts as "seen" —
-            # a failure here is benign (worst case: a trusted comment is re-treated as
-            # unaddressed next tick, forcing one redundant real invocation, not a stuck PR) so it
-            # is warned rather than died on, matching the fingerprint save above (#1307).
-            if post_comment_seen=$(compute_pr_last_agent_comment_seen "${item_id}"); then
-                save_pr_last_agent_comment_seen "${item_id}" "${post_comment_seen}"
-            else
-                warn "Failed to compute post-run last-agent-comment-seen for PR #${item_id} in ${item_repo} — a trusted comment may be re-evaluated as unaddressed next tick"
-            fi
+            # Only a real agent turn (this point) is allowed to advance what counts as "seen".
+            # Deliberately reuses this tick's already-fetched pr_json/trusted_logins rather than
+            # a fresh gh pr view (unlike the post-run fingerprint above, which needs genuinely
+            # current state to avoid re-driving an already-completed phase): worst case of a
+            # comment arriving mid-invocation being missed here is that it is re-treated as
+            # unaddressed next tick, forcing one redundant real invocation, not a stuck PR — the
+            # same acceptable-staleness tradeoff already used elsewhere in this file (#1090)
+            # (#1307).
+            save_pr_last_agent_comment_seen "${item_id}" "$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}")"
         elif [ "${item_type}" = "Issue" ]; then
             if post_fp=$(compute_issue_fingerprint "${item_id}"); then
                 save_issue_fingerprint "${item_id}" "${post_fp}"

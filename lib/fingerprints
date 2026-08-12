@@ -258,17 +258,6 @@ load_pr_last_agent_comment_seen() {
     fi
 }
 
-# Fetches fresh PR state and returns the newest trusted top-level comment timestamp in it, for
-# saving via save_pr_last_agent_comment_seen once a real agent invocation completes (#1307).
-# Mirrors compute_pr_fingerprint's own fetch-then-derive pattern.
-compute_pr_last_agent_comment_seen() {
-    local item_id="$1"
-    local pr_json trusted
-    pr_json=$(fetch_pr_json "${item_id}") || return 1
-    trusted=$(get_trusted_logins) || return 1
-    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}"
-}
-
 # Returns the path to the fingerprint file for a given Issue ID.
 issue_fingerprint_file_path() {
     local item_id="$1"

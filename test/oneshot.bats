@@ -4049,7 +4049,6 @@ setup_main_mocks() {
     # fetch_pr_json's "comments" and/or these individually.
     load_pr_last_agent_comment_seen()    { printf ''; }
     save_pr_last_agent_comment_seen()    { return 0; }
-    compute_pr_last_agent_comment_seen() { printf ''; }
     fingerprint_issue_json()    { printf 'issue-fp-default\n'; }
     load_issue_fingerprint()    { printf ''; }
     # No Workflow board by default (#1204) — tests exercising board-approval behaviour override
@@ -10643,20 +10642,6 @@ STUBEOF
     run load_pr_last_agent_comment_seen 42
     [ "${status}" -eq 0 ]
     [ "${output}" = "2026-08-12T10:05:07Z" ]
-}
-
-@test "compute_pr_last_agent_comment_seen fetches PR state and returns the newest trusted comment timestamp (#1307)" {
-    fetch_pr_json() { printf '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}]}\n'; }
-    get_trusted_logins() { printf '["credfeto"]\n'; }
-    run compute_pr_last_agent_comment_seen 42
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "2026-08-12T10:05:07Z" ]
-}
-
-@test "compute_pr_last_agent_comment_seen returns 1 when fetch_pr_json fails (#1307)" {
-    fetch_pr_json() { return 1; }
-    run compute_pr_last_agent_comment_seen 42
-    [ "${status}" -eq 1 ]
 }
 
 @test "ci_checks_timed_out returns false and writes state on first call for a new OID" {
