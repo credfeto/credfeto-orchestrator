@@ -34,50 +34,86 @@ pr_json_is_terminal() {
     ' > /dev/null 2>&1
 }
 
-# Returns the newest trusted top-level PR comment timestamp in pr_json, or empty string if there
-# are none. trusted_logins follows fingerprint_pr_json's shape: a JSON array, or the literal
-# string "null" to trust every commenter. Used both to record what a genuine agent invocation
-# actually saw (via save_pr_last_agent_comment_seen, #1307) and, via
-# pr_json_has_unaddressed_trusted_comment below, to decide whether one is still unaddressed.
+# Returns the newest trusted-activity timestamp in pr_json — top-level comments, reviews, AND
+# (via the optional third argument) inline review comments — or empty string if there is none.
+# trusted_logins and review_comments_json follow fingerprint_pr_json's shapes exactly (JSON array
+# or "null" to trust everyone; REST-shaped inline comments, author under `.user.login`, timestamp
+# under `.updated_at`), and this deliberately covers the same three activity sources
+# fingerprint_pr_json hashes — omitting reviews/inline comments here would let a trusted review or
+# inline comment change the general PR fingerprint while never registering as "unaddressed",
+# reproducing #1307's exact symptom via a different surface. GitHub CLI's `--json comments` never
+# actually populates `updatedAt` (verified live — only `createdAt` is present), so in practice
+# this only detects a *new* top-level comment, not an edit to an already-seen one; tracked
+# separately as a known limitation rather than blocking this fix (#1309).
+# Used both to record what a genuine agent invocation actually saw (via
+# save_pr_last_agent_comment_seen, #1307) and, via pr_json_has_unaddressed_trusted_comment below,
+# to decide whether one is still unaddressed.
 pr_json_latest_trusted_comment_timestamp() {
-    local pr_json="$1" trusted_logins="${2:-null}"
-    printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" '
-        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
-        ([tc(.comments // [])[] | (.updatedAt // .createdAt // "") | select(. != "")] | sort | last) // ""
-    '
+    local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}"
+    local review_comments_file result jq_status
+    review_comments_file=$(mktemp --suffix=.json) || return 1
+    printf '%s' "${review_comments_json}" > "${review_comments_file}"
+
+    result=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --rawfile reviewCommentsRaw "${review_comments_file}" '
+        ($reviewCommentsRaw | fromjson) as $reviewComments
+        | def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
+        def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
+        [
+            (tc(.comments // [])[]? | (.updatedAt // .createdAt // "")),
+            (tc(.reviews // [])[]? | (.submittedAt // .updatedAt // "")),
+            (trc($reviewComments)[]? | (.updated_at // ""))
+        ]
+        | map(select(. != ""))
+        | sort | last // ""
+    ')
+    jq_status=$?
+    rm -f "${review_comments_file}"
+    [ "${jq_status}" -eq 0 ] || return 1
+    printf '%s' "${result}"
 }
 
-# Returns 0 (true) if any trusted-login top-level PR comment is newer than last_seen_timestamp —
-# i.e. a human has said something an agent has not actually read yet. An empty last_seen_timestamp
-# (no prior record from load_pr_last_agent_comment_seen) counts any trusted comment as
-# unaddressed, so a PR with no recorded history is never silently skipped. Callers use this to
-# override the free non-agentic-rebase and terminal/"settled" paths in oneshot, both of which
-# would otherwise never let a plain PR comment (as opposed to a formal CHANGES_REQUESTED review)
-# reach a real agent invocation (#1307). Deliberately built on
-# pr_json_latest_trusted_comment_timestamp rather than a second jq pass over .comments, so the
-# two functions cannot drift on what counts as a "trusted comment" — plain string comparison is
-# safe here because GitHub always emits these as fixed-width ISO-8601 UTC timestamps.
+# Returns 0 (true) if any trusted-activity timestamp (top-level comment, review, or inline review
+# comment) is newer than last_seen_timestamp — i.e. a human has said something an agent has not
+# actually read yet. An empty last_seen_timestamp (no prior record from
+# load_pr_last_agent_comment_seen) counts any trusted activity as unaddressed, so a PR with no
+# recorded history is never silently skipped. This is a deliberate one-time cost on first deploy:
+# every already-open PR with any trusted comment history gets exactly one forced real invocation
+# the first time it's observed (no marker file yet) before the marker exists to compare against —
+# accepted rather than "fixed" (e.g. by seeding the marker without an invocation whenever the
+# general fingerprint already matches) because the PR that motivated this fix
+# (funfair-tech/funfair-treasury-reporting#3622) is *exactly* that shape: no marker file, general
+# fingerprint already matching due to historical non-agentic-rebase absorption. Silencing the
+# empty-marker case would silence that PR's own fix (#1307 review). Callers use this to override
+# the free non-agentic-rebase and terminal/"settled" paths in oneshot, both of which would
+# otherwise never let a plain PR comment (as opposed to a formal CHANGES_REQUESTED review) reach a
+# real agent invocation (#1307). Deliberately built on pr_json_latest_trusted_comment_timestamp
+# rather than a second jq pass, so the two functions cannot drift on what counts as "trusted
+# activity" — plain
+# string comparison is safe here because GitHub always emits these as fixed-width ISO-8601 UTC
+# timestamps.
 pr_json_has_unaddressed_trusted_comment() {
-    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}"
+    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}"
     local latest
-    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}")
+    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${review_comments_json}")
     [ -n "${latest}" ] && { [ -z "${last_seen_timestamp}" ] || [[ "${latest}" > "${last_seen_timestamp}" ]]; }
 }
 
 # Sets the caller's `pr_has_unaddressed_comment` from the caller's pre-fetched
-# `pr_json`/`trusted_logins` and the persisted last-agent-comment-seen marker for item_id. Relies
-# on bash's dynamic scoping of `local`s, same convention as require_trusted_logins (lib/github):
-# must only be called from within main()'s per-item loop, where both `pr_json` and
-# `pr_has_unaddressed_comment` are already declared local. Shared by both PR code paths
-# (issue-pivot and direct-PR) so this derivation cannot drift between them (#1307).
+# `pr_json`/`trusted_logins`/`pr_review_comments` and the persisted last-agent-comment-seen marker
+# for item_id. Relies on bash's dynamic scoping of `local`s, same convention as
+# require_trusted_logins (lib/github): must only be called from within main()'s per-item loop,
+# where `pr_json`, `pr_review_comments`, and `pr_has_unaddressed_comment` are already declared
+# local. Shared by both PR code paths (issue-pivot and direct-PR) so this derivation cannot drift
+# between them (#1307).
 set_pr_has_unaddressed_comment() {
     local id="$1" last_seen
     last_seen=$(load_pr_last_agent_comment_seen "${id}")
     # shellcheck disable=SC2034  # set via dynamic scoping for the caller, same as
     # require_trusted_logins (lib/github) does for trusted_logins/count_error
     pr_has_unaddressed_comment=false
-    # shellcheck disable=SC2034
-    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" \
+    # shellcheck disable=SC2034,SC2154  # pr_json/pr_review_comments read here are set by the
+    # caller via dynamic scoping, same as item_repo is for require_trusted_logins (lib/github)
+    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" "${pr_review_comments}" \
         && pr_has_unaddressed_comment=true
 }
 
@@ -291,9 +327,16 @@ block_issue_for_unapplied_plan_approval() {
 # unchanged because the orchestrator re-saves it after each run).  Returns 0 (advance) when the
 # PR is non-terminal and still within the idle budget; 1 (park) otherwise.  Read-only: the idle
 # counter is persisted at invocation time via save_pr_invocation_counts.
+# Optional third argument has_unaddressed_comment ("true"/"false", default "false"): an
+# unaddressed trusted PR comment (#1307) is treated as its own advance-reason that overrides the
+# terminal short-circuit — a comment left on an otherwise-"done" PR still deserves a real look —
+# but it is NOT exempt from the idle budget below: once PR_INVOCATION_IDLE reaches the cap this
+# still returns 1 (park) exactly like any other stuck-unchanged reason, so the caller's
+# failed-check/unaddressed-review-request escalation gets a real chance to fire instead of being
+# silently defeated for as long as the comment stays unaddressed (#1307 review).
 pr_should_advance_unchanged() {
-    local item_id="$1" pr_json="$2"
-    pr_json_is_terminal "${pr_json}" && return 1
+    local item_id="$1" pr_json="$2" has_unaddressed_comment="${3:-false}"
+    pr_json_is_terminal "${pr_json}" && [ "${has_unaddressed_comment}" != "true" ] && return 1
     load_pr_invocation_counts "${item_id}"
     [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
 }

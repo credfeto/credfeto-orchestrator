@@ -1330,6 +1330,40 @@ teardown() {
     [ "${output}" = "2026-08-12T10:05:07Z" ]
 }
 
+@test "pr_json_latest_trusted_comment_timestamp picks up a trusted review even with no top-level comments (#1307 review)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[],"reviews":[{"author":{"login":"credfeto"},"state":"COMMENTED","submittedAt":"2026-08-12T10:05:07Z"}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "pr_json_latest_trusted_comment_timestamp picks up a trusted inline review comment via the third argument (#1307 review)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[],"reviews":[]}' '["credfeto"]' '[{"user":{"login":"credfeto"},"updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "pr_json_latest_trusted_comment_timestamp ignores an untrusted review and inline comment (#1307 review)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[],"reviews":[{"author":{"login":"random-passerby"},"submittedAt":"2026-08-12T10:05:07Z"}]}' '["credfeto"]' '[{"user":{"login":"random-passerby"},"updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "" ]
+}
+
+@test "pr_json_latest_trusted_comment_timestamp returns the newest across all three trusted-activity sources (#1307 review)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T06:00:00Z"}],"reviews":[{"author":{"login":"credfeto"},"submittedAt":"2026-08-12T07:00:00Z"}]}' '["credfeto"]' '[{"user":{"login":"credfeto"},"updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "pr_json_has_unaddressed_trusted_comment is true for a trusted review with no top-level comments (#1307 review)" {
+    run pr_json_has_unaddressed_trusted_comment '{"comments":[],"reviews":[{"author":{"login":"credfeto"},"submittedAt":"2026-08-12T10:05:07Z"}]}' '["credfeto"]' "2026-08-12T07:26:12Z"
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_unaddressed_trusted_comment is true for a trusted inline review comment via the fourth argument (#1307 review)" {
+    run pr_json_has_unaddressed_trusted_comment '{"comments":[],"reviews":[]}' '["credfeto"]' "2026-08-12T07:26:12Z" '[{"user":{"login":"credfeto"},"updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_has_unaddressed_review_request is true for reviewDecision CHANGES_REQUESTED (#1083)" {
     run pr_json_has_unaddressed_review_request '{"reviewDecision":"CHANGES_REQUESTED"}'
     [ "${status}" -eq 0 ]
@@ -1584,6 +1618,25 @@ teardown() {
 @test "pr_should_advance_unchanged parks a non-terminal PR once the idle budget is exhausted" {
     save_pr_invocation_counts 42 10 "${MAX_PR_IDLE_INVOCATIONS}"
     run pr_should_advance_unchanged 42 '{"autoMergeRequest":null}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_should_advance_unchanged advances a terminal PR within the idle budget when has_unaddressed_comment is true (#1307 review)" {
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}' "true"
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_advance_unchanged still parks a terminal PR when has_unaddressed_comment is false (#1307 review)" {
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}' "false"
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_should_advance_unchanged parks a terminal PR with has_unaddressed_comment true once the idle budget is exhausted (#1307 review)" {
+    # The escalation-defeating regression this guards against: an unaddressed comment must not
+    # exempt a PR from the idle budget forever, or the failed-check/unaddressed-review-request
+    # escalation in oneshot's caller never gets a real chance to fire.
+    save_pr_invocation_counts 42 10 "${MAX_PR_IDLE_INVOCATIONS}"
+    run pr_should_advance_unchanged 42 '{"autoMergeRequest":{"enabledAt":"now"}}' "true"
     [ "${status}" -ne 0 ]
 }
 
@@ -4049,6 +4102,7 @@ setup_main_mocks() {
     # fetch_pr_json's "comments" and/or these individually.
     load_pr_last_agent_comment_seen()    { printf ''; }
     save_pr_last_agent_comment_seen()    { return 0; }
+    compute_pr_last_agent_comment_seen() { printf ''; }
     fingerprint_issue_json()    { printf 'issue-fp-default\n'; }
     load_issue_fingerprint()    { printf ''; }
     # No Workflow board by default (#1204) — tests exercising board-approval behaviour override
@@ -10644,6 +10698,29 @@ STUBEOF
     [ "${output}" = "2026-08-12T10:05:07Z" ]
 }
 
+@test "compute_pr_last_agent_comment_seen fetches fresh PR state rather than reusing stale data (#1307 review)" {
+    fetch_pr_json() { printf '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}],"reviews":[]}\n'; }
+    get_trusted_logins() { printf '["credfeto"]\n'; }
+    fetch_pr_review_comments() { printf '[]\n'; }
+    run compute_pr_last_agent_comment_seen 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "compute_pr_last_agent_comment_seen returns 1 when fetch_pr_json fails (#1307)" {
+    fetch_pr_json() { return 1; }
+    run compute_pr_last_agent_comment_seen 42
+    [ "${status}" -eq 1 ]
+}
+
+@test "compute_pr_last_agent_comment_seen returns 1 when fetch_pr_review_comments fails (#1307 review)" {
+    fetch_pr_json() { printf '{"comments":[]}\n'; }
+    get_trusted_logins() { printf '["credfeto"]\n'; }
+    fetch_pr_review_comments() { return 1; }
+    run compute_pr_last_agent_comment_seen 42
+    [ "${status}" -eq 1 ]
+}
+
 @test "ci_checks_timed_out returns false and writes state on first call for a new OID" {
     local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
     run ci_checks_timed_out 42 "${pr_json}"
@@ -11358,7 +11435,10 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" != *"settled"* ]]
-    [[ "${output}" != *"unchanged"* ]]
+    # Routed through the idle-tracked "re-invoking to advance" path (not a blanket bypass), so
+    # the idle counter and failed-check/unaddressed-review-request escalation stay in force once
+    # genuinely exhausted (#1307 review) — "unchanged" legitimately appears in that log line.
+    [[ "${output}" == *"unchanged — re-invoking to advance the next workflow phase"* ]]
 }
 
 @test "main invokes the agent for a BEHIND PR with an unaddressed trusted comment instead of a non-agentic rebase (#1307)" {
@@ -11449,6 +11529,47 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     [ -f "${TEST_TMP}/comment_seen_log" ]
+}
+
+@test "main still escalates a terminal PR with a failed required check and an unaddressed comment once idle budget is exhausted (#1307 review)" {
+    # Regression guard: an unaddressed trusted comment must not permanently exempt a PR from the
+    # idle-exhausted escalation checks — it may force one extra look, but once the idle budget is
+    # genuinely spent the failed-check escalation must still fire, not silently churn forever.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main still sends the Discord review-approval nudge for a terminal PR even with an unaddressed comment (#1307 review)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    notify_discord_pr_needs_approval() { printf 'called\n' >> "${TEST_TMP}/approval_notify_log"; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [ -f "${TEST_TMP}/approval_notify_log" ]
 }
 
 @test "main blocks PR and posts complaint when CI checks exceed timeout in Issue-to-PR pivot path" {

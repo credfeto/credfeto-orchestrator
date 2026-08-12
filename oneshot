@@ -275,7 +275,7 @@ main() {
     local issue_json issue_state issue_fp saved_issue_fp plan_approved
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_has_unaddressed_comment
+    local pr_has_unaddressed_comment post_comment_seen
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
@@ -494,19 +494,24 @@ main() {
                 fi
                 clear_pr_ci_pending_state "${open_pr}"
 
-                if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ] && [ "${pr_has_unaddressed_comment}" != "true" ]; then
+                if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
                     if pr_json_is_terminal "${pr_json}"; then
-                        info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        # Discord's review-approval nudge fires regardless of
+                        # pr_has_unaddressed_comment below — an unrelated trusted comment must not
+                        # silently suppress it (#1307 review).
                         if pr_json_needs_review_approval "${pr_json}"; then
                             notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
                         fi
-                        count_unchanged=$((count_unchanged + 1))
-                        item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
-                        continue
+                        if [ "${pr_has_unaddressed_comment}" != "true" ]; then
+                            info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                            count_unchanged=$((count_unchanged + 1))
+                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
+                            continue
+                        fi
                     fi
                 fi
 
-                if [ "${pr_has_unaddressed_comment}" != "true" ] && [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+                if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                     if [ "${pr_is_draft}" != "true" ]; then
                         # PR unchanged — also check whether the linked issue has new comments.
                         require_trusted_logins || continue
@@ -519,7 +524,16 @@ main() {
                             || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                         saved_issue_fp=$(load_issue_fingerprint "${item_id}")
                         if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
-                            if pr_should_advance_unchanged "${open_pr}" "${pr_json}"; then
+                            # pr_has_unaddressed_comment is passed through to
+                            # pr_should_advance_unchanged rather than bypassing this whole block
+                            # from outside: it still overrides that function's terminal
+                            # short-circuit (an unaddressed comment deserves a real look even on
+                            # an otherwise-settled PR), but stays subject to the same idle budget,
+                            # so the failed-check/unaddressed-review-request escalation below still
+                            # gets a real chance to fire once genuinely exhausted instead of being
+                            # silently defeated for as long as the comment stays unaddressed
+                            # (#1307 review).
+                            if pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                                 info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                                 pr_idle_advance=1
                             else
@@ -854,24 +868,36 @@ main() {
             fi
             clear_pr_ci_pending_state "${item_id}"
 
-            if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ] && [ "${pr_has_unaddressed_comment}" != "true" ]; then
+            if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
                 if pr_json_is_terminal "${pr_json}"; then
-                    info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                    # Discord's review-approval nudge fires regardless of
+                    # pr_has_unaddressed_comment below — an unrelated trusted comment must not
+                    # silently suppress it (#1307 review).
                     if pr_json_needs_review_approval "${pr_json}"; then
                         notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
                     fi
-                    count_unchanged=$((count_unchanged + 1))
-                    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
-                    continue
+                    if [ "${pr_has_unaddressed_comment}" != "true" ]; then
+                        info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        count_unchanged=$((count_unchanged + 1))
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
+                        continue
+                    fi
                 fi
             fi
 
-            if [ "${pr_has_unaddressed_comment}" != "true" ] && [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
+            if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
                 if [ "${pr_is_draft}" = "true" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
                 elif [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
-                elif pr_should_advance_unchanged "${item_id}" "${pr_json}"; then
+                # pr_has_unaddressed_comment is passed through to pr_should_advance_unchanged
+                # rather than bypassing this whole block from outside: it still overrides that
+                # function's terminal short-circuit (an unaddressed comment deserves a real look
+                # even on an otherwise-settled PR), but stays subject to the same idle budget, so
+                # the failed-check/unaddressed-review-request escalation below still gets a real
+                # chance to fire once genuinely exhausted instead of being silently defeated for
+                # as long as the comment stays unaddressed (#1307 review).
+                elif pr_should_advance_unchanged "${item_id}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                     info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                     pr_idle_advance=1
                 else
@@ -1176,14 +1202,19 @@ main() {
                 warn "Failed to compute post-run fingerprint(s) for ${item_type} #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
             fi
             # Only a real agent turn (this point) is allowed to advance what counts as "seen".
-            # Deliberately reuses this tick's already-fetched pr_json/trusted_logins rather than
-            # a fresh gh pr view (unlike the post-run fingerprint above, which needs genuinely
-            # current state to avoid re-driving an already-completed phase): worst case of a
-            # comment arriving mid-invocation being missed here is that it is re-treated as
-            # unaddressed next tick, forcing one redundant real invocation, not a stuck PR — the
-            # same acceptable-staleness tradeoff already used elsewhere in this file (#1090)
-            # (#1307).
-            save_pr_last_agent_comment_seen "${item_id}" "$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}")"
+            # Deliberately re-fetches fresh PR state (compute_pr_last_agent_comment_seen) rather
+            # than reusing this tick's pre-invocation pr_json: it must capture any top-level
+            # comment posted during the invocation itself, including one the agent's own trusted
+            # login just posted — reusing stale data would leave that permanently unaccounted for
+            # and force a spurious re-invocation every subsequent tick (#1307 review). A failure
+            # here is benign (worst case: a trusted comment is re-treated as unaddressed next
+            # tick, forcing one redundant real invocation, not a stuck PR) so it is warned rather
+            # than died on, matching the fingerprint save above.
+            if post_comment_seen=$(compute_pr_last_agent_comment_seen "${item_id}"); then
+                save_pr_last_agent_comment_seen "${item_id}" "${post_comment_seen}"
+            else
+                warn "Failed to compute post-run last-agent-comment-seen for PR #${item_id} in ${item_repo} — a trusted comment may be re-evaluated as unaddressed next tick"
+            fi
         elif [ "${item_type}" = "Issue" ]; then
             if post_fp=$(compute_issue_fingerprint "${item_id}"); then
                 save_issue_fingerprint "${item_id}" "${post_fp}"
