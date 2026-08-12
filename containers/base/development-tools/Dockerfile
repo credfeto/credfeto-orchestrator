@@ -341,20 +341,23 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # the next install adds another folder under /usr/share/dotnet/sdk — so the
 # report in /opt/installed-versions.txt attributes each version to the
 # correct channel rather than guessing from a combined listing afterwards.
-RUN mkdir -p /opt \
-    && curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --channel LTS --install-dir /usr/share/dotnet \
     && LTS_SDK_VERSION="" \
     && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
          LTS_SDK_VERSION="$(basename "$sdk_dir")"; \
        done \
+    && test -d "/usr/share/dotnet/sdk/${LTS_SDK_VERSION}" \
+        || { echo "FATAL: LTS SDK directory not found after install (got '${LTS_SDK_VERSION}')" >&2; exit 1; } \
     && /tmp/dotnet-install.sh --channel STS --install-dir /usr/share/dotnet \
     && STS_SDK_VERSION="" \
     && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
          sdk_version="$(basename "$sdk_dir")"; \
          [ "$sdk_version" = "${LTS_SDK_VERSION}" ] || STS_SDK_VERSION="$sdk_version"; \
        done \
+    && test -d "/usr/share/dotnet/sdk/${STS_SDK_VERSION}" \
+        || { echo "FATAL: STS SDK directory not found after install (got '${STS_SDK_VERSION}')" >&2; exit 1; } \
     && printf 'dotnet SDK (LTS): %s\ndotnet SDK (STS): %s\n' \
         "${LTS_SDK_VERSION}" "${STS_SDK_VERSION}" > /opt/installed-versions.txt \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \

@@ -1,21 +1,15 @@
 --- # Read back the /opt/installed-versions.txt report baked into a just-built image
 name: "Report installed tool versions"
-description: "Reads /opt/installed-versions.txt out of a container image, appends it to the job summary, and returns it as an output"
+description: "Reads /opt/installed-versions.txt out of a container image and appends it to the job summary"
 inputs:
   image-ref:
     description: "Fully-qualified container image reference to inspect (e.g. ghcr.io/owner/image:latest)"
     required: true
 
-outputs:
-  versions:
-    description: "Markdown report: a Tool/Component | Version table when every line is a clean name/value pair, otherwise a fenced code block of the raw report"
-    value: "${{steps.report.outputs.versions}}"
-
 runs:
   using: "composite"
   steps:
     - name: "Read installed-versions report from image"
-      id: "report"
       shell: "bash"
       run: |
         IMAGE_REF="${{inputs.image-ref}}"
@@ -60,13 +54,6 @@ runs:
         else
           VERSIONS=$(printf '```\n%s\n```' "$VERSIONS")
         fi
-
-        DELIMITER="VERSIONS_EOF_${GITHUB_RUN_ID}_${GITHUB_JOB}"
-        {
-          echo "versions<<${DELIMITER}"
-          echo "$VERSIONS"
-          echo "${DELIMITER}"
-        } >> "$GITHUB_OUTPUT"
 
         # Written directly here (rather than left to each of the 7 calling
         # workflows to re-echo under their own "### Installed versions"
