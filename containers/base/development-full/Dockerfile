@@ -212,11 +212,14 @@ RUN ln -sf /usr/bin/gpg /usr/bin/gpg2
 # so this stage's report covers only what development-full itself adds: the
 # pinned/resolved refs for each cloned repo (ARGs for the pinned third-party
 # ones) plus the linked skill count. credfeto-ai-skills and
-# credfeto-global-pre-commit are deliberately not repeated here — the
-# workflow's own "Summarise" step already prints both from the pre-build
-# git ls-remote resolution, and showing both risks confusing readers if the
-# two (independently resolved, moments apart) values ever disagree. Read back
-# post-build by .github/actions/report-installed-versions.
+# credfeto-global-pre-commit are deliberately not repeated here — on the
+# push path, the workflow's "Summarise" step already prints both from the
+# pre-build git ls-remote resolution, and showing both there risks
+# confusing readers if the two (independently resolved, moments apart)
+# values ever disagree. (pull_request runs don't print them either way —
+# that step is push-only, matching every other pre-build-resolved value
+# in this repo's build-development-*.yml workflows.) Read back post-build
+# by .github/actions/report-installed-versions.
 RUN { \
       echo "dotnet-claude-kit: ${DOTNET_CLAUDE_KIT_COMMIT}"; \
       echo "wshobson-agents: ${WSHOBSON_AGENTS_COMMIT}"; \

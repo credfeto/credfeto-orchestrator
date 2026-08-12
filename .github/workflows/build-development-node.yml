@@ -113,13 +113,6 @@ jobs:
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
-      - name: "Capture installed tool versions"
-        id: "versions"
-        if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        uses: ./.github/actions/report-installed-versions
-        with:
-          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
         shell: "bash"
@@ -143,17 +136,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (installed versions)"
+        id: "versions"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        shell: "bash"
-        env:
-          INSTALLED_VERSIONS: "${{ steps.versions.outputs.versions }}"
-        run: |
-          {
-            echo ""
-            echo "### Installed versions"
-            echo ""
-            echo "$INSTALLED_VERSIONS"
-          } >> "$GITHUB_STEP_SUMMARY"
+        uses: ./.github/actions/report-installed-versions
+        with:
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
       - name: "Summarise (skipped — no relevant changes)"
         if: ${{ steps.relevance.outputs.relevant != 'true' }}

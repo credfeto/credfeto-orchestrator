@@ -394,10 +394,13 @@ RUN { \
 # Appends this stage's remaining explicitly-installed tool versions to the
 # report started by the dotnet SDK install above. Read back post-build by
 # .github/actions/report-installed-versions for the workflow job summary.
-# composite-action-lint's version is deliberately not repeated here — the
-# workflow's own "Summarise" step already prints it from the pre-build
-# git ls-remote resolution, and showing both risks confusing readers if the
-# two (independently resolved, moments apart) values ever disagree.
+# composite-action-lint's version is deliberately not repeated here — on
+# the push path, the workflow's "Summarise" step already prints it from
+# the pre-build git ls-remote resolution, and showing both there risks
+# confusing readers if the two (independently resolved, moments apart)
+# values ever disagree. (pull_request runs don't print it either way —
+# that step is push-only, matching every other pre-build-resolved value
+# in this repo's build-development-*.yml workflows.)
 # Locked down root:root 0444 once complete, matching other baked-in artefacts.
 RUN { \
       echo "hadolint: $(hadolint --version || echo 'version unknown')"; \

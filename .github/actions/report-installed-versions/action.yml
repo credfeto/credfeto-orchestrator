@@ -1,6 +1,6 @@
 --- # Read back the /opt/installed-versions.txt report baked into a just-built image
 name: "Report installed tool versions"
-description: "Reads /opt/installed-versions.txt out of a container image and returns it as an output for the job summary"
+description: "Reads /opt/installed-versions.txt out of a container image, appends it to the job summary, and returns it as an output"
 inputs:
   image-ref:
     description: "Fully-qualified container image reference to inspect (e.g. ghcr.io/owner/image:latest)"
@@ -23,8 +23,14 @@ runs:
         # A pull_request run has the image already loaded locally (load: true,
         # push: false) — a push run has it in the registry only. Prefer the
         # local copy so pull_request runs don't fetch the previous push's tag.
+        # A pull failure (registry hiccup, rate limit) must not fail this
+        # purely informational step — composite action bash steps run with
+        # -eo pipefail, so an unguarded "docker pull" would fail the whole
+        # job over a transient blip despite the image itself having built
+        # and pushed successfully. Let it fall through to the "not found"
+        # fallback below instead, same as an unreadable local image would.
         if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
-          docker pull "$IMAGE_REF"
+          docker pull "$IMAGE_REF" || true
         fi
 
         # --entrypoint overrides any ENTRYPOINT baked into the image (e.g.
@@ -61,3 +67,15 @@ runs:
           echo "$VERSIONS"
           echo "${DELIMITER}"
         } >> "$GITHUB_OUTPUT"
+
+        # Written directly here (rather than left to each of the 7 calling
+        # workflows to re-echo under their own "### Installed versions"
+        # step) so the formatting logic above has exactly one caller to stay
+        # in sync with. Callers just need to run this step after whichever
+        # header step they want it to follow.
+        {
+          echo ""
+          echo "### Installed versions"
+          echo ""
+          echo "$VERSIONS"
+        } >> "$GITHUB_STEP_SUMMARY"
