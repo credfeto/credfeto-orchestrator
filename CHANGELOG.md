@@ -58,6 +58,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - recover_orphaned_branch now warns with a status summary before discarding uncommitted or untracked changes on an orphaned branch, instead of silently force-checking-out main with no trace of what was lost
 - The self-update step no longer wedges forever on a stale git lock: the merge now retries once after clearing known stale lock files, and oneshot itself detects and refuses to run when its checkout is still behind origin/main, alerting Discord and exiting non-zero instead of silently continuing on stale code.
 - Debugging recipe no longer reowns an owner's .git/index to root, and setup-owner self-heals ownership drift before pulling
+- Trusted PR comments left while a PR is BEHIND main or already settled (auto-merge armed, checks green) are no longer silently swallowed by the non-agentic rebase path or the terminal-state skip; both now force a real agent invocation until an actual agent turn has read the comment (#1307)
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
