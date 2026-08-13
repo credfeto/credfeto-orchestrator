@@ -156,25 +156,29 @@ host_allowed() {
 # "[user@]host:path". A bare "host:path" (no user@) is only treated as
 # remote if the part before the first ':' contains no '/' - a local relative
 # path with a colon in it (e.g. "./a:b") is not mistaken for a host.
+#
+# The non-URI form finds the FIRST ':' before ever looking for '@' - real
+# scp/ssh syntax treats everything up to the first ':' as the [user@]host
+# spec and everything after it as the path, so only an '@' inside that
+# pre-colon spec is part of the host (round 4 code review: the previous
+# version searched the whole word for '@' before restricting to the
+# pre-colon portion, so a crafted "evil.com:x@dns-01.lan:y" extracted
+# dns-01.lan as the host while real scp - verified via `scp -v`, which
+# reported "Executing: program ssh host evil.com" - connects to evil.com).
 scp_target_host() {
-  local w="$1" h prefix
+  local w="$1" spec
   case "$w" in
     scp://*)
-      h="${w#scp://}"
-      h="${h#*@}"
-      h="${h%%/*}"
-      h="${h%%:*}"
-      printf '%s' "$h"
-      ;;
-    *@*:*)
-      h="${w#*@}"
-      printf '%s' "${h%%:*}"
+      spec="${w#scp://}"
+      spec="${spec#*@}"
+      spec="${spec%%/*}"
+      printf '%s' "${spec%%:*}"
       ;;
     *:*)
-      prefix="${w%%:*}"
-      case "$prefix" in
+      spec="${w%%:*}"
+      case "$spec" in
         */* | . | ..) ;; # local path shape, not a host
-        *) printf '%s' "$prefix" ;;
+        *) printf '%s' "${spec#*@}" ;;
       esac
       ;;
   esac
@@ -225,21 +229,35 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command cou
 # this hook saw the literal text "-\x6fProxyCommand=x" and let it straight
 # through unblocked before this exclusion was added).
 #
-# Root cause behind that bug, and closed generally rather than one form at a
-# time: shfmt's Value/Parts[0].Value is ALWAYS the raw source text, for
-# EVERY node type - not just $'...'/$"..." - and a bare backslash escape
-# outside of any quoting is genuine, valid bash syntax that also gets
-# decoded before the command sees it (`-\oProxyCommand=x`, unquoted, is the
-# argument -oProxyCommand=x at execution time - the leading backslash is
-# stripped by ordinary bash word processing, not something ANSI-C-specific).
-# Round 3 code review found this exact bare-word variant still worked after
-# the Dollar-only fix above. Rather than special-case ANSI-C, locale, and
-# bare-backslash escaping one at a time (each is a different bash decoding
-# rule, more are plausible), any value containing a literal backslash
-# anywhere is now excluded from unwrapping regardless of which branch
-# produced it - a plain .lan hostname or scp path never legitimately needs
-# one, so this costs nothing in real usability while closing the whole class
-# of "shfmt's raw text differs from bash's decoded text" bugs at once.
+# Root cause behind that bug, and now closed exhaustively rather than one
+# form at a time: shfmt's Value/Parts[0].Value is ALWAYS the raw source
+# text, for EVERY node type - not just $'...'/$"..." - and any character
+# that triggers one of bash's word-expansion phases makes that raw text
+# differ from what the command actually receives at execution time. Round 3
+# closed backslash escaping (a quote-removal-phase transform: a bare
+# `-\oProxyCommand=x`, unquoted, really is the argument -oProxyCommand=x at
+# execution time). Round 4 found this still didn't cover brace expansion or
+# pathname expansion (globbing) - `ssh {-oProxyCommand=x,dns-01}.lan` is one
+# Lit word ending in ".lan" to this hook (and to reject-obfuscated-commands,
+# which never runs it through shell expansion either), but bash's brace
+# expansion turns it into TWO argv words at execution time, one a live -o
+# flag - verified via `shfmt --tojson` (one Lit) against real bash brace
+# expansion (two words) side by side.
+#
+# Rather than keep adding one expansion mechanism at a time, this now
+# enumerates bash's complete set of word-expansion phases (per bash(1)
+# EXPANSION) and excludes any value containing a character that can trigger
+# one: brace expansion ({ } ,), tilde expansion (~), pathname expansion (* ?
+# [ ]), and quote removal of an escape (\), on top of the node-type check
+# already excluding parameter/command/arithmetic expansion (anything that
+# isn't a single Lit/SglQuoted/pure-DblQuoted node isn't unwrapped at all,
+# and unquoted results of THOSE expansions are the only source of the
+# remaining phase, word splitting - already excluded transitively). A plain
+# .lan hostname or scp path never legitimately needs any of these
+# characters, so this costs nothing in real usability. Comma is
+# deliberately NOT excluded on its own - it is inert without an enclosing
+# { }, which is already excluded, and excluding it too would needlessly
+# reject ordinary path/filename content.
 calls=$(printf '%s' "$ast" | jq -r --arg marker "$MARKER" '
   def literal_value:
     if (.Parts | length) != 1 then null
@@ -252,11 +270,17 @@ calls=$(printf '%s' "$ast" | jq -r --arg marker "$MARKER" '
          then $p.Parts[0].Value
        else null
        end) as $v |
-      if $v == null or ($v | contains("\\")) then null else $v end
+      if $v == null then null
+      elif ($v | contains("\\")) or ($v | contains("{")) or ($v | contains("}"))
+        or ($v | contains("~")) or ($v | contains("*")) or ($v | contains("?"))
+        or ($v | contains("[")) or ($v | contains("]"))
+        then null
+      else $v
+      end
     end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
   [ .Args[] | literal_value // $marker ] |
-  join("\t")')
+  join("\t")') || block 'command structure could not be analyzed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
