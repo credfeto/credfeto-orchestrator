@@ -38,9 +38,30 @@
 # cannot see in the positional target argument (arbitrary config overrides,
 # a jump host, a forwarded port to an arbitrary destination), the same
 # "cannot classify as safe, block outright" treatment enforce-git-dash-c
-# gives `git config --file`/`--blob`. Any unrecognised flag, and any target
-# that isn't a single plain-literal word, fails closed (blocked) too, rather
-# than guessed at - matching this hook family's convention.
+# gives `git config --file`/`--blob`. The blocked-flag check matches on the
+# flag letter alone (classify_flag below), independent of whether its value
+# is attached ("-oProxyCommand=x") or a separate token ("-o ProxyCommand=x")
+# - an earlier version of this hook only checked the exact-token form and so
+# missed the attached form entirely, letting exactly the redirection vectors
+# this hook exists to close straight through (round 1 review). A target that
+# isn't a single plain-literal word still fails closed (blocked) rather than
+# guessed at. Two known remaining gaps, both narrower than the one above and
+# left deliberately unaddressed for now:
+#   * A flag this hook doesn't recognise at all (not in any BLOCKED_FLAGS or
+#     VALUE_FLAGS array above) is treated as an ordinary boolean flag and
+#     skipped, not blocked - this hook is a blocklist of known-dangerous
+#     flags layered on ssh/scp's actual grammar, not a from-scratch allowlist
+#     of every safe flag either tool supports. Closing this would mean
+#     enumerating ssh/scp's complete flag surface (all of it, not just the
+#     value- and redirection-relevant subset covered here) - real risk of
+#     getting an obscure or version-specific flag's arity wrong and breaking
+#     legitimate usage for no security benefit, so left as a blocklist.
+#   * A blocked flag bundled behind other short boolean flags in one token
+#     (e.g. "-vo ProxyCommand=x" for "-v -oProxyCommand=x") is not decoded
+#     and so is not caught - real-world ssh/scp usage essentially never does
+#     this, and reject-obfuscated-commands' job is exactly this class of
+#     disguised intent for the command name.
+# Revisit either gap if it is ever actually exploited.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job - reject-obfuscated-commands rejects those
@@ -66,14 +87,6 @@ block() {
 # actually bans these upstream in the normal PreToolUse chain.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
-is_wrapper() {
-  local w
-  for w in "${WRAPPERS[@]}"; do
-    [ "$1" = "$w" ] && return 0
-  done
-  return 1
-}
-
 is_in() {
   local needle="$1" straw
   shift
@@ -98,12 +111,41 @@ SSH_VALUE_FLAGS=(-B -b -c -E -e -I -i -l -m -O -p -Q -S)
 # Remaining scp value flags, same convention.
 SCP_VALUE_FLAGS=(-c -i -l -P -S -X)
 
+# Classifies word $2 (already known to start with '-') against the blocked-
+# and value-flag arrays for tool $1 ("ssh" or "scp"), advancing the caller's
+# loop index $k accordingly. Blocks outright on a match against the blocked
+# set - checked against the flag letter alone (${w:0:2}), independent of
+# whether the rest of the word is an attached value, so "-o" and
+# "-oProxyCommand=x" are both caught. Must be called as a plain statement,
+# never inside $(...) - block's exit would only kill a subshell there and
+# silently fail the check open.
+classify_flag() {
+  local tool="$1" w="$2"
+  local flag="${w:0:2}" blocked_flags value_flags
+  case "$tool" in
+    ssh)
+      blocked_flags=("${SSH_BLOCKED_FLAGS[@]}")
+      value_flags=("${SSH_VALUE_FLAGS[@]}")
+      ;;
+    scp)
+      blocked_flags=("${SCP_BLOCKED_FLAGS[@]}")
+      value_flags=("${SCP_VALUE_FLAGS[@]}")
+      ;;
+  esac
+  if is_in "$flag" "${blocked_flags[@]}"; then
+    block "${tool} ${flag} is not permitted - it can redirect the connection to a host this check cannot verify"
+  fi
+  if [ "$w" = "$flag" ] && is_in "$flag" "${value_flags[@]}"; then
+    k=$((k + 2))
+  else
+    k=$((k + 1))
+  fi
+}
+
 # Host is allowed only if it ends in the .lan private-network suffix
 # (case-insensitive - hostnames are conventionally case-insensitive).
 host_allowed() {
-  local host_lc
-  host_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-  case "$host_lc" in
+  case "${1,,}" in
     *.lan) return 0 ;;
     *) return 1 ;;
   esac
@@ -140,16 +182,16 @@ scp_target_host() {
 
 MARKER=$'\x01'
 
-key_checked=0
+# Only "already confirmed OK" is worth caching: require_ssh_key always exits
+# on failure (via block), so a failed check is never observed again to cache.
 key_ok=0
 require_ssh_key() {
-  if [ "$key_checked" = 0 ]; then
-    key_checked=1
-    if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1 && ssh-add -l >/dev/null 2>&1; then
-      key_ok=1
-    fi
+  [ "$key_ok" = 1 ] && return 0
+  if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1 && ssh-add -l >/dev/null 2>&1; then
+    key_ok=1
+    return 0
   fi
-  [ "$key_ok" = 1 ] || block 'no usable SSH key is loaded in the forwarded ssh-agent - ssh/scp requires key-based auth, not a password fallback'
+  block 'no usable SSH key is loaded in the forwarded ssh-agent - ssh/scp requires key-based auth, not a password fallback'
 }
 
 input=$(cat)
@@ -180,7 +222,7 @@ while IFS= read -r call_line; do
   # appearing anywhere else is an ordinary argument, not an ssh/scp
   # invocation (e.g. `grep -r ssh .`, `find . -name scp`).
   positions=(0)
-  is_wrapper "${words[0]}" && positions+=(1)
+  is_in "${words[0]}" "${WRAPPERS[@]}" && positions+=(1)
 
   for i in "${positions[@]}"; do
     tok="${words[$i]:-}"
@@ -200,15 +242,7 @@ while IFS= read -r call_line; do
             break
             ;;
           -*)
-            flag="${w:0:2}"
-            if [ "$w" = "$flag" ] && is_in "$flag" "${SSH_BLOCKED_FLAGS[@]}"; then
-              block "ssh ${flag} is not permitted - it can redirect the connection to a host this check cannot verify"
-            fi
-            if [ "$w" = "$flag" ] && is_in "$flag" "${SSH_VALUE_FLAGS[@]}"; then
-              k=$((k + 2))
-            else
-              k=$((k + 1))
-            fi
+            classify_flag ssh "$w"
             continue
             ;;
           *)
@@ -219,9 +253,9 @@ while IFS= read -r call_line; do
       done
 
       if [ -n "$target" ]; then
-        require_ssh_key
         host="${target##*@}"
         host_allowed "$host" || block "ssh target host '${host}' is not in the allowed .lan network"
+        require_ssh_key
       fi
 
     elif [ "$tok" = "scp" ] || [[ "$tok" == */scp ]]; then
@@ -237,22 +271,14 @@ while IFS= read -r call_line; do
             continue
             ;;
           -*)
-            flag="${w:0:2}"
-            if [ "$w" = "$flag" ] && is_in "$flag" "${SCP_BLOCKED_FLAGS[@]}"; then
-              block "scp ${flag} is not permitted - it can redirect the connection to a host this check cannot verify"
-            fi
-            if [ "$w" = "$flag" ] && is_in "$flag" "${SCP_VALUE_FLAGS[@]}"; then
-              k=$((k + 2))
-            else
-              k=$((k + 1))
-            fi
+            classify_flag scp "$w"
             continue
             ;;
           *)
             host=$(scp_target_host "$w")
             if [ -n "$host" ]; then
-              require_ssh_key
               host_allowed "$host" || block "scp target host '${host}' is not in the allowed .lan network"
+              require_ssh_key
             fi
             k=$((k + 1))
             ;;

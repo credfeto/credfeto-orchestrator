@@ -3,6 +3,7 @@
 
 load test_helper
 
+# shellcheck disable=SC2034  # read by run_hook in test_helper.bash, not visible to shellcheck across `load`
 HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-ssh-scp-host-and-key"
 
 setup() {
@@ -17,15 +18,8 @@ teardown() {
     cleanup_stubs
 }
 
-# Pipes a Claude Code PreToolUse hook payload for the given Bash command into
-# the hook under test. status 0 = allowed, 2 = blocked (matches the hook's
-# own contract).
-run_hook() {
-    local command="$1"
-    local payload
-    payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
-}
+# run_hook is provided by test_helper (shared across every *.bats file that
+# exercises a PreToolUse hook this same way).
 
 # Stubs ssh-add to report one loaded identity and points SSH_AUTH_SOCK at a
 # (non-existent - ssh-add itself is stubbed, so it's never dereferenced)
@@ -156,6 +150,34 @@ with_valid_key() {
     run_hook "ssh -D 1080 dns-01.lan"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'-D is not permitted'* ]]
+}
+
+@test "ssh -oProxyCommand attached form is blocked outright, not just the separate-token form" {
+    with_valid_key
+    run_hook "ssh -oProxyCommand=/tmp/evil.sh dns-01.lan"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-o is not permitted'* ]]
+}
+
+@test "ssh -Jhost attached form is blocked outright" {
+    with_valid_key
+    run_hook "ssh -Jevil.example.com dns-01.lan"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-J is not permitted'* ]]
+}
+
+@test "ssh -F/path attached form is blocked outright" {
+    with_valid_key
+    run_hook "ssh -F/tmp/evil.cfg dns-01.lan"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-F is not permitted'* ]]
+}
+
+@test "scp -oProxyCommand attached form is blocked outright" {
+    with_valid_key
+    run_hook "scp -oProxyCommand=/tmp/evil.sh file.txt dns-01.lan:/tmp/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-o is not permitted'* ]]
 }
 
 @test "ssh target via command substitution fails closed" {
