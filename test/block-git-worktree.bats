@@ -23,6 +23,18 @@ run_hook() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
 }
 
+# Pipes a Claude Code PreToolUse hook payload for the native EnterWorktree
+# tool into the hook under test - name/path are omitted from tool_input
+# entirely when not given (not passed as empty strings), matching how the
+# real tool call payload looks. status 0 = allowed, 2 = blocked.
+run_hook_enter_worktree() {
+    local name="$1" path="$2"
+    local payload
+    payload=$(jq -n --arg name "$name" --arg path "$path" \
+        '{tool_name: "EnterWorktree", tool_input: ((if $name != "" then {name: $name} else {} end) + (if $path != "" then {path: $path} else {} end))}')
+    run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
+}
+
 @test "git worktree add is blocked" {
     run_hook "git worktree add ../foo -b feature/x"
     [ "${status}" -eq 2 ]
@@ -160,4 +172,40 @@ run_hook() {
     run_hook "git worktree add"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'command did not run'* ]]
+}
+
+# EnterWorktree - the native tool (#1322). No shell command string involved,
+# so these exercise the tool_name dispatch branch directly instead of run_hook.
+
+@test "EnterWorktree with no name or path is blocked (random-name create)" {
+    run_hook_enter_worktree "" ""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'EnterWorktree creates a new linked worktree'* ]]
+}
+
+@test "EnterWorktree with only a name is blocked (create)" {
+    run_hook_enter_worktree "my-feature" ""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'EnterWorktree creates a new linked worktree'* ]]
+}
+
+@test "EnterWorktree with only a path is allowed (entering an existing worktree)" {
+    run_hook_enter_worktree "" "/repo/.claude/worktrees/my-feature"
+    [ "${status}" -eq 0 ]
+}
+
+@test "EnterWorktree with an empty-string path is blocked" {
+    run bash -c 'printf "%s" "$1" | "$2"' _ \
+        '{"tool_name":"EnterWorktree","tool_input":{"path":""}}' "$HOOK"
+    [ "${status}" -eq 2 ]
+}
+
+@test "EnterWorktree with both name and path set is blocked (malformed, fail closed)" {
+    run_hook_enter_worktree "my-feature" "/repo/.claude/worktrees/my-feature"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a Bash call is unaffected by the EnterWorktree dispatch branch" {
+    run_hook "git worktree list"
+    [ "${status}" -eq 0 ]
 }

@@ -86,6 +86,15 @@ teardown() {
     [[ "${output}" == *'$HOME/.claude/hooks/block-dotnet-tool-install'* ]]
 }
 
+@test "generated settings.json registers block-git-worktree against the native EnterWorktree tool (#1322)" {
+    main
+
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "EnterWorktree") | .hooks[] | .command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == '$HOME/.claude/hooks/block-git-worktree' ]]
+}
+
 @test "a pre-existing settings.json is preserved as settings.json.bak" {
     mkdir -p "${HOME}/.claude"
     printf '{"marker": "pre-existing"}' > "${HOME}/.claude/settings.json"
