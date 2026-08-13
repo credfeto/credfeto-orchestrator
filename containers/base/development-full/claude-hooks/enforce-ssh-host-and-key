@@ -122,9 +122,13 @@ is_in() {
 TARGET_RE='^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.lan$'
 
 target_allowed() {
-  local target_lc
-  target_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-  [[ "$target_lc" =~ $TARGET_RE ]]
+  # Bash's own lowercase expansion, not a `tr`-via-$(...) pipeline: command
+  # substitution unconditionally strips trailing newline bytes from its
+  # captured output, which would silently re-lose exactly the bytes the
+  # base64-decode sentinel fix above exists to preserve (round 6 code
+  # review: this was the actual reason that fix alone didn't close the
+  # bypass - two separate command substitutions in the pipeline needed it).
+  [[ "${1,,}" =~ $TARGET_RE ]]
 }
 
 MARKER='(non-literal)'
@@ -189,7 +193,27 @@ while IFS= read -r call_line; do
   while IFS= read -r entry; do
     case "$entry" in
       N) words+=("$MARKER") ;;
-      L:*) words+=("$(printf '%s' "${entry#L:}" | base64 -d 2>/dev/null)") ;;
+      L:*)
+        # $(...) unconditionally strips ALL trailing newline bytes from its
+        # captured output - true regardless of quoting, since the stripping
+        # happens as part of the substitution itself, before quote-removal
+        # ever applies. A base64-decoded word whose real, decoded value
+        # ends in one or more newlines would silently lose them here,
+        # validating a shorter string against TARGET_RE than the one bash
+        # actually passes to ssh - confirmed as a live gap (round 6 code
+        # review: `ssh 'user@dns-01.lan<newline>'` was allowed, matched
+        # only after the trailing newline was silently dropped). Fixed with
+        # the standard technique: append a known, non-newline sentinel
+        # inside the same command substitution, then strip exactly that one
+        # trailing sentinel character afterwards - $(...) then has no real
+        # trailing newline left to strip, since the sentinel is now the
+        # actual last byte it sees.
+        decoded=$(
+          printf '%s' "${entry#L:}" | base64 -d 2>/dev/null
+          printf '.'
+        )
+        words+=("${decoded%.}")
+        ;;
       *) words+=("$MARKER") ;; # unrecognised tag - fail closed, not silently drop
     esac
   done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')

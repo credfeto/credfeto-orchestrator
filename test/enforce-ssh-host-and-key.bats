@@ -114,9 +114,47 @@ with_valid_key() {
 @test "a real newline byte inside a quoted word no longer desyncs anything (round 5 regression)" {
     # ssh -i 'x<newline>y' evil.com - previously allowed through completely
     # unchecked (no key, no host check) due to a tab/newline-joined text
-    # transport; now closed by base64-per-word transport plus the fact that
-    # -i is a flag and flags are rejected outright regardless.
+    # transport. Blocked today for two independent reasons - -i is a flag
+    # (rejected outright regardless of transport) AND the transport itself
+    # is now safe - so this alone doesn't isolate the transport fix; the
+    # dedicated tests below do that unconfounded by the flag check (round 6
+    # code review).
     run_hook $'ssh -i \'x\ny\' evil.com'
+    [ "${status}" -eq 2 ]
+}
+
+@test "an embedded newline inside the target itself is rejected without going through a flag check" {
+    with_valid_key
+    # Isolates the transport specifically: no flag involved here at all, so
+    # this can only be caught by the target word itself surviving transport
+    # intact and then failing TARGET_RE (a real newline is not in the
+    # allowed charset).
+    run_hook $'ssh \'user@dns\n-01.lan\''
+    [ "${status}" -eq 2 ]
+}
+
+@test "a trailing newline on the target is rejected, not silently stripped by \$(...) (round 6 regression)" {
+    with_valid_key
+    # $(...) command substitution unconditionally strips ALL trailing
+    # newline bytes from its captured output, regardless of quoting - two
+    # separate places in the hook used $(...) on word content (the base64
+    # decode step, and target_allowed's original tr-based lowercasing) and
+    # both needed fixing before this closed; a real trailing newline being
+    # silently dropped meant the hook validated a shorter string than the
+    # one bash actually passes to ssh.
+    run_hook $'ssh \'user@dns-01.lan\n\''
+    [ "${status}" -eq 2 ]
+}
+
+@test "multiple trailing newlines on the target are rejected the same way" {
+    with_valid_key
+    run_hook $'ssh \'user@dns-01.lan\n\n\n\''
+    [ "${status}" -eq 2 ]
+}
+
+@test "a trailing carriage return on the target is rejected (control case - CR was never stripped by \$(...))" {
+    with_valid_key
+    run_hook $'ssh \'user@dns-01.lan\r\''
     [ "${status}" -eq 2 ]
 }
 
