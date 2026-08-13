@@ -27,19 +27,23 @@ teardown() {
 
     allow_names=$(grep -vE '^(#|$)' "${ALLOWLIST}" | sort -u)
     blocklist_names=$(grep -vE '^(#|$)' "${BLOCKLIST}" | cut -f1 | sort -u)
-    deny_names=$(jq -r '.permissions.deny[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )]+).*/\1/p' | sort -u)
+    # Whole-command denies only (Bash(name) / Bash(name *)) - a narrow, args-scoped
+    # deny like Bash(git config --add *) does NOT mean "git" itself needs no allow
+    # entry (git still needs one for its other, permitted invocations); only a
+    # deny that blocks the bare command outright, e.g. Bash(sqlcmd *), does.
+    deny_names=$(jq -r '.permissions.deny[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )]+)( \*)?\)$/\1/p' | sort -u)
     settings_allow_names=$(jq -r '.permissions.allow[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )]+).*/\1/p' | sort -u)
 
     # A name genuinely needs a permissions.allow entry only if command-allowlist
     # permits it AND command-blocklist doesn't shadow it into a no-op (blocklist
-    # wins - e.g. xargs) AND it isn't explicitly denied on purpose (e.g. sqlcmd).
+    # wins - e.g. xargs) AND it isn't wholly denied on purpose (e.g. sqlcmd).
     expected=$(comm -23 <(printf '%s\n' "${allow_names}") <(printf '%s\n' "${blocklist_names}"))
     expected=$(comm -23 <(printf '%s\n' "${expected}") <(printf '%s\n' "${deny_names}"))
 
     missing=$(comm -23 <(printf '%s\n' "${expected}") <(printf '%s\n' "${settings_allow_names}"))
 
     if [ -n "${missing}" ]; then
-        echo "command-allowlist name(s) with no matching claude-settings.json permissions.allow entry - add Bash(<name> *) there (or, if deliberately excluded, add it to command-blocklist/permissions.deny and document why in ai/local/claude-hooks.instructions.md):" >&2
+        echo "command-allowlist name(s) with no matching claude-settings.json permissions.allow entry - add Bash(<name> ...) there (or, if deliberately excluded, add it to command-blocklist, or to permissions.deny as a whole-command Bash(<name> *) block, and document why in ai/local/claude-hooks.instructions.md):" >&2
         echo "${missing}" >&2
         return 1
     fi
