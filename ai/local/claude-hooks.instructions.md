@@ -22,6 +22,13 @@ Delegates parsing to `shfmt` and applies policy to the resulting AST rather than
 * Default (including any autonomous/non-interactive run): do **not** edit `command-allowlist` yourself. Instead log the request in the tracking issue below - check its body and comments for the command name first and skip logging if it is already present, so requests do not get duplicated.
 * Only edit `command-allowlist` directly when a human is present in the session and explicitly asks for that specific command to be added now. Still run the `reject-obfuscated-commands.bats` suite afterwards and commit/push per the normal workflow.
 
+### Keep command-allowlist and claude-settings.json in sync
+
+Enforced by `test/command-allowlist-parity.bats` on every PR (added after this exact drift shipped once - see `command-allowlist`'s own header comment for why the two files are separate layers in the first place): every `command-allowlist` name needs at least one matching `Bash(<name> ...)` entry in `claude-settings.json`'s `permissions.allow` - a blanket `Bash(<name> *)`, or one or more narrower subcommand-scoped patterns (as `git`/`gh`/`dotnet`/`bun`/`npm` deliberately use, on purpose, as least-privilege) - or CI fails. Whenever `command-allowlist` gains or loses a command, add or remove the matching entry in the same change - don't rely on the test to catch it after the fact; a tool missing an allow entry has no effect today (the container always passes `--dangerously-skip-permissions`) but would newly fall to the permission classifier, with no way to answer an "ask" in this unattended `--print` pipeline, the moment that flag is ever removed. Two exceptions the test also encodes:
+
+* A name present in `command-allowlist` but also on `command-blocklist` (blocklist wins - e.g. `xargs`) is not actually usable and must **not** get a `claude-settings.json` allow entry; that would misrepresent it as permitted.
+* A name with a *whole-command* deny in `claude-settings.json`'s own `permissions.deny` - `Bash(<name>)` or `Bash(<name> *)`, e.g. `sqlcmd` (denied to prevent reading `.database` credential files) - must not also get an allow entry for the same reason, even though `deny` already wins over `allow` for that specific pattern - a contradictory pair of entries is misleading regardless of which one takes effect. This does **not** apply to a narrow, args-scoped deny like `Bash(git config --add *)`: `git` still needs (and has) its own allow entries for its other, permitted invocations.
+
 ### Non-ASCII / Layer 0 block
 
 Do **not** loosen the "reject any non-ASCII byte" check - it is a deliberate, hardened defence (8 code-review rounds; see the script's own header comment) against Unicode homoglyph/zero-width/bidi-override obfuscation, not an allowlist gap.
