@@ -182,7 +182,7 @@ with_valid_key() {
 
 @test "ssh target via command substitution fails closed" {
     with_valid_key
-    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    # shellcheck disable=SC2016  # literal $(...) - must reach the hook unexpanded
     run_hook 'ssh $(cat host.txt)'
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'non-literal argument'* ]]
@@ -234,8 +234,26 @@ with_valid_key() {
 
 @test "a double-quoted target mixing literal text with an expansion still fails closed" {
     with_valid_key
-    # shellcheck disable=SC2016  # literal $HOST — must reach the hook unexpanded
+    # shellcheck disable=SC2016  # literal $HOST - must reach the hook unexpanded
     run_hook 'ssh "dns-01.$HOST"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "an ANSI-C quoted -o flag is not unwrapped as a plain literal, closing the escape-decode bypass" {
+    with_valid_key
+    # $'-\x6fProxyCommand=x' is raw source text "-\x6fProxyCommand=x" to this
+    # hook (shfmt does not decode ANSI-C escapes) but bash decodes it to the
+    # real argument -oProxyCommand=x before ssh ever sees it - round 2 review
+    # confirmed this bypassed the round 1 quoted-literal unwrap entirely.
+    run_hook $'ssh $\'-\\x6fProxyCommand=x\' dns-01.lan'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "a plain ANSI-C quoted host is treated as non-literal too (conservative, not a false negative)" {
+    with_valid_key
+    run_hook $'ssh $\'dns-01.lan\''
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'non-literal argument'* ]]
 }

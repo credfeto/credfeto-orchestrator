@@ -82,7 +82,7 @@ block() {
   exit 2
 }
 
-# Known wrapper names for the defense-in-depth `sudo ssh ...` check below —
+# Known wrapper names for the defense-in-depth `sudo ssh ...` check below -
 # mirrors the "Wrapper commands" section of command-blocklist, which is what
 # actually bans these upstream in the normal PreToolUse chain.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
@@ -204,23 +204,37 @@ command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the c
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
 
 # One line per CallExpr: every word that is a single plain literal - bare
-# (git -C X) or wrapped in one layer of quoting with no expansion inside it
-# ("git" -C "X", 'git' -C 'X') - is emitted verbatim; anything else (a
-# substitution, an expansion, or quoting that mixes literal text with either
-# of those, e.g. "dns-01.$HOST") is represented as a marker byte. Layer 0 of
-# reject-obfuscated-commands (which runs before this hook) guarantees a real
-# 0x01 byte can never appear in the input, so the marker is unambiguous and
-# opaque to the checks below. Unwrapping exactly one layer of quoting here
-# matters in practice - quoting a hostname/path is entirely ordinary style,
-# not an obfuscation attempt, and without this a call as plain as
-# `ssh "dns-01.lan"` would be misclassified as non-literal and blocked
-# (round 1 code review).
+# (git -C X) or wrapped in one layer of ordinary quoting with no expansion
+# inside it ("git" -C "X", 'git' -C 'X') - is emitted verbatim; anything else
+# (a substitution, an expansion, or quoting that mixes literal text with
+# either of those, e.g. "dns-01.$HOST") is represented as a marker byte.
+# Layer 0 of reject-obfuscated-commands (which runs before this hook)
+# guarantees a real 0x01 byte can never appear in the input, so the marker
+# is unambiguous and opaque to the checks below. Unwrapping exactly one
+# layer of quoting here matters in practice - quoting a hostname/path is
+# entirely ordinary style, not an obfuscation attempt, and without this a
+# call as plain as `ssh "dns-01.lan"` would be misclassified as non-literal
+# and blocked (round 1 code review).
+#
+# ANSI-C ($'...') and locale ($"...") quoting - shfmt sets Dollar: true on
+# these, same node Type as ordinary quoting otherwise - are deliberately
+# EXCLUDED from unwrapping despite carrying only a single Lit part: their
+# .Value/.Parts[0].Value is the raw, pre-decode source text (backslash
+# escapes and all), not what bash actually passes to the command at
+# execution time. $'-\x6fProxyCommand=x' decodes to the real argument
+# -oProxyCommand=x, but this hook would see the literal text
+# "-\x6fProxyCommand=x" - which classify_flag's ${w:0:2} check does not
+# recognise as -o - and let it straight through, defeating the blocked-flag
+# check entirely (round 2 code review: this exact bypass was live in the
+# round 1 fix above before this exclusion was added). Treated as opaque
+# (marker) instead, same as a real substitution.
 calls=$(printf '%s' "$ast" | jq -r --arg marker "$MARKER" '
   def literal_value:
     if (.Parts | length) != 1 then null
     else
       .Parts[0] as $p |
-      if $p.Type == "Lit" then $p.Value
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
       elif $p.Type == "SglQuoted" then $p.Value
       elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
         then $p.Parts[0].Value
