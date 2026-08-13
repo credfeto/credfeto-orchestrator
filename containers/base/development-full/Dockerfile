@@ -235,7 +235,7 @@ RUN { \
 # Fails the build (not the agent at runtime) if any required binary is missing,
 # HTTPS git clone is broken, dotnet tools are absent, or the pre-commit
 # hook wiring is incorrect.
-# hadolint ignore=DL3059
+# hadolint ignore=DL3059,DL3001
 RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
     for cmd in git gh dotnet python3 gpg curl jq sqlite3 \
@@ -276,6 +276,16 @@ RUN set -e; \
     echo "== gpg + sqlite3 self-check =="; \
     echo "probe" | gpg --dearmor >/dev/null 2>&1 || gpg --version >/dev/null; \
     sqlite3 :memory: "SELECT 1;" | grep -q 1; \
+    echo "== ssh version check (uses -V not --version) =="; \
+    if ! ssh -V >/dev/null 2>&1; then \
+        echo "FATAL sanity: ssh -V did not exit 0" >&2; exit 1; \
+    fi; \
+    echo "== scp + ssh-add presence check (enforce-ssh-scp-host-and-key depends on both) =="; \
+    for cmd in scp ssh-add; do \
+        if ! command -v "$cmd" >/dev/null 2>&1; then \
+            echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
+        fi; \
+    done; \
     echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
     rm -rf /tmp/sanity-clone; \
     GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone; \
