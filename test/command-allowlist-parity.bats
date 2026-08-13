@@ -41,8 +41,21 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
     # "git" itself needs no allow entry (git still needs one for its other,
     # permitted invocations); only a deny that blocks the bare command
     # outright, e.g. Bash(sqlcmd *), does.
+    #
+    # NOTE for whoever implements #1315 (per-tool argument scoping for
+    # high-risk denied/allowed tools): a future narrow allow override
+    # alongside a whole-command deny for the same tool (e.g. a scoped
+    # Bash(rm -v *) allow next to a Bash(rm *) deny) will trip the "extra"
+    # check below, since a wholly-denied name is excluded from `expected`.
+    # That is a deliberate exception this check cannot yet express - revisit
+    # this logic together with whatever scoping design #1315 lands on.
     deny_names=$(jq -r '.permissions.deny[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )*]+)( ?\*)?\)$/\1/p' | sort -u)
-    settings_allow_names=$(jq -r '.permissions.allow[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )]+).*/\1/p' | sort -u)
+    # Extraction excludes '*' from the name (so a no-space Bash(name*) allow
+    # entry isn't captured as "name*") and strips any leading path (so a
+    # path-qualified entry like Bash(/usr/bin/git status) - a form
+    # command-allowlist's own header documents as legitimate, matched by
+    # basename - reduces to "git" instead of "/usr/bin/git").
+    settings_allow_names=$(jq -r '.permissions.allow[]' "${SETTINGS}" | sed -nE 's/^Bash\(([^ )*]+).*/\1/p' | sed -E 's|.*/||' | sort -u)
 
     # A name genuinely needs a permissions.allow entry only if command-allowlist
     # permits it AND command-blocklist doesn't shadow it into a no-op (blocklist
@@ -58,15 +71,22 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
     # just the missing-entry direction.
     extra=$(comm -13 <(printf '%s\n' "${expected}") <(printf '%s\n' "${settings_allow_names}"))
 
+    # Report both directions in the same run - neither check short-circuits
+    # the other, so simultaneous missing+extra drift is never masked behind
+    # a single re-run.
+    local failed=0
+
     if [ -n "${missing}" ]; then
         echo "command-allowlist name(s) with no matching claude-settings.json permissions.allow entry - add Bash(<name> ...) there (or, if deliberately excluded, add it to command-blocklist, or to permissions.deny as a whole-command Bash(<name> *) block, and document why in ai/local/claude-hooks.instructions.md):" >&2
         echo "${missing}" >&2
-        return 1
+        failed=1
     fi
 
     if [ -n "${extra}" ]; then
         echo "claude-settings.json permissions.allow name(s) with no command-allowlist entry to justify them (stale after a command-allowlist removal, or a contradiction with command-blocklist/permissions.deny) - remove the entry, or add the name back to command-allowlist if it's still meant to be usable:" >&2
         echo "${extra}" >&2
-        return 1
+        failed=1
     fi
+
+    [ "${failed}" -eq 0 ]
 }
