@@ -203,14 +203,32 @@ command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the c
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One line per CallExpr: every word that is a single plain literal is
-# emitted verbatim; anything else (quoted text, substitutions, expansions)
-# is represented as a marker byte. Layer 0 of reject-obfuscated-commands
-# (which runs before this hook) guarantees a real 0x01 byte can never appear
-# in the input, so the marker is unambiguous and opaque to the checks below.
+# One line per CallExpr: every word that is a single plain literal - bare
+# (git -C X) or wrapped in one layer of quoting with no expansion inside it
+# ("git" -C "X", 'git' -C 'X') - is emitted verbatim; anything else (a
+# substitution, an expansion, or quoting that mixes literal text with either
+# of those, e.g. "dns-01.$HOST") is represented as a marker byte. Layer 0 of
+# reject-obfuscated-commands (which runs before this hook) guarantees a real
+# 0x01 byte can never appear in the input, so the marker is unambiguous and
+# opaque to the checks below. Unwrapping exactly one layer of quoting here
+# matters in practice - quoting a hostname/path is entirely ordinary style,
+# not an obfuscation attempt, and without this a call as plain as
+# `ssh "dns-01.lan"` would be misclassified as non-literal and blocked
+# (round 1 code review).
 calls=$(printf '%s' "$ast" | jq -r --arg marker "$MARKER" '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else $marker end ] |
+  [ .Args[] | literal_value // $marker ] |
   join("\t")')
 
 while IFS= read -r call_line; do
@@ -260,29 +278,37 @@ while IFS= read -r call_line; do
 
     elif [ "$tok" = "scp" ] || [[ "$tok" == */scp ]]; then
       k=$((i + 1))
+      # Once true, every remaining word is a positional source/target - even
+      # one that happens to start with '-' (a real filename) - never a flag
+      # again, matching real scp's own end-of-options handling. Before this
+      # was tracked, `scp -- -oddfile.txt user@host:/tmp/` still ran
+      # "-oddfile.txt" through the flag classifier and blocked on it (round
+      # 1 code review) - `--` was consumed but had no further effect.
+      literal_from_here=0
       while [ "$k" -lt "${#words[@]}" ]; do
         w="${words[$k]}"
-        case "$w" in
-          "$MARKER")
-            block 'scp argument could not be verified (non-literal argument)'
-            ;;
-          --)
-            k=$((k + 1))
-            continue
-            ;;
-          -*)
-            classify_flag scp "$w"
-            continue
-            ;;
-          *)
-            host=$(scp_target_host "$w")
-            if [ -n "$host" ]; then
-              host_allowed "$host" || block "scp target host '${host}' is not in the allowed .lan network"
-              require_ssh_key
-            fi
-            k=$((k + 1))
-            ;;
-        esac
+        if [ "$w" = "$MARKER" ]; then
+          block 'scp argument could not be verified (non-literal argument)'
+        fi
+        if [ "$literal_from_here" = 0 ] && [ "$w" = "--" ]; then
+          literal_from_here=1
+          k=$((k + 1))
+          continue
+        fi
+        if [ "$literal_from_here" = 0 ]; then
+          case "$w" in
+            -*)
+              classify_flag scp "$w"
+              continue
+              ;;
+          esac
+        fi
+        host=$(scp_target_host "$w")
+        if [ -n "$host" ]; then
+          host_allowed "$host" || block "scp target host '${host}' is not in the allowed .lan network"
+          require_ssh_key
+        fi
+        k=$((k + 1))
       done
     fi
   done
