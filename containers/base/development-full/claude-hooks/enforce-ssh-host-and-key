@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# Restricts ssh to exactly the form `ssh user@host command...`, where host
+# must end in the .lan private-network suffix (e.g. dns-01.lan,
+# dns-01.dns.lan), and to sessions where a usable SSH key is actually
+# loaded - blocks any other form or destination, and blocks outright if no
+# key is available, rather than falling back to password auth.
+# Exit 2 = blocked, 0 = allowed.
+#
+# ssh is on claude-settings.json's blanket Bash(ssh *) permissions.allow,
+# and the danger it poses is in the *destination*, not the verb - a
+# permissions.json prefix pattern cannot express "except this host", so the
+# restriction lives here instead (see issue #1315). scp was originally
+# covered by this same hook too; removed entirely (from both this hook and
+# command-allowlist/permissions.allow) rather than fixed further - there is
+# no legitimate need for the agent's own Bash tool to transfer files
+# directly (file movement in this repo's workflow goes through git), and
+# scp's own [user@]host:path/scp:// grammar was the source of two confirmed
+# parsing bugs during this hook's early review rounds. See git history for
+# the removed scp logic if it's ever needed again.
+#
+# No flags of any kind are permitted - the allowed grammar is exactly `ssh
+# user@host command...`, enforced positionally rather than by classifying
+# and blocklisting individual flags. This removes an entire class of bug
+# this hook had in its first several review rounds: every one of them was
+# about disguising a *flag* (-o, -J, -F, ...) as something else via
+# quoting/escaping/expansion tricks. If flags aren't part of the grammar at
+# all, there is nothing to disguise - a word starting with '-' immediately
+# where the target is expected fails the target regex below outright, and
+# nothing else in the command is ever treated as ssh's own option.
+#
+# Only the target word (word 1, or word 2 if preceded by a known wrapper -
+# see WRAPPERS below) is ever content-inspected. Everything after it is the
+# remote command, which this hook does not restrict at all: the security
+# boundary this hook enforces is "which host, as which user" - what runs on
+# a host you're already only allowed to reach because it's .lan and a valid
+# key is loaded is not a boundary this hook is responsible for. This also
+# means a substitution/expansion inside the remote command portion (e.g.
+# `ssh user@host "echo $(date)"`) is fine to leave uninspected: $(date)
+# expands locally before ssh is ever invoked, and its result cannot change
+# which host gets connected to (the target word's position and content are
+# fixed by the grammar above, not derived from anything the command portion
+# contains).
+#
+# Target validation is a positive allowlist (TARGET_RE below), not a
+# blocklist of dangerous characters - deliberately, after three review
+# rounds of finding one more mechanism (backslash escaping, then ANSI-C
+# quoting, then brace/tilde/glob expansion) that could make shfmt's raw
+# source text differ from what bash actually executes. A strict allowlist
+# of exactly the characters a real "user@host.lan" needs (alphanumerics,
+# '.', '-', '_', '@') closes that whole class in one step: every one of
+# those problem characters (\ { } ~ * ? [ ]) is already outside the
+# allowed set, so no per-mechanism exclusion list is needed or maintained.
+#
+# Parses the command with shfmt (mvdan/sh) and walks the resulting AST, same
+# approach as the sibling enforce-git-dash-c/block-git-worktree hooks (see
+# enforce-git-dash-c's header for the full rationale) - text/regex scanning
+# for a hostname would miss obfuscated forms and false-positive on unrelated
+# text, so this only inspects actual ssh call expressions. Word extraction
+# uses a two-stage, delimiter-collision-free transport (base64-encode each
+# word, one per line, prefixed with a type tag) rather than joining words
+# with a plain character like tab: an earlier version of this hook joined
+# words with tab and calls with newline, which a real tab or newline byte
+# inside a legitimately single/double-quoted word (valid syntax, triggers
+# no bash expansion, not excluded by the target-regex check since it only
+# applies to the target word) could desync entirely - verified as a live,
+# complete bypass (no key required, no host check performed at all) before
+# this transport was replaced.
+#
+# Key precondition (checked once, lazily, only once a call is confirmed to
+# be a valid `ssh user@host.lan ...` invocation): this container never
+# mounts raw private key files - see CHANGELOG ("Replace ~/.ssh volume
+# mount with SSH agent socket forwarding so private key files are never
+# exposed inside the agent container") - so a "valid key" check here means
+# the forwarded ssh-agent (SSH_AUTH_SOCK) has at least one loaded identity
+# (`ssh-add -l` exits 0), the same local-state-only verification style as
+# the sibling enforce-git-identity hook's `gpg --list-secret-keys` check.
+# This does not attempt to prove the key would actually authenticate
+# against any particular host - only that key-based auth is configured at
+# all, so a call can never silently fall back to interactive password auth.
+#
+# Fails closed: shfmt missing, a jq failure, the command not parsing as
+# shell, a missing/malformed target, or no ssh-agent key available all
+# block the command.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+# Known wrapper names for the defense-in-depth `sudo ssh ...` check below —
+# mirrors the "Wrapper commands" section of command-blocklist, which is what
+# actually bans these upstream in the normal PreToolUse chain. Only the
+# fixed position immediately after a wrapper name is checked, so a wrapper
+# used with its own leading flags (`env FOO=bar ssh ...`) is not caught here
+# - not fixed, since every one of these names is already banned outright by
+# reject-obfuscated-commands regardless of what follows (see #1320, tracked
+# separately - this is a pre-existing, shared limitation across this hook
+# family, not something introduced here).
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_in() {
+  local needle="$1" straw
+  shift
+  for straw in "$@"; do
+    [ "$needle" = "$straw" ] && return 0
+  done
+  return 1
+}
+
+# Target must be exactly user@host, host ending in the .lan private-network
+# suffix. User and host charsets are deliberately narrow (see header) -
+# no whitespace, no shell metacharacters, no expansion-triggering
+# characters of any kind. Case-insensitive on the host: hostnames are
+# conventionally case-insensitive, so the value is lowercased before
+# matching rather than widening the character class itself.
+TARGET_RE='^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.lan$'
+
+target_allowed() {
+  local target_lc
+  target_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$target_lc" =~ $TARGET_RE ]]
+}
+
+MARKER='(non-literal)'
+
+# Only "already confirmed OK" is worth caching: require_ssh_key always exits
+# on failure (via block), so a failed check is never observed again to cache.
+key_ok=0
+require_ssh_key() {
+  [ "$key_ok" = 1 ] && return 0
+  if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1 && ssh-add -l >/dev/null 2>&1; then
+    key_ok=1
+    return 0
+  fi
+  block 'no usable SSH key is loaded in the forwarded ssh-agent - ssh requires key-based auth, not a password fallback'
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One compact JSON array per CallExpr, one per line: a word that is a single
+# plain literal - bare (ssh user@host) or wrapped in one layer of ordinary
+# quoting with no expansion inside it ("ssh" user@"host", 'ssh' 'user@host')
+# - is the JSON string value; anything else (a substitution, an expansion,
+# ANSI-C/locale quoting, or quoting that mixes literal text with either of
+# those) is JSON null. Compact (-c) mode makes call-line splitting safe even
+# when a word's own value contains a real newline, since JSON string
+# encoding always escapes one - see the header for why a plain per-word
+# text-join was not.
+calls=$(printf '%s' "$ast" | jq -c '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | literal_value ]
+') || block 'command structure could not be analyzed - failing closed'
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+
+  # Second stage: decode this one call's words out of the JSON array via a
+  # base64-per-line transport, which cannot collide with any word's real
+  # content regardless of what bytes it contains (the base64 alphabet
+  # excludes newline, and every non-null element is base64-encoded before
+  # being placed on its own line) - see the header for why the tab/newline
+  # text-join this replaced was unsafe.
+  words=()
+  while IFS= read -r entry; do
+    case "$entry" in
+      N) words+=("$MARKER") ;;
+      L:*) words+=("$(printf '%s' "${entry#L:}" | base64 -d 2>/dev/null)") ;;
+      *) words+=("$MARKER") ;; # unrecognised tag - fail closed, not silently drop
+    esac
+  done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
+
+  # Only the command-name position, and the position immediately after a
+  # known wrapper name in the command-name position, are checked - a token
+  # appearing anywhere else is an ordinary argument, not an ssh invocation
+  # (e.g. `grep -r ssh .`, `find . -name ssh`).
+  positions=(0)
+  is_in "${words[0]:-}" "${WRAPPERS[@]}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    [ "$tok" = "ssh" ] || [[ "$tok" == */ssh ]] || continue
+
+    target="${words[$((i + 1))]:-}"
+
+    if [ -z "$target" ]; then
+      block 'ssh requires a target - only "ssh user@host ..." is permitted'
+    fi
+    if [ "$target" = "$MARKER" ]; then
+      block 'ssh target could not be verified (non-literal argument)'
+    fi
+    case "$target" in
+      -*) block 'ssh flags are not permitted - only "ssh user@host ..." is permitted' ;;
+    esac
+    target_allowed "$target" || block "ssh target '${target}' is not in the allowed user@*.lan form"
+
+    require_ssh_key
+  done
+done <<<"$calls"
+
+exit 0

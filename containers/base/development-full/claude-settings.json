@@ -144,7 +144,6 @@
       "Bash(run-formatter *)",
       "Bash(run-psscriptanalyzer *)",
       "Bash(run-stylelint *)",
-      "Bash(scp *)",
       "Bash(sed *)",
       "Bash(shellcheck *)",
       "Bash(shfmt *)",
@@ -240,7 +239,7 @@
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-ssh-scp-host-and-key"
+            "command": "$HOME/.claude/hooks/enforce-ssh-host-and-key"
           },
           {
             "type": "command",

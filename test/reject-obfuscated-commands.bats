@@ -38,11 +38,6 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
-@test "scp is on the command-allowlist and is allowed" {
-    run_hook "scp file.txt user@host:/tmp/"
-    [ "${status}" -eq 0 ]
-}
-
 @test "the bracket test idiom is allowed (issue #1282)" {
     run_hook "[ -d /proc/2094 ]"
     [ "${status}" -eq 0 ]
@@ -55,6 +50,12 @@ run_hook() {
 
 @test "kill is still not on the command-allowlist and is blocked" {
     run_hook "kill -0 2094"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "scp is not on the command-allowlist and is blocked (#1315 - removed, no legitimate need)" {
+    run_hook "scp file.txt user@dns-01.lan:/tmp/"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'not on the known-good command allowlist'* ]]
 }
