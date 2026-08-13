@@ -109,8 +109,6 @@
       "Bash(find *.database*)",
       "Read(~/.database)",
       "Read(**/.database)",
-      "Write(~/.database)",
-      "Write(**/.database)",
       "Edit(~/.database)",
       "Edit(**/.database)"
     ]
