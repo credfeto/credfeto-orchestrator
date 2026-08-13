@@ -253,6 +253,15 @@
             "command": "block-no-verify"
           }
         ]
+      },
+      {
+        "matcher": "EnterWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/block-git-worktree"
+          }
+        ]
       }
     ]
   },

@@ -3,7 +3,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-background-for-long-running-commands`.
+Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-background-for-long-running-commands`. `block-git-worktree` is also wired to a second, separate `PreToolUse` entry matching the native `EnterWorktree` tool (own `"matcher": "EnterWorktree"`, not part of the `Bash` chain above) — see its own section below.
 
 ## Prefer auto-correction over blocking, when it's a genuine correction
 
@@ -51,6 +51,8 @@ Parses each Bash command with `shfmt` and blocks any `git` invocation (including
 ## block-git-worktree
 
 Runs after `enforce-git-dash-c`. Blocks `git worktree add` (creating a new linked worktree) — a linked worktree splits repo state across multiple checkouts sharing one object store and one set of refs, which does not compose with this project's assumption of one checkout per repo directory. An errant `git worktree add` previously left a primary checkout registered as bare with no work tree of its own, breaking `git pull`/`git status` there until it was manually repaired. Other worktree subcommands (`list`/`remove`/`prune`/`lock`/`unlock`/`move`/`repair`/...) are inspection or cleanup of worktrees that already exist and remain allowed. Uses the same shfmt-parsed AST approach as `enforce-git-dash-c` and fails closed the same way. No safe auto-correct: `add` is a categorical policy block, not a syntax mistake, and there's no equivalent allowed command to substitute - the suggested alternative (a normal branch checkout) requires the agent to choose a branch name/target itself.
+
+Also registered in `claude-settings.json` under its own `"matcher": "EnterWorktree"` `PreToolUse` entry, covering Claude Code's native `EnterWorktree` tool — a first-class tool that performs the equivalent of `git worktree add` directly, with no shell command string for the shfmt/AST parsing above to inspect (`EnterWorktree` was previously invisible to this hook entirely, since it was only wired to the `Bash` matcher; #1322). The same script dispatches on the hook payload's own `tool_name` field: an `EnterWorktree` call is allowed only when it is entering a worktree that already exists (a non-empty `path` and no `name`); every create-shaped combination is blocked (no `name`/`path` at all, `name` only, an empty `path`, or `name`+`path` both set — the last is malformed per the tool's own "mutually exclusive" contract and is failed closed rather than guessed at). `ExitWorktree` gets no equivalent guardrail: per its own tool description it is scoped to worktrees the *current session* created via `EnterWorktree`, is a documented no-op otherwise, and is inspection/cleanup-shaped like the already-allowed `git worktree` subcommands above.
 
 ## block-dotnet-tool-install
 

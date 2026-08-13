@@ -3,6 +3,19 @@
 # linked worktree. Other worktree subcommands (list/remove/prune/lock/
 # unlock/move/repair/...) are inspection or cleanup of worktrees that
 # already exist and are left alone.
+#
+# Also registered (in claude-settings.json) against Claude Code's native
+# EnterWorktree tool, a first-class tool that performs the equivalent of
+# `git worktree add` directly — no shell command string involved, so the
+# usual shfmt/AST parsing below does not apply to it. That call shape is
+# dispatched on up front, via the hook payload's own .tool_name field: block
+# it unless it is entering a worktree that already exists (a non-empty
+# `path` argument and no `name`); creating one (a `name` argument, no `path`,
+# or neither) is blocked, matching the shell form's create-vs-inspect
+# distinction. A payload that supplies both `name` and `path` is malformed
+# per EnterWorktree's own "mutually exclusive" contract, and is blocked
+# rather than guessed at, consistent with this hook's fail-closed posture.
+#
 # Exit 2 = blocked, 0 = allowed.
 #
 # Git worktrees split repo state across multiple linked checkouts that share
@@ -21,7 +34,9 @@
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
 # categorically before this hook ever runs. Anything here that is not a
-# plain literal word is deliberately treated as opaque.
+# plain literal word is deliberately treated as opaque. (This does not apply
+# to the EnterWorktree branch above, whose input is already structured JSON,
+# not a shell command line.)
 #
 # Fails closed: shfmt missing or the command not parsing as shell blocks
 # the command.
@@ -51,6 +66,32 @@ is_wrapper() {
 }
 
 input=$(cat)
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
+
+if [ "$tool_name" = "EnterWorktree" ]; then
+  # Structured JSON input, not a shell command line - no shfmt parsing
+  # needed. Allowed only when entering an existing worktree: a non-empty
+  # string `path` and no string-valued `name`. Every create-shaped
+  # combination is blocked: no `name`/`path` (random-name create), `name`
+  # only, an empty `path`, and `name`+`path` both set (malformed per
+  # EnterWorktree's own "mutually exclusive" contract - failed closed
+  # rather than guessed at). Explicit `type == "string"` checks, not just
+  # `length` (which is also valid on arrays/objects/numbers and treats a
+  # JSON `false` the same as an absent key via `//`) - failing closed on
+  # any non-string `name`/`path` rather than letting jq's type coercion
+  # silently wave through a malformed payload as an allowed entry.
+  allowed=$(printf '%s' "$input" | jq -r '
+    (.tool_input.path) as $path |
+    (.tool_input.name) as $name |
+    (($path != null) and ($path | type == "string") and ($path | length > 0)) as $has_path |
+    (($name == null) or (($name | type == "string") and ($name | length == 0))) as $no_name |
+    $has_path and $no_name')
+  if [ "$allowed" != "true" ]; then
+    block 'EnterWorktree creates a new linked worktree, which is prohibited in this repo - use a normal branch checkout instead, or pass path to switch into a worktree that already exists'
+  fi
+  exit 0
+fi
+
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 [ -z "$raw_cmd" ] && exit 0
