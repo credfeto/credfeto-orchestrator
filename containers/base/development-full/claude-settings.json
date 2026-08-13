@@ -132,6 +132,7 @@
       "Bash(printf *)",
       "Bash(ps *)",
       "Bash(pwd)",
+      "Bash(pwd *)",
       "Bash(pylint *)",
       "Bash(python3 *)",
       "Bash(querydb *)",
