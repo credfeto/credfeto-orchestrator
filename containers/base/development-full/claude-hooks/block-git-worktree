@@ -78,8 +78,8 @@ if [ "$tool_name" = "EnterWorktree" ]; then
   allowed=$(printf '%s' "$input" | jq -r '
     ((.tool_input.path? // "") | length) as $plen |
     ((.tool_input.name? // "") | length) as $nlen |
-    if $plen > 0 and $nlen == 0 then "1" else "0" end')
-  if [ "$allowed" != "1" ]; then
+    $plen > 0 and $nlen == 0')
+  if [ "$allowed" != "true" ]; then
     block 'EnterWorktree creates a new linked worktree, which is prohibited in this repo - use a normal branch checkout instead, or pass path to switch into a worktree that already exists'
   fi
   exit 0
