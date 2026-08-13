@@ -152,6 +152,7 @@ COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/deve
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /home/developer/.claude/hooks/reject-obfuscated-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-scp-host-and-key /home/developer/.claude/hooks/enforce-ssh-scp-host-and-key
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /home/developer/.claude/hooks/enforce-background-for-long-running-commands
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
@@ -320,6 +321,10 @@ RUN set -e; \
         || { echo "FATAL sanity: block-dotnet-tool-install hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/block-dotnet-tool-install ] \
         || { echo "FATAL sanity: block-dotnet-tool-install hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-ssh-scp-host-and-key)" = "root:root 755" ] \
+        || { echo "FATAL sanity: enforce-ssh-scp-host-and-key hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/enforce-ssh-scp-host-and-key ] \
+        || { echo "FATAL sanity: enforce-ssh-scp-host-and-key hook is not executable" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-background-for-long-running-commands)" = "root:root 755" ] \
         || { echo "FATAL sanity: enforce-background-for-long-running-commands hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/enforce-background-for-long-running-commands ] \

