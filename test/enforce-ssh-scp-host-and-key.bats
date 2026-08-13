@@ -258,6 +258,39 @@ with_valid_key() {
     [[ "${output}" == *'non-literal argument'* ]]
 }
 
+@test "a bare backslash-escaped -o flag is not unwrapped as a plain literal, closing the round 3 bare-word bypass" {
+    with_valid_key
+    # ssh -\oProxyCommand=x, unquoted: bash's own word processing strips the
+    # backslash before ssh ever sees the argument, so the real, executed
+    # argument is -oProxyCommand=x - but shfmt's Lit.Value is the raw,
+    # pre-strip source text "-\oProxyCommand=x", which classify_flag's
+    # ${w:0:2} does not recognise as -o. Round 2's Dollar-only guard did not
+    # cover this (there is no quoting here at all, ANSI-C or otherwise).
+    run_hook 'ssh -\oProxyCommand=x dns-01.lan'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "a bare backslash before scp's -o flag is not unwrapped either" {
+    with_valid_key
+    run_hook 'scp \-oProxyCommand=x file.txt user@dns-01.lan:/tmp/'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
+@test "a single-quoted value containing a backslash is conservatively treated as non-literal" {
+    with_valid_key
+    # Single quotes are the one case where the raw backslash IS exactly what
+    # bash passes through unprocessed (no escape decoding happens inside
+    # '...' at all) - blocking it anyway is deliberately over-conservative,
+    # applying one uniform backslash guard across every branch rather than a
+    # different rule per quoting style, since a real .lan hostname never
+    # legitimately contains a backslash regardless.
+    run_hook "ssh 'dns-01\\.lan'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-literal argument'* ]]
+}
+
 @test "scp -- end-of-options switches to literal parsing, so a dash-prefixed filename after it is not treated as a flag" {
     with_valid_key
     run_hook "scp -- -oddfile.txt user@dns-01.lan:/tmp/"
