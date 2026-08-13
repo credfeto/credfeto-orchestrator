@@ -46,6 +46,8 @@ ping
 openssl
 
 # Linters / test tooling
+# (sqlcmd deliberately excluded - denied in claude-settings.json to prevent
+# reading .database credential files; keep it off this list too)
 shellcheck
 checkbashisms
 shfmt
@@ -55,7 +57,6 @@ yamllint
 markdownlint-cli2
 sqlfluff
 sqlite3
-sqlcmd
 jq
 
 # credfeto-global-pre-commit: pre-commit-hooks (pip package) console scripts,
@@ -109,6 +110,7 @@ grep
 find
 sed
 awk
+base64
 head
 tail
 sort
