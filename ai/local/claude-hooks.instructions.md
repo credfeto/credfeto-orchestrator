@@ -3,7 +3,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-background-for-long-running-commands`. `block-git-worktree` is also wired to a second, separate `PreToolUse` entry matching the native `EnterWorktree` tool (own `"matcher": "EnterWorktree"`, not part of the `Bash` chain above) — see its own section below.
+Local guardrail hooks live in `containers/base/development-full/claude-hooks/` and are wired into `~/.claude/settings.json` as `Bash` `PreToolUse` hooks, run in this order: `reject-obfuscated-commands`, `block-no-verify`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-ssh-scp-host-and-key`, `enforce-background-for-long-running-commands`. `block-git-worktree` is also wired to a second, separate `PreToolUse` entry matching the native `EnterWorktree` tool (own `"matcher": "EnterWorktree"`, not part of the `Bash` chain above) — see its own section below.
 
 ## Prefer auto-correction over blocking, when it's a genuine correction
 
@@ -57,6 +57,17 @@ Also registered in `claude-settings.json` under its own `"matcher": "EnterWorktr
 ## block-dotnet-tool-install
 
 Runs before `enforce-background-for-long-running-commands`. Blocks `dotnet tool install` (local or global — any flag combination) and `dotnet new tool-manifest`. This container's .NET global tools are pinned and baked into the image at build time (see the "dotnet tools" sanity check in `containers/base/development-full/Dockerfile`, which asserts an exact set of tool names via `dotnet tool list -g`); either command would add an unpinned, unreviewed tool outside that set, bypassing the dependency-selection review the pinned set went through. Other `dotnet tool` subcommands (`list`/`restore`/`uninstall`/`update`/`run`/`search`) and other `dotnet new` templates remain allowed. Uses the same shfmt-parsed AST approach as `block-git-worktree`/`enforce-git-dash-c` and fails closed the same way. No safe auto-correct: there's no pinned-tool substitute the hook could infer and inject on the agent's behalf - adding a new pinned tool is a reviewed image-build change, not something a command rewrite can do.
+
+## enforce-ssh-scp-host-and-key
+
+Runs after `block-dotnet-tool-install`, before `enforce-background-for-long-running-commands`. Restricts `ssh`/`scp` to two conditions, added because `claude-settings.json`'s `Bash(ssh *)`/`Bash(scp *)` allow entries are blanket - the danger both tools pose is in the *destination*, not the verb, which a `permissions.allow` prefix pattern cannot scope (see [issue #1315](https://github.com/credfeto/credfeto-orchestrator/issues/1315)):
+
+* **Host allowlist**: the target host must end in the `.lan` private-network suffix (e.g. `dns-01.lan`, `dns-01.dns.lan`), checked for both ssh's `[user@]host` form and scp's `[user@]host:path`/`scp://[user@]host[/path]` forms. `-o`/`-F`/`-J` (both tools) and `-D`/`-L`/`-R`/`-W`/`-w` (ssh only) are blocked outright rather than parsed, since each can redirect the connection or open a tunnel to a host this hook cannot see in the positional target argument (arbitrary config override, a jump host, a forwarded port to an arbitrary destination) - the same "cannot classify as safe, block outright" treatment `enforce-git-dash-c` gives `git config --file`/`--blob`.
+* **Key precondition**: a usable SSH key must be loaded in the forwarded ssh-agent (`ssh-add -l` exits 0 against `SSH_AUTH_SOCK`) before a call that resolves an actual target host is allowed - this container never mounts raw private key files (agent-socket forwarding only), so a call can never silently fall back to interactive password auth. Checked lazily, only once a target is actually resolved, so a target-less call like `ssh -V` is left alone.
+
+Uses the same shfmt-parsed AST approach as `enforce-git-dash-c`/`block-git-worktree`/`block-dotnet-tool-install` and fails closed the same way (missing `shfmt`, unparseable command, a non-literal target argument, or an unrecognised flag all block). No safe auto-correct: neither condition has a rewrite the hook could inject on the agent's behalf - a wrong host or a missing key are facts about the world, not something a command edit can fix.
+
+`gpg` is deliberately **not** on `command-allowlist`/`permissions.allow` at all (removed alongside this hook, also from #1315): the agent's own Bash tool has no legitimate reason to invoke it directly - commit signing goes through git's own internal `gpg` invocation (`user.signingkey`/`commit.gpgsign`), and the only direct `gpg` calls in this repo are the `enforce-git-identity` hook's own subprocess check and `entrypoint.sh`'s container-startup validation, neither of which is gated by `permissions.allow` in the first place.
 
 ## enforce-background-for-long-running-commands
 

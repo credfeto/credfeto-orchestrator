@@ -102,7 +102,6 @@
       "Bash(git config --local --get user.name)",
       "Bash(git config --local --get user.signingkey)",
       "Bash(git config --system --get core.hooks-path)",
-      "Bash(gpg *)",
       "Bash(grep *)",
       "Bash(hadolint *)",
       "Bash(head *)",
@@ -238,6 +237,10 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/block-dotnet-tool-install"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/enforce-ssh-scp-host-and-key"
           },
           {
             "type": "command",
