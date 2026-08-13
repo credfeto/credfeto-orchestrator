@@ -162,6 +162,7 @@
       "Bash(testdocker *)",
       "Bash(touch *)",
       "Bash(tr *)",
+      "Bash(trailing-whitespace-fixer *)",
       "Bash(trivy *)",
       "Bash(true)",
       "Bash(trufflehog *)",
