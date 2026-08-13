@@ -17,6 +17,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Allow base64 through the reject-obfuscated-commands hook allowlist
 - Remove sqlcmd from the reject-obfuscated-commands hook allowlist - it was still hook-permitted despite claude-settings.json already denying it, and that deny rule has no effect while --dangerously-skip-permissions is passed, so the hook layer was the only one actually blocking it
 - Extend the block-git-worktree Claude Code hook to also cover the native EnterWorktree tool, which previously bypassed the guardrail entirely since it performs the equivalent of git worktree add directly with no shell command for the hook to inspect, and type-check its name/path arguments rather than relying on length alone, which had let a non-string value slip past the allow check (#1322)
+- Remove gpg from the reject-obfuscated-commands hook allowlist and claude-settings.json's permissions.allow - the agent's own Bash tool never legitimately invokes gpg directly, since commit signing goes through git's internal gpg invocation and the enforce-git-identity hook's own subprocess check is unaffected by permissions.allow (#1315)
 ### Added
 - Add a block-git-worktree Claude Code hook to the development-full container, blocking git worktree add (worktree creation) while leaving list/remove/prune and other worktree subcommands allowed
 - Add an install-claude-hooks script that installs the development-full container's Claude Code settings.json and hooks into the current host user's ~/.claude (hooks symlinked back into the repo, settings.json path-rewritten for the host), so hooks can be exercised outside the container
@@ -32,6 +33,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Trust GitHub's Advanced Security (code scanning) bot as an automated reviewer/commenter, alongside the existing Copilot review bot
 - Container-build workflow job summaries now show the versions of each explicitly-installed tool (e.g. dotnet SDK LTS/STS versions), not just the pushed image tag.
 - Add test/command-allowlist-parity.bats, asserting every reject-obfuscated-commands command-allowlist entry has a matching claude-settings.json permissions.allow entry (unless blocklisted or explicitly denied); catches the class of drift a simplify-pass review found already shipped once in this same change
+- Add an enforce-ssh-scp-host-and-key Claude Code hook to the development-full container, restricting ssh/scp to hosts in the .lan private-network suffix and requiring a usable SSH key loaded in the forwarded ssh-agent before connecting, since the permissions.allow Bash(ssh *)/Bash(scp *) entries cannot express a per-host restriction (#1315)
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
