@@ -10,7 +10,11 @@
 # listed command may actually do.
 
 ssh
-scp
+# (scp deliberately excluded - no legitimate need for the agent's own Bash
+# tool to transfer files directly; file movement in this repo's workflow
+# goes through git, and scp's own [user@]host:path grammar was the source
+# of two of #1315's confirmed hook bugs - see #1315 and enforce-ssh-host-
+# and-key's header)
 
 # Version control / forge
 git
