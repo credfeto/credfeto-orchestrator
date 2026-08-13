@@ -71,14 +71,21 @@ tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
 if [ "$tool_name" = "EnterWorktree" ]; then
   # Structured JSON input, not a shell command line - no shfmt parsing
   # needed. Allowed only when entering an existing worktree: a non-empty
-  # `path` and no `name`. Every create-shaped combination is blocked: no
-  # `name`/`path` (random-name create), `name` only, an empty `path`, and
-  # `name`+`path` both set (malformed per EnterWorktree's own "mutually
-  # exclusive" contract - failed closed rather than guessed at).
+  # string `path` and no string-valued `name`. Every create-shaped
+  # combination is blocked: no `name`/`path` (random-name create), `name`
+  # only, an empty `path`, and `name`+`path` both set (malformed per
+  # EnterWorktree's own "mutually exclusive" contract - failed closed
+  # rather than guessed at). Explicit `type == "string"` checks, not just
+  # `length` (which is also valid on arrays/objects/numbers and treats a
+  # JSON `false` the same as an absent key via `//`) - failing closed on
+  # any non-string `name`/`path` rather than letting jq's type coercion
+  # silently wave through a malformed payload as an allowed entry.
   allowed=$(printf '%s' "$input" | jq -r '
-    ((.tool_input.path? // "") | length) as $plen |
-    ((.tool_input.name? // "") | length) as $nlen |
-    $plen > 0 and $nlen == 0')
+    (.tool_input.path) as $path |
+    (.tool_input.name) as $name |
+    (($path != null) and ($path | type == "string") and ($path | length > 0)) as $has_path |
+    (($name == null) or (($name | type == "string") and ($name | length == 0))) as $no_name |
+    $has_path and $no_name')
   if [ "$allowed" != "true" ]; then
     block 'EnterWorktree creates a new linked worktree, which is prohibited in this repo - use a normal branch checkout instead, or pass path to switch into a worktree that already exists'
   fi

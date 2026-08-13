@@ -210,6 +210,26 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 2 ]
 }
 
+@test "EnterWorktree with name set to JSON false is blocked, not treated as absent" {
+    run_hook_payload '{"tool_name":"EnterWorktree","tool_input":{"name":false,"path":"/repo/.claude/worktrees/x"}}'
+    [ "${status}" -eq 2 ]
+}
+
+@test "EnterWorktree with a non-string (array) path is blocked, not treated as a valid path" {
+    run_hook_payload '{"tool_name":"EnterWorktree","tool_input":{"path":["a","b","c"]}}'
+    [ "${status}" -eq 2 ]
+}
+
+@test "EnterWorktree with a non-string (number) path is blocked" {
+    run_hook_payload '{"tool_name":"EnterWorktree","tool_input":{"path":5}}'
+    [ "${status}" -eq 2 ]
+}
+
+@test "EnterWorktree with a non-string (object) name is blocked" {
+    run_hook_payload '{"tool_name":"EnterWorktree","tool_input":{"name":{"foo":"bar"},"path":"/repo/.claude/worktrees/x"}}'
+    [ "${status}" -eq 2 ]
+}
+
 @test "a Bash call is unaffected by the EnterWorktree dispatch branch" {
     run_hook "git worktree list"
     [ "${status}" -eq 0 ]
