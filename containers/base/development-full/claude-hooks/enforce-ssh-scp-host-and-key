@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+# Restricts ssh and scp to (a) targets in the .lan private-network suffix
+# (e.g. dns-01.lan, dns-01.dns.lan) and (b) sessions where a usable SSH key
+# is actually loaded - blocks any other destination, and blocks outright if
+# no key is available, rather than falling back to password auth.
+# Exit 2 = blocked, 0 = allowed.
+#
+# ssh/scp are on claude-settings.json's blanket Bash(ssh *)/Bash(scp *)
+# permissions.allow, and the danger both pose is in the *destination*, not
+# the verb - a permissions.json prefix pattern cannot express "except this
+# host", so the restriction lives here instead (see issue #1315). Parses the
+# command with shfmt (mvdan/sh) and walks the resulting AST, same approach as
+# the sibling enforce-git-dash-c/block-git-worktree hooks (see
+# enforce-git-dash-c's header for the full rationale) - text/regex scanning
+# for a hostname would miss obfuscated forms and false-positive on unrelated
+# text, so this only inspects actual ssh/scp call expressions.
+#
+# Key precondition (checked once, lazily, the first time a call actually
+# resolves a target host to verify - a target-less call like `ssh -V` never
+# connects anywhere, so it is left alone): this container never mounts raw
+# private key files - see CHANGELOG ("Replace ~/.ssh volume mount with SSH
+# agent socket forwarding so private key files are never exposed inside the
+# agent container") - so a "valid key" check here means the forwarded
+# ssh-agent (SSH_AUTH_SOCK) has at least one loaded identity (`ssh-add -l`
+# exits 0), the same local-state-only verification style as the sibling
+# enforce-git-identity hook's `gpg --list-secret-keys` check. This does not
+# attempt to prove the key would actually authenticate against any
+# particular host - only that key-based auth is configured at all, so a
+# call can never silently fall back to interactive password auth.
+#
+# Host extraction approximates each tool's own option parser rather than
+# reusing a shared one (ssh and scp accept different flag sets), skipping
+# every known non-value flag, and every known value flag together with its
+# separate-token value, before treating the first remaining non-flag word as
+# the target. A handful of flags are blocked outright instead of parsed -
+# -o/-F/-J (ssh and scp) and -D/-L/-R/-W/-w (ssh only) - because each can
+# redirect the connection to, or open a tunnel toward, a host this hook
+# cannot see in the positional target argument (arbitrary config overrides,
+# a jump host, a forwarded port to an arbitrary destination), the same
+# "cannot classify as safe, block outright" treatment enforce-git-dash-c
+# gives `git config --file`/`--blob`. Any unrecognised flag, and any target
+# that isn't a single plain-literal word, fails closed (blocked) too, rather
+# than guessed at - matching this hook family's convention.
+#
+# Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
+# NOT this hook's job - reject-obfuscated-commands rejects those
+# categorically before this hook ever runs. Anything here that is not a
+# plain literal word is deliberately treated as opaque.
+#
+# Fails closed: shfmt missing, the command not parsing as shell, or no
+# ssh-agent key available all block the command.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+# Known wrapper names for the defense-in-depth `sudo ssh ...` check below —
+# mirrors the "Wrapper commands" section of command-blocklist, which is what
+# actually bans these upstream in the normal PreToolUse chain.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+is_in() {
+  local needle="$1" straw
+  shift
+  for straw in "$@"; do
+    [ "$needle" = "$straw" ] && return 0
+  done
+  return 1
+}
+
+# Flags that redirect the connection/tunnel somewhere this hook cannot see
+# and verify - blocked outright rather than parsed. -o covers arbitrary
+# ssh_config overrides (Hostname, ProxyCommand, ProxyJump, ...); -F an
+# arbitrary alternate config file that could set the same; -J an explicit
+# jump host; -D/-L/-R/-W/-w open a tunnel to a host of their own.
+SSH_BLOCKED_FLAGS=(-o -F -J -D -L -R -W -w)
+SCP_BLOCKED_FLAGS=(-o -F -J)
+
+# Remaining ssh flags that take a value as a separate token when not
+# attached to the flag itself (e.g. "-p 2222" vs. attached "-p2222" - both
+# handled, since an attached value never produces a separate token to skip).
+SSH_VALUE_FLAGS=(-B -b -c -E -e -I -i -l -m -O -p -Q -S)
+# Remaining scp value flags, same convention.
+SCP_VALUE_FLAGS=(-c -i -l -P -S -X)
+
+# Host is allowed only if it ends in the .lan private-network suffix
+# (case-insensitive - hostnames are conventionally case-insensitive).
+host_allowed() {
+  local host_lc
+  host_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case "$host_lc" in
+    *.lan) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Extracts the host from an scp positional word, or prints nothing if the
+# word looks like a local path. Forms: "scp://[user@]host[:port][/path]",
+# "[user@]host:path". A bare "host:path" (no user@) is only treated as
+# remote if the part before the first ':' contains no '/' - a local relative
+# path with a colon in it (e.g. "./a:b") is not mistaken for a host.
+scp_target_host() {
+  local w="$1" h prefix
+  case "$w" in
+    scp://*)
+      h="${w#scp://}"
+      h="${h#*@}"
+      h="${h%%/*}"
+      h="${h%%:*}"
+      printf '%s' "$h"
+      ;;
+    *@*:*)
+      h="${w#*@}"
+      printf '%s' "${h%%:*}"
+      ;;
+    *:*)
+      prefix="${w%%:*}"
+      case "$prefix" in
+        */* | . | ..) ;; # local path shape, not a host
+        *) printf '%s' "$prefix" ;;
+      esac
+      ;;
+  esac
+}
+
+MARKER=$'\x01'
+
+key_checked=0
+key_ok=0
+require_ssh_key() {
+  if [ "$key_checked" = 0 ]; then
+    key_checked=1
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1 && ssh-add -l >/dev/null 2>&1; then
+      key_ok=1
+    fi
+  fi
+  [ "$key_ok" = 1 ] || block 'no usable SSH key is loaded in the forwarded ssh-agent - ssh/scp requires key-based auth, not a password fallback'
+}
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One line per CallExpr: every word that is a single plain literal is
+# emitted verbatim; anything else (quoted text, substitutions, expansions)
+# is represented as a marker byte. Layer 0 of reject-obfuscated-commands
+# (which runs before this hook) guarantees a real 0x01 byte can never appear
+# in the input, so the marker is unambiguous and opaque to the checks below.
+calls=$(printf '%s' "$ast" | jq -r --arg marker "$MARKER" '
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else $marker end ] |
+  join("\t")')
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+  IFS=$'\t' read -ra words <<<"$call_line"
+
+  # Only the command-name position, and the position immediately after a
+  # known wrapper name in the command-name position, are checked - a token
+  # appearing anywhere else is an ordinary argument, not an ssh/scp
+  # invocation (e.g. `grep -r ssh .`, `find . -name scp`).
+  positions=(0)
+  is_wrapper "${words[0]}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+
+    if [ "$tok" = "ssh" ] || [[ "$tok" == */ssh ]]; then
+      k=$((i + 1))
+      target=""
+      while [ "$k" -lt "${#words[@]}" ]; do
+        w="${words[$k]}"
+        case "$w" in
+          "$MARKER")
+            block 'ssh argument could not be verified (non-literal argument)'
+            ;;
+          --)
+            k=$((k + 1))
+            target="${words[$k]:-}"
+            break
+            ;;
+          -*)
+            flag="${w:0:2}"
+            if [ "$w" = "$flag" ] && is_in "$flag" "${SSH_BLOCKED_FLAGS[@]}"; then
+              block "ssh ${flag} is not permitted - it can redirect the connection to a host this check cannot verify"
+            fi
+            if [ "$w" = "$flag" ] && is_in "$flag" "${SSH_VALUE_FLAGS[@]}"; then
+              k=$((k + 2))
+            else
+              k=$((k + 1))
+            fi
+            continue
+            ;;
+          *)
+            target="$w"
+            break
+            ;;
+        esac
+      done
+
+      if [ -n "$target" ]; then
+        require_ssh_key
+        host="${target##*@}"
+        host_allowed "$host" || block "ssh target host '${host}' is not in the allowed .lan network"
+      fi
+
+    elif [ "$tok" = "scp" ] || [[ "$tok" == */scp ]]; then
+      k=$((i + 1))
+      while [ "$k" -lt "${#words[@]}" ]; do
+        w="${words[$k]}"
+        case "$w" in
+          "$MARKER")
+            block 'scp argument could not be verified (non-literal argument)'
+            ;;
+          --)
+            k=$((k + 1))
+            continue
+            ;;
+          -*)
+            flag="${w:0:2}"
+            if [ "$w" = "$flag" ] && is_in "$flag" "${SCP_BLOCKED_FLAGS[@]}"; then
+              block "scp ${flag} is not permitted - it can redirect the connection to a host this check cannot verify"
+            fi
+            if [ "$w" = "$flag" ] && is_in "$flag" "${SCP_VALUE_FLAGS[@]}"; then
+              k=$((k + 2))
+            else
+              k=$((k + 1))
+            fi
+            continue
+            ;;
+          *)
+            host=$(scp_target_host "$w")
+            if [ -n "$host" ]; then
+              require_ssh_key
+              host_allowed "$host" || block "scp target host '${host}' is not in the allowed .lan network"
+            fi
+            k=$((k + 1))
+            ;;
+        esac
+      done
+    fi
+  done
+done <<<"$calls"
+
+exit 0

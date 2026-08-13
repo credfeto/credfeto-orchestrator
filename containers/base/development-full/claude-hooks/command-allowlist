@@ -15,7 +15,9 @@ scp
 # Version control / forge
 git
 gh
-gpg
+# (gpg deliberately excluded - only used for commit signing, which git
+# invokes internally via user.signingkey/commit.gpgsign; the agent's own
+# Bash tool has no legitimate reason to run gpg directly, see #1315)
 pre-commit
 pre-commit-check
 
