@@ -34,7 +34,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Trust GitHub's Advanced Security (code scanning) bot as an automated reviewer/commenter, alongside the existing Copilot review bot
 - Container-build workflow job summaries now show the versions of each explicitly-installed tool (e.g. dotnet SDK LTS/STS versions), not just the pushed image tag.
 - Add test/command-allowlist-parity.bats, asserting every reject-obfuscated-commands command-allowlist entry has a matching claude-settings.json permissions.allow entry (unless blocklisted or explicitly denied); catches the class of drift a simplify-pass review found already shipped once in this same change
-- Add an enforce-ssh-scp-host-and-key Claude Code hook to the development-full container, restricting ssh/scp to hosts in the .lan private-network suffix and requiring a usable SSH key loaded in the forwarded ssh-agent before connecting, since the permissions.allow Bash(ssh *)/Bash(scp *) entries cannot express a per-host restriction (#1315)
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
