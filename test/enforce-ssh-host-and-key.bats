@@ -82,6 +82,55 @@ with_valid_key() {
     [ "${status}" -eq 0 ]
 }
 
+# --- round 7: a flag re-injected via the post-target word -----------------
+# ssh's own argv parsing does not stop consuming options at the destination
+# word - it keeps parsing the word(s) immediately following it as its own
+# flags until the first non-option word (confirmed against real ssh via
+# `ssh -G`). These pin the fix: only the single word right after the target
+# is checked, not the whole remote command.
+
+@test "a -o flag immediately after the target is rejected" {
+    with_valid_key
+    run_hook "ssh user@dns-01.lan -oProxyCommand=id"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'flag immediately after the target'* ]]
+}
+
+@test "a -J flag immediately after the target is rejected" {
+    with_valid_key
+    run_hook "ssh user@dns-01.lan -J attacker.example.com"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'flag immediately after the target'* ]]
+}
+
+@test "a -F flag immediately after the target is rejected" {
+    with_valid_key
+    run_hook "ssh user@dns-01.lan -F /tmp/evil_config"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'flag immediately after the target'* ]]
+}
+
+@test "the space-separated -o form immediately after the target is rejected" {
+    with_valid_key
+    run_hook "ssh user@dns-01.lan -o ProxyCommand=id"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'flag immediately after the target'* ]]
+}
+
+@test "a non-literal word immediately after the target is rejected" {
+    with_valid_key
+    # shellcheck disable=SC2016  # literal $(x) - must reach the hook unexpanded, not run in this shell
+    run_hook 'ssh user@dns-01.lan $(x)'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be verified'* ]]
+}
+
+@test "a flag two words after the target (not immediately after) is not caught - matches ssh's own non-permuting stop" {
+    with_valid_key
+    run_hook "ssh user@dns-01.lan echo -oProxyCommand=id"
+    [ "${status}" -eq 0 ]
+}
+
 # --- host validation -------------------------------------------------------
 
 @test "a nested .dns.lan subdomain is allowed" {
