@@ -97,6 +97,12 @@ with_valid_key() {
     [[ "${output}" == *'not in the allowed user@'* ]]
 }
 
+@test "an underscore in the user portion is allowed - part of TARGET_RE's positive charset" {
+    with_valid_key
+    run_hook "ssh service_account@dns-01.lan"
+    [ "${status}" -eq 0 ]
+}
+
 @test "host matching is case-insensitive" {
     with_valid_key
     run_hook "ssh user@DNS-01.LAN"
