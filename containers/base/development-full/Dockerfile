@@ -152,6 +152,7 @@ COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/deve
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /home/developer/.claude/hooks/reject-obfuscated-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /home/developer/.claude/hooks/enforce-ssh-host-and-key
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /home/developer/.claude/hooks/enforce-background-for-long-running-commands
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
@@ -234,7 +235,7 @@ RUN { \
 # Fails the build (not the agent at runtime) if any required binary is missing,
 # HTTPS git clone is broken, dotnet tools are absent, or the pre-commit
 # hook wiring is incorrect.
-# hadolint ignore=DL3059
+# hadolint ignore=DL3059,DL3001
 RUN set -e; \
     echo "== binary presence + version probe (stage 1+2+3 inherited binaries) =="; \
     for cmd in git gh dotnet python3 gpg curl jq sqlite3 \
@@ -275,6 +276,14 @@ RUN set -e; \
     echo "== gpg + sqlite3 self-check =="; \
     echo "probe" | gpg --dearmor >/dev/null 2>&1 || gpg --version >/dev/null; \
     sqlite3 :memory: "SELECT 1;" | grep -q 1; \
+    echo "== ssh version check (uses -V not --version) =="; \
+    if ! ssh -V >/dev/null 2>&1; then \
+        echo "FATAL sanity: ssh -V did not exit 0" >&2; exit 1; \
+    fi; \
+    echo "== ssh-add presence check (enforce-ssh-host-and-key depends on it) =="; \
+    if ! command -v ssh-add >/dev/null 2>&1; then \
+        echo "FATAL sanity: required binary 'ssh-add' is missing" >&2; exit 1; \
+    fi; \
     echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
     rm -rf /tmp/sanity-clone; \
     GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone; \
@@ -320,6 +329,10 @@ RUN set -e; \
         || { echo "FATAL sanity: block-dotnet-tool-install hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/block-dotnet-tool-install ] \
         || { echo "FATAL sanity: block-dotnet-tool-install hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-ssh-host-and-key)" = "root:root 755" ] \
+        || { echo "FATAL sanity: enforce-ssh-host-and-key hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/enforce-ssh-host-and-key ] \
+        || { echo "FATAL sanity: enforce-ssh-host-and-key hook is not executable" >&2; exit 1; }; \
     [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-background-for-long-running-commands)" = "root:root 755" ] \
         || { echo "FATAL sanity: enforce-background-for-long-running-commands hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/enforce-background-for-long-running-commands ] \

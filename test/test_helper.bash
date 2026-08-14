@@ -193,6 +193,24 @@ make_stub_multiline() {
     chmod +x "${script}"
 }
 
+# Pipes a Claude Code PreToolUse hook payload for the given Bash command into
+# the hook script at $HOOK (a *.bats file under test must set that variable
+# before calling this). status 0 = allowed, 2 = blocked (matches every
+# PreToolUse hook's own contract). run_in_background is omitted from the
+# payload entirely unless explicitly passed as $2, mirroring a Bash tool call
+# that never set it - only enforce-background-for-long-running-commands
+# actually reads that field, but every hook is fed the same payload shape.
+run_hook() {
+    local command="$1" run_in_background="${2:-}"
+    local payload
+    if [ -n "${run_in_background}" ]; then
+        payload=$(jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}')
+    else
+        payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
+    fi
+    run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
+}
+
 # Sets up a local bare "remote" and clones it into clone_dir (defaults to REPO_WORK_DIR) so tests
 # can perform real git operations without network calls. Outputs the bare remote's path on stdout.
 setup_local_git_remote() {
