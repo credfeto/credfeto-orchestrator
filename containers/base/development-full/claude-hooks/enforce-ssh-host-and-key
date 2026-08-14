@@ -144,8 +144,10 @@ require_ssh_key() {
   block 'no usable SSH key is loaded in the forwarded ssh-agent - ssh requires key-based auth, not a password fallback'
 }
 
+command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
 input=$(cat)
-raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
 
 [ -z "$raw_cmd" ] && exit 0
 
