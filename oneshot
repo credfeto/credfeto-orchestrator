@@ -659,9 +659,13 @@ main() {
                 plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
                 # plan_approved_or_later is the ordinal-aware sibling of plan_approved above — see
                 # its header comment in lib/workflow-board for why the two must stay separate.
-                # plan_approved itself keeps feeding fingerprint_issue_json (below) and
-                # issue_should_advance_unchanged unchanged. Computed eagerly here (not lazily at
-                # each use) because it is needed unconditionally just below, for every Issue.
+                # plan_approved itself keeps feeding only fingerprint_issue_json (below), whose
+                # exact-match semantics are baked into every saved fingerprint and must never
+                # change. Every other decision below — including issue_should_advance_unchanged —
+                # uses plan_approved_or_later instead, so a card that has moved on past Approved is
+                # never treated as still-unapproved partway through this same if/elif chain.
+                # Computed eagerly here (not lazily at each use) because it is needed
+                # unconditionally just below, for every Issue.
                 plan_approved_or_later=$(issue_plan_approved_or_later "${item_id}")
                 # The plan-block self-heal marker (#1286) only needs to survive across a human
                 # clearing Blocked WITHOUT approving; once the plan is genuinely approved — including
@@ -684,7 +688,7 @@ main() {
                         # name threaded into the generated CLAUDE.md is recomputed later, after
                         # ensure_repo_current's fetch, in case origin/main has moved since.
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
-                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved}"; then
+                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved_or_later}"; then
                         # A plan-approved Issue whose last invocation produced no durable change at
                         # all (no new comment, no branch, no PR — e.g. only a status-update
                         # comment). Neither of the two checks above found anything to resume from,

@@ -6753,6 +6753,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -6996,6 +6997,11 @@ STUBEOF
     # Board now says Approved.
     _WF_PROJECT_ID="PVT_test"
     fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+    # issue_plan_approved_or_later is unrelated to what this test exercises (the exact-match
+    # fetch_board_approved_items path feeding the fingerprint) — stub it directly so it doesn't
+    # fall through to a real, unstubbed gh api graphql call now that oneshot calls it
+    # unconditionally for every Issue (#1321 review).
+    issue_plan_approved_or_later() { printf 'true'; }
 
     run main
     [ "${status}" -eq 0 ]
@@ -7022,6 +7028,8 @@ STUBEOF
 
     _WF_PROJECT_ID="PVT_test"
     fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+    # See the previous test for why this is stubbed directly (#1321 review).
+    issue_plan_approved_or_later() { printf 'true'; }
 
     # Pre-existing on-disk fingerprint, as if cached before the plan was approved. Real
     # save_issue_fingerprint/load_issue_fingerprint (via the re-source above) so state genuinely
