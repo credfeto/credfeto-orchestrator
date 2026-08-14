@@ -421,6 +421,11 @@ pr_is_human_driven() {
 
 # Copies labels from all closing issues linked to a PR onto the PR, adding any that are missing.
 # Never removes existing labels. Uses --add-label for each missing one.
+# Excludes Blocked and On-Hold: those are workflow-control labels scoped to the issue they were
+# applied to, not classification labels meant to propagate — task-workflow.instructions.md's PR
+# Title/Body/Label Sync rule already states this explicitly for the agent-driven sync path, but
+# this shell-level helper previously copied them anyway, silently re-adding Blocked to a PR every
+# tick even after a human removed it, with no comment explaining why (#1321).
 # Arguments: pr_id pr_json
 sync_pr_labels_from_linked_issues() {
     local pr_id="$1" pr_json="$2"
@@ -439,6 +444,9 @@ sync_pr_labels_from_linked_issues() {
         [ -n "${issue_num}" ] || continue
         while IFS= read -r issue_label; do
             [ -n "${issue_label}" ] || continue
+            case "${issue_label}" in
+                Blocked | On-Hold) continue ;;
+            esac
             already_present=$(printf '%s' "${pr_label_list}" | jq -r --arg l "${issue_label}" 'map(select(. == $l)) | length')
             if [ "${already_present}" = "0" ]; then
                 info "PR #${pr_id}: adding label '${issue_label}' from linked issue #${issue_num}"

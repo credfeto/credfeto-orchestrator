@@ -1518,6 +1518,45 @@ teardown() {
     grep -qx "type=Issue id=42 reason=custom reason text" "${_notif_log}"
 }
 
+# --- sync_pr_labels_from_linked_issues (#1321) --------------------------------
+
+@test "sync_pr_labels_from_linked_issues never copies Blocked or On-Hold, but still copies other labels" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+    case "$*" in
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Bug\nBlocked\nOn-Hold\n" ;;
+        *"pr edit"*) exit 0 ;;
+    esac'
+
+    sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
+
+    grep -q -- "pr edit 42 --repo org/repo --add-label Bug" "${call_log}"
+    run grep -- "--add-label Blocked" "${call_log}"
+    [ "${status}" -ne 0 ]
+    run grep -- "--add-label On-Hold" "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "sync_pr_labels_from_linked_issues does not call gh pr edit when there is nothing new to add" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+    case "$*" in
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Blocked\nOn-Hold\n" ;;
+        *"pr edit"*) exit 0 ;;
+    esac'
+
+    sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
+
+    run grep -- "pr edit" "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
 # --- block_pr_for_ci_timeout (#1140 review) --------------------------------------
 
 @test "block_pr_for_ci_timeout posts the timeout-specific reason and clears the pending-CI state once the label is verified (#1140 review)" {
@@ -6741,6 +6780,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -9384,6 +9424,46 @@ STUBEOF
     [ -z "${output}" ]
     run _wf_status_ordinal ""
     [ -z "${output}" ]
+}
+
+# --- issue_plan_approved_or_later (#1321) -------------------------------------
+
+@test "issue_plan_approved_or_later returns true for a card exactly on Approved" {
+    board_substatus_for_item() { printf 'Approved'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "true" ]
+}
+
+@test "issue_plan_approved_or_later returns true for a card that has progressed past Approved" {
+    for status in Development "AI Simplify" "AI Review" "AI Security Review" "AI Coverage" "Human Review" Complete; do
+        # shellcheck disable=SC2317 # invoked indirectly via issue_plan_approved_or_later
+        board_substatus_for_item() { printf '%s' "${status}"; }
+        run issue_plan_approved_or_later 42
+        [ "${output}" = "true" ]
+    done
+}
+
+@test "issue_plan_approved_or_later returns false for a card that has not reached Approved yet" {
+    board_substatus_for_item() { printf 'Planning'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+
+    board_substatus_for_item() { printf 'Not Started'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+}
+
+@test "issue_plan_approved_or_later returns false when the item is not on the board" {
+    board_substatus_for_item() { printf 'Unknown'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+}
+
+@test "issue_plan_approved_or_later returns false when no board is configured" {
+    _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
 }
 
 # --- sync_pr_workflow_status_from_linked_issues (#1276) ----------------------

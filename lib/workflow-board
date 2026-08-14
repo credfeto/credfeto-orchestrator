@@ -613,6 +613,29 @@ issue_plan_approved() {
     fi
 }
 
+# Returns "true"/"false" on stdout: whether item_id's Workflow board card is currently at or
+# past "Approved" (Approved, Development, AI Simplify, AI Review, AI Security Review,
+# AI Coverage, Human Review, Complete), via an ordinal comparison rather than an exact match
+# against "Approved" alone. Unlike issue_plan_approved above (an exact-match check that
+# underpins fingerprint_issue_json's edge-trigger semantics and must never change behaviour —
+# see docs/fingerprinting.md), this predicate is for callers that need "has this plan ever been
+# approved", not "is the card on Approved right now": a card that has since moved on to
+# Development/AI Review/etc. is unambiguously still approved, and treating it as unapproved
+# incorrectly re-blocks issues/PRs whose work is already under way (#1321). Fails closed to
+# "false" when the board is not configured or the item's status is unrecognised ("Unknown"),
+# matching issue_plan_approved's own no-board behaviour. Relies on REPO_FULL already being set
+# for the item's repo (via set_repo_context), same as board_substatus_for_item itself.
+issue_plan_approved_or_later() {
+    local item_id="$1" item_ord approved_ord
+    item_ord=$(_wf_status_ordinal "$(board_substatus_for_item "${item_id}")")
+    approved_ord=$(_wf_status_ordinal "Approved")
+    if [ -n "${item_ord}" ] && [ "${item_ord}" -ge "${approved_ord}" ]; then
+        printf 'true'
+    else
+        printf 'false'
+    fi
+}
+
 # Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Workflow Status field
 # option ID, keyed "owner/repo/number" — covers BOTH Issues and PRs (unlike
 # fetch_board_approved_items, which only ever needs Issues for the plan-approval flow).

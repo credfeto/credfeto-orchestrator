@@ -272,7 +272,7 @@ main() {
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
-    local issue_json issue_state issue_fp saved_issue_fp plan_approved
+    local issue_json issue_state issue_fp saved_issue_fp plan_approved plan_approved_or_later
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local pr_has_unaddressed_comment post_comment_seen
@@ -657,6 +657,15 @@ main() {
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
                 plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
+                # A second, ordinal-aware view of approval, distinct from plan_approved above.
+                # plan_approved feeds fingerprint_issue_json below (its exact-match "is the card
+                # on Approved right now" semantics are baked into every saved fingerprint, so it
+                # must never change) and issue_should_advance_unchanged. plan_approved_or_later is
+                # for the idle-exhausted check further down, which needs "has this plan ever been
+                # approved" — a card that has since moved on to Development/AI Review/etc. is
+                # still unambiguously approved, and treating it as unapproved incorrectly re-
+                # blocks issues whose work is already under way (#1321).
+                plan_approved_or_later=$(issue_plan_approved_or_later "${item_id}")
                 # The plan-block self-heal marker (#1286) only needs to survive across a human
                 # clearing Blocked WITHOUT approving; once the plan is genuinely approved, any
                 # earlier unapplied-Blocked drift episode is fully resolved, so clear it now rather
@@ -685,7 +694,7 @@ main() {
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
                         issue_idle_advance=1
                     else
-                        if [ "${plan_approved}" = "true" ]; then
+                        if [ "${plan_approved_or_later}" = "true" ]; then
                             info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
                             block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
@@ -1080,18 +1089,22 @@ main() {
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
-            plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
-            # Computed fresh here (after ensure_repo_current's fetch above), not reused from the
-            # fingerprint-unchanged skip decision earlier in this iteration: that check only runs
-            # when the fingerprint matched the saved one, so a session that changed the Issue
-            # (e.g. posted a comment) after pushing a branch and dying would otherwise reach here
-            # with no guidance to resume the existing branch, risking a duplicate one (#1262
+            # Ordinal-aware, not the exact-match issue_plan_approved: the prompt only needs to
+            # know "has this plan ever been approved" so the agent is told correctly to proceed
+            # to implementation even once the card has moved on to Development/AI Review/etc.
+            # rather than being told a card that's clearly past Approved still awaits approval
+            # (#1321). Computed fresh here (after ensure_repo_current's fetch above), not reused
+            # from the fingerprint-unchanged skip decision earlier in this iteration: that check
+            # only runs when the fingerprint matched the saved one, so a session that changed the
+            # Issue (e.g. posted a comment) after pushing a branch and dying would otherwise reach
+            # here with no guidance to resume the existing branch, risking a duplicate one (#1262
             # review). Placed after every abort point above (rate limit, missing AI instructions,
             # runaway backstop, trusted-logins) so a paid gh call is never spent on an Issue that
             # bails out before reaching the agent invocation anyway.
+            plan_approved_or_later=$(issue_plan_approved_or_later "${item_id}")
             stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}") || stale_issue_branch=""
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')

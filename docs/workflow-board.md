@@ -41,10 +41,18 @@ visible decision a human has to make — everything downstream of it is automati
 
 ## What `oneshot` reads from the board vs. what it writes
 
-- **Reads**: whether an Issue's card currently says "Approved" (`fetch_board_approved_items`).
-  This is the one piece of board state that changes what `oneshot` itself decides to do — see
-  [fingerprinting.md](fingerprinting.md) for the bug that happened when this fact was invisible
-  to the fingerprint that gates re-checking an Issue at all.
+- **Reads**: whether an Issue's card currently says "Approved" (`fetch_board_approved_items`,
+  `issue_plan_approved`). This is the one piece of board state that changes what `oneshot` itself
+  decides to do — see [fingerprinting.md](fingerprinting.md) for the bug that happened when this
+  fact was invisible to the fingerprint that gates re-checking an Issue at all.
+  A related but distinct read is "has this Issue's plan ever been approved, regardless of how far
+  the card has since moved on" (`issue_plan_approved_or_later`) — an ordinal comparison against
+  the column order above, not an exact match against "Approved." A card that has progressed to
+  "Development," "AI Review," or any later column is still unambiguously approved: only
+  `issue_plan_approved`'s exact-match result feeds the fingerprint (see fingerprinting.md); every
+  other caller that needs "was this ever approved" (the idle-exhausted check, the plan-approval
+  self-heal, and the agent-facing prompt) uses `issue_plan_approved_or_later` instead, so that
+  work already under way is never mistaken for a plan still awaiting approval (#1321).
 - **Writes**: the card's status, at specific well-defined points — e.g. "Not Started" the first
   time an Issue is ever touched, a PR's card mirrored forward from its linked issue on every
   tick (see [Keeping a PR's card in step with its issue's](#keeping-a-prs-card-in-step-with-its-issues)
