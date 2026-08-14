@@ -104,11 +104,10 @@ block() {
 # family, not something introduced here).
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
-is_in() {
-  local needle="$1" straw
-  shift
-  for straw in "$@"; do
-    [ "$needle" = "$straw" ] && return 0
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
   done
   return 1
 }
@@ -149,6 +148,18 @@ input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 [ -z "$raw_cmd" ] && exit 0
+
+# Cheap pre-filter: a real `ssh` call (bare, wrapped, or `*/ssh`) can only
+# ever be recognised below from a literal AST word - Lit/SglQuoted/simple
+# DblQuoted - and every one of those copies its source bytes verbatim, so
+# the substring "ssh" is guaranteed to already be present in $raw_cmd
+# whenever the full parse below would go on to find one. Skips shfmt and
+# both jq passes entirely for the common case (no ssh invocation at all)
+# without changing the outcome for any command this hook actually acts on.
+case "$raw_cmd" in
+*ssh*) ;;
+*) exit 0 ;;
+esac
 
 command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
 
@@ -192,7 +203,6 @@ while IFS= read -r call_line; do
   words=()
   while IFS= read -r entry; do
     case "$entry" in
-      N) words+=("$MARKER") ;;
       L:*)
         # $(...) unconditionally strips ALL trailing newline bytes from its
         # captured output - true regardless of quoting, since the stripping
@@ -214,7 +224,7 @@ while IFS= read -r call_line; do
         )
         words+=("${decoded%.}")
         ;;
-      *) words+=("$MARKER") ;; # unrecognised tag - fail closed, not silently drop
+      *) words+=("$MARKER") ;; # "N" (non-literal) or any unrecognised tag - fail closed, not silently drop
     esac
   done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
 
@@ -223,7 +233,7 @@ while IFS= read -r call_line; do
   # appearing anywhere else is an ordinary argument, not an ssh invocation
   # (e.g. `grep -r ssh .`, `find . -name ssh`).
   positions=(0)
-  is_in "${words[0]:-}" "${WRAPPERS[@]}" && positions+=(1)
+  is_wrapper "${words[0]:-}" && positions+=(1)
 
   for i in "${positions[@]}"; do
     tok="${words[$i]:-}"
@@ -231,12 +241,8 @@ while IFS= read -r call_line; do
 
     target="${words[$((i + 1))]:-}"
 
-    if [ -z "$target" ]; then
-      block 'ssh requires a target - only "ssh user@host ..." is permitted'
-    fi
-    if [ "$target" = "$MARKER" ]; then
-      block 'ssh target could not be verified (non-literal argument)'
-    fi
+    [ -z "$target" ] && block 'ssh requires a target - only "ssh user@host ..." is permitted'
+    [ "$target" = "$MARKER" ] && block 'ssh target could not be verified (non-literal argument)'
     case "$target" in
       -*) block 'ssh flags are not permitted - only "ssh user@host ..." is permitted' ;;
     esac
