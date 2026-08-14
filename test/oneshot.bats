@@ -369,6 +369,18 @@ teardown() {
     [[ "${output}" == *"- bob"* ]]
 }
 
+@test "build_pr_claude_md's PHASE A label-sync step excludes Blocked and On-Hold (#1321 review)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+}
+
+@test "build_pr_claude_md's dependency-PR label-sync step excludes Blocked and On-Hold (#1321 review)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+}
+
 @test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
