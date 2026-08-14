@@ -169,18 +169,6 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') 
 
 [ -z "$raw_cmd" ] && exit 0
 
-# Cheap pre-filter: a real `ssh` call (bare, wrapped, or `*/ssh`) can only
-# ever be recognised below from a literal AST word - Lit/SglQuoted/simple
-# DblQuoted - and every one of those copies its source bytes verbatim, so
-# the substring "ssh" is guaranteed to already be present in $raw_cmd
-# whenever the full parse below would go on to find one. Skips shfmt and
-# both jq passes entirely for the common case (no ssh invocation at all)
-# without changing the outcome for any command this hook actually acts on.
-case "$raw_cmd" in
-*ssh*) ;;
-*) exit 0 ;;
-esac
-
 command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
