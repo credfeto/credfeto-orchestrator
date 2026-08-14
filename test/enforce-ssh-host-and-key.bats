@@ -278,6 +278,15 @@ with_valid_key() {
 
 # --- fail-closed infrastructure ---------------------------------------------
 
+@test "a failing jq fails closed" {
+    # Payload built as a raw literal, not via jq -n, so stubbing jq only
+    # affects the hook's own extraction call, not the test's own setup.
+    make_stub jq 'exit 1'
+    run bash -c 'printf "%s" "$1" | "$2"' _ '{"tool_input":{"command":"ssh user@dns-01.lan"}}' "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
+}
+
 @test "a failing shfmt fails closed" {
     # A stub on PATH satisfies `command -v shfmt`, so a failure here exercises
     # the "could not be parsed" branch, not the "not available" branch - the
