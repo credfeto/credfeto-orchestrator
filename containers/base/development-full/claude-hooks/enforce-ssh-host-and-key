@@ -291,6 +291,26 @@ while IFS= read -r call_line; do
       -*) block 'a flag immediately after the target is not permitted - only "ssh user@host command..." is permitted' ;;
     esac
 
+    # shfmt parses syntax, not bash's runtime word-splitting: brace
+    # expansion is not a distinct AST node, so `{-oProxyCommand=id,x}`
+    # comes back as one ordinary, non-dash-prefixed Lit word - passing
+    # both checks above - even though real bash expands it into two argv
+    # words before ssh ever runs, the first of which is a live flag
+    # (confirmed empirically: shfmt --tojson, bash's own word-splitting on
+    # the brace form, and `ssh -G` all checked directly). Applying the
+    # same expansion-phase exclusion list TARGET_RE's charset already
+    # gives the target word (see the header: bash(1) EXPANSION - brace,
+    # tilde, pathname/glob) to this one word too closes it, without
+    # touching anything further into the remote command, where none of
+    # this applies (bash has already fully expanded and split the command
+    # line before ssh's own destination/option parsing even begins, so
+    # only the position ssh itself keeps re-parsing after the destination
+    # is at risk).
+    case "$next" in
+      *"\\"* | *'{'* | *'}'* | *'~'* | *'*'* | *'?'* | *'['* | *']'*)
+        block 'the word immediately after the target contains a character that could expand into more than one word at runtime - only "ssh user@host command..." is permitted' ;;
+    esac
+
     require_ssh_key
   done
 done <<<"$calls"

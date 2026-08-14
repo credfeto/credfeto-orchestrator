@@ -131,6 +131,49 @@ with_valid_key() {
     [ "${status}" -eq 0 ]
 }
 
+@test "brace expansion immediately after the target is rejected - shfmt sees one Lit word, bash expands it into a flag" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan {-oProxyCommand=id,x}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "brace-expanded -J immediately after the target is rejected" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan {-J,attacker.example.com}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "a glob metacharacter immediately after the target is rejected" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan *'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "a tilde immediately after the target is rejected" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan ~attacker'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "a bare backslash escape immediately after the target is rejected - raw text differs from what bash actually executes" {
+    with_valid_key
+    # shellcheck disable=SC2016  # literal backslash - the leading \- decodes
+    # away in real bash, leaving -oProxyCommand=id as the actual argv word
+    run_hook 'ssh user@dns-01.lan \-oProxyCommand=id'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "brace expansion further into the remote command (not immediately after the target) is still unrestricted" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan echo {a,b}'
+    [ "${status}" -eq 0 ]
+}
+
 # --- host validation -------------------------------------------------------
 
 @test "a nested .dns.lan subdomain is allowed" {
