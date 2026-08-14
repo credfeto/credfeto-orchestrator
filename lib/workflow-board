@@ -614,17 +614,17 @@ issue_plan_approved() {
 }
 
 # Returns "true"/"false" on stdout: whether item_id's Workflow board card is currently at or
-# past "Approved" (Approved, Development, AI Simplify, AI Review, AI Security Review,
-# AI Coverage, Human Review, Complete), via an ordinal comparison rather than an exact match
-# against "Approved" alone. Unlike issue_plan_approved above (an exact-match check that
-# underpins fingerprint_issue_json's edge-trigger semantics and must never change behaviour —
-# see docs/fingerprinting.md), this predicate is for callers that need "has this plan ever been
-# approved", not "is the card on Approved right now": a card that has since moved on to
-# Development/AI Review/etc. is unambiguously still approved, and treating it as unapproved
-# incorrectly re-blocks issues/PRs whose work is already under way (#1321). Fails closed to
-# "false" when the board is not configured or the item's status is unrecognised ("Unknown"),
-# matching issue_plan_approved's own no-board behaviour. Relies on REPO_FULL already being set
-# for the item's repo (via set_repo_context), same as board_substatus_for_item itself.
+# past "Approved" in _WF_STATUS_ORDER (lib/globals), via an ordinal comparison rather than an
+# exact match against "Approved" alone. Unlike issue_plan_approved above (an exact-match check
+# that underpins fingerprint_issue_json's edge-trigger semantics and must never change behaviour
+# — see docs/fingerprinting.md), this predicate is for callers that need "has this plan ever been
+# approved", not "is the card on Approved right now": a card that has since moved on to a later
+# column is unambiguously still approved, and treating it as unapproved incorrectly re-blocks an
+# Issue whose work is already under way (#1321 — see there for the full rationale; kept here
+# rather than repeated at each call site). Fails closed to "false" when the board is not
+# configured or the item's status is unrecognised ("Unknown"), matching issue_plan_approved's own
+# no-board behaviour. Relies on REPO_FULL already being set for the item's repo (via
+# set_repo_context), same as board_substatus_for_item itself.
 issue_plan_approved_or_later() {
     local item_id="$1" item_ord approved_ord
     item_ord=$(_wf_status_ordinal "$(board_substatus_for_item "${item_id}")")

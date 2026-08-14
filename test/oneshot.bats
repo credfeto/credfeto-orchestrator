@@ -6876,6 +6876,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
 
@@ -6894,6 +6895,35 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+}
+
+@test "main clears a stale plan-block marker for a card that has already progressed past Approved (#1321)" {
+    # Regression coverage: the marker must clear once the plan is genuinely approved even when
+    # the board has since moved on to a later column, so the exact-match issue_plan_approved
+    # (which reads false here) must NOT be what gates this — only issue_plan_approved_or_later.
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'false'; }
+    issue_plan_approved_or_later() { printf 'true'; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
     [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
 }
 
@@ -9435,7 +9465,11 @@ STUBEOF
 }
 
 @test "issue_plan_approved_or_later returns true for a card that has progressed past Approved" {
-    for status in Development "AI Simplify" "AI Review" "AI Security Review" "AI Coverage" "Human Review" Complete; do
+    # Derived from the canonical column order (_WF_STATUS_ORDER, lib/globals) rather than a
+    # hardcoded list, so this stays correct if a column is ever renamed/added/removed.
+    local approved_idx status
+    approved_idx=$(_wf_status_ordinal "Approved")
+    for status in "${_WF_STATUS_ORDER[@]:$((approved_idx + 1))}"; do
         # shellcheck disable=SC2317 # invoked indirectly via issue_plan_approved_or_later
         board_substatus_for_item() { printf '%s' "${status}"; }
         run issue_plan_approved_or_later 42

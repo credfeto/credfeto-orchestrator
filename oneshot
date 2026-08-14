@@ -657,20 +657,19 @@ main() {
                 discover_or_create_workflow_project
                 [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
                 plan_approved=$(issue_plan_approved "${item_repo}" "${item_id}")
-                # A second, ordinal-aware view of approval, distinct from plan_approved above.
-                # plan_approved feeds fingerprint_issue_json below (its exact-match "is the card
-                # on Approved right now" semantics are baked into every saved fingerprint, so it
-                # must never change) and issue_should_advance_unchanged. plan_approved_or_later is
-                # for the idle-exhausted check further down, which needs "has this plan ever been
-                # approved" — a card that has since moved on to Development/AI Review/etc. is
-                # still unambiguously approved, and treating it as unapproved incorrectly re-
-                # blocks issues whose work is already under way (#1321).
+                # plan_approved_or_later is the ordinal-aware sibling of plan_approved above — see
+                # its header comment in lib/workflow-board for why the two must stay separate.
+                # plan_approved itself keeps feeding fingerprint_issue_json (below) and
+                # issue_should_advance_unchanged unchanged. Computed eagerly here (not lazily at
+                # each use) because it is needed unconditionally just below, for every Issue.
                 plan_approved_or_later=$(issue_plan_approved_or_later "${item_id}")
                 # The plan-block self-heal marker (#1286) only needs to survive across a human
-                # clearing Blocked WITHOUT approving; once the plan is genuinely approved, any
-                # earlier unapplied-Blocked drift episode is fully resolved, so clear it now rather
-                # than risk it wrongly suppressing self-heal on a LATER, unrelated plan revision.
-                [ "${plan_approved}" = "true" ] && clear_issue_plan_block_marker "${item_id}"
+                # clearing Blocked WITHOUT approving; once the plan is genuinely approved — including
+                # a card that has since moved on past Approved to Development/AI Review/etc, which is
+                # exactly the case the exact-match plan_approved misses — any earlier unapplied-
+                # Blocked drift episode is fully resolved, so clear it now rather than risk it
+                # wrongly suppressing self-heal on a LATER, unrelated plan revision (#1321 review).
+                [ "${plan_approved_or_later}" = "true" ] && clear_issue_plan_block_marker "${item_id}"
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
@@ -1089,19 +1088,10 @@ main() {
 
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
-            # Ordinal-aware, not the exact-match issue_plan_approved: the prompt only needs to
-            # know "has this plan ever been approved" so the agent is told correctly to proceed
-            # to implementation even once the card has moved on to Development/AI Review/etc.
-            # rather than being told a card that's clearly past Approved still awaits approval
-            # (#1321). Computed fresh here (after ensure_repo_current's fetch above), not reused
-            # from the fingerprint-unchanged skip decision earlier in this iteration: that check
-            # only runs when the fingerprint matched the saved one, so a session that changed the
-            # Issue (e.g. posted a comment) after pushing a branch and dying would otherwise reach
-            # here with no guidance to resume the existing branch, risking a duplicate one (#1262
-            # review). Placed after every abort point above (rate limit, missing AI instructions,
-            # runaway backstop, trusted-logins) so a paid gh call is never spent on an Issue that
-            # bails out before reaching the agent invocation anyway.
-            plan_approved_or_later=$(issue_plan_approved_or_later "${item_id}")
+            # plan_approved_or_later is reused as-is from earlier in this same iteration (set
+            # unconditionally above, before the fingerprint-unchanged skip decision) — its
+            # underlying board-status fetch is cached per repo for the whole tick, so a fresh
+            # call here would just re-read the same cached value (#1321 review).
             stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}") || stale_issue_branch=""
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")

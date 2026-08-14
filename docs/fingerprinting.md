@@ -101,11 +101,10 @@ right now" edge-trigger, not "has this ever been approved" — it needs to flip
 exactly once, at the moment of approval, so a later change to what it means
 would be indistinguishable from every other in-place fingerprint change and
 would need its own [version bump](#the-version-number-how-we-change-the-recipe-safely).
-A separate, ordinal-aware predicate (`issue_plan_approved_or_later`, see
-[workflow-board.md](workflow-board.md)) answers "at or past Approved" for
-callers that need that instead — the idle-exhausted check, the plan-approval
-self-heal, and the agent-facing prompt. It does not feed the fingerprint at
-all, so introducing it required no schema version bump (#1321).
+A separate, ordinal-aware predicate (`issue_plan_approved_or_later`, see its
+header comment in `lib/workflow-board`) answers "at or past Approved" for
+callers that need that instead. It does not feed the fingerprint at all, so
+introducing it required no schema version bump (#1321).
 
 ## The version number: how we change the recipe safely
 
