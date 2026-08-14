@@ -400,6 +400,19 @@ with_valid_key() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a backslash-newline line continuation inside the literal word ssh is still caught (round 9 regression)" {
+    with_valid_key
+    # $'...' produces a real backslash-then-newline byte pair splitting the
+    # word "ssh" itself - shfmt still parses this to the literal Lit value
+    # "ssh" (line continuations are elided during literal token assembly),
+    # but the raw source text never contains the contiguous substring "ssh"
+    # - a full-hook bypass of the round-7/8 raw-text *ssh* pre-filter this
+    # is no longer present to have (see the commit removing it).
+    run_hook $'s\\\nsh user@dns-01.lan -oProxyCommand=id'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'flag immediately after the target'* ]]
+}
+
 @test "empty command is allowed" {
     run_hook ""
     [ "${status}" -eq 0 ]
