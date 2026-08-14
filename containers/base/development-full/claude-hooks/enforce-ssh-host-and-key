@@ -26,20 +26,37 @@
 # quoting/escaping/expansion tricks. If flags aren't part of the grammar at
 # all, there is nothing to disguise - a word starting with '-' immediately
 # where the target is expected fails the target regex below outright, and
-# nothing else in the command is ever treated as ssh's own option.
+# real ssh does not accept a flag anywhere else in the command line either
+# (see the next paragraph) - so nothing else is ever treated as ssh's own
+# option.
 #
-# Only the target word (word 1, or word 2 if preceded by a known wrapper -
-# see WRAPPERS below) is ever content-inspected. Everything after it is the
-# remote command, which this hook does not restrict at all: the security
-# boundary this hook enforces is "which host, as which user" - what runs on
-# a host you're already only allowed to reach because it's .lan and a valid
-# key is loaded is not a boundary this hook is responsible for. This also
-# means a substitution/expansion inside the remote command portion (e.g.
-# `ssh user@host "echo $(date)"`) is fine to leave uninspected: $(date)
-# expands locally before ssh is ever invoked, and its result cannot change
-# which host gets connected to (the target word's position and content are
-# fixed by the grammar above, not derived from anything the command portion
-# contains).
+# The target word and the single word immediately after it (word 1/2, or
+# word 2/3 if preceded by a known wrapper - see WRAPPERS below) are the only
+# ones content-inspected. Real ssh does not stop parsing its own options at
+# the destination: after extracting it, ssh re-enters its option loop and
+# keeps consuming the word(s) immediately following the destination as
+# flags (-o, -J, -F, -p, ...) until the first non-option word - confirmed
+# against real ssh via `ssh -G`, which shows a ProxyCommand/ProxyJump
+# placed after the destination take effect identically to one placed
+# before it (round 7 code review: the first version of this design assumed
+# otherwise and was a live local-command-execution/host-redirection bypass
+# via that immediate post-target word). So that one word is checked the
+# same way the target is: a leading '-', or a non-literal value that could
+# evaluate to one at runtime, is blocked outright. Because ssh's re-parse
+# is non-permuting and stops for good at the first non-option word, nothing
+# beyond that single word can still be consumed as an option - everything
+# from there on is genuinely the remote command, which this hook does not
+# restrict at all: the security boundary this hook enforces is "which
+# host, as which user" - what runs on a host you're already only allowed
+# to reach because it's .lan and a valid key is loaded is not a boundary
+# this hook is responsible for. This also means a substitution/expansion
+# further into the remote command (e.g. `ssh user@host echo "$(date)"`) is
+# fine to leave uninspected: $(date) expands locally before ssh is ever
+# invoked, and its result cannot change which host gets connected to (the
+# target word's position and content are fixed by the grammar above, not
+# derived from anything the command portion contains) - it's specifically
+# the position immediately after the target, and only that position, where
+# ssh's own parser can still turn a word into a flag.
 #
 # Target validation is a positive allowlist (TARGET_RE below), not a
 # blocklist of dangerous characters - deliberately, after three review
@@ -79,8 +96,9 @@
 # all, so a call can never silently fall back to interactive password auth.
 #
 # Fails closed: shfmt missing, a jq failure, the command not parsing as
-# shell, a missing/malformed target, or no ssh-agent key available all
-# block the command.
+# shell, a missing/malformed target, a missing/malformed/flag-shaped word
+# immediately after the target, or no ssh-agent key available all block
+# the command.
 
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
@@ -249,6 +267,29 @@ while IFS= read -r call_line; do
       -*) block 'ssh flags are not permitted - only "ssh user@host ..." is permitted' ;;
     esac
     target_allowed "$target" || block "ssh target '${target}' is not in the allowed user@*.lan form"
+
+    # ssh's own argv parsing does not stop consuming options at the
+    # destination word: after extracting it, ssh re-enters its option loop
+    # and keeps parsing the word(s) immediately following the destination
+    # as its own flags (-o, -J, -F, -p, ...) until the first non-option
+    # word - confirmed against real ssh via `ssh -G`, which shows a
+    # ProxyCommand/ProxyJump placed after the destination takes effect
+    # identically to one placed before it. A flag re-injected here defeats
+    # both of this hook's guarantees at once: -oProxyCommand=... runs an
+    # arbitrary command locally without ever touching the network, and
+    # -J/-F redirect the real connection to a host this hook never
+    # inspects. Only the single word immediately after the target needs
+    # checking - ssh's re-parse is non-permuting and stops for good at the
+    # first non-option word, so once that word is confirmed to not start
+    # with '-', nothing later in the command can still be consumed as an
+    # option. A non-literal word here is blocked outright too, same as the
+    # target itself, since it could evaluate to a leading '-' at runtime
+    # even though shfmt could not determine that statically.
+    next="${words[$((i + 2))]:-}"
+    [ "$next" = "$MARKER" ] && block 'the word immediately after the target could not be verified (non-literal argument) - it could evaluate to an ssh flag at runtime'
+    case "$next" in
+      -*) block 'a flag immediately after the target is not permitted - only "ssh user@host command..." is permitted' ;;
+    esac
 
     require_ssh_key
   done
