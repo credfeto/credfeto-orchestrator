@@ -369,6 +369,18 @@ teardown() {
     [[ "${output}" == *"- bob"* ]]
 }
 
+@test "build_pr_claude_md's PHASE A label-sync step excludes Blocked and On-Hold (#1321 review)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+}
+
+@test "build_pr_claude_md's dependency-PR label-sync step excludes Blocked and On-Hold (#1321 review)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+}
+
 @test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
@@ -1516,6 +1528,45 @@ teardown() {
     run apply_blocked_label_with_reason "Issue" 42 "org/repo" "custom reason text"
     [ "${status}" -eq 0 ]
     grep -qx "type=Issue id=42 reason=custom reason text" "${_notif_log}"
+}
+
+# --- sync_pr_labels_from_linked_issues (#1321) --------------------------------
+
+@test "sync_pr_labels_from_linked_issues never copies Blocked or On-Hold, but still copies other labels" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+    case "$*" in
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Bug\nBlocked\nOn-Hold\n" ;;
+        *"pr edit"*) exit 0 ;;
+    esac'
+
+    sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
+
+    grep -q -- "pr edit 42 --repo org/repo --add-label Bug" "${call_log}"
+    run grep -- "--add-label Blocked" "${call_log}"
+    [ "${status}" -ne 0 ]
+    run grep -- "--add-label On-Hold" "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "sync_pr_labels_from_linked_issues does not call gh pr edit when there is nothing new to add" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+    case "$*" in
+        *"pr view 42 --repo org/repo --json closingIssuesReferences"*) printf "164\n" ;;
+        *"issue view 164 --repo org/repo --json labels"*) printf "Blocked\nOn-Hold\n" ;;
+        *"pr edit"*) exit 0 ;;
+    esac'
+
+    sync_pr_labels_from_linked_issues 42 '{"labels":[]}'
+
+    run grep -- "pr edit" "${call_log}"
+    [ "${status}" -ne 0 ]
 }
 
 # --- block_pr_for_ci_timeout (#1140 review) --------------------------------------
@@ -6714,6 +6765,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -6741,6 +6793,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -6836,6 +6889,7 @@ STUBEOF
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
     issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
 
@@ -6854,6 +6908,35 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
+}
+
+@test "main clears a stale plan-block marker for a card that has already progressed past Approved (#1321)" {
+    # Regression coverage: the marker must clear once the plan is genuinely approved even when
+    # the board has since moved on to a later column, so the exact-match issue_plan_approved
+    # (which reads false here) must NOT be what gates this — only issue_plan_approved_or_later.
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'false'; }
+    issue_plan_approved_or_later() { printf 'true'; }
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.plan-block"
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
     [ ! -f "${SESSION_BASE_DIR}/Issue_42.plan-block" ]
 }
 
@@ -6926,6 +7009,11 @@ STUBEOF
     # Board now says Approved.
     _WF_PROJECT_ID="PVT_test"
     fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+    # issue_plan_approved_or_later is unrelated to what this test exercises (the exact-match
+    # fetch_board_approved_items path feeding the fingerprint) — stub it directly so it doesn't
+    # fall through to a real, unstubbed gh api graphql call now that oneshot calls it
+    # unconditionally for every Issue (#1321 review).
+    issue_plan_approved_or_later() { printf 'true'; }
 
     run main
     [ "${status}" -eq 0 ]
@@ -6952,6 +7040,8 @@ STUBEOF
 
     _WF_PROJECT_ID="PVT_test"
     fetch_board_approved_items() { _WF_APPROVED_ITEMS["org/repo/42"]=1; }
+    # See the previous test for why this is stubbed directly (#1321 review).
+    issue_plan_approved_or_later() { printf 'true'; }
 
     # Pre-existing on-disk fingerprint, as if cached before the plan was approved. Real
     # save_issue_fingerprint/load_issue_fingerprint (via the re-source above) so state genuinely
@@ -9384,6 +9474,50 @@ STUBEOF
     [ -z "${output}" ]
     run _wf_status_ordinal ""
     [ -z "${output}" ]
+}
+
+# --- issue_plan_approved_or_later (#1321) -------------------------------------
+
+@test "issue_plan_approved_or_later returns true for a card exactly on Approved" {
+    board_substatus_for_item() { printf 'Approved'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "true" ]
+}
+
+@test "issue_plan_approved_or_later returns true for a card that has progressed past Approved" {
+    # Derived from the canonical column order (_WF_STATUS_ORDER, lib/globals) rather than a
+    # hardcoded list, so this stays correct if a column is ever renamed/added/removed.
+    local approved_idx status
+    approved_idx=$(_wf_status_ordinal "Approved")
+    for status in "${_WF_STATUS_ORDER[@]:$((approved_idx + 1))}"; do
+        # shellcheck disable=SC2317 # invoked indirectly via issue_plan_approved_or_later
+        board_substatus_for_item() { printf '%s' "${status}"; }
+        run issue_plan_approved_or_later 42
+        [ "${output}" = "true" ]
+    done
+}
+
+@test "issue_plan_approved_or_later returns false for a card that has not reached Approved yet" {
+    board_substatus_for_item() { printf 'Planning'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+
+    board_substatus_for_item() { printf 'Not Started'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+}
+
+@test "issue_plan_approved_or_later returns false when the item is not on the board" {
+    board_substatus_for_item() { printf 'Unknown'; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
+}
+
+@test "issue_plan_approved_or_later returns false when no board is configured" {
+    _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
+    run issue_plan_approved_or_later 42
+    [ "${output}" = "false" ]
 }
 
 # --- sync_pr_workflow_status_from_linked_issues (#1276) ----------------------

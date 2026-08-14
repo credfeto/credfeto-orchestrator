@@ -41,10 +41,16 @@ visible decision a human has to make — everything downstream of it is automati
 
 ## What `oneshot` reads from the board vs. what it writes
 
-- **Reads**: whether an Issue's card currently says "Approved" (`fetch_board_approved_items`).
-  This is the one piece of board state that changes what `oneshot` itself decides to do — see
-  [fingerprinting.md](fingerprinting.md) for the bug that happened when this fact was invisible
-  to the fingerprint that gates re-checking an Issue at all.
+- **Reads**: whether an Issue's card currently says "Approved" (`fetch_board_approved_items`,
+  `issue_plan_approved`). This is the one piece of board state that changes what `oneshot` itself
+  decides to do — see [fingerprinting.md](fingerprinting.md) for the bug that happened when this
+  fact was invisible to the fingerprint that gates re-checking an Issue at all.
+  A related but distinct read is "is the card currently at or past Approved, regardless of which
+  later column it has since moved on to" (`issue_plan_approved_or_later` — ordinal, not
+  exact-match; a present-moment snapshot, not a history check, so a card dragged backward again
+  reads false; see its header comment in `lib/workflow-board` for the full rationale and its call
+  sites). Only
+  `issue_plan_approved`'s exact-match result feeds the fingerprint (#1321).
 - **Writes**: the card's status, at specific well-defined points — e.g. "Not Started" the first
   time an Issue is ever touched, a PR's card mirrored forward from its linked issue on every
   tick (see [Keeping a PR's card in step with its issue's](#keeping-a-prs-card-in-step-with-its-issues)

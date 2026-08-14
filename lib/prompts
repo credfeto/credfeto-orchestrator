@@ -58,6 +58,19 @@ _build_plan_approval_instruction() {
     fi
 }
 
+# The gh one-liner that syncs labels from all linked closing issues onto this PR, for the agent
+# to run itself. Excludes Blocked and On-Hold — workflow-control labels scoped to the issue they
+# were applied to, not classification labels meant to propagate
+# (task-workflow.instructions.md's PR Title/Body/Label Sync rule) — mirroring the shell-level
+# sync_pr_labels_from_linked_issues (lib/github), which excludes the same two labels for the same
+# reason. Shared here, rather than duplicated at each PHASE call site, so the two can't drift
+# apart the way they already had before this fix (#1321).
+_build_pr_label_sync_command() {
+    local item_id="$1"
+    printf 'gh pr view %s --repo %s --json closingIssuesReferences --jq '"'"'.closingIssuesReferences[].number'"'"' | while IFS= read -r n; do gh issue view "$n" --repo %s --json labels --jq '"'"'.labels[].name'"'"'; done | grep -vE '"'"'^(Blocked|On-Hold)$'"'"' | sort -u | while IFS= read -r label; do gh pr edit %s --repo %s --add-label "$label"; done' \
+        "${item_id}" "${REPO_FULL}" "${REPO_FULL}" "${item_id}" "${REPO_FULL}"
+}
+
 _build_trusted_commenters_section() {
     local logins_json="$1"
     [ -n "${logins_json}" ] && [ "${logins_json}" != "null" ] || return 0
@@ -291,8 +304,8 @@ This is a dependency update PR. Do NOT make any code changes. Your only job is t
 
 Steps:
 1. Assign yourself: gh pr edit ${item_id} --repo ${REPO_FULL} --add-assignee @me
-2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
-   gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
+2. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR, except Blocked/On-Hold which must never propagate (never remove existing labels):
+   $(_build_pr_label_sync_command "${item_id}")
 3. Check CI: gh pr checks ${item_id} --repo ${REPO_FULL}
    Evaluate in this order — auto-merge being enabled does NOT mean there is nothing to do; it
    only means GitHub will merge automatically once every required check has actually passed, so
@@ -334,8 +347,8 @@ $(_build_container_vs_github_note)
 Determine the current phase and do ONLY that one, then STOP:
 
 PHASE A — Setup / rebase (do this if the PR is not yet checked out, is BEHIND/DIRTY, or labels are unsynced):
-  1. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR (never remove existing labels):
-     gh pr view ${item_id} --repo ${REPO_FULL} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' | while IFS= read -r n; do gh issue view "\$n" --repo ${REPO_FULL} --json labels --jq '.labels[].name'; done | sort -u | while IFS= read -r label; do gh pr edit ${item_id} --repo ${REPO_FULL} --add-label "\$label"; done
+  1. Sync labels from all linked closing issues — add any label present on a linked issue but missing from this PR, except Blocked/On-Hold which must never propagate (never remove existing labels):
+     $(_build_pr_label_sync_command "${item_id}")
   ${checkout_step}
   Then STOP. (If you pushed a rebase, CI will run; the next cycle continues once CI settles.)
 
