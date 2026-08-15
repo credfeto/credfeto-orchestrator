@@ -119,6 +119,8 @@
       "Bash(mkdir *)",
       "Bash(mktemp *)",
       "Bash(mv *)",
+      "Bash(npm --prefix * run *)",
+      "Bash(npm --version)",
       "Bash(npm audit *)",
       "Bash(npm ci *)",
       "Bash(npm install *)",
