@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Discord webhook notifications: work-item start/resume, no-work, low-disk-space,
-# priorities-unreachable, blocked-item, PR-needs-approval, Claude container error, and
-# rate-limited notices. Also the shared item-URL builder they use.
+# priorities-unreachable, blocked-item, PR-needs-approval, Claude container error,
+# permission-denials, and rate-limited notices. Also the shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id, repo (optional, defaults to REPO_FULL). Falls back to the bare repo URL for an
@@ -517,6 +517,45 @@ notify_discord_claude_error() {
             {name:"Error",value:$error,inline:false}
         ]}]}') \
         || { warn "Discord: failed to build claude error payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord embed notification listing tool calls Claude Code denied during a run
+# (parsed from the result JSON's permission_denials array by handle_claude_permission_denials
+# in lib/podman — see that function's own comment for what can currently produce a denial).
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty),
+#            summary (multi-line "- tool: detail" text, already built by the caller),
+#            denials_count (total number of denials the summary was built from)
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_permission_denials() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" summary="$3" denials_count="${4:-?}"
+    local url payload
+
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    # Truncate to stay within Discord's 1024-character field limit, leaving room for the
+    # truncation marker below so the field itself never exceeds the limit.
+    local truncated_summary="${summary:0:900}"
+    if [ "${#summary}" -gt 900 ]; then
+        truncated_summary="${truncated_summary}
+... (truncated; see the run's own logs for the full list)"
+    fi
+
+    payload=$(jq --null-input \
+        --argjson color 16776960 \
+        --arg title "Permission Denials (${denials_count}): ${REPO_FULL}" \
+        --arg url "${url}" \
+        --arg summary "${truncated_summary}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Denied tool calls",value:$summary,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build permission-denials payload"; return 0; }
 
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \

@@ -172,6 +172,13 @@ teardown() {
     [[ "${output}" == *"never a shell-level"* ]]
 }
 
+@test "build_issue_claude_md attributes a denial to either the hook layer or the permission system (#1328)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"whether by a PreToolUse hook"* ]]
+    [[ "${output}" == *"or by Claude Code's own permission system when it is active"* ]]
+}
+
 @test "build_issue_claude_md omits trusted-commenters section when logins list is empty" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" ""
     [ "${status}" -eq 0 ]
@@ -472,6 +479,13 @@ teardown() {
     [[ "${output}" == *"never started, try again correctly"* ]]
     [[ "${output}" == *'git -C <dir> commit -m "..." with run_in_background: true'* ]]
     [[ "${output}" == *"never a shell-level"* ]]
+}
+
+@test "build_pr_claude_md attributes a denial to either the hook layer or the permission system (#1328)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"whether by a PreToolUse hook"* ]]
+    [[ "${output}" == *"or by Claude Code's own permission system when it is active"* ]]
 }
 
 @test "build_pr_claude_md states the container-vs-GitHub survival rule" {
@@ -2799,6 +2813,64 @@ STUBEOF
     grep -q "https://github.com/org/repo" "${args_log}"
 }
 
+# --- notify_discord_permission_denials (#1328) ----------------------------------
+
+@test "notify_discord_permission_denials does not call curl when DISCORD_WEBHOOK_URL is empty" {
+    DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_permission_denials calls curl with embed payload including issue URL, count, and summary" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/hook" "${args_log}"
+    grep -q "https://github.com/org/repo/issues/42" "${args_log}"
+    grep -q "Bash: git status" "${args_log}"
+    grep -q "Permission Denials (1)" "${args_log}"
+}
+
+@test "notify_discord_permission_denials appends a truncation marker when the summary exceeds the field limit" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    local long_summary
+    long_summary=$(printf -- '- Bash: git status %.0s' $(seq 1 100))
+    run notify_discord_permission_denials "Issue" "42" "${long_summary}" "100"
+    [ "${status}" -eq 0 ]
+    grep -q "truncated; see the run's own logs for the full list" "${args_log}"
+    grep -q "Permission Denials (100)" "${args_log}"
+}
+
+@test "notify_discord_permission_denials does not append a truncation marker for a short summary" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    run ! grep -q "truncated; see the run's own logs" "${args_log}"
+}
+
+@test "notify_discord_permission_denials uses repo URL when item type is unknown" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "" "" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    grep -q "https://github.com/org/repo" "${args_log}"
+}
+
 @test "invoke_claude uses container name orchestrator-OWNER" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
@@ -2918,6 +2990,63 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" ""
     [ "${status}" -ne 0 ]
     grep -q "claude_md_content is required" "${notify_log}"
+}
+
+@test "invoke_claude surfaces permission_denials via Discord even when the run also errors (#1328)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+printf '{"is_error":true,"api_error_status":"500","result":"internal error","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    notify_discord_claude_error() { return 0; }
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    # Overall run still fails: handle_claude_is_error always dies — but the denial must have
+    # been surfaced before tmpfile was deleted on that path (#1328).
+    [ "${status}" -ne 0 ]
+    grep -q "git status" "${notify_log}"
+}
+
+@test "invoke_claude surfaces permission_denials via Discord on a successful run (#1328)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+printf '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    grep -q "git status" "${notify_log}"
+}
+
+@test "invoke_claude does not call notify_discord_permission_denials when permission_denials is absent (#1328)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+printf '{"is_error":false,"result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${notify_log}" ]
 }
 
 # --- cleanup_claude_invocation_tmpfiles (#1133 review, Copilot) ----------------
@@ -6213,6 +6342,83 @@ STUBEOF
     [ "${status}" -ne 0 ]
     # The temp file must not be leaked on the generic-error path.
     [ ! -f "${tmpfile}" ]
+}
+
+# --- handle_claude_permission_denials (#1328) -----------------------------------
+
+@test "handle_claude_permission_denials is a no-op when permission_denials is absent" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done"}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ ! -f "${notify_log}" ]
+}
+
+@test "handle_claude_permission_denials is a no-op when permission_denials is an empty array" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${notify_log}" ]
+}
+
+@test "handle_claude_permission_denials logs and notifies on a single Bash denial" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"1 permission denial"* ]]
+    [[ "${output}" == *"Bash: git status"* ]]
+    grep -q "Bash: git status" "${notify_log}"
+    # The count is passed through as a trailing argument so the Discord embed can show it
+    # rather than the reviewer only being able to infer it by counting summary lines.
+    grep -q " 1\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials summarizes multiple denials across different tools" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}},{"tool_name":"Edit","tool_input":{"file_path":"/workspace/repo/.database"}}]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "PullRequest" "7"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"2 permission denial"* ]]
+    [[ "${output}" == *"Bash: git status"* ]]
+    [[ "${output}" == *"Edit: /workspace/repo/.database"* ]]
+    grep -q "Bash: git status" "${notify_log}"
+    grep -q "Edit: /workspace/repo/.database" "${notify_log}"
+    grep -q " 2\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials does not remove the tmpfile (caller owns cleanup)" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}' > "${tmpfile}"
+
+    notify_discord_permission_denials() { return 0; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ -f "${tmpfile}" ]
 }
 
 # --- report_unparseable_rate_limit --------------------------------------------
