@@ -98,6 +98,23 @@ _build_container_vs_github_note() {
 CVGNOTE
 }
 
+# Emitted only when the immediately preceding session on this item ended in the
+# background-stall pattern claude_result_indicates_background_stall (lib/podman) detects —
+# confirmed live incident: credfeto-dotnet-repo-tools#215's approved plan sat untouched through
+# six consecutive invocations over 5.5 hours, every one backgrounding the mandatory Pre-Work
+# Baseline Check and ending its turn believing a later Monitor notification would resume it,
+# before being wrongly auto-Blocked for "no progress" (credfeto-orchestrator#1326/#1335). Placed
+# directly under the Container-vs-GitHub note (PHASE DISCIPLINE) rather than relying on the
+# agent to recall that generic rule on its own — the whole point of this warning is that the
+# generic rule already existed and did not prevent the incident.
+_build_background_stall_warning() {
+    local background_stall="${1:-false}"
+    [ "${background_stall}" = "true" ] || return 0
+    cat <<'STALLNOTE'
+- MANDATORY, READ FIRST: your immediately preceding session on this item ended by backgrounding a local check (a build, test suite, or pre-commit hook) and stopping its turn to "wait for a Monitor notification" or "continue automatically" once it finished. That never happened and never will: this is a fresh, non-resumed session with no memory of that one, and the backgrounded process — along with the container running it — was killed the instant that turn ended. If you background a check again this session, you MUST poll for its own completion string with the Monitor tool and WAIT for it to actually finish in THIS SAME turn (see the Container-vs-GitHub rule above and the Background Tasks and Monitor Tool rules in the AI instructions) — do not end this turn while a container-local process is still running, even to "wait for a notification". Repeating the previous session's mistake burns another idle-invocation attempt for nothing and pushes this item closer to being wrongly Blocked for "no progress".
+STALLNOTE
+}
+
 # Shared MANDATORY background-commands rule referenced by both build_issue_claude_md and
 # build_pr_claude_md's numbered "General rules" list. Supersedes the old "always run git commit
 # in the foreground" text (#1253 review) — the enforce-background-for-long-running-commands hook
@@ -200,7 +217,7 @@ _build_issue_branch_step() {
 }
 
 build_issue_claude_md() {
-    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}"
+    local item_id="$1" ai_instructions="$2" repo_path="${3:-${REPO_WORK_DIR}}" plan_approved="${4:-false}" trusted_logins="${5:-}" dirty_branch="${6:-}" stale_branch="${7:-}" background_stall="${8:-false}"
     cat <<EOF
 You are the Orchestrator agent.
 
@@ -219,6 +236,7 @@ $(_build_issue_stale_branch_section "${stale_branch}" "${repo_path}" "${dirty_br
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the issue, its comments, labels, and the Workflow board status above).
 $(_build_container_vs_github_note)
+$(_build_background_stall_warning "${background_stall}")
 - Do EXACTLY ONE phase and then STOP: either PLAN mode (steps 3–4) or IMPLEMENTATION mode (steps 5–7), never both in one session. The orchestrator re-invokes you on the next cycle.
 - Once a draft pull request exists, this issue's work continues under the pull-request workflow on later cycles — do not try to drive reviews or merging from the issue session.
 - NEVER apply the Blocked label without ALSO posting a comment, in the SAME turn, that specifically explains why. A human who sees the label with no explanation has no way to act on it and no way to tell whether their own last action (an approval, a fix, a reply) was even seen — this applies to every blocking scenario in this file, not only the ones spelled out explicitly below, including re-blocking something that was JUST unblocked (#1140).
@@ -262,7 +280,7 @@ EOF
 }
 
 build_pr_claude_md() {
-    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}"
+    local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}"
     local checkout_step
     local needs_rebase=0
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
@@ -337,6 +355,7 @@ $(_build_wf_section)
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
 $(_build_container_vs_github_note)
+$(_build_background_stall_warning "${background_stall}")
 - You must do EXACTLY ONE phase from the list below — the FIRST one that applies — and then STOP. Do NOT continue to later phases in this session. The orchestrator will re-invoke you on the next cycle to do the next phase.
 - NEVER run more than one /code-review round or one /security-review round per session. Running a review loop in a single session is what overflows the context window — that is the bug this design fixes.
 - The Workflow board status above is your phase marker. Read the current status for this PR to know where you are; advance it as instructed when a phase completes. It is ONLY a phase marker among PHASE A-H below — it is NEVER an approval gate to re-derive or check. The Issue-workflow "Plan First" Approved gate (agent-roles.instructions.md) is scoped explicitly to picking up an Issue that has no existing PR; this PR's existence already proves that gate was passed, by a human, before this PR was ever opened. If this PR's own card still reads "Not Started", "Planning", or "Approved" (e.g. a previous session opened the draft PR but died before advancing its card, or a fresh board mis-seeded it), treat that exactly as "Development" and continue straight into PHASE A-C below — do NOT block pending approval, and do NOT treat it as evidence the linked issue was never approved. PHASE C's "linked-issue work remains" explicitly includes doing the FULL implementation described in the issue's approved plan when this PR is still a scaffold-only draft (e.g. only a placeholder CHANGELOG.md commit exists) — that is precisely the deferred work Development-phase sessions exist to finish, not a reason to escalate or block (#1276).

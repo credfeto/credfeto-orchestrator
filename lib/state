@@ -501,6 +501,44 @@ clear_issue_plan_block_marker() {
     rm -f "$(issue_plan_block_marker_file_path "${item_id}")" 2>/dev/null || true
 }
 
+# Returns the path to the per-item "previous session ended by backgrounding a local check and
+# stopping its turn to wait for a later notification" marker (#1326/credfeto-orchestrator#1335).
+# Written by invoke_claude (lib/podman) whenever the just-completed session's own result text
+# matches that pattern — confirmed live incident: credfeto-dotnet-repo-tools#215 repeated exactly
+# this six times over 5.5 hours (every invocation here is fresh and non-resumed, so "wait for a
+# Monitor notification" after ending the turn is never actually honoured — the backgrounded
+# process and the container both die with the turn) before being wrongly auto-Blocked for "no
+# progress". Unlike issue_plan_block_marker_file_path above, this is deliberately overwritten
+# (not accumulated) every invocation to reflect only the MOST RECENT session's outcome — read by
+# the next invocation's prompt builder to inject an explicit warning, and implicitly cleared the
+# moment a session produces a result that doesn't match (including genuine progress).
+background_stall_marker_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.background-stall' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Returns 0 (true) if the immediately preceding session on this item ended with the
+# background-stall pattern described above.
+background_stall_marked() {
+    [ -f "$(background_stall_marker_file_path "$1" "$2")" ]
+}
+
+# Marks the background-stall pattern for this item. Best-effort: a failure to write only means
+# the next session's prompt misses the extra warning, not that anything else breaks.
+mark_background_stall() {
+    local item_type="$1" item_id="$2"
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    touch "$(background_stall_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
+        || warn "Failed to write background-stall marker for ${item_type} #${item_id} — the next session will not see the extra warning"
+}
+
+# Clears the background-stall marker — called on every non-error invocation whose result does
+# NOT match the pattern, so the marker only ever reflects the most recent session.
+clear_background_stall_marker() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(background_stall_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+}
+
 # Clears the blocked-notification marker for an item, re-arming the notifier so a
 # future transition back into the blocked state notifies again. Call on any path
 # where the item is observed open and not carrying the Blocked label.

@@ -279,7 +279,7 @@ main() {
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
-    local other_open_pr
+    local other_open_pr background_stall
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -1111,6 +1111,15 @@ main() {
 
         container_ai_instructions=$(host_to_container_path "${ai_instructions}")
 
+        # Whether the immediately preceding session on THIS exact item (issue or, after a pivot
+        # above, the PR it now points at) ended in the background-stall pattern (#1326/#1335) —
+        # threaded into the prompt so the agent is warned explicitly instead of silently repeating
+        # it. Deliberately re-checked here rather than earlier: item_id/item_type may have just
+        # been reassigned by the issue-to-PR pivot, and the marker must match whichever item is
+        # actually about to be invoked.
+        background_stall=false
+        background_stall_marked "${item_type}" "${item_id}" && background_stall=true
+
         require_trusted_logins || continue
         if [ "${item_type}" = "Issue" ]; then
             # plan_approved_or_later is reused as-is from earlier in this same iteration (set
@@ -1119,12 +1128,12 @@ main() {
             # call here would just re-read the same cached value (#1321 review).
             stale_issue_branch=$(resolve_resumable_issue_branch "${item_id}") || stale_issue_branch=""
             prompt=$(build_issue_prompt "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}")
+            claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}" "${background_stall}")
         else
             local is_dependency_pr
             is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
