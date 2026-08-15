@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Container/Podman invocation: launching a fresh Claude Code session in a locked-down agent
 # container, cgroup/SSH/GPG setup around it, bind-mount validation, and cleanup. Also the
-# agent-image SHA lookup used by the environment-block auto-unblock feature.
+# agent-image SHA lookup used by the environment-block auto-unblock feature, and parsing/
+# surfacing any permission_denials recorded in a run's result.
 
 # Runs a single podman-based claude invocation, writing JSON output to tmpfile.
 # On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
@@ -110,6 +111,31 @@ handle_claude_is_error() {
     notify_discord_claude_error "${item_type}" "${item_id}" "${result_text}"
     rm -f "${tmpfile}"
     die "Claude invocation failed: ${result_text}"
+}
+
+# Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
+# Today the only thing that can produce an entry here is a PreToolUse hook block — the
+# container always passes --dangerously-skip-permissions, so Claude Code's own permission
+# system cannot deny anything yet. Once that flag is replaced with an active permission mode
+# (see #1327), denials can also originate there, with no code change needed on this side: the
+# field's shape is the same regardless of source. Always logs a summary when denials are
+# present, and notifies Discord so a denial doesn't require someone to go read journald to
+# notice it. No-ops (no log, no notification) when the array is absent or empty.
+# Arguments: tmpfile (the Claude JSON result), item_type, item_id.
+handle_claude_permission_denials() {
+    local tmpfile="$1" item_type="$2" item_id="$3"
+    local denials_count
+    denials_count=$(jq -r '(.permission_denials // []) | length' "${tmpfile}" 2>/dev/null || printf '0')
+    [ "${denials_count}" -gt 0 ] 2>/dev/null || return 0
+
+    local summary
+    summary=$(jq -r '(.permission_denials // [])[] | "- \(.tool_name // "unknown"): \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))"' "${tmpfile}" 2>/dev/null || printf '')
+    [ -n "${summary}" ] || return 0
+
+    warn "Claude reported ${denials_count} permission denial(s) for ${REPO_FULL}:
+${summary}"
+
+    notify_discord_permission_denials "${item_type}" "${item_id}" "${summary}" "${denials_count}"
 }
 
 # In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
@@ -514,6 +540,11 @@ invoke_claude() {
         cleanup_dangling_images
         return 2
     fi
+
+    # Parsed before the is_error check below: handle_claude_is_error always dies (and deletes
+    # tmpfile) on an errored run, so denials would otherwise never surface on exactly the runs
+    # where they are most likely to explain the failure.
+    handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
 
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
