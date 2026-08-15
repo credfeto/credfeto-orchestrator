@@ -257,6 +257,30 @@ find_open_nonblocked_pr_for_repo() {
     return 0
 }
 
+# Returns the number of the first open PR in the given repo, regardless of author or Blocked
+# label — the broad "is this repo's single active-branch/PR slot occupied at all" question,
+# distinct from find_open_nonblocked_pr_for_repo above, which deliberately excludes Blocked PRs
+# and non-bot-authored PRs for its own narrower "is there a PR I should pivot into and drive"
+# question (#1131/#1134). A Blocked PR, or one authored by a human or another tool, still
+# occupies the repo's one-active-branch-or-PR-at-a-time slot per the mandatory PR Lifecycle rule
+# (task-workflow.instructions.md) — it is not evidence that a separate Issue in the same repo is
+# genuinely stuck, so it must never itself be treated as a reason to add the Blocked label to
+# that Issue (#1326: "an existing PR being open is NOT a reason to add a blocked label").
+# Outputs the PR number on stdout, or empty string if the repo has no open PR at all.
+# Returns 1 if the gh call fails — callers must treat this the same as "cannot tell" and skip
+# the decision that depends on it, never default to the more disruptive outcome (blocking).
+find_any_open_pr_for_repo() {
+    local repo_full="$1"
+    local pr_list
+    pr_list=$(gh pr list \
+        --repo "${repo_full}" \
+        --state open \
+        --limit 200 \
+        --json number \
+        2>/dev/null) || return 1
+    printf '%s' "${pr_list}" | jq -r '(.[0].number // empty)'
+}
+
 # Tests whether the bot (_GH_ME) has authored (or co-authored) at least one commit on the given
 # PR — the signal that the bot, not a human, is driving the branch (#1131).
 # Returns 0 when a bot-authored commit exists, 1 when none does, and 2 when the gh fetch fails

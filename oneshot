@@ -279,6 +279,7 @@ main() {
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
+    local other_open_pr
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -698,9 +699,29 @@ main() {
                         issue_idle_advance=1
                     else
                         if [ "${plan_approved_or_later}" = "true" ]; then
-                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
-                            block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
-                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
+                            # Before blocking for idle exhaustion, check whether this repo's
+                            # single active-branch/PR slot is occupied by some OTHER open PR —
+                            # any author, including Blocked (unlike find_open_nonblocked_pr_for_repo
+                            # above, which deliberately excludes those for its own narrower
+                            # pivot-and-drive question). If so, no amount of re-invoking this Issue
+                            # could ever have made progress, so an exhausted idle budget is not a
+                            # "human needs to investigate" signal here — it is normal, self-clearing
+                            # serialisation once the occupying PR closes (#1326: "an existing PR
+                            # being open is NOT a reason to add a blocked label"). A failed check is
+                            # treated the same as "occupied" — skip rather than risk a wrongful
+                            # block on an already-uncertain read.
+                            other_open_pr=$(find_any_open_pr_for_repo "${item_repo}") || {
+                                warn "Failed to check for an occupying PR in ${item_repo} — not blocking Issue #${item_id} on an uncertain read"
+                                other_open_pr="unknown"
+                            }
+                            if [ -n "${other_open_pr}" ]; then
+                                info "Issue #${item_id} in ${item_repo}: idle budget exhausted but another open PR occupies the repo's active-branch slot — deferring, not blocking"
+                                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted but another open PR occupies the active-branch slot - deferring")")
+                            else
+                                info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
+                                block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
+                            fi
                         elif issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
                             && ! issue_plan_block_marked "${item_id}"; then
                             # The agent posted a plan and ended its session without applying
