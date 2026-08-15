@@ -3554,6 +3554,29 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# --- find_any_open_pr_for_repo (#1326) ---------------------------------------------
+
+@test "find_any_open_pr_for_repo returns the first open PR regardless of author or Blocked label" {
+    # shellcheck disable=SC2016
+    make_stub gh 'printf '"'"'[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"someone-else"}}]\n'"'"
+    run find_any_open_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "99" ]
+}
+
+@test "find_any_open_pr_for_repo returns empty when the repo has no open PR" {
+    make_stub gh 'printf "[]\n"'
+    run find_any_open_pr_for_repo "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "find_any_open_pr_for_repo returns 1 when gh fails" {
+    make_stub gh 'exit 1'
+    run find_any_open_pr_for_repo "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
 # --- json_has_commit_author_identity (#1294) --------------------------------------
 
 @test "json_has_commit_author_identity matches on resolved login" {
@@ -6808,7 +6831,7 @@ STUBEOF
     save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
     export GH_CALL_LOG="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; *"--json number"*) printf "[]\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -6817,6 +6840,71 @@ STUBEOF
     [[ "${output}" == *"idle budget exhausted with plan approved but no progress — blocking"* ]]
     grep -q "issue comment 42 --repo org/repo --body This issue's plan is approved" "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main does not block a plan-approved Issue on idle exhaustion when another open PR occupies the repo (#1326)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    find_any_open_pr_for_repo()        { printf '99\n'; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"idle budget exhausted but another open PR occupies the repo's active-branch slot — deferring, not blocking"* ]]
+    [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
+    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
+    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'issue comment' "${GH_CALL_LOG}"
+}
+
+@test "main does not block a plan-approved Issue on idle exhaustion when the occupying-PR check itself fails (#1326)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+    issue_plan_approved() { printf 'true'; }
+    issue_plan_approved_or_later() { printf 'true'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    find_any_open_pr_for_repo()        { return 1; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — not blocking Issue #42 on an uncertain read"* ]]
+    [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
+    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
 }
 
 # --- main() integration: self-heal a plan posted without Blocked (#1286) ----

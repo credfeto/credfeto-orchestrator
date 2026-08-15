@@ -69,6 +69,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Debugging recipe no longer reowns an owner's .git/index to root, and setup-owner self-heals ownership drift before pulling
 - Trusted PR comments left while a PR is BEHIND main or already settled (auto-merge armed, checks green) are no longer silently swallowed by the non-agentic rebase path or the terminal-state skip; both now force a real agent invocation until an actual agent turn has read the comment (#1307)
 - Fixed oneshot silently re-blocking issues and PRs whose Workflow board card had already progressed past Approved, and stopped it from silently re-adding a removed Blocked label to a PR every tick
+- An open PR occupying a repository's single active-branch slot no longer causes a plan-approved Issue to be wrongly marked Blocked once its idle-invocation budget runs out; the orchestrator now checks broadly for any occupying PR (any author, including Blocked ones) before blocking and defers silently instead
 ### Changed
 - Retarget development-full's FROM to development-credfeto-tools and trim its Dockerfile of the NuGet.Config baking, claude-code install, all twelve dotnet tool installs, alias symlinks, and PSScriptAnalyzer install that moved into development-dotnet-tools/development-credfeto-tools
 - Exempt `git clone` and read-only `git config --global|--system --get/--get-all/--get-regexp/--list` from the enforce-git-dash-c Claude hook's `-C <dir>` requirement
