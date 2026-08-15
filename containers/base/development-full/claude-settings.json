@@ -4,7 +4,7 @@
     "pr": ""
   },
   "permissions": {
-    "defaultMode": "auto",
+    "defaultMode": "dontAsk",
     "allow": [
       "Bash(actionlint *)",
       "Bash(ansible-lint *)",
@@ -173,8 +173,20 @@
       "Bash(xmllint *)",
       "Bash(yamllint *)",
       "Bash([ *)",
+      "Agent",
+      "BashOutput",
       "Edit",
+      "Glob",
+      "Grep",
+      "KillShell",
+      "Monitor",
+      "NotebookEdit",
       "Read",
+      "SlashCommand",
+      "Task",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
       "Write"
     ],
     "deny": [

@@ -5,8 +5,12 @@
 # ("Keep command-allowlist and claude-settings.json in sync"). Without this,
 # permissions.allow is free to silently drift behind command-allowlist - as it
 # already had, by the time this test was added (#1313) - with nothing catching
-# it until the day --dangerously-skip-permissions is removed and Claude Code
-# starts blocking on the missing entries.
+# it until the day --dangerously-skip-permissions is removed in favour of
+# --permission-mode dontAsk (#1327). That day is no longer hypothetical: the
+# non-Bash coverage test below (#1329) exists specifically because a missing
+# entry then is not inert, it is a build/test-cycle deadlock waiting to happen
+# (e.g. a denied Monitor call, with every long-running command required to
+# poll it).
 #
 # Reads static repo files only (no HOME/PATH/git interaction), so this
 # intentionally skips the shared setup_isolated_env/cleanup_stubs sandbox
@@ -89,4 +93,52 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
     fi
 
     [ "${failed}" -eq 0 ]
+}
+
+# Non-Bash tool names the agent's mandated workflow provably needs (#1329), independent
+# of the parity check above - that check only ever compares Bash(...) entries, so a bare
+# non-Bash entry (Monitor, Edit, ...) is invisible to it in either direction. Confirmed
+# via #1330's compat spike that no tool is read-only-exempt from an explicit allow entry
+# once --dangerously-skip-permissions is dropped (the one tool tested there without an
+# entry, WebFetch, was denied outright) - so every one of these is required, not a
+# defensive guess. EnterWorktree is deliberately absent: block-git-worktree already gates
+# it via a PreToolUse hook (claude-settings.json's own hooks.PreToolUse), and omitting an
+# allow entry here reinforces that rather than letting the permission layer approve what
+# the hook is meant to block.
+EXPECTED_NON_BASH_TOOLS=(
+    Agent
+    BashOutput
+    Edit
+    Glob
+    Grep
+    KillShell
+    Monitor
+    NotebookEdit
+    Read
+    SlashCommand
+    Task
+    TodoWrite
+    WebFetch
+    WebSearch
+    Write
+)
+
+@test "claude-settings.json permissions.allow contains every non-Bash tool the mandated workflow needs" {
+    [ -s "${SETTINGS}" ] || { echo "SETTINGS not found or empty: ${SETTINGS}" >&2; return 1; }
+
+    local settings_bare_names missing tool
+    settings_bare_names=$(jq -r '.permissions.allow[] | select(test("^[A-Za-z]+$"))' "${SETTINGS}" | sort -u)
+
+    missing=""
+    for tool in "${EXPECTED_NON_BASH_TOOLS[@]}"; do
+        printf '%s\n' "${settings_bare_names}" | grep -qxF "${tool}" \
+            || missing="${missing}${tool}
+"
+    done
+
+    if [ -n "${missing}" ]; then
+        echo "claude-settings.json permissions.allow is missing bare (non-Bash) entries required by #1329:" >&2
+        printf '%s' "${missing}" >&2
+        return 1
+    fi
 }
