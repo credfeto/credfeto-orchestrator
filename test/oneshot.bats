@@ -6421,6 +6421,41 @@ STUBEOF
     [ -f "${tmpfile}" ]
 }
 
+@test "handle_claude_permission_denials survives a non-object tool_input without losing the rest of the batch (code review, #1328)" {
+    # A scalar tool_input makes jq's .tool_input.command indexing a runtime error, not a null —
+    # without normalizing tool_input to an object first, jq aborts the whole $d[] iteration on
+    # the first such entry, and the count line already flushed to stdout survives as a partial,
+    # newline-less result that gets misparsed as denials_count == summary == the bare count.
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":"not-an-object"},{"tool_name":"Bash","tool_input":{"command":"echo hi"}}]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"2 permission denial"* ]]
+    [[ "${output}" == *"Bash: not-an-object"* ]]
+    [[ "${output}" == *"Bash: echo hi"* ]]
+    grep -q "Bash: echo hi" "${notify_log}"
+    grep -q " 2\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials falls back to {} rendering for a null or absent tool_input" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Weird","tool_input":null},{"tool_name":"NoInput"}]}' > "${tmpfile}"
+
+    notify_discord_permission_denials() { return 0; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"2 permission denial"* ]]
+    [[ "${output}" == *"Weird: {}"* ]]
+    [[ "${output}" == *"NoInput: {}"* ]]
+}
+
 # --- report_unparseable_rate_limit --------------------------------------------
 
 @test "handle_claude_is_error does not call report_unparseable_rate_limit when parse_reset_time succeeds" {

@@ -166,6 +166,14 @@ handle_claude_permission_denials() {
     # denial, rather than two separate parses of the same array (simplify review, #1328): a
     # second invocation re-reading and re-tokenizing the same tmpfile to derive a value already
     # available from the first buys nothing.
+    # tool_input is normalized to an object before indexing .command/.file_path — Claude Code's
+    # own denial entries always carry an object there today, but indexing a non-object directly
+    # (a bare string, say) is a jq runtime error, not a null: jq aborts the whole $d[] iteration
+    # on the first such entry, and the count line already flushed to stdout survives that as a
+    # newline-less partial result the caller's count/summary split silently misparses as both
+    # fields being the bare count (code review, #1328). Normalizing away from home keeps this
+    # resilient to any future denial shape without depending on jq's specific error-recovery
+    # behaviour for indexing.
     local denials_output
     denials_output=$(jq -r '
         (.permission_denials // []) as $d
@@ -173,7 +181,9 @@ handle_claude_permission_denials() {
         | if $n == 0 then empty
           else
             ($n | tostring),
-            ($d[] | "- \(.tool_name // "unknown"): \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))")
+            ($d[] | "- \(.tool_name // "unknown"): \((.tool_input // {}) as $ti |
+                if ($ti | type) == "object" then ($ti.command // $ti.file_path // ($ti | tostring))
+                else ($ti | tostring) end)")
           end
         ' "${tmpfile}" 2>/dev/null)
     [ -n "${denials_output}" ] || return 0
