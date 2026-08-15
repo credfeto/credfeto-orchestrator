@@ -115,10 +115,12 @@ assert_ownership_heal_before_selfupdate() {
 # Extracts a single-quoted /bin/sh -c '...' command embedded in a generated unit file, given a
 # grep marker unique to the target ExecStartPre line. Shared by selfupdate_retry_cmd_for and
 # ownership_heal_cmd_for below, which differ only in how they configure the unit before
-# generating it and which line's marker they pass in. A broken extraction (e.g. the grep stops
-# matching after an install-timer change) must not silently degrade a caller into
-# `/bin/sh -c ""`, which always exits 0 and would make a no-drift-style test pass vacuously
-# regardless of the real command's behaviour - so an empty result is a hard failure here.
+# generating it and which line's marker they pass in. Returns non-zero on a broken extraction
+# (e.g. the grep stops matching after an install-timer change) rather than printing an empty
+# string - callers must not embed this directly in `run /bin/sh -c "$(...)"`, since a command
+# substitution's exit status is discarded there and an empty result would silently become
+# `/bin/sh -c ""`, which always exits 0 and makes a no-drift-style test pass vacuously regardless
+# of the real command's behaviour; use run_execstartpre_cmd below instead, which checks this.
 extract_execstartpre_cmd() {
     local svc="$1" marker="$2"
     local cmd
@@ -138,6 +140,16 @@ generated_execstartpre_cmd() {
     main >/dev/null
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
     extract_execstartpre_cmd "${svc}" "${marker}"
+}
+
+# Asserts cmd (an already-extracted command from *_cmd_for) is non-empty before running it, then
+# runs it via bats' `run`. Extraction failures must fail loudly here rather than at the call
+# site: `run /bin/sh -c "$(foo)"` discards the command substitution's own exit status, so an
+# empty extraction would otherwise silently become the always-succeeding `/bin/sh -c ""`.
+run_execstartpre_cmd() {
+    local cmd="$1"
+    [ -n "${cmd}" ]
+    run /bin/sh -c "${cmd}"
 }
 
 # Extracts the merge-retry ExecStartPre command for repo_dir as a plain string, ready for
@@ -167,7 +179,7 @@ selfupdate_retry_cmd_for() {
     # +1, comfortably above the step's own 30-second timeout) must treat it as safe to clear.
     touch -d '-10 minutes' "${repo}/.git/refs/heads/main.lock"
 
-    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    run_execstartpre_cmd "$(selfupdate_retry_cmd_for "${repo}")"
     [ "${status}" -eq 0 ]
     [ ! -f "${repo}/.git/refs/heads/main.lock" ]
 
@@ -190,7 +202,7 @@ selfupdate_retry_cmd_for() {
 
     touch "${repo}/.git/refs/heads/main.lock"
 
-    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    run_execstartpre_cmd "$(selfupdate_retry_cmd_for "${repo}")"
     [ "${status}" -ne 0 ]
     [ -f "${repo}/.git/refs/heads/main.lock" ]
 
@@ -235,7 +247,7 @@ make_fake_repo() {
     local repo="${TEST_TMP}/heal-no-drift-repo"
     make_fake_repo "${repo}"
 
-    run /bin/sh -c "$(ownership_heal_cmd_for "${repo}" "${real_user}")"
+    run_execstartpre_cmd "$(ownership_heal_cmd_for "${repo}" "${real_user}")"
     [ "${status}" -eq 0 ]
 }
 
@@ -256,7 +268,7 @@ make_fake_repo() {
     local repo="${TEST_TMP}/heal-drift-repo"
     make_fake_repo "${repo}"
 
-    LC_ALL=C run /bin/sh -c "$(ownership_heal_cmd_for "${repo}" "root")"
+    LC_ALL=C run_execstartpre_cmd "$(ownership_heal_cmd_for "${repo}" "root")"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Operation not permitted"* ]]
 
