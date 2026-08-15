@@ -113,6 +113,23 @@ assert_ownership_heal_before_selfupdate() {
     [[ "${output}" == *"Required tool not found"* ]]
 }
 
+# Extracts a single-quoted /bin/sh -c '...' command embedded in a generated unit file, given a
+# grep marker unique to the target ExecStartPre line. Shared by selfupdate_retry_cmd_for and
+# ownership_heal_cmd_for below, which differ only in how they configure the unit before
+# generating it and which line's marker they pass in. A broken extraction (e.g. the grep stops
+# matching after an install-timer change) must not silently degrade a caller into
+# `/bin/sh -c ""`, which always exits 0 and would make a no-drift-style test pass vacuously
+# regardless of the real command's behaviour - so an empty result is a hard failure here.
+extract_execstartpre_cmd() {
+    local svc="$1" marker="$2"
+    local cmd
+    cmd=$(grep -F "${marker}" "${svc}")
+    cmd="${cmd#*"${marker}"}"
+    cmd="${cmd%\'}"
+    [ -n "${cmd}" ] || return 1
+    printf '%s' "${cmd}"
+}
+
 # Generates the systemd unit for repo_dir and extracts the merge-retry ExecStartPre command as a
 # plain string, ready for `run /bin/sh -c "$(...)"`. Shared by the two regression tests below.
 # REPO_DIR is a plain global create_service_unit reads, so overriding it here means the extracted
@@ -125,11 +142,7 @@ selfupdate_retry_cmd_for() {
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
     # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent socket
     # step a few lines below also matches a bare "/bin/sh -c '".
-    local retry_cmd
-    retry_cmd=$(grep -F "timeout 30 /bin/sh -c '" "${svc}")
-    retry_cmd="${retry_cmd#*-c \'}"
-    retry_cmd="${retry_cmd%\'}"
-    printf '%s' "${retry_cmd}"
+    extract_execstartpre_cmd "${svc}" "timeout 30 /bin/sh -c '"
 }
 
 @test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
@@ -195,15 +208,7 @@ ownership_heal_cmd_for() {
     CURRENT_USER="${current_user}"
     main >/dev/null
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
-    local heal_cmd
-    heal_cmd=$(grep -F "ExecStartPre=+-/bin/sh -c '" "${svc}")
-    heal_cmd="${heal_cmd#*+-/bin/sh -c \'}"
-    heal_cmd="${heal_cmd%\'}"
-    # A broken extraction (e.g. the grep above stops matching after an install-timer change)
-    # must not silently degrade the tests below into `/bin/sh -c ""`, which always exits 0 and
-    # would make the no-drift test pass vacuously regardless of the real command's behaviour.
-    [ -n "${heal_cmd}" ] || return 1
-    printf '%s' "${heal_cmd}"
+    extract_execstartpre_cmd "${svc}" "ExecStartPre=+-/bin/sh -c '"
 }
 
 @test "the ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1300/#1302, real repro)" {
