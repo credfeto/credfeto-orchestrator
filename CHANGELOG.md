@@ -35,6 +35,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Trust GitHub's Advanced Security (code scanning) bot as an automated reviewer/commenter, alongside the existing Copilot review bot
 - Container-build workflow job summaries now show the versions of each explicitly-installed tool (e.g. dotnet SDK LTS/STS versions), not just the pushed image tag.
 - Add test/command-allowlist-parity.bats, asserting every reject-obfuscated-commands command-allowlist entry has a matching claude-settings.json permissions.allow entry (unless blocklisted or explicitly denied); catches the class of drift a simplify-pass review found already shipped once in this same change
+- TBD - to be finalized after review (#1328)
 ### Fixed
 - Make every build-development-*.yml workflow always report its required status check on pull requests, skipping the real build when the PR doesn't touch anything relevant, instead of silently never running and permanently blocking merge
 - Drop the job-level name override on every build-development-*.yml job so its check-run name matches the job id branch protection requires, instead of silently never satisfying the required status check
