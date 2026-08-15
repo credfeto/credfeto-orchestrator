@@ -57,6 +57,28 @@ assert_selfupdate_execstartpre() {
     grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -mmin \+1 -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
 }
 
+# Asserts the ownership-heal ExecStartPre line (#1300/#1302): must run '+'-prefixed (forces root
+# regardless of the unit's User=) combined with '-' (tolerate failure), and detect-then-chown the
+# whole REPO_DIR tree using absolute /usr/bin/find and /usr/bin/chown paths, mirroring
+# setup-owner's clone_or_pull_repo pattern. Uses two separate find calls rather than a single
+# \( -o \) group deliberately (see install-timer) so this line never depends on how systemd's own
+# Exec line parser handles an escape sequence it doesn't recognise.
+assert_ownership_heal_execstartpre() {
+    local svc="$1"
+    grep -qE 'ExecStartPre=\+-/bin/sh -c .\[ -z "\$\(/usr/bin/find ".*" -not -user .* -print -quit 2>/dev/null; /usr/bin/find ".*" -not -group .* -print -quit 2>/dev/null\)" \] \|\| /usr/bin/chown -R .*:.* ".*".$' "${svc}"
+}
+
+# Asserts the ownership-heal step (#1300/#1302) runs before the self-update fetch step, so a
+# healed checkout is guaranteed to be in place before the merge that depends on it — a reorder
+# would keep both assert_* greps above green while silently disabling the fix.
+assert_ownership_heal_before_selfupdate() {
+    local svc="$1"
+    local heal_line fetch_line
+    heal_line=$(grep -n "ExecStartPre=+-/bin/sh -c" "${svc}" | head -1 | cut -d: -f1)
+    fetch_line=$(grep -n "ExecStartPre=-/usr/bin/timeout 60" "${svc}" | head -1 | cut -d: -f1)
+    [ -n "${heal_line}" ] && [ -n "${fetch_line}" ] && [ "${heal_line}" -lt "${fetch_line}" ]
+}
+
 @test "sourcing install-timer defines main without executing it" {
     run declare -F main
     [ "${status}" -eq 0 ]
@@ -159,6 +181,74 @@ selfupdate_retry_cmd_for() {
     [ "${head}" != "${output}" ]
 }
 
+# Generates the systemd unit for repo_dir/current_user and extracts the ownership-heal
+# ExecStartPre command as a plain string, ready for `run /bin/sh -c "$(...)"`. CURRENT_USER is
+# overridden as a plain global the same way selfupdate_retry_cmd_for overrides REPO_DIR above —
+# this bypasses the file-level `id` stub (which returns the unresolvable name "testuser") so the
+# extracted command's `find -user`/`-group` arguments name a real, resolvable account, since a
+# nonexistent username makes find itself error out rather than exercise the detect logic.
+ownership_heal_cmd_for() {
+    local repo_dir="$1" current_user="$2"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    REPO_DIR="${repo_dir}"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    CURRENT_USER="${current_user}"
+    main >/dev/null
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    local heal_cmd
+    heal_cmd=$(grep -F "ExecStartPre=+-/bin/sh -c '" "${svc}")
+    heal_cmd="${heal_cmd#*+-/bin/sh -c \'}"
+    heal_cmd="${heal_cmd%\'}"
+    # A broken extraction (e.g. the grep above stops matching after an install-timer change)
+    # must not silently degrade the tests below into `/bin/sh -c ""`, which always exits 0 and
+    # would make the no-drift test pass vacuously regardless of the real command's behaviour.
+    [ -n "${heal_cmd}" ] || return 1
+    printf '%s' "${heal_cmd}"
+}
+
+@test "the ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1300/#1302, real repro)" {
+    # command bypasses the file-level `id` shell-function stub to get the real account running
+    # this test, so the extracted find/chown command's CURRENT_USER matches the temp repo's
+    # actual on-disk owner and genuinely exercises the no-drift path, not a forced pass.
+    local real_user
+    real_user=$(command id -un)
+
+    local repo="${TEST_TMP}/heal-no-drift-repo"
+    mkdir -p "${repo}/.git"
+    touch "${repo}/.git/index"
+
+    run /bin/sh -c "$(ownership_heal_cmd_for "${repo}" "${real_user}")"
+    [ "${status}" -eq 0 ]
+}
+
+@test "the ownership-heal ExecStartPre detects drift and attempts to reassert ownership (#1300/#1302, real repro)" {
+    # Every file under repo is genuinely owned by the account running this test, not by root, so
+    # naming "root" as CURRENT_USER reproduces real drift (analogous to #1300's root-run
+    # diagnostic command reowning .git/index) without needing privilege to actually chown a file
+    # away from its real owner. The chown this triggers then genuinely fails with "Operation not
+    # permitted" — this test is run unprivileged deliberately, so it proves the detect-then-chown
+    # branch was taken (the exact command the '+' prefix lets systemd run as root in production)
+    # without asserting on privileged behaviour this suite cannot grant itself. If the suite itself
+    # is somehow run as root (e.g. a container-based CI runner), naming "root" as CURRENT_USER
+    # would never look like drift and the chown would genuinely succeed, so skip rather than fail.
+    if [ "$(command id -u)" -eq 0 ]; then
+        skip "requires an unprivileged test runner to reproduce ownership drift"
+    fi
+
+    local repo="${TEST_TMP}/heal-drift-repo"
+    mkdir -p "${repo}/.git"
+    touch "${repo}/.git/index"
+
+    LC_ALL=C run /bin/sh -c "$(ownership_heal_cmd_for "${repo}" "root")"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Operation not permitted"* ]]
+
+    # The failed, unprivileged chown must not have silently succeeded in any partial form: the
+    # repo's actual owner (this test's own account) must be unchanged.
+    run find "${repo}" -not -user "$(command id -un)" -print -quit
+    [ -z "${output}" ]
+}
+
 @test "install-timer creates unit files and invokes systemctl correctly" {
     run main
     [ "${status}" -eq 0 ]
@@ -176,6 +266,8 @@ selfupdate_retry_cmd_for() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_ownership_heal_execstartpre "${svc}"
+    assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
@@ -245,6 +337,8 @@ selfupdate_retry_cmd_for() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_ownership_heal_execstartpre "${svc}"
+    assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"

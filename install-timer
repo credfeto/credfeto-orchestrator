@@ -116,6 +116,26 @@ Environment=SSH_AUTH_SOCK=${ssh_socket}
 # unrelated systemd --user session, which would otherwise wrongly gate a manual/interactive run.
 Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1
 WorkingDirectory=${REPO_DIR}
+# A root-run diagnostic command against REPO_DIR (e.g. a bare 'sudo git ... status', whose optional
+# index-refresh side effect reowns .git/index to root) can leave files under REPO_DIR owned by
+# someone other than ${CURRENT_USER}, which then makes the self-update merge below fail with
+# \"index file open failed: Permission denied\" (#1300) and the unit reports failed indefinitely
+# until a human notices and manually re-runs setup-owner. Mirrors setup-owner's clone_or_pull_repo
+# detect-then-chown pattern so this automatic self-update path self-heals the same way the manual
+# one already does (#1302). ExecStartPre steps run as User=${CURRENT_USER} by default, so only the
+# '+' prefix lets this step run with the privilege needed to chown files it doesn't own; it is also
+# '-'-prefixed (tolerate failure) so a chown failure — e.g. racing a sibling --owner unit's
+# concurrent operation on this same shared checkout, as already called out for setup-owner (#1300
+# review) — does not stop the unit: the fetch/merge immediately after remains the real gate and
+# fails clearly if ownership is still broken. The find is detect-before-write, same as setup-owner:
+# a healthy checkout is never chowned, so a healed checkout stays distinguishable from one that was
+# never broken. Two separate find calls (rather than one with a \\( -o \\) group) deliberately avoid
+# backslash-escaped parentheses in this line: systemd's own Exec line parser applies its own
+# escape-sequence handling before /bin/sh ever sees the string, and that handling has changed
+# across systemd versions for escapes it does not recognise (e.g. systemd/systemd#4697) - exactly
+# the kind of version-dependent silent failure this ExecStartPre step exists to eliminate, so this
+# avoids relying on it at all.
+ExecStartPre=+-/bin/sh -c '[ -z \"\$(/usr/bin/find \"${REPO_DIR}\" -not -user ${CURRENT_USER} -print -quit 2>/dev/null; /usr/bin/find \"${REPO_DIR}\" -not -group ${CURRENT_USER} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${CURRENT_USER}:${CURRENT_USER} \"${REPO_DIR}\"'
 # Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
 # unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the
 # orchestrator from running with whatever was last successfully pulled (#1098). Genuine repo
