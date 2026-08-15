@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Container/Podman invocation: launching a fresh Claude Code session in a locked-down agent
 # container, cgroup/SSH/GPG setup around it, bind-mount validation, and cleanup. Also the
-# agent-image SHA lookup used by the environment-block auto-unblock feature.
+# agent-image SHA lookup used by the environment-block auto-unblock feature, and parsing/
+# surfacing any permission_denials recorded in a run's result.
 
 # Runs a single podman-based claude invocation, writing JSON output to tmpfile.
 # On non-zero exit: handles timeout (exit 124), container-name conflict, or general failure.
@@ -147,6 +148,58 @@ claude_result_indicates_background_stall() {
     local match_rc=$?
     eval "${shopt_nocasematch}"
     return "${match_rc}"
+}
+
+# Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
+# Confirmed live today: a PreToolUse hook block (e.g. enforce-git-dash-c rejecting a bare
+# git fetch) already populates this field, independently of Claude Code's own permission
+# system - the container's --dangerously-skip-permissions flag only disables that separate
+# system, it has no effect on hook blocks. Once that flag is replaced with an active
+# permission mode (see #1327), denials can also originate there, with no code change needed
+# on this side: the field's shape is the same regardless of source. Always logs a summary
+# when denials are present, and notifies Discord so a denial doesn't require someone to go
+# read journald to notice it. No-ops (no log, no notification) when the array is absent,
+# empty, or not an array.
+# Arguments: tmpfile (the Claude JSON result), item_type, item_id.
+handle_claude_permission_denials() {
+    local tmpfile="$1" item_type="$2" item_id="$3"
+
+    # Every permission_denials element is coerced to an object before indexing .tool_name/
+    # .tool_input - indexing a non-object element (e.g. a bare string) is a jq runtime error,
+    # not a null, and aborts the whole $d[] iteration part-way through (code review, #1328);
+    # coercing keeps every entry visible in the summary instead of the iteration dying
+    # silently on the first malformed one. Each rendered line has embedded newlines collapsed
+    # to a single space so one denial is always exactly one summary line, and a tool_input
+    # value with neither .command nor .file_path is truncated so a single odd denial cannot
+    # blow out the log or the Discord field on its own.
+    local summary
+    summary=$(jq -r '
+        def to_obj: if type == "object" then . else {tool_name: "malformed-denial-entry", tool_input: {raw: .}} end;
+        def trunc: if (length > 200) then .[0:200] + "...(truncated)" else . end;
+        (.permission_denials // []) as $raw
+        | ($raw | if type == "array" then . else [] end | map(to_obj)) as $d
+        | $d[]
+        | ((.tool_input // {}) as $ti |
+            if ($ti | type) == "object"
+            then ($ti.command // $ti.file_path // ($ti | tostring | trunc))
+            else ($ti | tostring | trunc)
+            end) as $detail
+        | "- \(.tool_name // "unknown"): \($detail)"
+        | gsub("[\r\n]+"; " ")
+        ' "${tmpfile}" 2>/dev/null)
+    [ -n "${summary}" ] || return 0
+
+    # Counting rendered lines rather than a second independent jq pass means the count can
+    # never disagree with what is actually shown - it IS what was shown (simplify review,
+    # #1328). Every line unconditionally starts with the literal "- " prefix above, so this
+    # is not affected by anything denial content itself might contain.
+    local denials_count
+    denials_count=$(printf '%s\n' "${summary}" | grep -c '^- ')
+
+    warn "Claude reported ${denials_count} permission denial(s) for ${REPO_FULL}:
+${summary}"
+
+    notify_discord_permission_denials "${item_type}" "${item_id}" "${summary}" "${denials_count}"
 }
 
 # In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
@@ -551,6 +604,11 @@ invoke_claude() {
         cleanup_dangling_images
         return 2
     fi
+
+    # Parsed before the is_error check below: handle_claude_is_error always dies (and deletes
+    # tmpfile) on an errored run, so denials would otherwise never surface on exactly the runs
+    # where they are most likely to explain the failure.
+    handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
 
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')

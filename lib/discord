@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Discord webhook notifications: work-item start/resume, no-work, low-disk-space,
-# priorities-unreachable, blocked-item, PR-needs-approval, Claude container error, and
-# rate-limited notices. Also the shared item-URL builder they use.
+# priorities-unreachable, blocked-item, PR-needs-approval, Claude container error,
+# permission-denials, and rate-limited notices. Also the shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id, repo (optional, defaults to REPO_FULL). Falls back to the bare repo URL for an
@@ -523,6 +523,63 @@ notify_discord_claude_error() {
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord embed notification listing tool calls Claude Code denied during a run
+# (parsed from the result JSON's permission_denials array by handle_claude_permission_denials
+# in lib/podman - see that function's own comment for what can currently produce a denial).
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty),
+#            summary (multi-line "- tool: detail" text, already built by the caller),
+#            denials_count (total number of denials the summary was built from)
+# Deduplicates like notify_discord_pr_needs_approval: at most one notification per repo per
+# hour. Deliberate noise trade-off, not an oversight - a run that denies the same command
+# repeatedly (e.g. a stuck retry loop) would otherwise flood the channel with one near-identical
+# embed per invocation. A distinct denial arriving inside that same hour is still visible in
+# the warn() log line even while the Discord alert itself is suppressed.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_permission_denials() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" summary="$3" denials_count="${4:-?}"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file permission_denials "${REPO_FULL}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local url payload
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    # Truncate to stay within Discord's 1024-character field limit. Sliced via jq (codepoint-
+    # aware) rather than bash's byte-offset ${var:0:N}, which can split a multi-byte UTF-8
+    # character in half under a non-UTF-8 locale and corrupt the field - same failure mode and
+    # same fix as notify_discord_blocked_item's item_title above (#1140 review). The summary
+    # here is built from arbitrary command text and file paths (tool_input.command/.file_path),
+    # exactly the kind of content that can legitimately contain multi-byte UTF-8.
+    local truncated_summary
+    truncated_summary=$(printf '%s' "${summary}" | jq -Rsr '
+        if (length > 900) then .[0:900] + "\n... (truncated; see the run log for the full list)"
+        else . end
+        ' 2>/dev/null) \
+        || { warn "Discord: failed to build permission-denials payload"; return 0; }
+
+    # Same 240-char title cap as notify_discord_blocked_item/notify_discord_pr_needs_approval,
+    # for the same reason: an embed title over Discord's 256-char limit makes curl --fail reject
+    # the whole payload. REPO_FULL is always a short owner/repo slug in practice, but the cap
+    # costs nothing and keeps this function honouring the same defensive pattern as its siblings.
+    local title
+    title=$(printf '%s' "Permission Denials (${denials_count}): ${REPO_FULL}" | jq -Rsr '.[0:240]' 2>/dev/null)
+
+    payload=$(jq --null-input \
+        --argjson color 16776960 \
+        --arg title "${title}" \
+        --arg url "${url}" \
+        --arg summary "${truncated_summary}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:[
+            {name:"Denied tool calls",value:$summary,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build permission-denials payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
 # Sends a Discord embed notification when Claude returns a rate-limit error (HTTP 429).
