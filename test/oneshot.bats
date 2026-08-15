@@ -2858,7 +2858,7 @@ STUBEOF
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
     run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
     [ "${status}" -eq 0 ]
-    run ! grep -q "truncated; see the run log" "${args_log}"
+    [ "$(grep -c "truncated; see the run log" "${args_log}")" -eq 0 ]
 }
 
 @test "notify_discord_permission_denials uses repo URL when item type is unknown" {
@@ -3007,7 +3007,7 @@ STUBEOF
     notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
 
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
-    # Overall run still fails: handle_claude_is_error always dies — but the denial must have
+    # Overall run still fails: handle_claude_is_error always dies - but the denial must have
     # been surfaced before tmpfile was deleted on that path (#1328).
     [ "${status}" -ne 0 ]
     grep -q "git status" "${notify_log}"
@@ -6422,10 +6422,9 @@ STUBEOF
 }
 
 @test "handle_claude_permission_denials survives a non-object tool_input without losing the rest of the batch (code review, #1328)" {
-    # A scalar tool_input makes jq's .tool_input.command indexing a runtime error, not a null —
+    # A scalar tool_input makes jq's .tool_input.command indexing a runtime error, not a null -
     # without normalizing tool_input to an object first, jq aborts the whole $d[] iteration on
-    # the first such entry, and the count line already flushed to stdout survives as a partial,
-    # newline-less result that gets misparsed as denials_count == summary == the bare count.
+    # the first such entry, and only entries before it would ever reach the summary.
     local tmpfile
     tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
     printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":"not-an-object"},{"tool_name":"Bash","tool_input":{"command":"echo hi"}}]}' > "${tmpfile}"
@@ -6440,6 +6439,60 @@ STUBEOF
     [[ "${output}" == *"Bash: echo hi"* ]]
     grep -q "Bash: echo hi" "${notify_log}"
     grep -q " 2\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials survives a non-object denial ARRAY ELEMENT without losing the rest of the batch (code review, #1328)" {
+    # A bare string (or number, etc.) sitting directly in the permission_denials array - not
+    # inside tool_input, the array element itself - makes jq's .tool_name/.tool_input indexing a
+    # runtime error, not a null: without coercing every $d[] element to an object first, jq
+    # aborts the whole iteration on the first such entry and every denial after it is silently
+    # dropped from the summary with no indication anything went wrong.
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":["a bare string entry",{"tool_name":"Bash","tool_input":{"command":"echo hi"}}]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"2 permission denial"* ]]
+    [[ "${output}" == *"malformed-denial-entry"* ]]
+    [[ "${output}" == *"Bash: echo hi"* ]]
+    grep -q "Bash: echo hi" "${notify_log}"
+    grep -q " 2\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials collapses an embedded newline in a denied command to a single summary line" {
+    # Without collapsing embedded newlines, a multi-line denied command (or a malformed entry's
+    # raw JSON dump) would break the "one denial = one summary line" invariant the bash-side
+    # line-count derivation of denials_count depends on.
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"echo one\necho two"}},{"tool_name":"Bash","tool_input":{"command":"echo three"}}]}' > "${tmpfile}"
+
+    local notify_log="${TEST_TMP}/denial_notify.log"
+    notify_discord_permission_denials() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"2 permission denial"* ]]
+    [[ "${output}" == *"Bash: echo one echo two"* ]]
+    grep -q " 2\$" "${notify_log}"
+}
+
+@test "handle_claude_permission_denials truncates an oversized tool_input dump instead of logging it unbounded" {
+    local tmpfile long_value
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    long_value=$(printf 'x%.0s' $(seq 1 500))
+    printf '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"WebFetch","tool_input":{"url":"%s"}}]}' "${long_value}" > "${tmpfile}"
+
+    notify_discord_permission_denials() { return 0; }
+
+    run handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"...(truncated)"* ]]
+    [[ "${output}" != *"${long_value}"* ]]
 }
 
 @test "handle_claude_permission_denials falls back to {} rendering for a null or absent tool_input" {
