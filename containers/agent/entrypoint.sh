@@ -216,8 +216,8 @@ verify_no_user_insteadof() {
 # Workspace trust is what actually gates whether Claude Code auto-loads and acts on a
 # project's own .claude/settings(.local).json and .mcp.json — including hooks (e.g.
 # SessionStart, PreToolUse) and MCP server definitions that execute arbitrary commands.
-# --dangerously-skip-permissions does not grant this; it only bypasses interactive
-# tool-call approval prompts once Claude is already running. Pre-accepting trust below
+# --permission-mode dontAsk (#1331) does not grant this either; it only governs whether
+# Claude asks for approval on a tool call once it is already running. Pre-accepting trust below
 # for the repo checkout is safe ONLY because any such config it carries is verified
 # below to be byte-identical to the human-reviewed version already merged to
 # origin/main — some repos legitimately commit a .claude/settings.json (e.g. a
@@ -268,14 +268,16 @@ git config --global commit.gpgsign  true
 #
 # Also pre-accept the workspace-trust dialog for the repo checkout (CONTAINER_REPO_PATH
 # in oneshot, and this image's WORKDIR — verify_no_repo_claude_config above has already
-# confirmed it carries no .claude/.mcp config of its own): every invocation is a fresh
-# container with no memory of prior runs (by design, see oneshot's PHASE DISCIPLINE), so
-# there is never a prior run to have accepted the interactive trust prompt, and --print
-# mode has no way to show it. Without this, Claude Code silently ignores every
-# permissions.allow entry in the project's own /home/developer/.claude/settings.json
-# (real effect on this run is masked by --dangerously-skip-permissions also being
-# passed, but the allow-list exists as its own defence-in-depth layer and should
-# actually be honoured).
+# confirmed it carries no .claude/.mcp config of its own, or one byte-identical to the
+# reviewed origin/main version): every invocation is a fresh container with no memory of
+# prior runs (by design, see oneshot's PHASE DISCIPLINE), so there is never a prior run to
+# have accepted the interactive trust prompt, and --print mode has no way to show it.
+# Without this, a repo checkout that legitimately commits its own project-level
+# .claude/settings.json would have it silently ignored instead of honoured. This is
+# unrelated to the image's own baked-in user-level /home/developer/.claude/settings.json
+# (containers/base/development-full/claude-settings.json) - that file is not project-level
+# and is not gated by workspace trust at all; its permissions.allow is enforced by
+# --permission-mode dontAsk (#1331) regardless of this pre-acceptance.
 if [ ! -f "${HOME}/.claude.json" ]; then
     printf '{"firstStartTime":"%s","projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "${WORKSPACE_REPO_DIR:-/workspace/repo}" \

@@ -151,12 +151,13 @@ claude_result_indicates_background_stall() {
 }
 
 # Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
-# Confirmed live today: a PreToolUse hook block (e.g. enforce-git-dash-c rejecting a bare
-# git fetch) already populates this field, independently of Claude Code's own permission
-# system - the container's --dangerously-skip-permissions flag only disables that separate
-# system, it has no effect on hook blocks. Once that flag is replaced with an active
-# permission mode (see #1327), denials can also originate there, with no code change needed
-# on this side: the field's shape is the same regardless of source. Always logs a summary
+# Confirmed live: a PreToolUse hook block (e.g. enforce-git-dash-c rejecting a bare
+# git fetch) populates this field independently of Claude Code's own permission system.
+# Since #1331, the container also runs under --permission-mode dontAsk (previously
+# --dangerously-skip-permissions, which bypassed that separate system entirely and so
+# could never populate this field on its own), so a denial can now originate from either
+# source, with no code change needed here: the field's shape is the same regardless of
+# origin. Always logs a summary
 # when denials are present, and notifies Discord so a denial doesn't require someone to go
 # read journald to notice it. No-ops (no log, no notification) when the array is absent,
 # empty, or not an array.
@@ -580,7 +581,7 @@ invoke_claude() {
         --model opusplan
         --print
         --output-format json
-        --dangerously-skip-permissions
+        --permission-mode dontAsk
         --add-dir "${CONTAINER_REPO_PATH}"
         # -- terminates option/variadic parsing before the positional prompt.
         # --add-dir takes <directories...> (variadic) — without this separator the

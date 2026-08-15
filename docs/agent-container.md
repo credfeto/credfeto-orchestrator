@@ -11,9 +11,12 @@ the host.
 
 ## Why a container, and why locked down this specifically
 
-The agent is given `--dangerously-skip-permissions` (it doesn't ask "can I run this command?"
-before every tool call) so it can work unattended overnight. Something has to make that safe.
-The container is that something:
+The agent runs under `--permission-mode dontAsk` (it doesn't stop to ask "can I run this
+command?" before every tool call - there's no human present overnight to answer) against an
+explicit `permissions.allow` list naming exactly the commands and tools the mandated workflow
+uses, backed by `PreToolUse` hooks that enforce the same boundaries independently of Claude
+Code's own permission system. Something has to make unattended operation safe. The container
+is that something:
 
 - It runs as an ordinary, unprivileged user (`developer`), not root.
 - **Every tool that could install new software or escalate privilege is physically deleted from
