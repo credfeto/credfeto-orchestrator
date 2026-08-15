@@ -2847,7 +2847,7 @@ STUBEOF
     long_summary=$(printf -- '- Bash: git status %.0s' $(seq 1 100))
     run notify_discord_permission_denials "Issue" "42" "${long_summary}" "100"
     [ "${status}" -eq 0 ]
-    grep -q "truncated; see the run's own logs for the full list" "${args_log}"
+    grep -q "truncated; see the run log for the full list" "${args_log}"
     grep -q "Permission Denials (100)" "${args_log}"
 }
 
@@ -2858,7 +2858,7 @@ STUBEOF
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
     run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
     [ "${status}" -eq 0 ]
-    run ! grep -q "truncated; see the run's own logs" "${args_log}"
+    run ! grep -q "truncated; see the run log" "${args_log}"
 }
 
 @test "notify_discord_permission_denials uses repo URL when item type is unknown" {
