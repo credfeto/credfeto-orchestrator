@@ -86,6 +86,24 @@ run_hook() {
     [ "${status}" -eq 2 ]
 }
 
+# --- pre-commit-check ------------------------------------------------------
+
+@test "pre-commit-check without run_in_background is blocked" {
+    run_hook "pre-commit-check"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'pre-commit-check must run with run_in_background: true'* ]]
+}
+
+@test "pre-commit-check with run_in_background true is allowed" {
+    run_hook "pre-commit-check" true
+    [ "${status}" -eq 0 ]
+}
+
+@test "a path-qualified pre-commit-check invocation is blocked" {
+    run_hook "/home/user/bin/pre-commit-check"
+    [ "${status}" -eq 2 ]
+}
+
 # --- dotnet build / dotnet test ------------------------------------------
 
 @test "dotnet build without run_in_background is blocked" {

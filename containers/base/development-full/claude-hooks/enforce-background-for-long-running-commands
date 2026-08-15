@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Blocks git commit, pre-commit, dotnet build, dotnet test, npm test, and bun
-# test unless the tool call sets run_in_background: true.
+# Blocks git commit, pre-commit, pre-commit-check, dotnet build, dotnet test,
+# npm test, and bun test unless the tool call sets run_in_background: true.
 # Exit 2 = blocked, 0 = allowed.
 #
 # credfeto-long-running-commands (this repo's own AI instructions) mandates
-# that these five commands have no bounded, predictable duration and must
-# always run via a background-task mechanism, never in the foreground,
-# regardless of how fast the specific run is expected to be. A foreground
-# run that outlives the tool's own timeout gets killed mid-run, which skips
-# the target process's own cleanup (a shell EXIT trap, a runtime's
+# that these commands have no bounded, predictable duration and must always
+# run via a background-task mechanism, never in the foreground, regardless
+# of how fast the specific run is expected to be. A foreground run that
+# outlives the tool's own timeout gets killed mid-run, which skips the
+# target process's own cleanup (a shell EXIT trap, a runtime's
 # IDisposable-style teardown, etc.) and has previously left orphaned state
 # behind. Before this hook existed, nothing enforced the rule but prose.
+# pre-commit-check is this repo's own wrapper script that runs pre-commit
+# against the existing checked-out repo (as opposed to invoking pre-commit
+# directly) — it shares pre-commit's unbounded hook-chain duration, so it is
+# checked identically, immediately after the pre-commit check below.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
 # the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
@@ -104,6 +108,10 @@ while IFS= read -r call_line; do
 
     if [ "$tok" = "pre-commit" ] || [[ "$tok" == */pre-commit ]]; then
       block 'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
+    fi
+
+    if [ "$tok" = "pre-commit-check" ] || [[ "$tok" == */pre-commit-check ]]; then
+      block 'pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
     fi
 
     if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
