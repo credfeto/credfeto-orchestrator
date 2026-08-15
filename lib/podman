@@ -124,13 +124,25 @@ handle_claude_is_error() {
 # Arguments: tmpfile (the Claude JSON result), item_type, item_id.
 handle_claude_permission_denials() {
     local tmpfile="$1" item_type="$2" item_id="$3"
-    local denials_count
-    denials_count=$(jq -r '(.permission_denials // []) | length' "${tmpfile}" 2>/dev/null || printf '0')
-    [ "${denials_count}" -gt 0 ] 2>/dev/null || return 0
 
-    local summary
-    summary=$(jq -r '(.permission_denials // [])[] | "- \(.tool_name // "unknown"): \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))"' "${tmpfile}" 2>/dev/null || printf '')
-    [ -n "${summary}" ] || return 0
+    # One jq call emits the count on its own first line, followed by one formatted line per
+    # denial, rather than two separate parses of the same array (simplify review, #1328): a
+    # second invocation re-reading and re-tokenizing the same tmpfile to derive a value already
+    # available from the first buys nothing.
+    local denials_output
+    denials_output=$(jq -r '
+        (.permission_denials // []) as $d
+        | ($d | length) as $n
+        | if $n == 0 then empty
+          else
+            ($n | tostring),
+            ($d[] | "- \(.tool_name // "unknown"): \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))")
+          end
+        ' "${tmpfile}" 2>/dev/null)
+    [ -n "${denials_output}" ] || return 0
+
+    local denials_count="${denials_output%%$'\n'*}"
+    local summary="${denials_output#*$'\n'}"
 
     warn "Claude reported ${denials_count} permission denial(s) for ${REPO_FULL}:
 ${summary}"
