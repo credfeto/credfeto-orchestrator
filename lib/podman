@@ -112,6 +112,43 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Returns 0 (true) if the given Claude result text shows the session ended by backgrounding a
+# local check (build/test/pre-commit) and stopping its turn to "wait" for a later notification
+# instead of polling for it within the same turn (#1326/credfeto-orchestrator#1335). Confirmed
+# live incident: credfeto-dotnet-repo-tools#215's approved plan sat untouched through six
+# consecutive invocations over 5.5 hours, every one of them backgrounding the mandatory Pre-Work
+# Baseline Check and ending its turn on phrasing this pattern matches (e.g. "I'll pause here and
+# wait for the Monitor notification when it completes", "I'll continue automatically once that
+# completes") — before being wrongly auto-Blocked for "no progress". Every invocation here is
+# fresh and non-resumed: the backgrounded process and the container running it are both killed
+# the instant the turn ends, so no such notification is ever actually delivered.
+# Deliberately narrow to "background"/"Monitor"/"notification" phrasing so it does not fire on
+# the legitimate, instructed form of stopping a turn — e.g. "stopping here, the next cycle will
+# pick up once CI settles" — which waits on GitHub-side state that genuinely does survive between
+# invocations and is explicitly allowed by the Container-vs-GitHub rule.
+# Takes the already-extracted result TEXT (not a tmpfile) — the caller already runs the one
+# canonical `jq -r '.result // ""'` query for logging; reusing that string here, matched with a
+# plain bash regex, avoids a second jq invocation entirely (and, in tests, avoids depending on a
+# jq stub recognising a filter it was never written to expect).
+claude_result_indicates_background_stall() {
+    local result_text="$1"
+    local stall_re='background.*(wait|still running|pause here)'
+    stall_re+='|wait(ing)?[^.]*(background|monitor|notification)'
+    stall_re+='|monitor (will|task)[^.]*(notif|wake)'
+    stall_re+='|notify me (when|once)'
+    stall_re+='|notification[^.]*before (proceeding|continuing)'
+    stall_re+='|continue automatically'
+    stall_re+='|I.ll continue (once|automatically)'
+    stall_re+="|I.ll be notified"
+    local shopt_nocasematch
+    shopt_nocasematch=$(shopt -p nocasematch)
+    shopt -s nocasematch
+    [[ "${result_text}" =~ ${stall_re} ]]
+    local match_rc=$?
+    eval "${shopt_nocasematch}"
+    return "${match_rc}"
+}
+
 # In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
 # directly contains processes from having child cgroups with domain controllers
 # (memory, cpu, pids).  For Type=oneshot services the process lands directly
@@ -521,7 +558,20 @@ invoke_claude() {
         handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
-    jq -r '.result // ""' "${tmpfile}" >&2
+    local result_text
+    result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
+
+    # Persist whether THIS session ended in the background-stall pattern (see
+    # claude_result_indicates_background_stall above) so the next invocation's prompt can warn
+    # about it explicitly — deliberately overwritten every time, not accumulated, so the marker
+    # always reflects only the most recent session's outcome.
+    if claude_result_indicates_background_stall "${result_text}"; then
+        mark_background_stall "${item_type}" "${item_id}"
+    else
+        clear_background_stall_marker "${item_type}" "${item_id}"
+    fi
+
+    printf '%s\n' "${result_text}" >&2
 
     # Sanity check that Claude actually produced a JSON result object rather than empty output
     # or a stream fragment — a fresh run that dies before the final result would otherwise be

@@ -136,6 +136,22 @@ teardown() {
     [[ "${output}" == *"survives independently of this container"* ]]
 }
 
+@test "build_issue_claude_md omits the background-stall warning by default" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"MANDATORY, READ FIRST"* ]]
+    [[ "${output}" != *"backgrounding a local check"* ]]
+}
+
+@test "build_issue_claude_md includes the background-stall warning when the previous session stalled (#1326/#1335)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "${REPO_WORK_DIR}" "false" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"MANDATORY, READ FIRST"* ]]
+    [[ "${output}" == *"backgrounding a local check"* ]]
+    [[ "${output}" == *"wait for a Monitor notification"* ]]
+    [[ "${output}" == *"killed the instant that turn ended"* ]]
+}
+
 @test "build_issue_claude_md mandates run_in_background for pre-commit, dotnet test, npm test, and bun test (#1270)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
@@ -407,6 +423,28 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"branch names contain slashes"* ]]
     [[ "${output}" == *"foreground"* ]]
+}
+
+@test "build_pr_claude_md omits the background-stall warning by default" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"MANDATORY, READ FIRST"* ]]
+    [[ "${output}" != *"backgrounding a local check"* ]]
+}
+
+@test "build_pr_claude_md includes the background-stall warning when the previous session stalled (#1326/#1335)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "UNKNOWN" "" "${REPO_WORK_DIR}" "" "false" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"MANDATORY, READ FIRST"* ]]
+    [[ "${output}" == *"backgrounding a local check"* ]]
+    [[ "${output}" == *"wait for a Monitor notification"* ]]
+    [[ "${output}" == *"killed the instant that turn ended"* ]]
+}
+
+@test "build_pr_claude_md omits the background-stall warning for dependency PRs even when the flag is true" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "UNKNOWN" "" "${REPO_WORK_DIR}" "" "true" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"MANDATORY, READ FIRST"* ]]
 }
 
 @test "build_pr_claude_md instructs backgrounding git commit and waiting for it to finish instead of ending the turn (#1270)" {
@@ -2955,6 +2993,53 @@ STUBEOF
     CLAUDE_MD_TMPFILE="sentinel"
     invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
     [ -z "${CLAUDE_MD_TMPFILE}" ]
+}
+
+@test "invoke_claude marks the background-stall marker when the session result matches the pattern (#1326/#1335)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf "I'll pause here and wait for the Monitor notification when it completes.\n" ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"..."}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "215" "# per-item instructions" 2>/dev/null
+    [ -f "${SESSION_BASE_DIR}/Issue_215.background-stall" ]
+}
+
+@test "invoke_claude clears the background-stall marker when the session result does not match the pattern" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}" "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_215.background-stall"
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf 'Opened draft PR #284 and moved the board to Development.\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"..."}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "215" "# per-item instructions" 2>/dev/null
+    [ ! -f "${SESSION_BASE_DIR}/Issue_215.background-stall" ]
 }
 
 @test "invoke_claude creates CLAUDE_MD_TMPFILE as a regular file (not a directory) from XDG_RUNTIME_DIR when set" {
@@ -6151,6 +6236,75 @@ STUBEOF
     [ ! -f "${gh_log}" ] || [ ! -s "${gh_log}" ]
 }
 
+# --- claude_result_indicates_background_stall (#1326/#1335) --------------------
+
+@test "claude_result_indicates_background_stall matches every confirmed #215 incident phrasing" {
+    local texts=(
+        "The pre-commit baseline check (buildcheck + build) is still running in the background. I'll pause here and wait for the Monitor notification when it completes before proceeding to branch creation and the draft PR."
+        "Waiting for the backgrounded pre-commit baseline check to finish; the Monitor will notify me when it completes."
+        "I'll pause here and wait for the pre-commit Monitor task to notify me before continuing."
+        "Still waiting on the background pre-commit/test run to complete."
+        "I'll skip detailed task tracking overhead and just wait for the baseline check notification before proceeding."
+        "I'm now waiting on the mandatory Pre-Work Baseline Check (pre-commit --all-files, running in background) to finish before creating the branch — I'll continue automatically once that completes."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -eq 0 ] || { echo "expected match for: ${t}"; false; }
+    done
+}
+
+@test "claude_result_indicates_background_stall does not match legitimate GitHub-side stop reasons" {
+    local texts=(
+        "PHASE H complete: PR #216 was still a draft, so it was moved out of draft and auto-merge was enabled, with a status comment posted. Stopping here per phase discipline — the next cycle will pick up once GitHub settles this state."
+        "Auto-merge is already enabled and no other phase applies — the PR is ready and just waiting on the required human review/checks, which is expected branch-protection behavior."
+        "Phase F (Security review) is complete: security review found no findings, board advanced from AI Security Review to AI Coverage. Per phase discipline, stopping here — the next cycle will pick up PHASE G (Coverage)."
+        "Work on issue #177 is complete for this cycle. Opened draft PR #216, assigned myself. Updated Workflow board status to Development."
+        "Issue #244 is blocked pending explicit human approval — done for this session."
+        "Waiting for a human to review and approve the plan before proceeding."
+        "PR #99 CI checks pending — deferring to the next cycle when GitHub settles."
+        ""
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -ne 0 ] || { echo "expected no match for: ${t}"; false; }
+    done
+}
+
+# --- background-stall marker (lib/state, #1326/#1335) ---------------------------
+
+@test "background_stall_marked is false when no marker file exists" {
+    run background_stall_marked "Issue" "42"
+    [ "${status}" -ne 0 ]
+}
+
+@test "mark_background_stall then background_stall_marked round-trips" {
+    mark_background_stall "Issue" "42"
+    run background_stall_marked "Issue" "42"
+    [ "${status}" -eq 0 ]
+}
+
+@test "clear_background_stall_marker removes the marker" {
+    mark_background_stall "PullRequest" "7"
+    clear_background_stall_marker "PullRequest" "7"
+    run background_stall_marked "PullRequest" "7"
+    [ "${status}" -ne 0 ]
+}
+
+@test "clear_background_stall_marker is a no-op when no marker exists" {
+    run clear_background_stall_marker "Issue" "99"
+    [ "${status}" -eq 0 ]
+}
+
+@test "background_stall marker is keyed independently per item type and id" {
+    mark_background_stall "Issue" "1"
+    run background_stall_marked "PullRequest" "1"
+    [ "${status}" -ne 0 ]
+    run background_stall_marked "Issue" "2"
+    [ "${status}" -ne 0 ]
+}
+
 @test "report_unparseable_rate_limit creates a new issue when no open tracking issue exists" {
     local gh_log="${TEST_TMP}/gh_args"
     # Stub: gh issue list outputs nothing (no open tracker found after jq filtering).
@@ -7061,6 +7215,61 @@ STUBEOF
     [[ "${output}" == *"Found actionable Issue #42"* ]]
     [ -f "${captured_arg7}" ]
     [ "$(cat "${captured_arg7}")" = "chore/42-fix" ]
+}
+
+@test "main threads background_stall=true into the generated CLAUDE.md when the previous session stalled (#1326/#1335)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    local captured_arg8="${TEST_TMP}/build-issue-claude-md-arg8"
+    build_issue_claude_md() { printf '%s\n' "$8" > "${captured_arg8}"; printf 'mock-issue-claude-md\n'; }
+
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.background-stall"
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'new-fp\n'; }
+    load_issue_fingerprint()      { printf ''; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    [ -f "${captured_arg8}" ]
+    [ "$(cat "${captured_arg8}")" = "true" ]
+}
+
+@test "main threads background_stall=false into the generated CLAUDE.md when no marker exists (#1326/#1335)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    local captured_arg8="${TEST_TMP}/build-issue-claude-md-arg8-false"
+    build_issue_claude_md() { printf '%s\n' "$8" > "${captured_arg8}"; printf 'mock-issue-claude-md\n'; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'new-fp\n'; }
+    load_issue_fingerprint()      { printf ''; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    [ -f "${captured_arg8}" ]
+    [ "$(cat "${captured_arg8}")" = "false" ]
 }
 
 @test "main does not skip a board-approved Issue whose own fields are otherwise unchanged (#1204)" {
