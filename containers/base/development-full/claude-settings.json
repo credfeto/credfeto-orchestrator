@@ -71,7 +71,6 @@
       "Bash(find *)",
       "Bash(find * -exec cat *)",
       "Bash(flake8 *)",
-      "Bash(gh api /rate_limit*)",
       "Bash(gh api graphql*)",
       "Bash(gh api repos/*/pulls/*)",
       "Bash(gh api repos/*/releases*)",
