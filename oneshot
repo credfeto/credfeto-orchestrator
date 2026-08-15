@@ -110,12 +110,12 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _build_issue_dirty_branch_section, _build_issue_stale_branch_section, build_issue_claude_md,
 # build_pr_claude_md, build_issue_prompt, and build_pr_prompt are declared in lib/prompts.
 
-# run_claude_fresh, handle_claude_is_error, setup_cgroup_leaf, cleanup_dangling_images,
-# stop_ssh_agent, preload_ssh_keys, verify_gpg_signing_ready, add_gpg_podman_args,
-# validate_bind_mounts, cleanup_claude_invocation_tmpfiles, invoke_claude, and
-# current_agent_image_sha (plus the invocation-scoped globals CLAUDE_MD_TMPFILE,
-# CLAUDE_PROMPT, GPG_PUBKEY_TMPDIR, PODMAN_SECRET_NAME, GH_ENTERPRISE_SECRET_NAME) are
-# declared in lib/podman.
+# run_claude_fresh, handle_claude_is_error, handle_claude_permission_denials,
+# setup_cgroup_leaf, cleanup_dangling_images, stop_ssh_agent, preload_ssh_keys,
+# verify_gpg_signing_ready, add_gpg_podman_args, validate_bind_mounts,
+# cleanup_claude_invocation_tmpfiles, invoke_claude, and current_agent_image_sha (plus the
+# invocation-scoped globals CLAUDE_MD_TMPFILE, CLAUDE_PROMPT, GPG_PUBKEY_TMPDIR,
+# PODMAN_SECRET_NAME, GH_ENTERPRISE_SECRET_NAME) are declared in lib/podman.
 
 # sync_pr_labels_from_linked_issues is declared in lib/github.
 
@@ -129,8 +129,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
 # notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
-# notify_discord_pr_needs_approval, notify_discord_claude_error, and notify_discord_rate_limited
-# are declared in lib/discord.
+# notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
+# and notify_discord_rate_limited are declared in lib/discord.
 
 # rearm_closed_issue_markers and tag_pr_closed_issue are declared in lib/state.
 
