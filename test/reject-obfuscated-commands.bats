@@ -48,6 +48,59 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "set -e alone at the top of a script is allowed (issue #1349)" {
+    run_hook 'set -e
+git status'
+    [ "${status}" -eq 0 ]
+}
+
+@test "set -e followed by more statements on one line is allowed (issue #1349)" {
+    run_hook 'set -e; git status'
+    [ "${status}" -eq 0 ]
+}
+
+@test "bare set with no arguments is still blocked (issue #1349)" {
+    run_hook "set"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set +e is still blocked (issue #1349)" {
+    run_hook "set +e"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set -x is still blocked (issue #1349)" {
+    run_hook "set -x"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set -o pipefail is still blocked (issue #1349)" {
+    run_hook "set -o pipefail"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set -eu (combined short flags) is still blocked (issue #1349)" {
+    run_hook "set -eu"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set -- (positional-parameter reassignment) is still blocked (issue #1349)" {
+    run_hook "set -- a b c"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
+@test "set -e -x (two separate flags) is still blocked (issue #1349)" {
+    run_hook "set -e -x"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not on the known-good command allowlist'* ]]
+}
+
 @test "kill is still not on the command-allowlist and is blocked" {
     run_hook "kill -0 2094"
     [ "${status}" -eq 2 ]
