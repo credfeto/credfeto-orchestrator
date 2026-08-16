@@ -61,6 +61,11 @@ it) rather than a symptom of anything broken.
   If a checkout's `.git/index` is ever found owned by someone other than that checkout's owner,
   that is this exact corruption; `chown` it back to the owner (verify with `git -C <dir> pull`
   as that owner) — do not delete/regenerate it, which would discard any staged state.
+  `setup-owner`'s manual/`--owner` re-run above is no longer the only fix: `install-timer`'s
+  generated unit now carries its own `+`-prefixed, failure-tolerant `ExecStartPre` that detects and
+  reasserts ownership under `REPO_DIR` immediately before its self-update fetch/merge, so the
+  automatic self-update path self-heals the same drift on its own (#1302): a stuck `failed` timer
+  no longer requires a human to notice and manually re-run `setup-owner`.
 
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
 

@@ -57,6 +57,27 @@ assert_selfupdate_execstartpre() {
     grep -qE 'ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c .git -C .* merge --ff-only origin/main \|\| \{ find .*/\.git -name "\*\.lock" -mmin \+1 -delete; git -C .* merge --ff-only origin/main; \}.$' "${svc}"
 }
 
+# Asserts the ownership-heal ExecStartPre line (#1300/#1302): must run '+'-prefixed (forces root
+# regardless of the unit's User=) combined with '-' (tolerate failure), and detect-then-chown the
+# whole REPO_DIR tree using absolute /usr/bin/find and /usr/bin/chown paths, mirroring
+# setup-owner's clone_or_pull_repo pattern. Repeats '-print -quit' on each side of -o rather than
+# grouping with a \( -o \) (see install-timer) so this line never depends on how systemd's own
+# Exec line parser handles an escape sequence it doesn't recognise.
+assert_ownership_heal_execstartpre() {
+    local svc="$1"
+    grep -qE 'ExecStartPre=\+-/bin/sh -c .\[ -z "\$\(/usr/bin/find ".*" -not -user .* -print -quit -o -not -group .* -print -quit 2>/dev/null\)" \] \|\| /usr/bin/chown -R .*:.* ".*".$' "${svc}"
+}
+
+# Asserts the ownership-heal step (#1300/#1302) runs before the self-update fetch step, so a
+# healed checkout is guaranteed to be in place before the merge that depends on it; a reorder
+# would keep both assert_* greps above green while silently disabling the fix. Matching either
+# marker and checking which one it is works because they're each unique to their own line: the
+# first line in the file matching either pattern must be the heal line for this to pass.
+assert_ownership_heal_before_selfupdate() {
+    local svc="$1"
+    grep -m1 -E 'ExecStartPre=\+-/bin/sh -c|ExecStartPre=-/usr/bin/timeout 60' "${svc}" | grep -q '+-/bin/sh -c'
+}
+
 @test "sourcing install-timer defines main without executing it" {
     run declare -F main
     [ "${status}" -eq 0 ]
@@ -91,23 +112,57 @@ assert_selfupdate_execstartpre() {
     [[ "${output}" == *"Required tool not found"* ]]
 }
 
-# Generates the systemd unit for repo_dir and extracts the merge-retry ExecStartPre command as a
-# plain string, ready for `run /bin/sh -c "$(...)"`. Shared by the two regression tests below.
-# REPO_DIR is a plain global create_service_unit reads, so overriding it here means the extracted
-# line already targets repo_dir directly — no text-surgery/retargeting needed.
+# Extracts a single-quoted /bin/sh -c '...' command embedded in a generated unit file, given a
+# grep marker unique to the target ExecStartPre line. Shared by selfupdate_retry_cmd_for and
+# ownership_heal_cmd_for below, which differ only in how they configure the unit before
+# generating it and which line's marker they pass in. Returns non-zero on a broken extraction
+# (e.g. the grep stops matching after an install-timer change) rather than printing an empty
+# string - callers must not embed this directly in `run /bin/sh -c "$(...)"`, since a command
+# substitution's exit status is discarded there and an empty result would silently become
+# `/bin/sh -c ""`, which always exits 0 and makes a no-drift-style test pass vacuously regardless
+# of the real command's behaviour; use run_execstartpre_cmd below instead, which checks this.
+extract_execstartpre_cmd() {
+    local svc="$1" marker="$2"
+    local cmd
+    cmd=$(grep -F "${marker}" "${svc}")
+    cmd="${cmd#*"${marker}"}"
+    cmd="${cmd%\'}"
+    [ -n "${cmd}" ] || return 1
+    printf '%s' "${cmd}"
+}
+
+# Regenerates the systemd unit from whatever REPO_DIR/CURRENT_USER globals the caller has already
+# set, then extracts the ExecStartPre command matching marker. Shared by selfupdate_retry_cmd_for
+# and ownership_heal_cmd_for below, which differ only in which globals they override beforehand
+# and which line's marker they pass in.
+generated_execstartpre_cmd() {
+    local marker="$1"
+    main >/dev/null
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    extract_execstartpre_cmd "${svc}" "${marker}"
+}
+
+# Asserts cmd (an already-extracted command from *_cmd_for) is non-empty before running it, then
+# runs it via bats' `run`. Extraction failures must fail loudly here rather than at the call
+# site: `run /bin/sh -c "$(foo)"` discards the command substitution's own exit status, so an
+# empty extraction would otherwise silently become the always-succeeding `/bin/sh -c ""`.
+run_execstartpre_cmd() {
+    local cmd="$1"
+    [ -n "${cmd}" ]
+    run /bin/sh -c "${cmd}"
+}
+
+# Extracts the merge-retry ExecStartPre command for repo_dir as a plain string, ready for
+# `run /bin/sh -c "$(...)"`. Shared by the two regression tests below. REPO_DIR is a plain global
+# create_service_unit reads, so overriding it here means the extracted line already targets
+# repo_dir directly, no text-surgery/retargeting needed.
 selfupdate_retry_cmd_for() {
     local repo_dir="$1"
     # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
     REPO_DIR="${repo_dir}"
-    main >/dev/null
-    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
     # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent socket
     # step a few lines below also matches a bare "/bin/sh -c '".
-    local retry_cmd
-    retry_cmd=$(grep -F "timeout 30 /bin/sh -c '" "${svc}")
-    retry_cmd="${retry_cmd#*-c \'}"
-    retry_cmd="${retry_cmd%\'}"
-    printf '%s' "${retry_cmd}"
+    generated_execstartpre_cmd "timeout 30 /bin/sh -c '"
 }
 
 @test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
@@ -124,7 +179,7 @@ selfupdate_retry_cmd_for() {
     # +1, comfortably above the step's own 30-second timeout) must treat it as safe to clear.
     touch -d '-10 minutes' "${repo}/.git/refs/heads/main.lock"
 
-    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    run_execstartpre_cmd "$(selfupdate_retry_cmd_for "${repo}")"
     [ "${status}" -eq 0 ]
     [ ! -f "${repo}/.git/refs/heads/main.lock" ]
 
@@ -147,7 +202,7 @@ selfupdate_retry_cmd_for() {
 
     touch "${repo}/.git/refs/heads/main.lock"
 
-    run /bin/sh -c "$(selfupdate_retry_cmd_for "${repo}")"
+    run_execstartpre_cmd "$(selfupdate_retry_cmd_for "${repo}")"
     [ "${status}" -ne 0 ]
     [ -f "${repo}/.git/refs/heads/main.lock" ]
 
@@ -157,6 +212,70 @@ selfupdate_retry_cmd_for() {
     local head="${output}"
     run git -C "${repo}" rev-parse origin/main
     [ "${head}" != "${output}" ]
+}
+
+# Extracts the ownership-heal ExecStartPre command for repo_dir/current_user as a plain string,
+# ready for `run /bin/sh -c "$(...)"`. CURRENT_USER is overridden as a plain global the same way
+# selfupdate_retry_cmd_for overrides REPO_DIR above; this bypasses the file-level `id` stub
+# (which returns the unresolvable name "testuser") so the extracted command's `find -user`/
+# `-group` arguments name a real, resolvable account, since a nonexistent username makes find
+# itself error out rather than exercise the detect logic.
+ownership_heal_cmd_for() {
+    local repo_dir="$1" current_user="$2"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    REPO_DIR="${repo_dir}"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    CURRENT_USER="${current_user}"
+    generated_execstartpre_cmd "ExecStartPre=+-/bin/sh -c '"
+}
+
+# Creates a minimal repo checkout (just enough for the ownership-heal find/chown command to have
+# something to walk) at the given path, shared by the two ownership-heal regression tests below.
+make_fake_repo() {
+    local repo="$1"
+    mkdir -p "${repo}/.git"
+    touch "${repo}/.git/index"
+}
+
+@test "the ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1300/#1302, real repro)" {
+    # command bypasses the file-level `id` shell-function stub to get the real account running
+    # this test, so the extracted find/chown command's CURRENT_USER matches the temp repo's
+    # actual on-disk owner and genuinely exercises the no-drift path, not a forced pass.
+    local real_user
+    real_user=$(command id -un)
+
+    local repo="${TEST_TMP}/heal-no-drift-repo"
+    make_fake_repo "${repo}"
+
+    run_execstartpre_cmd "$(ownership_heal_cmd_for "${repo}" "${real_user}")"
+    [ "${status}" -eq 0 ]
+}
+
+@test "the ownership-heal ExecStartPre detects drift and attempts to reassert ownership (#1300/#1302, real repro)" {
+    # Every file under repo is genuinely owned by the account running this test, not by root, so
+    # naming "root" as CURRENT_USER reproduces real drift (analogous to #1300's root-run
+    # diagnostic command reowning .git/index) without needing privilege to actually chown a file
+    # away from its real owner. The chown this triggers then genuinely fails with "Operation not
+    # permitted": this test is run unprivileged deliberately, so it proves the detect-then-chown
+    # branch was taken (the exact command the '+' prefix lets systemd run as root in production)
+    # without asserting on privileged behaviour this suite cannot grant itself. If the suite itself
+    # is somehow run as root (e.g. a container-based CI runner), naming "root" as CURRENT_USER
+    # would never look like drift and the chown would genuinely succeed, so skip rather than fail.
+    if [ "$(command id -u)" -eq 0 ]; then
+        skip "requires an unprivileged test runner to reproduce ownership drift"
+    fi
+
+    local repo="${TEST_TMP}/heal-drift-repo"
+    make_fake_repo "${repo}"
+
+    LC_ALL=C run_execstartpre_cmd "$(ownership_heal_cmd_for "${repo}" "root")"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Operation not permitted"* ]]
+
+    # The failed, unprivileged chown must not have silently succeeded in any partial form: the
+    # repo's actual owner (this test's own account) must be unchanged.
+    run find "${repo}" -not -user "$(command id -un)" -print -quit
+    [ -z "${output}" ]
 }
 
 @test "install-timer creates unit files and invokes systemctl correctly" {
@@ -176,6 +295,8 @@ selfupdate_retry_cmd_for() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_ownership_heal_execstartpre "${svc}"
+    assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
@@ -245,6 +366,8 @@ selfupdate_retry_cmd_for() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_ownership_heal_execstartpre "${svc}"
+    assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
     grep -q "ExecStartPre=-/usr/bin/pkill -u testuser -f \"ssh-agent -a /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket\"" "${svc}"
     grep -q "ExecStartPre=-/usr/bin/rm -f /run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
