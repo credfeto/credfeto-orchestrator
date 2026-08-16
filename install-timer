@@ -124,9 +124,9 @@ WorkingDirectory=${REPO_DIR}
 # detect-then-chown pattern so this automatic self-update path self-heals the same way the manual
 # one already does (#1302). ExecStartPre steps run as User=${CURRENT_USER} by default, so only the
 # '+' prefix lets this step run with the privilege needed to chown files it doesn't own; it is also
-# '-'-prefixed (tolerate failure) so a chown failure — e.g. racing a sibling --owner unit's
+# '-'-prefixed (tolerate failure) so a chown failure, e.g. racing a sibling --owner unit's
 # concurrent operation on this same shared checkout, as already called out for setup-owner (#1300
-# review) — does not stop the unit: the fetch/merge immediately after remains the real gate and
+# review), does not stop the unit: the fetch/merge immediately after remains the real gate and
 # fails clearly if ownership is still broken. The find is detect-before-write, same as setup-owner:
 # a healthy checkout is never chowned, so a healed checkout stays distinguishable from one that was
 # never broken. setup-owner groups both checks with a \( -o \) so a single walk stops at the first

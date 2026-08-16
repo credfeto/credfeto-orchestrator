@@ -69,7 +69,7 @@ assert_ownership_heal_execstartpre() {
 }
 
 # Asserts the ownership-heal step (#1300/#1302) runs before the self-update fetch step, so a
-# healed checkout is guaranteed to be in place before the merge that depends on it — a reorder
+# healed checkout is guaranteed to be in place before the merge that depends on it; a reorder
 # would keep both assert_* greps above green while silently disabling the fix. Matching either
 # marker and checking which one it is works because they're each unique to their own line: the
 # first line in the file matching either pattern must be the heal line for this to pass.
@@ -155,7 +155,7 @@ run_execstartpre_cmd() {
 # Extracts the merge-retry ExecStartPre command for repo_dir as a plain string, ready for
 # `run /bin/sh -c "$(...)"`. Shared by the two regression tests below. REPO_DIR is a plain global
 # create_service_unit reads, so overriding it here means the extracted line already targets
-# repo_dir directly — no text-surgery/retargeting needed.
+# repo_dir directly, no text-surgery/retargeting needed.
 selfupdate_retry_cmd_for() {
     local repo_dir="$1"
     # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
@@ -216,7 +216,7 @@ selfupdate_retry_cmd_for() {
 
 # Extracts the ownership-heal ExecStartPre command for repo_dir/current_user as a plain string,
 # ready for `run /bin/sh -c "$(...)"`. CURRENT_USER is overridden as a plain global the same way
-# selfupdate_retry_cmd_for overrides REPO_DIR above — this bypasses the file-level `id` stub
+# selfupdate_retry_cmd_for overrides REPO_DIR above; this bypasses the file-level `id` stub
 # (which returns the unresolvable name "testuser") so the extracted command's `find -user`/
 # `-group` arguments name a real, resolvable account, since a nonexistent username makes find
 # itself error out rather than exercise the detect logic.
@@ -256,7 +256,7 @@ make_fake_repo() {
     # naming "root" as CURRENT_USER reproduces real drift (analogous to #1300's root-run
     # diagnostic command reowning .git/index) without needing privilege to actually chown a file
     # away from its real owner. The chown this triggers then genuinely fails with "Operation not
-    # permitted" — this test is run unprivileged deliberately, so it proves the detect-then-chown
+    # permitted": this test is run unprivileged deliberately, so it proves the detect-then-chown
     # branch was taken (the exact command the '+' prefix lets systemd run as root in production)
     # without asserting on privileged behaviour this suite cannot grant itself. If the suite itself
     # is somehow run as root (e.g. a container-based CI runner), naming "root" as CURRENT_USER

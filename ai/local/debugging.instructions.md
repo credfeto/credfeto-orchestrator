@@ -64,7 +64,7 @@ it) rather than a symptom of anything broken.
   `setup-owner`'s manual/`--owner` re-run above is no longer the only fix: `install-timer`'s
   generated unit now carries its own `+`-prefixed, failure-tolerant `ExecStartPre` that detects and
   reasserts ownership under `REPO_DIR` immediately before its self-update fetch/merge, so the
-  automatic self-update path self-heals the same drift on its own (#1302) — a stuck `failed` timer
+  automatic self-update path self-heals the same drift on its own (#1302): a stuck `failed` timer
   no longer requires a human to notice and manually re-run `setup-owner`.
 
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
