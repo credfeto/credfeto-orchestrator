@@ -22,6 +22,21 @@ ALLOWLIST="${REPO_ROOT}/containers/base/development-full/claude-hooks/command-al
 BLOCKLIST="${REPO_ROOT}/containers/base/development-full/claude-hooks/command-blocklist"
 SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
 
+# Names deliberately absent from command-allowlist (so reject-obfuscated-commands rejects
+# every OTHER invocation of them) but present in permissions.allow as a single narrow,
+# argument-scoped exact entry (no trailing *) - a hook-level carve-out narrower than a
+# blanket allowlist entry would permit. `set` is the first case (#1349): `set` generally
+# is not allowlisted (would also permit `set -x` tracing, `set -o` reconfiguring shell
+# options, `set --` reassigning positional parameters, bare `set` dumping every shell
+# variable to stdout), but a dedicated Layer 4a check in reject-obfuscated-commands lets
+# through exactly `set -e`, and claude-settings.json's own permissions.allow needs its own
+# matching `Bash(set -e)` entry - Claude Code's own permission layer is independent of and
+# runs regardless of the hook layer, so the hook allowing a call is not sufficient on its
+# own. command-allowlist's flat per-name model has no way to express "only with these exact
+# arguments", so this is a deliberate exception the parity check below cannot derive
+# automatically - same class of gap the #1315 NOTE above already anticipated for denies.
+NARROW_ALLOW_ONLY_NAMES=(set)
+
 @test "every command-allowlist entry has a matching claude-settings.json permissions.allow entry, and vice versa, unless blocklisted or explicitly denied" {
     local allow_names blocklist_names deny_names settings_allow_names expected missing extra
 
@@ -73,6 +88,7 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
     # permissions.allow) - both are drift this test exists to catch, not
     # just the missing-entry direction.
     extra=$(comm -13 <(printf '%s\n' "${expected}") <(printf '%s\n' "${settings_allow_names}"))
+    extra=$(comm -23 <(printf '%s\n' "${extra}") <(printf '%s\n' "${NARROW_ALLOW_ONLY_NAMES[@]}" | sort -u))
 
     # Report both directions in the same run - neither check short-circuits
     # the other, so simultaneous missing+extra drift is never masked behind

@@ -151,6 +151,7 @@
       "Bash(run-psscriptanalyzer *)",
       "Bash(run-stylelint *)",
       "Bash(sed *)",
+      "Bash(set -e)",
       "Bash(shellcheck *)",
       "Bash(shfmt *)",
       "Bash(sleep *)",
