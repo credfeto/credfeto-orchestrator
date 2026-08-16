@@ -183,6 +183,39 @@ STUBEOF
     grep -qx -- '--print' "${TEST_TMP}/claude_args"
 }
 
+@test "entrypoint exports TMPDIR, TMP, TEMP, and XDG_RUNTIME_DIR to /workspace/tmp before invoking claude (#1351)" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+env >> "${TEST_TMP}/claude_env"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" \
+        GIT_SIGNING_KEY="ABCD1234" bash "${ENTRYPOINT}" --print 2>/dev/null
+    grep -qx "TMPDIR=/workspace/tmp" "${TEST_TMP}/claude_env"
+    grep -qx "TMP=/workspace/tmp" "${TEST_TMP}/claude_env"
+    grep -qx "TEMP=/workspace/tmp" "${TEST_TMP}/claude_env"
+    grep -qx "XDG_RUNTIME_DIR=/workspace/tmp" "${TEST_TMP}/claude_env"
+}
+
+@test "entrypoint exports TMPDIR etc from WORKSPACE_TMP_DIR when overridden (#1351)" {
+    setup_entrypoint_stubs
+    cat > "${STUB_BIN}/claude" << 'STUBEOF'
+#!/usr/bin/env bash
+env >> "${TEST_TMP}/claude_env"
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/claude"
+
+    CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" GIT_USER_EMAIL="alice@example.com" \
+        GIT_SIGNING_KEY="ABCD1234" WORKSPACE_TMP_DIR="${TEST_TMP}/custom-tmp" \
+        bash "${ENTRYPOINT}" --print 2>/dev/null
+    grep -qx "TMPDIR=${TEST_TMP}/custom-tmp" "${TEST_TMP}/claude_env"
+    grep -qx "XDG_RUNTIME_DIR=${TEST_TMP}/custom-tmp" "${TEST_TMP}/claude_env"
+}
+
 @test "entrypoint does not consume stdin before passing it to claude" {
     setup_entrypoint_stubs
     # ssh stub that reads from stdin to simulate ssh without -n consuming the prompt.

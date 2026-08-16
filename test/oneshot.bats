@@ -2607,6 +2607,67 @@ STUBEOF
     [ "$(sed -n "${separator_line}p" "${args_log}")" = "--" ]
 }
 
+@test "invoke_claude registers CONTAINER_SCRATCH_PATH as a second --add-dir alongside CONTAINER_REPO_PATH (#1351)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    local add_dir_line
+    add_dir_line=$(grep -nx -- '--add-dir' "${args_log}" | cut -d: -f1)
+    [ -n "${add_dir_line}" ]
+    [ "$(sed -n "$((add_dir_line + 1))p" "${args_log}")" = "${CONTAINER_REPO_PATH}" ]
+    [ "$(sed -n "$((add_dir_line + 2))p" "${args_log}")" = "${CONTAINER_SCRATCH_PATH}" ]
+}
+
+@test "invoke_claude bind-mounts a fresh host scratch dir at CONTAINER_SCRATCH_PATH read-write (#1351)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qE -- ":${CONTAINER_SCRATCH_PATH}:rw\$" "${args_log}"
+}
+
+@test "invoke_claude removes the host scratch dir on successful completion, leaving no orphan (#1351)" {
+    local args_log="${TEST_TMP}/podman_args"
+    local scratch_dir_log="${TEST_TMP}/scratch_dir_seen"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    # The --volume argv element is HOST:CONTAINER:rw as a single token; strip the
+    # container-side suffix to recover the host-side scratch dir invoke_claude created.
+    local scratch_dir
+    scratch_dir=$(grep -E -- ":${CONTAINER_SCRATCH_PATH}:rw\$" "${args_log}" | sed -E "s#:${CONTAINER_SCRATCH_PATH}:rw\$##")
+    # invoke_claude resets CLAUDE_SCRATCH_TMPDIR to "" on its own cleanup path once removed —
+    # the directory it captured in argv above must no longer exist on disk.
+    [ -n "${scratch_dir}" ]
+    [ ! -d "${scratch_dir}" ]
+    [ -z "${CLAUDE_SCRATCH_TMPDIR}" ]
+}
+
 @test "invoke_claude passes resource limit flags to podman run" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
