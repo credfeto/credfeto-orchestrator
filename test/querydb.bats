@@ -25,11 +25,6 @@ write_database_file() {
     printf '%s\n' "$@" > "${path}"
 }
 
-# Runs $SCRIPT with cwd set to $1.
-run_script() {
-    run bash -c 'cd "$1" && "$2"' _ "$1" "${SCRIPT}"
-}
-
 @test "dies when no settings are available at all" {
     run_script "${TEST_TMP}"
     [ "${status}" -eq 1 ]
