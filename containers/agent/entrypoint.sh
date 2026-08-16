@@ -284,4 +284,18 @@ if [ ! -f "${HOME}/.claude.json" ]; then
         > "${HOME}/.claude.json"
 fi
 
+# #1351 experiment: point every standard scratch-dir env var at the registered
+# CONTAINER_SCRATCH_PATH --add-dir (lib/globals; matches the WORKSPACE_TMP_DIR default here)
+# so redirect/temp-file targets land somewhere Claude Code's own file-write trust boundary
+# (independent of permissions.allow) has actually been told about, instead of the
+# unregistered /tmp default. XDG_RUNTIME_DIR reuses the same directory rather than needing
+# its own mount: this container is a single-session, single-user process torn down on exit
+# (--rm), so the usual reason to keep runtime sockets separate from temp files (a persistent
+# multi-user host) does not apply, and the mount already satisfies XDG_RUNTIME_DIR's own
+# requirement of a private (mode 0700, GNU mktemp -d's default), per-session directory.
+export TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+export TMP="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+export TEMP="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+export XDG_RUNTIME_DIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+
 exec claude "$@"
