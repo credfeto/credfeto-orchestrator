@@ -194,6 +194,17 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
 # The directory is root-owned (traversable but not writable by the agent user).
 ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
 
+# ---- Repo-local scripts (scripts/) -------------------------------------------
+# Small standalone wrapper scripts maintained in this repo, installed next to
+# every other custom binary this image bakes in (agent-entrypoint, sqlcmd,
+# composite-action-lint all land under /usr/local/bin/ too). root:root 0755
+# per the Lock-Down Requirements. Neither script supports a --version probe,
+# so the Stage 1 sanity check below verifies presence + executable bit
+# instead. Both names are already anticipated on this image's
+# command-allowlist/enforce-background-for-long-running-commands hook.
+COPY --chown=root:root --chmod=0755 scripts/pre-commit-check /usr/local/bin/pre-commit-check
+COPY --chown=root:root --chmod=0755 scripts/querydb /usr/local/bin/querydb
+
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
 # `developer` user the agent runs as has no way to modify it.
@@ -227,6 +238,8 @@ RUN { \
       echo "cc-devops-skills: ${CC_DEVOPS_SKILLS_REF} @ ${CC_DEVOPS_SKILLS_COMMIT}"; \
       echo "markdown-linter-fixer: ${MARKDOWN_LINTER_FIXER_REF} @ ${MARKDOWN_LINTER_FIXER_COMMIT}"; \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
+      echo "pre-commit-check: present-only, no --version support"; \
+      echo "querydb: present-only, no --version support"; \
     } > /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -284,6 +297,11 @@ RUN set -e; \
     if ! command -v ssh-add >/dev/null 2>&1; then \
         echo "FATAL sanity: required binary 'ssh-add' is missing" >&2; exit 1; \
     fi; \
+    echo "== repo-local bin/ scripts (no --version support, so presence + executable-bit only) =="; \
+    for script in pre-commit-check querydb; do \
+        [ -x "/usr/local/bin/$script" ] \
+            || { echo "FATAL sanity: /usr/local/bin/$script is missing or not executable" >&2; exit 1; }; \
+    done; \
     echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
     rm -rf /tmp/sanity-clone; \
     GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone; \

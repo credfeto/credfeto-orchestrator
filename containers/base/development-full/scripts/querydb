@@ -1,0 +1,65 @@
+#!/bin/bash
+
+TMPBASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+TESTDB_LOG="$TMPBASE/testdb-last.log"
+
+# Re-exec through tee so all output is always captured to a log file.
+# The outer invocation sets TESTDB_LOGGING=1 to prevent infinite recursion.
+if [ -z "$TESTDB_LOGGING" ]; then
+  TESTDB_LOGGING=1 "$0" "$@" 2>&1 | tee "$TESTDB_LOG"
+  exit "${PIPESTATUS[0]:-$?}"
+fi
+
+die() {
+    echo
+    echo "$@"
+    echo "(full log: $TESTDB_LOG)"
+    exit 1
+}
+
+SERVER=
+DB=
+# USER is deliberately shadowed here: it is populated from the .database
+# settings files below (same convention as the SERVER/DB/PASSWORD fields),
+# not left as the caller's login name.
+# shellcheck disable=SC2034
+USER=
+PASSWORD=
+
+# Canonicalized up front (readlink -f works even if the path doesn't exist
+# yet) so the same-file comparison against LOCAL_DB_SETTINGS_FILE below,
+# which is also canonicalized, isn't fooled by a symlink component in $HOME.
+DB_SETTINGS_FILE=$(readlink -f "$HOME/.database")
+if [ -f "$DB_SETTINGS_FILE" ]; then
+  echo "Using $DB_SETTINGS_FILE"
+  # Not following: \
+  # shellcheck disable=SC1090
+  # shellcheck disable=SC1091
+  . "$DB_SETTINGS_FILE"
+fi
+# Walk up from the current directory looking for the nearest .database file.
+LOCAL_DB_SETTINGS_FILE=""
+CP="${PWD}"
+while [ -n "$CP" ]; do
+  [ -f "$CP/.database" ] && LOCAL_DB_SETTINGS_FILE="$CP/.database" && break
+  CP="${CP%/*}"
+done
+if [ -n "$LOCAL_DB_SETTINGS_FILE" ]; then
+  LOCAL_DB_SETTINGS_FILE=$(readlink -f "$LOCAL_DB_SETTINGS_FILE")
+  LOCAL_DB_SETTINGS_FOLDER=$(dirname "$LOCAL_DB_SETTINGS_FILE")
+  if [ "$LOCAL_DB_SETTINGS_FILE" != "$DB_SETTINGS_FILE" ]; then
+    echo "Using settings from $LOCAL_DB_SETTINGS_FOLDER"
+    # Not following:
+    # shellcheck disable=SC1090
+    # shellcheck disable=SC1091
+    . "$LOCAL_DB_SETTINGS_FILE"
+  fi
+fi
+
+[ -z "$SERVER" ] && die "SERVER not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$DB" ] && die "DB not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$USER" ] && die "USER not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$PASSWORD" ] && die "PASSWORD not set (add it to \$HOME/.database or a repo-local .database file)"
+
+echo "Connecting to $SERVER (DB: $DB) as $USER"
+sqlcmd -S "$SERVER" -d "$DB" -U "$USER" -P "$PASSWORD" "$@"

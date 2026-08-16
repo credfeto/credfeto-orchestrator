@@ -211,6 +211,15 @@ run_hook() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
 }
 
+# Runs the script under test (a *.bats file must set $SCRIPT before calling
+# this) with cwd set to $1.
+run_script() {
+    # SCRIPT is assigned by the calling *.bats file, not this file - shellcheck
+    # flags it as a possible misspelling of make_stub's local "script" var.
+    # shellcheck disable=SC2153
+    run bash -c 'cd "$1" && "$2"' _ "$1" "${SCRIPT}"
+}
+
 # Sets up a local bare "remote" and clones it into clone_dir (defaults to REPO_WORK_DIR) so tests
 # can perform real git operations without network calls. Outputs the bare remote's path on stdout.
 setup_local_git_remote() {

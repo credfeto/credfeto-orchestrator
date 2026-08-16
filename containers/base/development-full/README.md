@@ -126,6 +126,15 @@ The upstream hook orchestrator is cloned from `$PRECOMMIT_UPSTREAM` (default: `h
 
 `/etc/gitconfig` is copied from `system-gitconfig` in the build context and set to root:root mode 0444. Git validates the file at build time (`git config --file /etc/gitconfig --list`). A `/usr/bin/gpg2` symlink is created pointing to `/usr/bin/gpg` for compatibility with gitconfigs that pin `gpg.program=/usr/bin/gpg2`.
 
+### Repo-local scripts (`scripts/`)
+
+Two standalone wrapper scripts maintained in this repo (`containers/base/development-full/scripts/`) are copied to `/usr/local/bin/`, root:root mode 0755, alongside every other custom binary this image bakes in (`agent-entrypoint`, `sqlcmd`, `composite-action-lint`). Named `scripts/` rather than `bin/` because the repo-root `.gitignore` has a blanket `[Bb]in/` rule for build output that would otherwise silently exclude it:
+
+- `pre-commit-check` — locates the active `pre-commit` hook (repo hooks folder, system `hooksPath`, then global `hooksPath`, tried in that order) and runs it with `--all-files`, so the full hook chain can be exercised on demand against the current checkout without a real commit. Ported verbatim from `credfeto/scripts`' `development/pre-commit-check`.
+- `querydb` — loads `$HOME/.database` and then a repo-local `.database` file (found by walking up from `$PWD`) for `SERVER`/`DB`/`USER`/`PASSWORD`, then runs `sqlcmd` against them, passing through any extra arguments. See [sql.examples.md](../../../ai/global/sql.examples.md) for the `.database` file format.
+
+Both names are already registered on `claude-hooks/command-allowlist` and `claude-settings.json`'s `permissions.allow`, and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
+
 ---
 
 ## Users
@@ -167,6 +176,8 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
 | `/home/developer/.claude/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
+| `/usr/local/bin/pre-commit-check` | root:root | 0755 | Repo-local wrapper script (from `scripts/pre-commit-check`); read/execute only |
+| `/usr/local/bin/querydb` | root:root | 0755 | Repo-local wrapper script (from `scripts/querydb`); read/execute only |
 
 ---
 
@@ -191,6 +202,8 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 **gpg self-check** — `echo "probe" | gpg --dearmor` is piped and must not error (or `gpg --version` must exit 0 as a fallback).
 
 **sqlite3 self-check** — `sqlite3 :memory: "SELECT 1;"` must return `1`.
+
+**Repo-local `scripts/` scripts** — `pre-commit-check` and `querydb` support no `--version` probe, so `/usr/local/bin/pre-commit-check` and `/usr/local/bin/querydb` are instead checked for presence and the executable bit only.
 
 **HTTPS clone** — a sacrificial public repository (`github.com/dnyw4l3n13/scratch`) is cloned over HTTPS with `GIT_CONFIG_SYSTEM=/dev/null` to verify outbound TLS connectivity. The clone is removed immediately after.
 
