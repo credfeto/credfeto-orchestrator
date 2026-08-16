@@ -92,6 +92,15 @@ GITSSH
 # for it, not whether the container needs to stay alive until it finishes — a run_in_background
 # command that is still running when your turn ends is killed exactly as a foreground one would
 # be, just later.
+# #1351: tells the agent where to actually put scratch/temporary output. The env vars alone
+# (TMPDIR/TMP/TEMP, set by invoke_claude to CONTAINER_SCRATCH_PATH) don't help if nothing steers
+# the agent away from a hardcoded /tmp/... path out of habit — this is the behavioural half.
+_build_scratch_dir_note() {
+    cat <<SCRATCHNOTE
+- Scratch/temporary output (redirect targets, intermediate files you don't want committed) should go to \$TMPDIR (or \$TMP/\$TEMP — all three point at the same registered, writable scratch directory) rather than a hardcoded /tmp/... path.
+SCRATCHNOTE
+}
+
 _build_container_vs_github_note() {
     cat <<'CVGNOTE'
 - Container-vs-GitHub rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed the instant your turn ends — including a command you started with run_in_background: true, if you end your turn before it actually finishes. Backgrounding changes how you wait for something, not whether the container has to stay alive until it's done. git commit, pre-commit (direct invocation), pre-commit-check (this repo's wrapper that runs pre-commit against the existing checked-out repo), dotnet build, dotnet test, npm test, and bun test MUST be started with run_in_background: true (the container's enforce-background-for-long-running-commands hook blocks running any of these any other way) — then poll with the Monitor tool for the command's own completion string (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings and the 30-minute deadline) and WAIT for it to actually finish before doing anything else, including ending your turn. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container — for those, STOP and let the orchestrator re-invoke you next cycle instead of polling.
@@ -228,6 +237,7 @@ The repository is checked out at ${repo_path}.
 
 $(_build_trusted_commenters_section "${trusted_logins}")
 $(_build_git_ssh_section)
+$(_build_scratch_dir_note)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
 $(_build_wf_section)
 $(_build_issue_dirty_branch_section "${dirty_branch}" "${repo_path}" "${stale_branch}")
@@ -349,6 +359,7 @@ The repository is checked out at ${repo_path}.
 
 $(_build_trusted_commenters_section "${trusted_logins}")
 $(_build_git_ssh_section)
+$(_build_scratch_dir_note)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
 $(_build_wf_section)
 

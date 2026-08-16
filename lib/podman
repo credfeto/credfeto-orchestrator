@@ -74,6 +74,10 @@ CLAUDE_PROMPT=""
 GPG_PUBKEY_TMPDIR=""
 PODMAN_SECRET_NAME=""
 GH_ENTERPRISE_SECRET_NAME=""
+# Host-side per-invocation scratch dir bind-mounted read-write at CONTAINER_SCRATCH_PATH and
+# exposed to the agent via TMPDIR/TMP/TEMP (#1351) — throwaway space, wiped every invocation,
+# distinct from the persistent sessions/plans/cache/backups state dirs.
+CLAUDE_SCRATCH_TMPDIR=""
 
 # Handles is_error=true in the Claude JSON response.
 # On blocking_limit: every run is already a fresh single-phase session, so there is nothing
@@ -411,6 +415,10 @@ cleanup_claude_invocation_tmpfiles() {
         rm -rf "${GPG_PUBKEY_TMPDIR}"
         GPG_PUBKEY_TMPDIR=""
     fi
+    if [ -n "${CLAUDE_SCRATCH_TMPDIR}" ]; then
+        rm -rf "${CLAUDE_SCRATCH_TMPDIR}"
+        CLAUDE_SCRATCH_TMPDIR=""
+    fi
     if [ -n "${PODMAN_SECRET_NAME}" ]; then
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
         PODMAN_SECRET_NAME=""
@@ -490,6 +498,7 @@ invoke_claude() {
     #     they persist across invocations instead of being wiped every run.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+    CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
     # Registered immediately after CLAUDE_MD_TMPFILE is populated — not after the mkdir loop
@@ -529,6 +538,7 @@ invoke_claude() {
         --pids-limit=4096
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
+        --volume "${CLAUDE_SCRATCH_TMPDIR}:${CONTAINER_SCRATCH_PATH}:rw"
     )
     [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
     if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
@@ -552,6 +562,13 @@ invoke_claude() {
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
     [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
+    # #1351 experiment: point every standard scratch-dir env var at the registered
+    # CONTAINER_SCRATCH_PATH --add-dir so redirect/temp-file targets land somewhere Claude
+    # Code's own file-write trust boundary (independent of permissions.allow) has actually
+    # been told about, instead of the unregistered /tmp default.
+    PODMAN_RUN_ARGS+=( --env "TMPDIR=${CONTAINER_SCRATCH_PATH}" )
+    PODMAN_RUN_ARGS+=( --env "TMP=${CONTAINER_SCRATCH_PATH}" )
+    PODMAN_RUN_ARGS+=( --env "TEMP=${CONTAINER_SCRATCH_PATH}" )
 
     # Lets the agent container announce what it's working on at startup. Only
     # set when both are known — most callers (tests, ad-hoc invocations) pass
@@ -582,7 +599,7 @@ invoke_claude() {
         --print
         --output-format json
         --permission-mode dontAsk
-        --add-dir "${CONTAINER_REPO_PATH}"
+        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_SCRATCH_PATH}"
         # -- terminates option/variadic parsing before the positional prompt.
         # --add-dir takes <directories...> (variadic) — without this separator the
         # CLI parser greedily swallows the prompt as an extra --add-dir value

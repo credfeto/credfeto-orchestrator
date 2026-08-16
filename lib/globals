@@ -12,6 +12,12 @@ WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
+# A second registered --add-dir, distinct from CONTAINER_REPO_PATH: throwaway per-invocation
+# scratch space (mktemp -d on the host, bind-mounted read-write, exposed to the agent via
+# TMPDIR/TMP/TEMP) for the #1351 experiment testing whether Claude Code's own file-write trust
+# boundary — independent of permissions.allow — respects --add-dir for redirect targets outside
+# the repo checkout. Not one of the persistent sessions/plans/cache/backups state dirs.
+CONTAINER_SCRATCH_PATH="/workspace/scratch"
 
 # Bump whenever a field is added to or removed from fingerprint_issue_json or
 # fingerprint_pr_json (lib/fingerprints). Prepended to every computed fingerprint so a saved
