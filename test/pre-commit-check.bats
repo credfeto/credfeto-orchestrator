@@ -28,11 +28,6 @@ write_hook() {
     chmod +x "${path}"
 }
 
-# Runs $SCRIPT with cwd set to $1.
-run_script() {
-    run bash -c 'cd "$1" && "$2"' _ "$1" "${SCRIPT}"
-}
-
 @test "dies when no pre-commit hook is found in any hooksPath" {
     run_script "${REPO_DIR}"
     [ "${status}" -eq 1 ]

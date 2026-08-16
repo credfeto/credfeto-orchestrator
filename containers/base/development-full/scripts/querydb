@@ -26,7 +26,10 @@ DB=
 USER=
 PASSWORD=
 
-DB_SETTINGS_FILE="$HOME/.database"
+# Canonicalized up front (readlink -f works even if the path doesn't exist
+# yet) so the same-file comparison against LOCAL_DB_SETTINGS_FILE below,
+# which is also canonicalized, isn't fooled by a symlink component in $HOME.
+DB_SETTINGS_FILE=$(readlink -f "$HOME/.database")
 if [ -f "$DB_SETTINGS_FILE" ]; then
   echo "Using $DB_SETTINGS_FILE"
   # Not following: \
