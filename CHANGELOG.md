@@ -89,6 +89,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - No-work Discord notification now lists every skipped item individually (repo, issue/PR number and link, and status), not just the aggregate counts, so a human can see exactly what was skipped without checking the journal
 - Widen claude-settings.json's permissions.allow to cover every non-Bash tool the mandated workflow needs (Monitor, Task/Agent, NotebookEdit, KillShell, SlashCommand, Glob, Grep, BashOutput, WebFetch, WebSearch, TodoWrite), set permissions.defaultMode to dontAsk to match the mode #1327 targets, and extend test/command-allowlist-parity.bats to catch a missing entry - inert until the --dangerously-skip-permissions flag is dropped, but a missing entry then would deadlock every build/test cycle (Monitor is required for all mandated background-command polling)
 - Agent container now runs claude with --permission-mode dontAsk instead of --dangerously-skip-permissions (#1331) - tool calls not covered by claude-settings.json's permissions.allow or an approving PreToolUse hook are now denied rather than silently permitted, with denials surfaced via the existing permission_denials telemetry (#1328)
+- Widen claude-settings.json permissions.allow with Bash(gh api repos/*/issues/*), symmetric with the existing pulls/* and releases* entries, so resolving an issue's node_id for GraphQL Workflow-board lookups no longer requires a raw unlisted gh api call (#1342)
 ### Deprecated
 ### Removed
 ### Deployment Changes
