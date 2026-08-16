@@ -92,6 +92,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent container now runs claude with --permission-mode dontAsk instead of --dangerously-skip-permissions (#1331) - tool calls not covered by claude-settings.json's permissions.allow or an approving PreToolUse hook are now denied rather than silently permitted, with denials surfaced via the existing permission_denials telemetry (#1328)
 - Widen claude-settings.json permissions.allow with Bash(gh api repos/*/issues/*), symmetric with the existing pulls/* and releases* entries, so resolving an issue's node_id for GraphQL Workflow-board lookups no longer requires a raw unlisted gh api call (#1342)
 - Allow 'set -e' as a narrow, argument-scoped carve-out in the reject-obfuscated-commands hook and claude-settings.json permissions.allow (Bash(set -e), no trailing wildcard) - only the exact, argument-free-except-'-e' invocation is permitted at either layer; set +e, set -x, set -o ..., set --, and bare set all remain blocked (#1349)
+- Register a second per-invocation --add-dir at /workspace/tmp, a fresh throwaway scratch directory bind-mounted read-write; the agent container's entrypoint.sh now exports TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR pointing at it, so the agent has somewhere writable and registered with Claude Code's own file-write trust boundary to redirect scratch output to instead of an unregistered /tmp path (#1351 - an experiment testing whether that boundary respects --add-dir for output-redirect targets)
 ### Deprecated
 ### Removed
 ### Deployment Changes
