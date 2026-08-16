@@ -224,6 +224,22 @@ while IFS= read -r call_line; do
     done
   fi
 
+  # ---- Layer 4a: narrow, argument-scoped allowance for `set -e` --------
+  # `set -e` (exit-on-error) at the top of a multi-statement script is
+  # common, safe, AI-authored shell hygiene (#1349) - but `set` is
+  # deliberately NOT added to command-allowlist wholesale: that would also
+  # permit `set -x` (tracing every subsequent command, including argument
+  # values, to the log), `set -o <anything>` (reconfiguring shell option
+  # state generally), `set -- ...` (reassigning positional parameters), and
+  # bare `set` (dumping every shell variable and its value - including
+  # anything secret - to stdout). Only this single, argument-free-except-`-e`
+  # invocation is allowed; everything else naming `set` still falls through
+  # to Layer 5 and is rejected there, since `set` itself is absent from
+  # command-allowlist.
+  if [ "$base" = "set" ] && [ "${#words[@]}" -eq 2 ] && [ "${words[1]}" = "-e" ]; then
+    continue
+  fi
+
   # ---- Layer 4: known-bad names ----------------------------------------
   blocked_reason=""
   for entry in "${command_blocklist_lines[@]}"; do
