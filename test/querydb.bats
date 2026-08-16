@@ -25,22 +25,27 @@ write_database_file() {
     printf '%s\n' "$@" > "${path}"
 }
 
+# Runs $SCRIPT with cwd set to $1.
+run_script() {
+    run bash -c 'cd "$1" && "$2"' _ "$1" "${SCRIPT}"
+}
+
 @test "dies when no settings are available at all" {
-    run bash -c 'cd "$1" && "$2"' _ "${TEST_TMP}" "${SCRIPT}"
+    run_script "${TEST_TMP}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"--server not specified"* ]]
+    [[ "${output}" == *"SERVER not set"* ]]
 }
 
 @test "dies when password is missing" {
     write_database_file "${HOME}/.database" 'SERVER=dbserver' 'DB=Treasury' 'USER=sa'
-    run bash -c 'cd "$1" && "$2"' _ "${TEST_TMP}" "${SCRIPT}"
+    run_script "${TEST_TMP}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"--password not specified"* ]]
+    [[ "${output}" == *"PASSWORD not set"* ]]
 }
 
 @test "loads \$HOME/.database and connects via sqlcmd" {
     write_database_file "${HOME}/.database" 'SERVER=dbserver' 'DB=Treasury' 'USER=sa' 'PASSWORD=secret'
-    run bash -c 'cd "$1" && "$2"' _ "${TEST_TMP}" "${SCRIPT}"
+    run_script "${TEST_TMP}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Connecting to dbserver (DB: Treasury) as sa"* ]]
     [[ "${output}" == *"sqlcmd called with: -S dbserver -d Treasury -U sa -P secret"* ]]
@@ -51,7 +56,7 @@ write_database_file() {
     local work_dir="${TEST_TMP}/work"
     write_database_file "${work_dir}/.database" 'DB=LocalDb'
     mkdir -p "${work_dir}/sub/sub2"
-    run bash -c 'cd "$1" && "$2"' _ "${work_dir}/sub/sub2" "${SCRIPT}"
+    run_script "${work_dir}/sub/sub2"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Connecting to dbserver (DB: LocalDb) as sa"* ]]
     [[ "${output}" == *"sqlcmd called with: -S dbserver -d LocalDb -U sa -P secret"* ]]
@@ -66,7 +71,7 @@ write_database_file() {
 
 @test "writes a copy of its output to the log file" {
     write_database_file "${HOME}/.database" 'SERVER=dbserver' 'DB=Treasury' 'USER=sa' 'PASSWORD=secret'
-    run bash -c 'cd "$1" && "$2"' _ "${TEST_TMP}" "${SCRIPT}"
+    run_script "${TEST_TMP}"
     [ "${status}" -eq 0 ]
     [ -f "${TMPDIR}/testdb-last.log" ]
     grep -q "Connecting to dbserver" "${TMPDIR}/testdb-last.log"

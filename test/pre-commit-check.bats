@@ -28,15 +28,20 @@ write_hook() {
     chmod +x "${path}"
 }
 
+# Runs $SCRIPT with cwd set to $1.
+run_script() {
+    run bash -c 'cd "$1" && "$2"' _ "$1" "${SCRIPT}"
+}
+
 @test "dies when no pre-commit hook is found in any hooksPath" {
-    run bash -c 'cd "$1" && "$2"' _ "${REPO_DIR}" "${SCRIPT}"
+    run_script "${REPO_DIR}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"No pre-commit hook found in the repo's hooks folder, system hooksPath, or global hooksPath"* ]]
 }
 
 @test "runs the repo's own hooks/pre-commit with --all-files and reports success" {
     write_hook "${REPO_DIR}/.git/hooks/pre-commit" 'echo "args: $*"'
-    run bash -c 'cd "$1" && "$2"' _ "${REPO_DIR}" "${SCRIPT}"
+    run_script "${REPO_DIR}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"args: --all-files"* ]]
     [[ "${output}" == *"Pre-commit checks passed"* ]]
@@ -44,7 +49,7 @@ write_hook() {
 
 @test "dies when the resolved hook exits non-zero" {
     write_hook "${REPO_DIR}/.git/hooks/pre-commit" 'exit 1'
-    run bash -c 'cd "$1" && "$2"' _ "${REPO_DIR}" "${SCRIPT}"
+    run_script "${REPO_DIR}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"pre-commit hook failed"* ]]
 }
@@ -62,7 +67,7 @@ write_hook() {
 @test "falls back to the global hooksPath when neither repo nor system provide one" {
     write_hook "${TEST_TMP}/global-hooks/pre-commit" 'echo "global hook ran"'
     git config --global core.hooksPath "${TEST_TMP}/global-hooks"
-    run bash -c 'cd "$1" && "$2"' _ "${REPO_DIR}" "${SCRIPT}"
+    run_script "${REPO_DIR}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"global hook ran"* ]]
 }
@@ -72,7 +77,7 @@ write_hook() {
     chmod -x "${REPO_DIR}/.git/hooks/pre-commit"
     write_hook "${TEST_TMP}/global-hooks/pre-commit" 'echo "global hook ran"'
     git config --global core.hooksPath "${TEST_TMP}/global-hooks"
-    run bash -c 'cd "$1" && "$2"' _ "${REPO_DIR}" "${SCRIPT}"
+    run_script "${REPO_DIR}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"global hook ran"* ]]
     [[ "${output}" != *"should not run"* ]]

@@ -17,8 +17,6 @@ die() {
     exit 1
 }
 
-BASEDIR="$(dirname "$(readlink -f "$0")")"
-echo "Script Dir: $BASEDIR"
 SERVER=
 DB=
 # USER is deliberately shadowed here: it is populated from the .database
@@ -36,9 +34,13 @@ if [ -f "$DB_SETTINGS_FILE" ]; then
   # shellcheck disable=SC1091
   . "$DB_SETTINGS_FILE"
 fi
-# Quote to prevent word split:
-# shellcheck disable=SC2046
-LOCAL_DB_SETTINGS_FILE=$(find $(CP="${PWD}"; while [ -n "$CP" ] ; do echo "$CP"; CP="${CP%/*}"; done;) -mindepth 1 -maxdepth 1 -type f -name ".database" | head -n 1)
+# Walk up from the current directory looking for the nearest .database file.
+LOCAL_DB_SETTINGS_FILE=""
+CP="${PWD}"
+while [ -n "$CP" ]; do
+  [ -f "$CP/.database" ] && LOCAL_DB_SETTINGS_FILE="$CP/.database" && break
+  CP="${CP%/*}"
+done
 if [ -n "$LOCAL_DB_SETTINGS_FILE" ]; then
   LOCAL_DB_SETTINGS_FILE=$(readlink -f "$LOCAL_DB_SETTINGS_FILE")
   LOCAL_DB_SETTINGS_FOLDER=$(dirname "$LOCAL_DB_SETTINGS_FILE")
@@ -51,10 +53,10 @@ if [ -n "$LOCAL_DB_SETTINGS_FILE" ]; then
   fi
 fi
 
-[ -z "$SERVER" ] && die "--server not specified"
-[ -z "$DB" ] && die "--database not specified"
-[ -z "$USER" ] && die "--user not specified"
-[ -z "$PASSWORD" ] && die "--password not specified"
+[ -z "$SERVER" ] && die "SERVER not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$DB" ] && die "DB not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$USER" ] && die "USER not set (add it to \$HOME/.database or a repo-local .database file)"
+[ -z "$PASSWORD" ] && die "PASSWORD not set (add it to \$HOME/.database or a repo-local .database file)"
 
 echo "Connecting to $SERVER (DB: $DB) as $USER"
 sqlcmd -S "$SERVER" -d "$DB" -U "$USER" -P "$PASSWORD" "$@"
