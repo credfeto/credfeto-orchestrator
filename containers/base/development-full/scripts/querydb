@@ -1,0 +1,60 @@
+#!/bin/bash
+
+TMPBASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+TESTDB_LOG="$TMPBASE/testdb-last.log"
+
+# Re-exec through tee so all output is always captured to a log file.
+# The outer invocation sets TESTDB_LOGGING=1 to prevent infinite recursion.
+if [ -z "$TESTDB_LOGGING" ]; then
+  TESTDB_LOGGING=1 "$0" "$@" 2>&1 | tee "$TESTDB_LOG"
+  exit "${PIPESTATUS[0]:-$?}"
+fi
+
+die() {
+    echo
+    echo "$@"
+    echo "(full log: $TESTDB_LOG)"
+    exit 1
+}
+
+BASEDIR="$(dirname "$(readlink -f "$0")")"
+echo "Script Dir: $BASEDIR"
+SERVER=
+DB=
+# USER is deliberately shadowed here: it is populated from the .database
+# settings files below (same convention as the SERVER/DB/PASSWORD fields),
+# not left as the caller's login name.
+# shellcheck disable=SC2034
+USER=
+PASSWORD=
+
+DB_SETTINGS_FILE="$HOME/.database"
+if [ -f "$DB_SETTINGS_FILE" ]; then
+  echo "Using $DB_SETTINGS_FILE"
+  # Not following: \
+  # shellcheck disable=SC1090
+  # shellcheck disable=SC1091
+  . "$DB_SETTINGS_FILE"
+fi
+# Quote to prevent word split:
+# shellcheck disable=SC2046
+LOCAL_DB_SETTINGS_FILE=$(find $(CP="${PWD}"; while [ -n "$CP" ] ; do echo "$CP"; CP="${CP%/*}"; done;) -mindepth 1 -maxdepth 1 -type f -name ".database" | head -n 1)
+if [ -n "$LOCAL_DB_SETTINGS_FILE" ]; then
+  LOCAL_DB_SETTINGS_FILE=$(readlink -f "$LOCAL_DB_SETTINGS_FILE")
+  LOCAL_DB_SETTINGS_FOLDER=$(dirname "$LOCAL_DB_SETTINGS_FILE")
+  if [ "$LOCAL_DB_SETTINGS_FILE" != "$DB_SETTINGS_FILE" ]; then
+    echo "Using settings from $LOCAL_DB_SETTINGS_FOLDER"
+    # Not following:
+    # shellcheck disable=SC1090
+    # shellcheck disable=SC1091
+    . "$LOCAL_DB_SETTINGS_FILE"
+  fi
+fi
+
+[ -z "$SERVER" ] && die "--server not specified"
+[ -z "$DB" ] && die "--database not specified"
+[ -z "$USER" ] && die "--user not specified"
+[ -z "$PASSWORD" ] && die "--password not specified"
+
+echo "Connecting to $SERVER (DB: $DB) as $USER"
+sqlcmd -S "$SERVER" -d "$DB" -U "$USER" -P "$PASSWORD" "$@"
