@@ -13,37 +13,28 @@ teardown() {
     cleanup_stubs
     # Restores write permission on any directory a test chmod'd read-only (the
     # not-writable auto-correction case) so TEST_TMP cleanup can remove it.
-    [ -n "${READONLY_TEST_DIR:-}" ] && chmod u+w "${READONLY_TEST_DIR}" 2> /dev/null
-    :
+    if [ -n "${READONLY_TEST_DIR:-}" ]; then
+        chmod u+w "${READONLY_TEST_DIR}" 2> /dev/null
+    fi
 }
 
 # Pipes a Claude Code PreToolUse hook payload for the given Bash command into
 # the hook under test. status 0 = allowed, 2 = blocked (matches the hook's
-# own contract). Runs from TEST_TMP - confirmed (via direct testing before
-# #1357's auto-correction feature was written) to always sit under
-# BATS_TEST_TMPDIR, itself never nested inside this checkout's own git tree -
-# so every test below keeps exercising the hook exactly as it behaved before
-# #1357: bats itself is normally invoked from the repo root, which IS a real,
-# writable git checkout, so without this every "bare git X is blocked" test
-# here would silently start passing through the new auto-correct path instead
-# of the block path they're named for. The auto-correct path itself needs a
-# real, writable repository at the hook's own $PWD and gets its own dedicated
-# fixture (run_hook_in_repo) below instead.
+# own contract). Runs from dir (default TEST_TMP - confirmed, via direct
+# testing before #1357's auto-correction feature was written, to always sit
+# under BATS_TEST_TMPDIR, itself never nested inside this checkout's own git
+# tree), so every test below keeps exercising the hook exactly as it behaved
+# before #1357: bats itself is normally invoked from the repo root, which IS a
+# real, writable git checkout, so without this every "bare git X is blocked"
+# test here would silently start passing through the new auto-correct path
+# instead of the block path they're named for. The auto-correction tests
+# (#1357) pass a second argument instead - a real, writable git repository,
+# which the hook's own $PWD needs to be for that path.
 run_hook() {
-    local command="$1"
+    local command="$1" dir="${2:-$TEST_TMP}"
     local payload
     payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${TEST_TMP}"
-}
-
-# Same contract as run_hook, but runs from repo_dir instead of TEST_TMP - for the
-# auto-correction tests (#1357), which need a real, writable git repository at the
-# hook's own $PWD.
-run_hook_in_repo() {
-    local command="$1" repo_dir="$2"
-    local payload
-    payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${repo_dir}"
+    run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${dir}"
 }
 
 # Creates a fresh, writable git repository under TEST_TMP and echoes its path.
@@ -430,12 +421,12 @@ make_writable_repo() {
 
 # Auto-correction tests (#1357): a missing -C is rewritten instead of blocked when the
 # hook's own $PWD resolves via `git rev-parse --show-toplevel` to a writable directory and
-# no `cd` appears anywhere in the command. See run_hook_in_repo/make_writable_repo above.
+# no `cd` appears anywhere in the command. See run_hook (dir argument)/make_writable_repo above.
 
 @test "a bare git status auto-corrects to git -C <toplevel> status when run from inside a writable repo (#1357)" {
     local repo
     repo=$(make_writable_repo)
-    run_hook_in_repo "git status" "${repo}"
+    run_hook "git status" "${repo}"
     [ "${status}" -eq 0 ]
     local rewritten
     rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
@@ -445,7 +436,7 @@ make_writable_repo() {
 @test "a compound command with two bare git calls gets both auto-corrected (#1357)" {
     local repo
     repo=$(make_writable_repo)
-    run_hook_in_repo "git status && git branch --show-current" "${repo}"
+    run_hook "git status && git branch --show-current" "${repo}"
     [ "${status}" -eq 0 ]
     local rewritten
     rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
@@ -455,7 +446,7 @@ make_writable_repo() {
 @test "-C is inserted right after git, not after existing -c pairs, when auto-correcting (#1357)" {
     local repo
     repo=$(make_writable_repo)
-    run_hook_in_repo "git -c core.pager=cat status" "${repo}"
+    run_hook "git -c core.pager=cat status" "${repo}"
     [ "${status}" -eq 0 ]
     local rewritten
     rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
@@ -465,7 +456,7 @@ make_writable_repo() {
 @test "auto-correction is skipped (falls back to block) when cd appears anywhere in the command (#1357)" {
     local repo
     repo=$(make_writable_repo)
-    run_hook_in_repo "cd ${repo} && git status" "${repo}"
+    run_hook "cd ${repo} && git status" "${repo}"
     [ "${status}" -eq 2 ]
 }
 
@@ -479,14 +470,14 @@ make_writable_repo() {
     repo=$(make_writable_repo)
     READONLY_TEST_DIR="${repo}"
     chmod u-w "${repo}"
-    run_hook_in_repo "git status" "${repo}"
+    run_hook "git status" "${repo}"
     [ "${status}" -eq 2 ]
 }
 
 @test "a hardened invocation (already has -C) is not touched by auto-correction (#1357)" {
     local repo
     repo=$(make_writable_repo)
-    run_hook_in_repo "git -C ${repo} status" "${repo}"
+    run_hook "git -C ${repo} status" "${repo}"
     [ "${status}" -eq 0 ]
     [[ "${output}" != *'hookSpecificOutput'* ]]
 }

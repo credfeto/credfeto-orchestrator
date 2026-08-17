@@ -59,7 +59,9 @@
 #   parses the command statically and never runs any part of it, so it cannot track a `cd`'s
 #   effect), and (b) `git rev-parse --show-toplevel`, run from the hook's own $PWD, succeeds
 #   and resolves to a directory the hook process can write to (a sanity check that this is a
-#   real, usable checkout and not some unrelated read-only repository), then every bare git
+#   real, usable checkout and not some unrelated read-only repository) - the one place this
+#   hook itself executes anything, as distinct from never running the user's command above -
+#   then every bare git
 #   call in the command is rewritten in place — `-C "<toplevel>"` is inserted immediately
 #   after the `git` token itself, since global options like -C/-c may appear in any relative
 #   order, so there is no need to skip past any existing -c pairs first — and the rewritten
@@ -116,30 +118,34 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# Whether `cd` appears anywhere in this command, at any nesting depth, as a command name —
-# gates the auto-correction feature below (see the header comment): this hook parses
-# statically and never runs any part of the command, so a `cd` earlier in program order
-# means its own $PWD is no longer a safe stand-in for what a later bare git call in the same
-# command would actually see.
-HAS_CD=$(printf '%s' "$ast" | jq -r '
-  [.. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-   (if (.Args[0].Parts | length) == 1 and .Args[0].Parts[0].Type == "Lit"
-    then .Args[0].Parts[0].Value else "" end)]
-  | any(. == "cd")')
-
-# One JSON object per CallExpr line: w is every word (a single plain literal emitted
-# verbatim; anything else - quoted text, substitutions, expansions - represented as a
-# \u0001 marker, unambiguous since Layer 0 of reject-obfuscated-commands, which runs before
-# this hook, guarantees a real \x01 byte can never appear in the input, so it can never
-# equal "git"/"-C"/"-c" and is opaque to the checks below), e is that same word's raw_cmd
-# byte offset one past its end (shfmt's own End.Offset), used by the auto-correction rewrite
-# below to know exactly where to splice "-C <dir>" in after a bare git token.
-calls=$(printf '%s' "$ast" | jq -c '
+# Two tab-joined lines per CallExpr, in a single AST walk: the words line (every word - a
+# single plain literal emitted verbatim; anything else - quoted text, substitutions,
+# expansions - represented as a \u0001 marker, unambiguous since Layer 0 of
+# reject-obfuscated-commands, which runs before this hook, guarantees a real \x01 byte
+# can never appear in the input, so it can never equal "git"/"-C"/"-c" and is opaque to
+# the checks below), then the offsets line (each word's raw_cmd byte offset one past its
+# end - shfmt's own End.Offset - used by the auto-correction rewrite below to know
+# exactly where to splice "-C <dir>" in after a bare git token). Read below in two
+# pure-bash passes over this same already-computed string - no further jq forked per
+# call: the first scans only the words lines to answer "does cd appear anywhere in the
+# command" (the auto-correction gate - see the header comment), which must be known in
+# full before the first block-or-rewrite decision, not discovered mid-walk; the second
+# is the real per-call processing loop.
+calls=$(printf '%s' "$ast" | jq -r '
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  {
-    w: [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ],
-    e: [ .Args[] | .End.Offset ]
-  }')
+  ([ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] | join("\t")),
+  ([ .Args[] | (.End.Offset | tostring) ] | join("\t"))
+')
+
+# `cd` appearing anywhere in the command, at any nesting depth, as a command name gates the
+# auto-correction feature below: this hook parses statically and never runs any part of the
+# command, so a `cd` earlier in program order means its own $PWD is no longer a safe
+# stand-in for what a later bare git call in the same command would actually see.
+HAS_CD=false
+while IFS= read -r words_line && IFS= read -r _ends_line; do
+  [ -z "$words_line" ] && continue
+  [ "${words_line%%$'\t'*}" = "cd" ] && HAS_CD=true
+done <<< "$calls"
 
 # Populated only when at least one call needs a missing -C rewritten; each entry is a byte
 # offset into raw_cmd, immediately after a git token, at which " -C <dir>" is spliced in.
@@ -158,10 +164,8 @@ TOPLEVEL_RESOLVED=0
 # is both correct and real: a cd anywhere in the command, no enclosing git repository at
 # the hook's own $PWD, or a repository that resolves but is not writable.
 maybe_autocorrect_or_block() {
-  local offset="$1"
-  if [ "$HAS_CD" = "true" ]; then
-    block 'git commands must use "git -C <dir>" format'
-  fi
+  local offset="$1" msg='git commands must use "git -C <dir>" format'
+  [ "$HAS_CD" = "true" ] && block "$msg"
   if [ "$TOPLEVEL_RESOLVED" -eq 0 ]; then
     if TOPLEVEL_DIR=$(git rev-parse --show-toplevel 2> /dev/null) \
       && [ -n "$TOPLEVEL_DIR" ] && [ -w "$TOPLEVEL_DIR" ]; then
@@ -170,7 +174,7 @@ maybe_autocorrect_or_block() {
       TOPLEVEL_RESOLVED=2
     fi
   fi
-  [ "$TOPLEVEL_RESOLVED" -eq 2 ] && block 'git commands must use "git -C <dir>" format'
+  [ "$TOPLEVEL_RESOLVED" -eq 2 ] && block "$msg"
   INSERT_OFFSETS+=("$offset")
 }
 
@@ -212,10 +216,10 @@ check_config_call() {
   return 0
 }
 
-while IFS= read -r call_line; do
-  [ -z "$call_line" ] && continue
-  mapfile -t words < <(printf '%s' "$call_line" | jq -r '.w[]')
-  mapfile -t ends < <(printf '%s' "$call_line" | jq -r '.e[]')
+while IFS= read -r words_line && IFS= read -r ends_line; do
+  [ -z "$words_line" ] && continue
+  IFS=$'\t' read -ra words <<< "$words_line"
+  IFS=$'\t' read -ra ends <<< "$ends_line"
 
   case "${words[0]}" in
     eval | source | .)
