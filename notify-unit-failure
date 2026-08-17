@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Posts a Discord alert when an orchestrator systemd unit enters the failed state.
+#
+# Installed by install-timer as the target of the service unit's OnFailure= directive, and run
+# as a SEPARATE unit from the one that failed. That separation is the entire point: oneshot's
+# own notify_discord_* calls can only report problems oneshot is healthy enough to reach, so
+# every failure that stops it before (or instead of) those calls is invisible. A host reboot
+# left a stale podman container-name reservation that made every single invocation fail at
+# `podman run` for 19.5 hours across ~3,000 cycles, with the unit dutifully reporting
+# "Failed with result 'exit-code'" to a journal nobody was reading and no alert anywhere
+# (#1361). This script is what makes that class of failure audible.
+#
+# Deliberately dependency-free: it does NOT source lib/* . Everything in lib/ assumes the
+# orchestrator's own environment is intact, which is exactly the assumption that is false when
+# this runs. A self-contained curl call cannot be broken by whatever broke the service.
+#
+# Usage: notify-unit-failure <failed-unit-name>
+#   install-timer wires this up as: ExecStart=<repo>/notify-unit-failure %i
+
+set -e
+
+UNIT_NAME="${1:-unknown}"
+
+# Same config location and key as oneshot (see README "Discord notifications"). Read directly
+# rather than via lib/core's config loader for the dependency-free reason above.
+CONFIG_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+
+[ -f "${CONFIG_FILE}" ] || exit 0
+
+# Extract DISCORD_WEBHOOK without sourcing the file — sourcing would execute arbitrary shell
+# from a config file in a context that is already handling a failure.
+WEBHOOK=$(grep -E '^[[:space:]]*DISCORD_WEBHOOK[[:space:]]*=' "${CONFIG_FILE}" 2> /dev/null \
+    | tail -n 1 \
+    | cut -d= -f2- \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+
+# Silent when unconfigured, matching lib/discord's behaviour.
+[ -n "${WEBHOOK}" ] || exit 0
+
+# The last few journal lines are what makes the alert actionable rather than just noisy - they
+# usually contain the actual error (e.g. the podman "already in use" message) that explains why
+# the unit failed. Tolerate failure: journalctl may be unreadable for this user, and an alert
+# without context still beats no alert at all.
+CONTEXT=$(journalctl -u "${UNIT_NAME}" -n 15 --no-pager 2> /dev/null | tail -n 15 || true)
+[ -n "${CONTEXT}" ] || CONTEXT="(no journal output available)"
+
+HOSTNAME_VALUE=$(hostname 2> /dev/null || printf 'unknown-host')
+
+PAYLOAD=$(jq -n \
+    --arg unit "${UNIT_NAME}" \
+    --arg host "${HOSTNAME_VALUE}" \
+    --arg context "${CONTEXT}" \
+    '{
+        embeds: [{
+            title: "Orchestrator unit failed",
+            description: ("`" + $unit + "` entered the failed state on `" + $host + "`.\n\nThis alert comes from a separate unit, so it fires even when the orchestrator itself is too broken to report anything (see credfeto-orchestrator#1361).\n\nLast journal lines:\n```\n" + $context + "\n```"),
+            color: 15158332
+        }]
+    }')
+
+curl -sf -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${WEBHOOK}" > /dev/null 2>&1 \
+    || printf 'notify-unit-failure: failed to post Discord alert for %s\n' "${UNIT_NAME}" >&2
+
+exit 0

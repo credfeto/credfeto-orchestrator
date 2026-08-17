@@ -338,6 +338,73 @@ make_fake_repo() {
     grep -q "MemoryDenyWriteExecute=no" "${svc}"
 }
 
+@test "install-timer service unit wires up OnFailure and start rate limiting (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    # OnFailure points at a SEPARATE unit so alerting survives oneshot being too broken to
+    # report on itself — the whole reason the 19.5h outage went unnoticed.
+    grep -q "OnFailure=credfeto-orchestrator-testuser-failure.service" "${svc}"
+    # Rate limiting turns "retry silently forever" into "stop and shout".
+    grep -q "StartLimitIntervalSec=900" "${svc}"
+    grep -q "StartLimitBurst=10" "${svc}"
+}
+
+@test "install-timer service unit removes the agent container on stop (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    # A shutdown that SIGKILLs a running --rm container mid-teardown is what stranded the
+    # container name in podman's storage layer in the first place.
+    grep -q "ExecStop=-/usr/bin/podman rm -f orchestrator-testuser" "${svc}"
+    grep -q "KillMode=mixed" "${svc}"
+    grep -q "TimeoutStopSec=90" "${svc}"
+}
+
+@test "install-timer creates the failure-notifier unit (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
+    [ -f "${failure_unit}" ]
+    grep -q "User=testuser" "${failure_unit}"
+    grep -qE "ExecStart=.*/notify-unit-failure credfeto-orchestrator-testuser\.service$" "${failure_unit}"
+    # Must not chain OnFailure= onto itself: nothing to escalate to, and it would loop.
+    [ "$(grep -c '^OnFailure=' "${failure_unit}")" -eq 0 ]
+}
+
+@test "install-timer --owner scopes the failure-notifier unit to the owner (#1361)" {
+    run main --owner myorg
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg-failure.service"
+    [ -f "${failure_unit}" ]
+    grep -q "OnFailure=credfeto-orchestrator-testuser-myorg-failure.service" "${svc}"
+    grep -qE "ExecStart=.*/notify-unit-failure credfeto-orchestrator-testuser-myorg\.service$" "${failure_unit}"
+}
+
+@test "install-timer respects start-limit and stop-timeout overrides (#1361)" {
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+    ORCHESTRATOR_START_LIMIT_BURST=3
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+    ORCHESTRATOR_START_LIMIT_INTERVAL_SEC=60
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+    ORCHESTRATOR_TIMEOUT_STOP_SEC=42
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    grep -q "StartLimitBurst=3" "${svc}"
+    grep -q "StartLimitIntervalSec=60" "${svc}"
+    grep -q "TimeoutStopSec=42" "${svc}"
+}
+
 @test "install-timer respects ORCHESTRATOR_TIMEOUT_START_SEC override (#1098)" {
     # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
     ORCHESTRATOR_TIMEOUT_START_SEC=1234

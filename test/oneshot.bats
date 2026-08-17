@@ -3460,7 +3460,7 @@ STUBEOF
     grep -qx -- "rm -f orchestrator-credfeto" "${args_log}"
 }
 
-@test "invoke_claude dies with specific message when podman run fails due to container name in use" {
+@test "invoke_claude returns 2 (not a hard die) when podman run fails due to container name in use (#1361)" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -3472,9 +3472,53 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
-    [ "${status}" -ne 0 ]
+    # Must be 2, not just any non-zero: main()'s MAX_CONSECUTIVE_INFRA_FAILURES escalation
+    # (#1133) only ever triggers on exactly 2. This branch used to die, which bypassed that
+    # escalation entirely and let a wedged container retry ~3,000 times unreported (#1361).
+    [ "${status}" -eq 2 ]
     [[ "${output}" == *"already in use"* ]]
+    grep -q "name conflict persisted even with --replace" "${notify_log}"
+}
+
+@test "invoke_claude passes --replace to podman run so a stale container name cannot wedge it (#1361)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf "%s\n" "\$@" >> "${args_log}"
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx -- '--replace' "${args_log}"
+}
+
+@test "invoke_claude still refuses to clobber a genuinely running container despite --replace (#1361)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf "%s\n" "\$*" >> "${args_log}"
+[ "\$1" = "inspect" ] && [ "\$2" = "--format" ] && { printf 'true\n'; exit 0; }
+[ "\$1" = "inspect" ] && exit 0
+[ "\$1" = "pull" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    # --replace would happily destroy another invocation's in-flight work; the pre-flight guard
+    # is what prevents that, so it must still fire before podman run is ever reached.
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"already exists and is running"* ]]
+    [ "$(grep -c -- '--replace' "${args_log}")" -eq 0 ]
 }
 
 # --- pre-flight/infra container failure (#1133) --------------------------------

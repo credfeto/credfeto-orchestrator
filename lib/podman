@@ -43,7 +43,19 @@ run_claude_fresh() {
         if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
             cat "${stderrfile}" >&2
             rm -f "${stderrfile}"
-            die "Container ${PODMAN_CONTAINER_NAME} is already in use — another invocation may be running"
+            # Claude never started, so this is a pre-flight/infra failure: return 2 rather than
+            # die, exactly as the header comment above describes. This branch used to die, which
+            # silently bypassed main()'s MAX_CONSECUTIVE_INFRA_FAILURES escalation (#1133) — the
+            # mechanism written specifically so "a persistently broken container would retry
+            # silently forever with no human ever notified" could not happen. Because that
+            # escalation only ever triggers on a return of 2, dying here meant the counter never
+            # incremented, nothing was ever Blocked, and no Discord notification was ever sent:
+            # time-to-detect went from ~3 minutes to 19.5 hours (#1361). With --replace above
+            # this should now be unreachable in the storage-orphan case, but it stays as the
+            # backstop for any other cause of a name conflict.
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${PODMAN_CONTAINER_NAME} name conflict persisted even with --replace — needs manual host investigation"
+            return 2
         fi
         cat "${stderrfile}" >&2
         rm -f "${stderrfile}"
@@ -525,6 +537,18 @@ invoke_claude() {
     PODMAN_RUN_ARGS=(
         run
         --name "${container_name}"
+        # Takes over the name if something still holds it, instead of refusing to start (#1361).
+        # The pre-flight check above already handles a leftover container podman inspect can SEE
+        # (removing it when stopped, dying when genuinely running), and that guard is what keeps
+        # --replace from silently destroying another invocation's in-flight work. This covers the
+        # case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
+        # container mid-teardown) can leave the name reserved in the lower containers/storage
+        # layer while libpod's own metadata record is gone, so podman ps -a and podman inspect
+        # both report nothing while podman run still fails with "already in use by an external
+        # entity". That wedged the credfeto service for 19.5 hours across ~3,000 cycles until a
+        # human intervened. Verified on the live orphan: --replace both starts successfully AND
+        # purges the stale storage reservation, so it is the cure as well as the prevention.
+        --replace
         --rm
         --interactive
         # keep-id:uid=1000,gid=1000 maps container developer (UID/GID 1000) to the

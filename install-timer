@@ -17,6 +17,21 @@ ORCHESTRATOR_TIMER_INTERVAL="${ORCHESTRATOR_TIMER_INTERVAL:-30sec}"
 # self-update and agent-startup steps. Override with ORCHESTRATOR_TIMEOUT_START_SEC.
 ORCHESTRATOR_TIMEOUT_START_SEC="${ORCHESTRATOR_TIMEOUT_START_SEC:-6300}"
 
+# Grace period for ExecStop (removing the agent container) before systemd SIGKILLs the unit on
+# shutdown. Kept short: this only has to outlast a `podman rm -f`, and a long stop timeout
+# delays every reboot. Too short and the SIGKILL re-creates the very orphan this is preventing
+# (#1361). Override with ORCHESTRATOR_TIMEOUT_STOP_SEC.
+ORCHESTRATOR_TIMEOUT_STOP_SEC="${ORCHESTRATOR_TIMEOUT_STOP_SEC:-90}"
+
+# Start rate limiting: more than ORCHESTRATOR_START_LIMIT_BURST starts within
+# ORCHESTRATOR_START_LIMIT_INTERVAL_SEC leaves the unit failed until `systemctl reset-failed`.
+# Sized against the timer interval (default 30sec): 10 failures in 15 minutes means a genuinely
+# wedged service is stopped within ~5 minutes rather than retrying ~3,000 times over 19.5 hours
+# (#1361), while staying far above any plausible rate of isolated, self-recovering failures.
+# Override with ORCHESTRATOR_START_LIMIT_BURST / ORCHESTRATOR_START_LIMIT_INTERVAL_SEC.
+ORCHESTRATOR_START_LIMIT_INTERVAL_SEC="${ORCHESTRATOR_START_LIMIT_INTERVAL_SEC:-900}"
+ORCHESTRATOR_START_LIMIT_BURST="${ORCHESTRATOR_START_LIMIT_BURST:-10}"
+
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
     exit 1
@@ -83,6 +98,20 @@ create_service_unit() {
 Description=Credfeto Orchestrator for ${CURRENT_USER}
 After=network-online.target
 Wants=network-online.target
+# Fire the failure-notifier unit whenever this one enters the failed state. This is the ONLY
+# alerting path that survives oneshot being too broken to report on itself: it runs as a
+# separate unit, so it works when oneshot dies before (or instead of) reaching its own
+# notify_discord_* calls. A stale podman name reservation after a host reboot made every
+# invocation fail at \`podman run\` for 19.5 hours with no alert whatsoever (#1361).
+OnFailure=${SERVICE_NAME}-failure.service
+# Stop retrying a wedged service forever. Without this the unit re-ran every ~30s for ~3,000
+# consecutive failures, burning host resources and drowning the journal, with nothing ever
+# escalating. Exceeding the burst leaves the unit failed (which fires OnFailure= above) until
+# a human runs 'systemctl reset-failed' — deliberately \"stop and shout\" rather than
+# \"retry silently forever\". Paired with OnFailure=: rate limiting without alerting would
+# just be a quieter outage.
+StartLimitIntervalSec=${ORCHESTRATOR_START_LIMIT_INTERVAL_SEC}
+StartLimitBurst=${ORCHESTRATOR_START_LIMIT_BURST}
 
 [Service]
 Type=oneshot
@@ -172,6 +201,18 @@ ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # the socket lives under XDG_RUNTIME_DIR, not ~/.gnupg.
 ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'
 ExecStart=${exec_start}
+# Remove the agent container on the way down so a shutdown cannot strand it (#1361). The
+# originating incident was a host reboot whose shutdown completed in under a minute: the running
+# container was SIGKILLed mid---rm-teardown, which desynced podman's two layers and left the
+# container NAME reserved in containers/storage with no libpod record, wedging every subsequent
+# run. '-' prefixes tolerate failure (nothing to remove is the normal case, and a failing
+# ExecStop must never block shutdown). KillMode=mixed sends SIGTERM to the main process only,
+# giving oneshot and podman a chance to tear down cleanly instead of every process in the cgroup
+# being killed at once. TimeoutStopSec bounds that grace period so a hung teardown cannot delay
+# shutdown indefinitely.
+ExecStop=-/usr/bin/podman rm -f orchestrator-${CURRENT_USER}
+KillMode=mixed
+TimeoutStopSec=${ORCHESTRATOR_TIMEOUT_STOP_SEC}
 # Security hardening — limit the blast radius if the service is compromised.
 # PrivateTmp is deliberately NOT set: rootless Podman keeps a long-lived pause
 # process that holds the namespace it is first created in, and under PrivateTmp the
@@ -201,6 +242,25 @@ CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 AmbientCapabilities=
 LockPersonality=yes
 MemoryDenyWriteExecute=no"
+    write_unit_file "${dest}" "${content}"
+}
+
+# The unit referenced by the service's OnFailure=. Runs as a SEPARATE unit so it still fires
+# when the orchestrator itself is too broken to report anything - which is exactly the case
+# this exists for (#1361). Deliberately minimal: no ExecStartPre self-update, no ssh/gpg agent
+# setup, no Delegate=, nothing that could itself fail while trying to report a failure.
+create_failure_unit() {
+    local dest="${UNIT_DIR}/${SERVICE_NAME}-failure.service"
+    local content
+    content="[Unit]
+Description=Report failure of ${SERVICE_NAME}.service to Discord
+
+[Service]
+Type=oneshot
+User=${CURRENT_USER}
+# No OnFailure= here: if reporting a failure itself fails there is nothing further to escalate
+# to, and a unit that triggered itself on failure would loop.
+ExecStart=${REPO_DIR}/notify-unit-failure ${SERVICE_NAME}.service"
     write_unit_file "${dest}" "${content}"
 }
 
@@ -255,6 +315,9 @@ main() {
 
     create_service_unit "${owner_filter}"
     info "Service unit written to ${UNIT_DIR}/${SERVICE_NAME}.service"
+
+    create_failure_unit
+    info "Failure-notifier unit written to ${UNIT_DIR}/${SERVICE_NAME}-failure.service"
 
     create_timer_unit
     info "Timer unit written to ${UNIT_DIR}/${SERVICE_NAME}.timer"
