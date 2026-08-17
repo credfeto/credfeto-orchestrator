@@ -3460,7 +3460,7 @@ STUBEOF
     grep -qx -- "rm -f orchestrator-credfeto" "${args_log}"
 }
 
-@test "invoke_claude dies with specific message when podman run fails due to container name in use" {
+@test "invoke_claude returns 2 (not a hard die) when podman run fails due to container name in use (#1361)" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -3472,9 +3472,57 @@ exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
+    local notify_log="${TEST_TMP}/notify.log"
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
-    [ "${status}" -ne 0 ]
+    # Must be 2, not just any non-zero: main()'s MAX_CONSECUTIVE_INFRA_FAILURES escalation
+    # (#1133) only ever triggers on exactly 2. This branch used to die, which bypassed that
+    # escalation entirely and let a wedged container retry ~3,000 times unreported (#1361).
+    [ "${status}" -eq 2 ]
     [[ "${output}" == *"already in use"* ]]
+    # Must NOT notify from here: returning 2 lets main() continue to the next item, so a
+    # host-scoped fault would post one Discord message per item per 30s tick. Alerting for this
+    # class belongs to the unit-level OnFailure= handler, which fires once per failed tick.
+    [ ! -f "${notify_log}" ]
+}
+
+
+@test "invoke_claude passes --replace to podman run so a stale container name cannot wedge it (#1361)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf "%s\n" "\$@" >> "${args_log}"
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx -- '--replace' "${args_log}"
+}
+
+@test "invoke_claude still refuses to clobber a genuinely running container despite --replace (#1361)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+printf "%s\n" "\$*" >> "${args_log}"
+[ "\$1" = "inspect" ] && [ "\$2" = "--format" ] && { printf 'true\n'; exit 0; }
+[ "\$1" = "inspect" ] && exit 0
+[ "\$1" = "pull" ] && exit 0
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    # --replace would happily destroy another invocation's in-flight work; the pre-flight guard
+    # is what prevents that, so it must still fire before podman run is ever reached.
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"already exists and is running"* ]]
+    [ "$(grep -c -- '--replace' "${args_log}")" -eq 0 ]
 }
 
 # --- pre-flight/infra container failure (#1133) --------------------------------
@@ -4838,9 +4886,14 @@ STUBEOF
     invoke_claude() { return 2; }
 
     run main
-    [ "${status}" -eq 0 ]
+    # Exits 1, not 0, since #1361: a pre-flight container failure must make the systemd unit fail
+    # so its OnFailure= handler alerts. Without that the unit reports success and the only
+    # alerting path that survives a broken oneshot never fires. The budget exemption this test
+    # exists for is unaffected — that is asserted below.
+    [ "${status}" -eq 1 ]
     [[ "${output}" == *"not counted against the invocation budget"* ]]
     [[ "${output}" == *"errors: 1"* ]]
+    [[ "${output}" == *"exiting non-zero so the unit's OnFailure= handler reports it"* ]]
 
     load_issue_invocation_counts 10
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
@@ -4860,7 +4913,7 @@ STUBEOF
     invoke_claude() { return 2; }
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     [[ "${output}" == *"not counted against the invocation budget"* ]]
 
     load_pr_invocation_counts 5
@@ -4882,7 +4935,7 @@ STUBEOF
     save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     [[ "${output}" == *"BLOCKED Issue #10"* ]]
     [[ "${output}" == *"failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start"* ]]
     [[ "${output}" == *"blocked: 1"* ]]
@@ -4904,7 +4957,7 @@ STUBEOF
     save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 1 ))"
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     grep -q "issue comment 10 --repo org/repo --body This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${call_log}"
     grep -q "type=Issue id=10 reason=This item's agent container has failed ${MAX_CONSECUTIVE_INFRA_FAILURES} times in a row before Claude could even start" "${_notif_log}"
 }
@@ -4921,7 +4974,7 @@ STUBEOF
     save_infra_failure_count "Issue" 10 "$(( MAX_CONSECUTIVE_INFRA_FAILURES - 2 ))"
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     [[ "${output}" != *"BLOCKED"* ]]
     [[ "${output}" == *"errors: 1"* ]]
 }
@@ -4940,7 +4993,7 @@ STUBEOF
     save_infra_failure_count "Issue" 10 1
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     [ ! -f "${status_log}" ]
 }
 
@@ -4956,7 +5009,7 @@ STUBEOF
     update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     grep -q 'Issue 10 Not Started' "${status_log}"
 }
 
@@ -4994,7 +5047,7 @@ STUBEOF
     hash git
 
     run main
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 1 ]
     grep -q "clean -fdX" "${git_log}"
     [[ "${output}" != *"Failed to invoke Claude"* ]]
 }

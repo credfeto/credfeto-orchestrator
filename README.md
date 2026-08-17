@@ -105,6 +105,22 @@ DISCORD_WEBHOOK=https://discord.com/api/webhooks/<id>/<token>
 
 If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications are silently skipped.
 
+### Unit-failure alerts (`notify-unit-failure`)
+
+`install-timer` also installs a `<service>-failure.service` unit, wired to the main service's
+`OnFailure=`, which runs the `notify-unit-failure` script and posts to the same
+`DISCORD_WEBHOOK`.
+
+It exists because every alert `oneshot` sends is one `oneshot` was healthy enough to send: a
+failure that stops it before it reaches its own notification code is invisible. Running the
+alert from a *separate* unit is what makes that class of failure audible — a stale podman
+container name once made every invocation fail for 19.5 hours with no alert at all
+(credfeto-orchestrator#1361).
+
+It reuses the same config key as above, deliberately shares no code with `lib/` (everything
+there assumes an intact environment, which is the assumption being violated when it runs), and
+redacts token-shaped strings from the journal excerpt it forwards.
+
 ## Build Status
 
 | Branch  | Status                                                                                                                                                                                                                                          |

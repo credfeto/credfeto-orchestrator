@@ -338,6 +338,116 @@ make_fake_repo() {
     grep -q "MemoryDenyWriteExecute=no" "${svc}"
 }
 
+@test "install-timer service unit wires up OnFailure (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    # OnFailure points at a SEPARATE unit so alerting survives oneshot being too broken to
+    # report on itself — the whole reason the 19.5h outage went unnoticed.
+    grep -q "OnFailure=credfeto-orchestrator-testuser-failure.service" "${svc}"
+}
+
+@test "install-timer does NOT set systemd start rate limiting (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    # StartLimitIntervalSec/StartLimitBurst rate-limit ALL starts, not just failed ones, so any
+    # burst small enough to catch a wedged service also throttles a healthy one against the 30s
+    # timer — and a rate-limited unit self-clears anyway, so it never delivers the "stop until a
+    # human looks" behaviour it appears to promise. Asserted absent so it cannot be reintroduced
+    # without revisiting that reasoning.
+    [ "$(grep -c '^StartLimitIntervalSec=' "${svc}")" -eq 0 ]
+    [ "$(grep -c '^StartLimitBurst=' "${svc}")" -eq 0 ]
+}
+
+@test "install-timer service unit removes the agent container on stop (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    [ -f "${svc}" ]
+    # No --owner: OWNER varies per repo within a run, so no single literal name is correct and
+    # the teardown has to sweep by prefix instead.
+    grep -qF 'ExecStop=-/bin/sh -c ' "${svc}"
+    grep -qF 'podman ps -aq --filter name=^orchestrator-' "${svc}"
+    grep -q "TimeoutStopSec=90" "${svc}"
+    # KillMode must stay at the default (control-group): it SIGTERMs the whole cgroup so podman
+    # can tear the container down. KillMode=mixed would SIGTERM only the main process and SIGKILL
+    # podman after the timeout — re-creating the mid-teardown kill that caused #1361.
+    [ "$(grep -c '^KillMode=' "${svc}")" -eq 0 ]
+}
+
+@test "install-timer --owner ExecStop targets the OWNER container name, not the unix user (#1361)" {
+    run main --owner myorg
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
+    [ -f "${svc}" ]
+    # lib/podman names the container orchestrator-${OWNER} (the GitHub owner), NOT the host unix
+    # user. They coincide only when setup-owner's naming convention is followed; using
+    # CURRENT_USER here would remove the wrong name and silently fail to prevent the orphan.
+    grep -q "ExecStop=-/usr/bin/podman rm -f orchestrator-myorg" "${svc}"
+    [ "$(grep -c 'rm -f orchestrator-testuser' "${svc}")" -eq 0 ]
+}
+
+@test "install-timer creates the failure-notifier unit (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
+    [ -f "${failure_unit}" ]
+    grep -q "User=testuser" "${failure_unit}"
+    grep -qE "ExecStart=.*/notify-unit-failure credfeto-orchestrator-testuser\.service$" "${failure_unit}"
+    # Must not chain OnFailure= onto itself: nothing to escalate to, and it would loop.
+    [ "$(grep -c '^OnFailure=' "${failure_unit}")" -eq 0 ]
+}
+
+@test "install-timer --owner scopes the failure-notifier unit to the owner (#1361)" {
+    run main --owner myorg
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg-failure.service"
+    [ -f "${failure_unit}" ]
+    grep -q "OnFailure=credfeto-orchestrator-testuser-myorg-failure.service" "${svc}"
+    grep -qE "ExecStart=.*/notify-unit-failure credfeto-orchestrator-testuser-myorg\.service$" "${failure_unit}"
+}
+
+@test "install-timer respects stop-timeout and notifier-timeout overrides (#1361)" {
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+    ORCHESTRATOR_TIMEOUT_STOP_SEC=42
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_failure_unit in the sourced install-timer
+    ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC=7
+    run main
+    [ "${status}" -eq 0 ]
+
+    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
+    [ -f "${svc}" ]
+    grep -q "TimeoutStopSec=42" "${svc}"
+    grep -q "TimeoutStartSec=7" "${failure_unit}"
+}
+
+@test "install-timer failure unit is bounded and hardened (#1361)" {
+    run main
+    [ "${status}" -eq 0 ]
+
+    local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
+    [ -f "${failure_unit}" ]
+    # Unbounded, a blackholed webhook host would leave this 'activating' forever and later
+    # OnFailure activations would coalesce into it, silently disabling alerting (#1098's shape).
+    grep -q "TimeoutStartSec=60" "${failure_unit}"
+    # This unit only runs grep/journalctl/jq/curl, so unlike the main unit it can take the strict
+    # settings the main unit must not (rootless podman needs CAP_SETUID/CAP_SETGID there).
+    grep -q "NoNewPrivileges=yes" "${failure_unit}"
+    grep -q "ProtectSystem=strict" "${failure_unit}"
+    grep -qE "^CapabilityBoundingSet=$" "${failure_unit}"
+}
+
 @test "install-timer respects ORCHESTRATOR_TIMEOUT_START_SEC override (#1098)" {
     # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
     ORCHESTRATOR_TIMEOUT_START_SEC=1234
