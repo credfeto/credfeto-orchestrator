@@ -23,14 +23,22 @@ ORCHESTRATOR_TIMEOUT_START_SEC="${ORCHESTRATOR_TIMEOUT_START_SEC:-6300}"
 # (#1361). Override with ORCHESTRATOR_TIMEOUT_STOP_SEC.
 ORCHESTRATOR_TIMEOUT_STOP_SEC="${ORCHESTRATOR_TIMEOUT_STOP_SEC:-90}"
 
-# Start rate limiting: more than ORCHESTRATOR_START_LIMIT_BURST starts within
-# ORCHESTRATOR_START_LIMIT_INTERVAL_SEC leaves the unit failed until `systemctl reset-failed`.
-# Sized against the timer interval (default 30sec): 10 failures in 15 minutes means a genuinely
-# wedged service is stopped within ~5 minutes rather than retrying ~3,000 times over 19.5 hours
-# (#1361), while staying far above any plausible rate of isolated, self-recovering failures.
-# Override with ORCHESTRATOR_START_LIMIT_BURST / ORCHESTRATOR_START_LIMIT_INTERVAL_SEC.
-ORCHESTRATOR_START_LIMIT_INTERVAL_SEC="${ORCHESTRATOR_START_LIMIT_INTERVAL_SEC:-900}"
-ORCHESTRATOR_START_LIMIT_BURST="${ORCHESTRATOR_START_LIMIT_BURST:-10}"
+# Upper bound on the failure-notifier unit. Short by design: it only greps a config file, reads a
+# few journal lines and posts one webhook. Without it a blackholed webhook host would leave the
+# notifier 'activating' indefinitely and every later alert would coalesce into that stuck job,
+# silently killing the alerting path (#1098's failure mode, in the thing meant to report #1361).
+# Override with ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC.
+ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC="${ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC:-60}"
+
+# NOTE: systemd start rate limiting (StartLimitIntervalSec/StartLimitBurst) was deliberately
+# considered for #1361 and rejected. Two reasons, both from systemd.unit(5): it rate-limits ALL
+# starts, not just failed ones, so any burst small enough to catch a wedged service also throttles
+# a healthy one (the timer fires every ORCHESTRATOR_TIMER_INTERVAL, default 30sec, so even a
+# generous 10-per-15-minutes ceiling would have cut normal throughput roughly threefold); and a
+# rate-limited unit self-clears once the interval passes, so it never delivers the "stop until a
+# human looks at it" behaviour it appears to promise. Detection for #1361 is handled instead by
+# OnFailure= below (alerting) and by oneshot's own MAX_CONSECUTIVE_INFRA_FAILURES escalation
+# (per-item blocking), neither of which can slow the healthy path.
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -93,6 +101,15 @@ create_service_unit() {
     local ssh_socket="/run/${runtime_dir}/ssh-agent.socket"
     local owner_uid
     owner_uid=$(id -u) || die "Failed to get UID for ${CURRENT_USER}"
+    # See the ExecStop comment in the unit body below for why this tracks OWNER (the GitHub
+    # owner) rather than CURRENT_USER (the host UNIX user), and why the unfiltered install has
+    # to sweep by prefix instead of naming a single container.
+    local exec_stop
+    if [ -n "${owner_filter}" ]; then
+        exec_stop="ExecStop=-/usr/bin/podman rm -f orchestrator-${owner_filter}"
+    else
+        exec_stop="ExecStop=-/bin/sh -c '/usr/bin/podman ps -aq --filter name=^orchestrator- | xargs -r /usr/bin/podman rm -f'"
+    fi
     local content
     content="[Unit]
 Description=Credfeto Orchestrator for ${CURRENT_USER}
@@ -104,14 +121,6 @@ Wants=network-online.target
 # notify_discord_* calls. A stale podman name reservation after a host reboot made every
 # invocation fail at \`podman run\` for 19.5 hours with no alert whatsoever (#1361).
 OnFailure=${SERVICE_NAME}-failure.service
-# Stop retrying a wedged service forever. Without this the unit re-ran every ~30s for ~3,000
-# consecutive failures, burning host resources and drowning the journal, with nothing ever
-# escalating. Exceeding the burst leaves the unit failed (which fires OnFailure= above) until
-# a human runs 'systemctl reset-failed' — deliberately \"stop and shout\" rather than
-# \"retry silently forever\". Paired with OnFailure=: rate limiting without alerting would
-# just be a quieter outage.
-StartLimitIntervalSec=${ORCHESTRATOR_START_LIMIT_INTERVAL_SEC}
-StartLimitBurst=${ORCHESTRATOR_START_LIMIT_BURST}
 
 [Service]
 Type=oneshot
@@ -201,17 +210,35 @@ ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # the socket lives under XDG_RUNTIME_DIR, not ~/.gnupg.
 ExecStartPre=/bin/sh -c '/usr/bin/chmod 0660 \$(/usr/bin/gpgconf --list-dirs agent-extra-socket)'
 ExecStart=${exec_start}
-# Remove the agent container on the way down so a shutdown cannot strand it (#1361). The
-# originating incident was a host reboot whose shutdown completed in under a minute: the running
-# container was SIGKILLed mid---rm-teardown, which desynced podman's two layers and left the
-# container NAME reserved in containers/storage with no libpod record, wedging every subsequent
-# run. '-' prefixes tolerate failure (nothing to remove is the normal case, and a failing
-# ExecStop must never block shutdown). KillMode=mixed sends SIGTERM to the main process only,
-# giving oneshot and podman a chance to tear down cleanly instead of every process in the cgroup
-# being killed at once. TimeoutStopSec bounds that grace period so a hung teardown cannot delay
-# shutdown indefinitely.
-ExecStop=-/usr/bin/podman rm -f orchestrator-${CURRENT_USER}
-KillMode=mixed
+# Remove the agent container so a shutdown cannot strand it (#1361). The originating incident
+# was a host reboot whose shutdown completed in under a minute: the running container was
+# SIGKILLed mid---rm-teardown, which desynced podman's two layers and left the container NAME
+# reserved in containers/storage with no libpod record, wedging every subsequent run.
+#
+# The name MUST match lib/podman's own derivation, which is \"orchestrator-\${OWNER}\" where OWNER
+# is the GitHub owner of the repo being worked (lib/git's set_repo_context), NOT the host UNIX
+# user. Those two coincide only because setup-owner conventionally creates a Linux account named
+# after the owner and installs with a matching --owner; an install where they differ would remove
+# the wrong name and silently fail to prevent the very orphan this exists for. With --owner the
+# name is known exactly; without it OWNER varies per repo within a single run, so no single
+# literal is correct and the sweep below matches the prefix instead (safe here because rootless
+# podman storage is per-user and an unfiltered install is the only unit for that account).
+#
+# NOTE this runs at the end of EVERY timer tick, not just at shutdown: a Type=oneshot unit
+# without RemainAfterExit transitions straight to deactivating, so ExecStop fires each cycle. It
+# is a no-op in the normal case because --rm already removed the container. '-' prefixes tolerate
+# failure (nothing to remove is the normal case, and a failing ExecStop must never block
+# shutdown).
+#
+# KillMode is deliberately left at the default (control-group): that SIGTERMs every process in
+# the cgroup, so podman/conmon receive it and can tear the container down cleanly. KillMode=mixed
+# would be actively worse here despite sounding gentler - it SIGTERMs only the main process and
+# SIGKILLs the rest, and oneshot installs no SIGTERM handler (its traps are EXIT-only), so podman
+# would sit unsignalled until the stop timeout expired and then be SIGKILLed: precisely the
+# mid-teardown kill that created the #1361 orphan.
+#
+# TimeoutStopSec bounds the grace period so a hung teardown cannot delay shutdown indefinitely.
+${exec_stop}
 TimeoutStopSec=${ORCHESTRATOR_TIMEOUT_STOP_SEC}
 # Security hardening — limit the blast radius if the service is compromised.
 # PrivateTmp is deliberately NOT set: rootless Podman keeps a long-lived pause
@@ -258,9 +285,24 @@ Description=Report failure of ${SERVICE_NAME}.service to Discord
 [Service]
 Type=oneshot
 User=${CURRENT_USER}
+# Bounded so a blackholed webhook host cannot leave this stuck in 'activating' forever. Without
+# it a hung notifier would coalesce every later OnFailure= activation into the existing job and
+# silently stop alerting — the same class of stall as #1098, reintroduced in the alerting path.
+TimeoutStartSec=${ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC}
 # No OnFailure= here: if reporting a failure itself fails there is nothing further to escalate
 # to, and a unit that triggered itself on failure would loop.
-ExecStart=${REPO_DIR}/notify-unit-failure ${SERVICE_NAME}.service"
+ExecStart=${REPO_DIR}/notify-unit-failure ${SERVICE_NAME}.service
+# Hardening. Unlike the main unit — which must keep NoNewPrivileges=no and CAP_SETUID/CAP_SETGID
+# for rootless podman's newuidmap/newgidmap helpers (see its own comments) — this unit only runs
+# grep/journalctl/jq/curl, so it can take the strict settings. Do NOT propagate these back to the
+# main unit; its looser posture is deliberate and documented there.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=yes"
     write_unit_file "${dest}" "${content}"
 }
 

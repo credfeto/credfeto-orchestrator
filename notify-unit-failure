@@ -15,51 +15,120 @@
 # orchestrator's own environment is intact, which is exactly the assumption that is false when
 # this runs. A self-contained curl call cannot be broken by whatever broke the service.
 #
+# This script IS the last-resort signal, so it must never fail silently: every early exit
+# explains itself on stderr (which systemd captures) rather than just returning 0.
+#
 # Usage: notify-unit-failure <failed-unit-name>
-#   install-timer wires this up as: ExecStart=<repo>/notify-unit-failure %i
+#   install-timer wires this up as: ExecStart=<repo>/notify-unit-failure <service-name>.service
 
 set -e
 
-UNIT_NAME="${1:-unknown}"
+# Discord's embed description cap is 4096 characters; lib/discord budgets 900 for variable-length
+# content on every one of its notifiers, so the same budget is used here. Over the cap Discord
+# rejects the whole POST with a 400 and the alert is lost entirely - the exact silent failure
+# this script exists to prevent.
+MAX_CONTEXT_CHARS=900
+
+UNIT_NAME="${1:-}"
+if [ -z "${UNIT_NAME}" ]; then
+    printf 'notify-unit-failure: no unit name given; cannot report\n' >&2
+    exit 1
+fi
 
 # Same config location and key as oneshot (see README "Discord notifications"). Read directly
 # rather than via lib/core's config loader for the dependency-free reason above.
 CONFIG_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
 
-[ -f "${CONFIG_FILE}" ] || exit 0
+if [ ! -f "${CONFIG_FILE}" ]; then
+    printf 'notify-unit-failure: %s not found; cannot alert for %s\n' "${CONFIG_FILE}" "${UNIT_NAME}" >&2
+    exit 0
+fi
 
-# Extract DISCORD_WEBHOOK without sourcing the file — sourcing would execute arbitrary shell
+# Extract DISCORD_WEBHOOK without sourcing the file - sourcing would execute arbitrary shell
 # from a config file in a context that is already handling a failure.
 WEBHOOK=$(grep -E '^[[:space:]]*DISCORD_WEBHOOK[[:space:]]*=' "${CONFIG_FILE}" 2> /dev/null \
     | tail -n 1 \
     | cut -d= -f2- \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
 
-# Silent when unconfigured, matching lib/discord's behaviour.
-[ -n "${WEBHOOK}" ] || exit 0
+if [ -z "${WEBHOOK}" ]; then
+    printf 'notify-unit-failure: DISCORD_WEBHOOK not set in %s; cannot alert for %s\n' "${CONFIG_FILE}" "${UNIT_NAME}" >&2
+    exit 0
+fi
+
+# curl takes the URL as a positional argument, so a value starting with '-' would be parsed as an
+# option (-o writes a file, -K reads a config). Anyone able to write the config already owns the
+# account, so this is defence in depth rather than a privilege boundary - but it is one line.
+case "${WEBHOOK}" in
+    https://*) : ;;
+    *)
+        printf 'notify-unit-failure: DISCORD_WEBHOOK is not an https URL; refusing to use it\n' >&2
+        exit 0
+        ;;
+esac
 
 # The last few journal lines are what makes the alert actionable rather than just noisy - they
 # usually contain the actual error (e.g. the podman "already in use" message) that explains why
 # the unit failed. Tolerate failure: journalctl may be unreadable for this user, and an alert
 # without context still beats no alert at all.
-CONTEXT=$(journalctl -u "${UNIT_NAME}" -n 15 --no-pager 2> /dev/null | tail -n 15 || true)
+CONTEXT=$(journalctl -u "${UNIT_NAME}" -n 15 --no-pager 2> /dev/null || true)
 [ -n "${CONTEXT}" ] || CONTEXT="(no journal output available)"
 
-HOSTNAME_VALUE=$(hostname 2> /dev/null || printf 'unknown-host')
+# Redact before anything leaves the host. This forwards raw journal content to a chat channel
+# with its own membership and retention, and the orchestrator's journal legitimately carries
+# secret-shaped material: oneshot logs each denied tool call's full command text (a blocked
+# `curl -H "Authorization: Bearer ..."` lands there verbatim) and prints the agent's final
+# message, and the container's stderr is echoed wholesale. No known secret is written
+# deterministically, so this is narrowing a channel rather than closing a proven leak - but the
+# cost of the scrub is one sed and the cost of being wrong is a token in a chat log.
+CONTEXT=$(printf '%s' "${CONTEXT}" | sed -E \
+    -e 's/gh[pousr]_[A-Za-z0-9]{16,}/[REDACTED-GH-TOKEN]/g' \
+    -e 's/github_pat_[A-Za-z0-9_]{20,}/[REDACTED-GH-PAT]/g' \
+    -e 's/sk-ant-[A-Za-z0-9_-]{16,}/[REDACTED-ANTHROPIC-KEY]/g' \
+    -e 's/xox[abprs]-[A-Za-z0-9-]{10,}/[REDACTED-SLACK-TOKEN]/g' \
+    -e 's/(https:\/\/discord\.com\/api\/webhooks)\/[^[:space:]]+/\1\/[REDACTED]/g' \
+    -e 's/([Bb]earer|[Tt]oken|[Aa]uthorization)([=:[:space:]]+)[A-Za-z0-9._~+\/-]{12,}/\1\2[REDACTED]/g')
 
-PAYLOAD=$(jq -n \
-    --arg unit "${UNIT_NAME}" \
-    --arg host "${HOSTNAME_VALUE}" \
-    --arg context "${CONTEXT}" \
-    '{
-        embeds: [{
-            title: "Orchestrator unit failed",
-            description: ("`" + $unit + "` entered the failed state on `" + $host + "`.\n\nThis alert comes from a separate unit, so it fires even when the orchestrator itself is too broken to report anything (see credfeto-orchestrator#1361).\n\nLast journal lines:\n```\n" + $context + "\n```"),
-            color: 15158332
-        }]
-    }')
+# Truncate AFTER redacting, so a secret cannot survive by sitting past the cut.
+if [ "${#CONTEXT}" -gt "${MAX_CONTEXT_CHARS}" ]; then
+    CONTEXT="...(truncated)...
+${CONTEXT: -${MAX_CONTEXT_CHARS}}"
+fi
 
-curl -sf -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${WEBHOOK}" > /dev/null 2>&1 \
+# jq builds the payload safely (journal content cannot break out of the JSON), but it must not be
+# a hard requirement: under `set -e` a missing jq would abort before curl ever runs, and because
+# the notifier unit deliberately has no OnFailure= of its own that failure would be completely
+# silent - the one outcome this script exists to make impossible. Fall back to a context-free
+# alert instead: knowing a unit failed is the load-bearing part, the journal tail is a bonus.
+if command -v jq > /dev/null 2>&1; then
+    PAYLOAD=$(jq -n \
+        --arg unit "${UNIT_NAME}" \
+        --arg host "${HOSTNAME:-unknown-host}" \
+        --arg context "${CONTEXT}" \
+        '{
+            embeds: [{
+                title: "Orchestrator unit failed",
+                description: ("`" + $unit + "` entered the failed state on `" + $host + "`.\n\nThis alert comes from a separate unit, so it fires even when the orchestrator itself is too broken to report anything (see credfeto-orchestrator#1361).\n\nLast journal lines:\n```\n" + $context + "\n```"),
+                color: 15158332
+            }]
+        }')
+else
+    printf 'notify-unit-failure: jq unavailable; sending alert without journal context\n' >&2
+    # Hand-built JSON, so the interpolated values must be constrained to characters that cannot
+    # break the string. UNIT_NAME comes from the unit file install-timer generated and is already
+    # validated there, but re-restrict it here rather than trusting the caller; journal context is
+    # dropped entirely because it is arbitrary text that cannot be safely escaped without jq.
+    SAFE_UNIT=$(printf '%s' "${UNIT_NAME}" | tr -cd 'A-Za-z0-9._@-')
+    SAFE_HOST=$(printf '%s' "${HOSTNAME:-unknown-host}" | tr -cd 'A-Za-z0-9._-')
+    # shellcheck disable=SC2016  # the backticks are literal Discord markdown, not substitutions
+    PAYLOAD=$(printf '{"embeds":[{"title":"Orchestrator unit failed","description":"`%s` entered the failed state on `%s`. jq was unavailable so no journal context is included - check the host.","color":15158332}]}' \
+        "${SAFE_UNIT}" "${SAFE_HOST}")
+fi
+
+# --max-time matches lib/discord's own 5s budget on every webhook call: a hung POST here would
+# stall the whole notifier unit and, with OnFailure activations coalescing into it, silently
+# disable alerting.
+curl -sf --max-time 5 -X POST -H "Content-Type: application/json" -d "${PAYLOAD}" "${WEBHOOK}" > /dev/null 2>&1 \
     || printf 'notify-unit-failure: failed to post Discord alert for %s\n' "${UNIT_NAME}" >&2
 
 exit 0

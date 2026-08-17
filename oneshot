@@ -258,6 +258,14 @@ main() {
     local count_active_repo=0
     local count_not_open=0
     local count_error=0
+    # Counts items whose agent container failed BEFORE Claude started (invoke_claude returning 2)
+    # - a host-scoped, pre-flight fault rather than a per-item one. Tracked separately from
+    # count_error so main can exit non-zero for it: without that this whole run still ends in
+    # `success`, the systemd unit reports success, and the unit's OnFailure= handler - the only
+    # alerting path that survives oneshot being too broken to report on itself - never fires. That
+    # is precisely how #1361 stayed silent for 19.5 hours, and returning 2 here instead of dying
+    # would otherwise have re-created the same silence by a different route.
+    local count_infra_failure=0
     local count_human_driven=0
     # Per-item {type,id,repo,reason} breakdown for the no-actionable-work Discord notification
     # (#1291): record_item_status (lib/discord) builds one entry right after each count_*
@@ -1169,6 +1177,7 @@ main() {
             # broken container would retry silently forever with no human ever notified (#1133
             # review) — the die()-kills-the-whole-run behaviour this replaced was accidentally
             # the only thing providing that signal.
+            count_infra_failure=$((count_infra_failure + 1))
             load_infra_failure_count "${item_type}" "${item_id}"
             local new_infra_failures=$(( INFRA_FAILURE_COUNT + 1 ))
             save_infra_failure_count "${item_type}" "${item_id}" "${new_infra_failures}"
@@ -1266,6 +1275,19 @@ main() {
     notify_discord_no_work "${owner_filter}" "${count_blocked}" "${count_unchanged}" "${count_active_repo}" "${count_not_open}" "${count_error}" "${count_human_driven}" \
         "$(serialize_item_status_log "${item_status_log[@]+"${item_status_log[@]}"}")"
     success "No actionable work items found across all priorities (blocked: ${count_blocked}, unchanged: ${count_unchanged}, repo-active: ${count_active_repo}, not-open: ${count_not_open}, errors: ${count_error}, human-driven: ${count_human_driven})"
+
+    # Exit non-zero when the agent container failed before Claude could start, so systemd marks
+    # the unit failed and its OnFailure= handler alerts (#1361). Everything above this point
+    # reports through GitHub or oneshot's own Discord calls, both of which assume oneshot is
+    # healthy enough to reach them; a container that cannot start breaks exactly that assumption,
+    # which is why it needs a signal systemd itself can see. Scoped deliberately narrowly to
+    # pre-flight container failures - NOT to count_error, which also covers transient per-item
+    # GitHub API failures that already degrade gracefully and self-recover, and would otherwise
+    # alert on every upstream blip.
+    if [ "${count_infra_failure}" -gt 0 ]; then
+        warn "${count_infra_failure} item(s) had an agent container fail before Claude started — exiting non-zero so the unit's OnFailure= handler reports it"
+        return 1
+    fi
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

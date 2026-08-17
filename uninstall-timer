@@ -73,7 +73,11 @@ main() {
     sudo systemctl disable "${SERVICE_NAME}.timer" 2>/dev/null || true
 
     info "Removing unit files..."
+    # -failure.service is the OnFailure= handler install-timer generates alongside the main unit
+    # (#1361). Without it here an uninstall leaves a root-owned unit in ${UNIT_DIR} pointing at an
+    # ExecStart= path in a home directory that may later be removed or recreated.
     sudo rm -f "${UNIT_DIR}/${SERVICE_NAME}.service" "${UNIT_DIR}/${SERVICE_NAME}.timer" \
+        "${UNIT_DIR}/${SERVICE_NAME}-failure.service" \
         || die "Failed to remove unit files"
 
     info "Reloading systemd daemon..."

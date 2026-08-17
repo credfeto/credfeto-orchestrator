@@ -53,8 +53,15 @@ run_claude_fresh() {
             # time-to-detect went from ~3 minutes to 19.5 hours (#1361). With --replace above
             # this should now be unreachable in the storage-orphan case, but it stays as the
             # backstop for any other cause of a name conflict.
-            notify_discord_claude_error "${item_type}" "${item_id}" \
-                "Container ${PODMAN_CONTAINER_NAME} name conflict persisted even with --replace — needs manual host investigation"
+            #
+            # Deliberately does NOT notify Discord from here. Unlike the old die, returning 2
+            # lets main() carry on to the next item, so a host-scoped fault would post one
+            # message per item per 30s tick - well past Discord's webhook rate limit, in exactly
+            # the wedged state where the channel most needs to stay readable. Alerting for this
+            # class is the unit-level OnFailure= handler's job (one message per failed tick, from
+            # a unit that still works when oneshot does not); main() surfaces it by exiting
+            # non-zero when any item hit a pre-flight failure.
+            rm -f "${tmpfile}"
             return 2
         fi
         cat "${stderrfile}" >&2
