@@ -130,6 +130,16 @@ Additional documentation is in the [docs/](docs/) folder:
 - [How Discord notifications work](docs/discord-notifications.md)
 - [How deployment and setup work](docs/deployment-and-setup.md)
 
+## Operational tasks
+
+Re-runnable prompts for operating the live fleet are in the [tasks/](tasks/) folder:
+
+- [Fleet health check](tasks/healthcheck.md) — paste into a Claude Code session to check both
+  owners' services on `nanoclaw.lan` for wedged loops, unit failures, container-name orphans,
+  host-resource problems and new permission denials. Tests for the *absence of expected
+  success* as well as the presence of errors, because every failure that stops Claude starting
+  also silences every Claude-derived signal.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for reporting security issues.

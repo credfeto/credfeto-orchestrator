@@ -96,3 +96,16 @@ Two constraints shape almost every design decision in this codebase:
 - A human is assumed to be reachable via Discord and via GitHub notifications within a
   reasonable time of being needed (an approval, an escalation) — nothing here has a fallback for
   "nobody ever looks."
+
+## Checking the running fleet
+
+[tasks/healthcheck.md](../tasks/healthcheck.md) is a re-runnable prompt for inspecting the live
+services on the host.
+
+It is worth understanding *why* it is shaped the way it is, because the shape is load-bearing:
+every failure mode that prevents Claude from starting also silences every Claude-derived signal
+(`permission_denials`, `is_error`, result text — all of them live inside the result JSON a
+*successful* session emits). Monitoring that only looks for error-shaped events is therefore
+structurally blind to the worst outages: a totally dead fleet and a perfectly healthy one
+produce identical output, and the dead one can even look *cleaner*. The health check leads with
+"are sessions completing at all" as a dead man's switch for exactly this reason. See #1361.
