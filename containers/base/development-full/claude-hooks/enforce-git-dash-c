@@ -53,34 +53,38 @@
 # plain literal word is deliberately treated as opaque.
 #
 # Auto-correcting a missing -C (#1357):
-#   A bare git call missing -C is not always block-only. If (a) `cd` does not appear
-#   anywhere in the command (a `cd` earlier in the same command means this hook's own $PWD
-#   no longer represents what a later call would actually see at execution time — this hook
-#   parses the command statically and never runs any part of it, so it cannot track a `cd`'s
-#   effect), and (b) `git rev-parse --show-toplevel`, run from the hook's own $PWD, succeeds
-#   and resolves to a directory the hook process can write to (a sanity check that this is a
-#   real, usable checkout and not some unrelated read-only repository) - the one place this
-#   hook itself executes anything, as distinct from never running the user's command above -
-#   then every bare git
-#   call in the command is rewritten in place — `-C "<toplevel>"` is inserted immediately
-#   after the `git` token itself, since global options like -C/-c may appear in any relative
-#   order, so there is no need to skip past any existing -c pairs first — and the rewritten
-#   command is returned via hookSpecificOutput.updatedInput instead of blocking. Otherwise
-#   (cd present, not inside a repository, or the toplevel is not writable) the command is
-#   blocked exactly as before.
+#   A bare git call missing -C is not always block-only. If (a) no directory-changing
+#   command - `cd`/`pushd`/`popd`, plain or wrapped (`command cd ...`, `builtin cd ...`) or
+#   backslash-escaped (`\cd ...`) - appears anywhere in the command (one earlier in the same
+#   command means this hook's own $PWD no longer represents what a later call would actually
+#   see at execution time - this hook parses the command statically and never runs any part
+#   of it, so it cannot track such a call's effect), and (b) `git rev-parse --show-toplevel`,
+#   run from the hook's own $PWD, succeeds (a sanity check that $PWD is inside a real,
+#   enclosing git repository and not some unrelated directory) and $PWD itself is writable by
+#   the hook process - the one place this hook itself executes anything, as distinct from
+#   never running the user's command above - then every bare git call in the command is
+#   rewritten in place - `-C "<$PWD>"` is inserted immediately after the `git` token itself
+#   (the hook's own $PWD, not `git rev-parse --show-toplevel`'s output - a subdirectory of
+#   the repo is not equivalent to its root for relative pathspec resolution, so injecting the
+#   toplevel instead of $PWD would silently change what a call with a relative path argument
+#   operates on), since global options like -C/-c may appear in any relative order, so there
+#   is no need to skip past any existing -c pairs first - and the rewritten command is
+#   returned via hookSpecificOutput.updatedInput instead of blocking. Otherwise (a
+#   directory-changing call present, $PWD not inside a repository, or $PWD is not writable)
+#   the command is blocked exactly as before.
 #
 #   This differs from the $PWD-injection idea rejected in #1217 (see
 #   ai/local/claude-hooks.instructions.md's "Prefer auto-correction over blocking" note):
 #   that rejection was about injecting $PWD verbatim with no repository-boundary check, no
-#   writability check, and no guard against a preceding `cd` — which really would have been
-#   a no-op, since git already auto-discovers the repo root from $PWD identically whether -C
-#   is passed or not, making -C effectively optional everywhere. The cd-guard and
-#   writability check here are not present in that rejected idea: they are exactly what
-#   keeps this from being the same no-op — the cases this hook cannot be confident about
-#   (no enclosing repo, an unwritable/foreign checkout, or a `cd` this hook cannot see
-#   through) still block outright; only the unambiguous, single-directory case is resolved
-#   automatically instead of demanding the agent spell out a path this hook can already
-#   derive safely.
+#   writability check, and no guard against a preceding directory-changing call - which
+#   really would have been a no-op, since git already auto-discovers the repo root from $PWD
+#   identically whether -C is passed or not, making -C effectively optional everywhere. The
+#   cd-guard and writability check here are not present in that rejected idea: they are
+#   exactly what keeps this from being the same no-op - the cases this hook cannot be
+#   confident about (no enclosing repo, an unwritable/foreign checkout, or a
+#   directory-changing call this hook cannot see through) still block outright; only the
+#   unambiguous, single-directory case is resolved automatically instead of demanding the
+#   agent spell out a path this hook can already derive safely.
 #
 # Fails closed: shfmt missing or the command not parsing as shell blocks
 # the command.
@@ -137,14 +141,34 @@ calls=$(printf '%s' "$ast" | jq -r '
   ([ .Args[] | (.End.Offset | tostring) ] | join("\t"))
 ')
 
-# `cd` appearing anywhere in the command, at any nesting depth, as a command name gates the
+# Directory-changing command names that gate the auto-correction feature below - same
+# reasoning as is_wrapper()/WRAPPERS above, reused rather than a bespoke check: a plain or
+# backslash-escaped `cd`/`pushd`/`popd`, or one immediately after a known wrapper name (e.g.
+# `command cd ...`, `builtin cd ...`), all really do change the shell's working directory.
+CD_NAMES=(cd pushd popd '\cd' '\pushd' '\popd')
+
+is_cd_name() {
+  local w
+  for w in "${CD_NAMES[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+# A directory-changing call appearing anywhere in the command, at any nesting depth, in the
+# command-name position (or immediately after a wrapper name in that position) gates the
 # auto-correction feature below: this hook parses statically and never runs any part of the
-# command, so a `cd` earlier in program order means its own $PWD is no longer a safe
+# command, so such a call earlier in program order means its own $PWD is no longer a safe
 # stand-in for what a later bare git call in the same command would actually see.
 HAS_CD=false
 while IFS= read -r words_line && IFS= read -r _ends_line; do
   [ -z "$words_line" ] && continue
-  [ "${words_line%%$'\t'*}" = "cd" ] && HAS_CD=true
+  IFS=$'\t' read -ra cd_check_words <<< "$words_line"
+  if is_cd_name "${cd_check_words[0]}"; then
+    HAS_CD=true
+  elif is_wrapper "${cd_check_words[0]}" && is_cd_name "${cd_check_words[1]:-}"; then
+    HAS_CD=true
+  fi
 done <<< "$calls"
 
 # Populated only when at least one call needs a missing -C rewritten; each entry is a byte
@@ -152,29 +176,36 @@ done <<< "$calls"
 # Insertions are applied highest-offset-first so an earlier (lower-offset) insertion still to
 # be applied is never shifted by one already made.
 INSERT_OFFSETS=()
-TOPLEVEL_DIR=""
-# 0 = not yet attempted, 1 = resolved to a writable directory, 2 = attempted and failed (not
-# inside a repository, or the toplevel is not writable) - computed at most once per hook
-# invocation, not once per call: every bare-git call in one command shares the same hook $PWD.
-TOPLEVEL_RESOLVED=0
+# The directory injected via -C. Always the hook's own $PWD, never `git rev-parse
+# --show-toplevel`'s output: -C's target also anchors relative pathspec resolution, so
+# injecting the repo root instead of $PWD would silently change what a call with a relative
+# path argument operates on whenever the hook runs from a subdirectory of the repo, not just
+# its root. `git rev-parse --show-toplevel` below is used purely as an existence check - does
+# $PWD sit inside a real, enclosing git repository - never as the value injected.
+INJECT_DIR=""
+# 0 = not yet attempted, 1 = resolved ($PWD is inside a git working tree and is itself
+# writable), 2 = attempted and failed (not inside a repository, or $PWD is not writable) -
+# computed at most once per hook invocation, not once per call: every bare-git call in one
+# command shares the same hook $PWD.
+PWD_RESOLVED=0
 
 # Called at the exact point this hook would otherwise block for a missing -C (see the
 # "Auto-correcting a missing -C" header comment for the full reasoning). Blocks (exits 2)
 # instead of queuing a rewrite whenever this hook cannot be confident the injected directory
-# is both correct and real: a cd anywhere in the command, no enclosing git repository at
-# the hook's own $PWD, or a repository that resolves but is not writable.
+# is both correct and real: a directory-changing call anywhere in the command, no enclosing
+# git repository at the hook's own $PWD, or a $PWD that is not writable.
 maybe_autocorrect_or_block() {
   local offset="$1" msg='git commands must use "git -C <dir>" format'
   [ "$HAS_CD" = "true" ] && block "$msg"
-  if [ "$TOPLEVEL_RESOLVED" -eq 0 ]; then
-    if TOPLEVEL_DIR=$(git rev-parse --show-toplevel 2> /dev/null) \
-      && [ -n "$TOPLEVEL_DIR" ] && [ -w "$TOPLEVEL_DIR" ]; then
-      TOPLEVEL_RESOLVED=1
+  if [ "$PWD_RESOLVED" -eq 0 ]; then
+    if git rev-parse --show-toplevel > /dev/null 2>&1 && [ -w "$PWD" ]; then
+      INJECT_DIR="$PWD"
+      PWD_RESOLVED=1
     else
-      TOPLEVEL_RESOLVED=2
+      PWD_RESOLVED=2
     fi
   fi
-  [ "$TOPLEVEL_RESOLVED" -eq 2 ] && block "$msg"
+  [ "$PWD_RESOLVED" -eq 2 ] && block "$msg"
   INSERT_OFFSETS+=("$offset")
 }
 
@@ -220,6 +251,11 @@ while IFS= read -r words_line && IFS= read -r ends_line; do
   [ -z "$words_line" ] && continue
   IFS=$'\t' read -ra words <<< "$words_line"
   IFS=$'\t' read -ra ends <<< "$ends_line"
+
+  # Fails closed on a desync between the two paired lines (e.g. a future edit to the jq
+  # query above changing one line's word count but not the other's) rather than silently
+  # splicing at a wrong offset - consistent with this hook's fail-closed design throughout.
+  [ "${#words[@]}" -eq "${#ends[@]}" ] || block 'internal parse desync between words and offsets - failing closed'
 
   case "${words[0]}" in
     eval | source | .)
@@ -268,7 +304,7 @@ while IFS= read -r words_line && IFS= read -r ends_line; do
 done <<< "$calls"
 
 if [ "${#INSERT_OFFSETS[@]}" -gt 0 ]; then
-  insertion=" -C $(printf '%q' "$TOPLEVEL_DIR")"
+  insertion=" -C $(printf '%q' "$INJECT_DIR")"
   mapfile -t sorted_offsets < <(printf '%s\n' "${INSERT_OFFSETS[@]}" | sort -rn -u)
   new_cmd="$raw_cmd"
   for off in "${sorted_offsets[@]}"; do

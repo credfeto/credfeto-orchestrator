@@ -481,3 +481,36 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
     [[ "${output}" != *'hookSpecificOutput'* ]]
 }
+
+@test "auto-correction injects the hook's own \$PWD, not the resolved repo toplevel, when run from a subdirectory (#1357)" {
+    local repo subdir
+    repo=$(make_writable_repo)
+    subdir="${repo}/sub"
+    mkdir -p "${subdir}"
+    run_hook "git status" "${subdir}"
+    [ "${status}" -eq 0 ]
+    local rewritten
+    rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
+    [[ "${rewritten}" == "git -C ${subdir} status" ]]
+}
+
+@test "auto-correction is skipped (falls back to block) when pushd appears anywhere in the command (#1357)" {
+    local repo
+    repo=$(make_writable_repo)
+    run_hook "pushd ${repo} && git status" "${repo}"
+    [ "${status}" -eq 2 ]
+}
+
+@test "auto-correction is skipped (falls back to block) when a wrapped cd (command cd) appears anywhere in the command (#1357)" {
+    local repo
+    repo=$(make_writable_repo)
+    run_hook "command cd ${repo} && git status" "${repo}"
+    [ "${status}" -eq 2 ]
+}
+
+@test "auto-correction is skipped (falls back to block) when a backslash-escaped cd appears anywhere in the command (#1357)" {
+    local repo
+    repo=$(make_writable_repo)
+    run_hook '\cd '"${repo}"' && git status' "${repo}"
+    [ "${status}" -eq 2 ]
+}
