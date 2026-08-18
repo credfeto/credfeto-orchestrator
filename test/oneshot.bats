@@ -9756,15 +9756,37 @@ STUBEOF
     [[ "${output}" != *"behind origin/main"* ]]
 }
 
-# --- MAX_REVIEW_ITERATIONS constant -------------------------------------------
+# --- MAX_CODE_REVIEW_ITERATIONS / MAX_SECURITY_REVIEW_ITERATIONS / MAX_COVERAGE_ITERATIONS ----
 
-@test "MAX_REVIEW_ITERATIONS defaults to 3" {
-    [ "${MAX_REVIEW_ITERATIONS}" -eq 3 ]
+@test "MAX_CODE_REVIEW_ITERATIONS defaults to 15" {
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
 }
 
-@test "MAX_REVIEW_ITERATIONS can be overridden via environment variable" {
-    MAX_REVIEW_ITERATIONS=5
-    [ "${MAX_REVIEW_ITERATIONS}" -eq 5 ]
+@test "MAX_CODE_REVIEW_ITERATIONS can be overridden via environment variable" {
+    MAX_CODE_REVIEW_ITERATIONS=5
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 5 ]
+}
+
+@test "MAX_SECURITY_REVIEW_ITERATIONS defaults to 15" {
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_SECURITY_REVIEW_ITERATIONS can be overridden via environment variable" {
+    MAX_SECURITY_REVIEW_ITERATIONS=5
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 5 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS defaults to 6" {
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS can be overridden via environment variable" {
+    MAX_COVERAGE_ITERATIONS=2
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 2 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS defaults to 53 (ceil(1.15 * sum of per-phase budgets))" {
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 53 ]
 }
 
 # --- MAX_SIMPLIFY_ITERATIONS / SIMPLIFY_THRASH_LIMIT constants ----------------
@@ -10389,18 +10411,48 @@ STUBEOF
     [[ "${output}" == *"AI Security Review"* ]]
 }
 
-@test "build_pr_claude_md embeds MAX_REVIEW_ITERATIONS value in review guidance" {
-    MAX_REVIEW_ITERATIONS=3
+@test "build_pr_claude_md embeds MAX_CODE_REVIEW_ITERATIONS value in review guidance" {
+    MAX_CODE_REVIEW_ITERATIONS=3
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"already run 3 code-review rounds"* ]]
 }
 
-@test "build_pr_claude_md embeds custom MAX_REVIEW_ITERATIONS when overridden" {
-    MAX_REVIEW_ITERATIONS=5
+@test "build_pr_claude_md embeds custom MAX_CODE_REVIEW_ITERATIONS when overridden" {
+    MAX_CODE_REVIEW_ITERATIONS=5
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"already run 5 code-review rounds"* ]]
+}
+
+@test "build_pr_claude_md PHASE E self-detects non-convergence and advances without blocking" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"substantially repeating a prior round"* ]]
+    [[ "${output}" == *"code review is not converging"* ]]
+    [[ "${output}" == *'advance the board to "AI Security Review"'* ]]
+    [[ "${output}" == *"Do NOT add the Blocked label"* ]]
+}
+
+@test "build_pr_claude_md embeds MAX_SECURITY_REVIEW_ITERATIONS value in security-review guidance" {
+    MAX_SECURITY_REVIEW_ITERATIONS=3
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 3 security-review rounds"* ]]
+}
+
+@test "build_pr_claude_md embeds custom MAX_SECURITY_REVIEW_ITERATIONS when overridden" {
+    MAX_SECURITY_REVIEW_ITERATIONS=5
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 5 security-review rounds"* ]]
+}
+
+@test "build_pr_claude_md PHASE F self-detects non-convergence and advances without blocking" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"security review is not converging"* ]]
+    [[ "${output}" == *'advance the board to "AI Coverage"'* ]]
 }
 
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
@@ -10536,6 +10588,31 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"coverage rounds on this PR without the branch catching up"* ]]
     [[ "${output}" == *"still-failing languages and their gap"* ]]
+}
+
+@test "build_pr_claude_md PHASE G can bail early on a flat coverage trend, unlike PHASE E/F it blocks" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"trend is flat or worsening"* ]]
+    [[ "${output}" == *"your specific reasoning for why you believe coverage cannot realistically be raised further"* ]]
+    [[ "${output}" == *"unlike Phase E/F's early exit"* ]]
+    [[ "${output}" == *"it DOES block"* ]]
+}
+
+@test "build_pr_claude_md embeds MAX_COVERAGE_ITERATIONS value in coverage guidance" {
+    MAX_COVERAGE_ITERATIONS=6
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 6 coverage rounds"* ]]
+    [[ "${output}" == *"fire before 6 is reached"* ]]
+}
+
+@test "build_pr_claude_md embeds custom MAX_COVERAGE_ITERATIONS when overridden" {
+    MAX_COVERAGE_ITERATIONS=2
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 2 coverage rounds"* ]]
+    [[ "${output}" == *"fire before 2 is reached"* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
