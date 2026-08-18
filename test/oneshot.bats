@@ -10434,6 +10434,16 @@ STUBEOF
     [[ "${output}" == *"Do NOT add the Blocked label"* ]]
 }
 
+@test "build_pr_claude_md PHASE E checks the round cap before the fix-new-findings branch, so the cap is reachable even when findings keep being new" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    cap_line=$(printf '%s\n' "${output}" | grep -n "code-review rounds on this PR" | head -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "substantially new, and the round cap has not been reached" | head -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${fix_line}" ]
+    [ "${cap_line}" -lt "${fix_line}" ]
+}
+
 @test "build_pr_claude_md embeds MAX_SECURITY_REVIEW_ITERATIONS value in security-review guidance" {
     MAX_SECURITY_REVIEW_ITERATIONS=3
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
@@ -10453,6 +10463,24 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"security review is not converging"* ]]
     [[ "${output}" == *'advance the board to "AI Coverage"'* ]]
+}
+
+@test "build_pr_claude_md PHASE F checks the round cap before the fix-new-findings branch, so the cap is reachable even when findings keep being new" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    # PHASE E's identical shared-template text appears earlier in the document than PHASE F's;
+    # take the LAST occurrence of the (phase-agnostic) fix-branch phrase so this asserts PHASE F's
+    # own ordering rather than accidentally comparing against PHASE E's.
+    cap_line=$(printf '%s\n' "${output}" | grep -n "security-review rounds on this PR" | head -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "substantially new, and the round cap has not been reached" | tail -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${fix_line}" ]
+    [ "${cap_line}" -lt "${fix_line}" ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS invalid-override fallback reuses the same computed default, not a separate stale literal" {
+    # shellcheck disable=SC2154  # assigned in lib/globals, sourced at runtime via source_oneshot; shellcheck can't statically follow that source path
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq "${_max_pr_total_invocations_computed_default}" ]
 }
 
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
