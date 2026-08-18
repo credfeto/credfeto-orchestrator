@@ -109,11 +109,13 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
 # means the agent is churning without converging.  Defaults to ceil(1.15 * the sum of the four
 # per-phase round budgets above), leaving 15% headroom for the phases with no itemised budget of
-# their own (setup/rebase, CI-fix rounds, finalize); computed from those four budgets rather
-# than a hand-typed literal so retuning any one of them keeps this in sync automatically.
-# Override with MAX_PR_TOTAL_INVOCATIONS.
-MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-$(( ((MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS) * 23 + 19) / 20 ))}"
-[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=53
+# their own (setup/rebase, CI-fix rounds, finalize).  Computed once into
+# _max_pr_total_invocations_computed_default below and reused for BOTH the default substitution
+# and the invalid-override fallback, so the two can never disagree with each other or go stale
+# when any of the four budgets above is retuned.  Override with MAX_PR_TOTAL_INVOCATIONS.
+_max_pr_total_invocations_computed_default=$(( ((MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS) * 23 + 19) / 20 ))
+MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
+[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
 
 # Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
 # Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked

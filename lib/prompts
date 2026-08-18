@@ -291,18 +291,20 @@ EOF
 
 # Renders the self-detected convergence-judgment block shared by PHASE E (code review) and
 # PHASE F (security review): compare this round's findings to the PR's prior review-comment
-# history, and branch on whether they are genuinely new (fix them), a repeat (early-exit,
-# no Blocked label — see downstream_note), or hitting the round cap (Blocked). The one
-# genuine behavioural difference between the two phases — how the "substantially new" branch
-# reports/fixes findings, since /code-review --comment already posts inline but /security-review
-# does not — is passed in explicitly as fix_step rather than hand-copied.
+# history, and branch on whether the round cap is already exhausted (Blocked — checked FIRST,
+# so it is a real backstop reachable even when every round keeps finding something genuinely
+# new, not just when findings repeat), the findings are a repeat (early-exit, no Blocked label
+# — see downstream_note), or they are genuinely new (fix them). The one genuine behavioural
+# difference between the two phases — how the "substantially new" branch reports/fixes
+# findings, since /code-review --comment already posts inline but /security-review does not —
+# is passed in explicitly as fix_step rather than hand-copied.
 _build_review_convergence_block() {
     local review_label="$1" review_noun="$2" next_status="$3" max_iter="$4" fix_step="$5" downstream_note="$6"
     cat <<CONVBLOCK
   - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
-    - If substantially new: ${fix_step}
-    - If substantially repeating a prior round (you are not finding anything new — not converging): post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label — ${downstream_note}
-    - If findings are new but you have already run ${max_iter} ${review_label} rounds on this PR (judge from the PR's history of ${review_label} comments) without reaching zero findings: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
+    - If you have already run ${max_iter} ${review_label} rounds on this PR (judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
+    - Otherwise, if substantially repeating a prior round (you are not finding anything new — not converging): post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label — ${downstream_note}
+    - Otherwise (substantially new, and the round cap has not been reached): ${fix_step}
 CONVBLOCK
 }
 
@@ -422,14 +424,14 @@ PHASE E — Code review (do this ONLY when CI is fully green, there is no outsta
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
 $(_build_review_convergence_block "code-review" "code review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
     'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.' \
-    "this means no new correctness issues are surfacing, not that a known one is safe to ignore — unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review rather than a downstream phase re-checking it.")
+    "this means no new correctness issues are surfacing, not that a known one is safe to ignore — unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review.")
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
 $(_build_review_convergence_block "security-review" "security review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
     'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.' \
-    "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review rather than a downstream phase re-checking it.")
+    "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review.")
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: if the branch is non-code-only (every changed file is a dependency manifest/version-pin, a GitHub Actions workflow/composite action beyond a version pin, SQL/T-SQL, a shell script, a Dockerfile/Docker Compose file, or a documentation-only change — no source or test file touched), skip straight to the success step below without measuring anything. Otherwise, read COVERAGE.md from origin/main live (git -C <repodir> show origin/main:COVERAGE.md) — do NOT look for a PR comment, there isn't one. If COVERAGE.md doesn't exist on origin/main yet, this is the bootstrap case: there is nothing to compare against, so treat it as passed.
