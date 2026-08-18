@@ -291,15 +291,20 @@ EOF
 
 # Renders the self-detected convergence-judgment block shared by PHASE E (code review) and
 # PHASE F (security review): compare this round's findings to the PR's prior review-comment
-# history, and branch on whether the round cap is already exhausted (Blocked — checked FIRST,
+# history, and branch on whether the round cap is already exhausted (Blocked, checked FIRST,
 # so it is a real backstop reachable even when every round keeps finding something genuinely
-# new, not just when findings repeat), the findings are a repeat (early-exit, no Blocked label
-# — see downstream_note), or they are genuinely new (fix them). The one genuine behavioural
-# difference between the two phases — how the "substantially new" branch reports/fixes
-# findings, since /code-review --comment already posts inline but /security-review does not —
-# is passed in explicitly as fix_step rather than hand-copied.
+# new, not just when findings repeat), the findings are a repeat (early-exit, no Blocked label,
+# see downstream_note), or they are genuinely new (fix them). review_noun (used in prose, e.g.
+# "code review is not converging") is derived from review_label rather than passed separately,
+# so the two can never drift apart. The one genuine behavioural difference between the two
+# phases - how the "substantially new" branch reports/fixes findings, since /code-review
+# --comment already posts inline but /security-review does not - is passed in explicitly as
+# fix_step rather than hand-copied. fix_step and downstream_note are interpolated as literal
+# prose into the CONVBLOCK heredoc below: neither may contain a literal single-quote, since
+# both call sites below wrap their arguments in single quotes.
 _build_review_convergence_block() {
-    local review_label="$1" review_noun="$2" next_status="$3" max_iter="$4" fix_step="$5" downstream_note="$6"
+    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5"
+    local review_noun="${review_label//-/ }"
     cat <<CONVBLOCK
   - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
     - If you have already run ${max_iter} ${review_label} rounds on this PR (judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
@@ -422,14 +427,14 @@ PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstandi
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
-$(_build_review_convergence_block "code-review" "code review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
+$(_build_review_convergence_block "code-review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
     'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.' \
     "this means no new correctness issues are surfacing, not that a known one is safe to ignore — unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review.")
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
-$(_build_review_convergence_block "security-review" "security review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
+$(_build_review_convergence_block "security-review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
     'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.' \
     "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review.")
 
@@ -438,8 +443,8 @@ PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Otherwise, re-run the same per-language extraction against the branch's current (already checked out) working tree (per-component rows plus each language's Overall figure) and compare branch Overall vs. baseline Overall per language — component rows never gate, only Overall does.
   - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
   - On failure (any language's branch Overall below its baseline Overall):
-    - If you have already run ${MAX_COVERAGE_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP.
-    - Otherwise, compare each still-failing language's Overall this round against its Overall in the previous coverage round (judge from the PR's history of prior "... - returning to Development" coverage comments; treat a first coverage round as trending, there is nothing yet to compare).
+    - If you have already run ${MAX_COVERAGE_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP. (This round-cap check must stay FIRST in this failure branch, same as PHASE E/F's - a round-cap check placed after an exhaustive set of other STOP branches can never be reached; this exact ordering bug was found and fixed here twice in one PR, see #1366.)
+    - Otherwise, compare each still-failing language's Overall this round against its Overall in the previous coverage round (judge from the PR's history of prior "... - returning to Development" coverage comments). Treat a first coverage round as trending, there is nothing yet to compare; the same applies per-language on a later round if this is the first time that specific language has failed (no prior comment mentions it), even if other languages already have history.
       - If the gap is closing (every still-failing language's Overall improved versus the previous coverage round, or this is the first round): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
       - If the trend is flat or worsening for a still-failing language AND you judge, from the actual gap and the code, that further Development-phase rounds are unlikely to close it: post a PR comment giving the per-language numbers, the round-over-round trend, and your specific reasoning for why you believe coverage cannot realistically be raised further here, add the Blocked label, and STOP. This can fire before ${MAX_COVERAGE_ITERATIONS} is reached (checked above). Unlike Phase E/F's early exit, this one blocks: a coverage round's pass/fail IS the ratchet's own verdict, so giving up here means proposing to waive the gate itself, not merely reporting that no new findings turned up — a human must see and agree with that reasoning before the gate is treated as satisfied.
       - Otherwise (trend is flat/worsening but you judge more rounds are still worth trying): post the status comment as above, move the board back to "Development", then STOP.

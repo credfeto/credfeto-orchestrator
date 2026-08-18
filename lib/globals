@@ -71,25 +71,34 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # self-detect non-convergence (this round's findings substantially repeating a prior round's)
 # and exit early without blocking, well before their cap is normally reached. PHASE G's exit is
 # a branch-coverage percentage trend combined with the agent's own judgement of whether the gap
-# is realistically closeable, and — unlike PHASE E/F — DOES add the Blocked label when it fires,
+# is realistically closeable, and unlike PHASE E/F it DOES add the Blocked label when it fires,
 # with a mandatory PR comment stating the agent's reasoning: a coverage round's pass/fail IS the
 # ratchet's own verdict, so giving up there means proposing to waive the gate itself, not merely
 # reporting that no new findings turned up. See lib/prompts for the full per-phase logic.
+#
+# All four budgets below (plus MAX_SIMPLIFY_ITERATIONS) are regex-validated to a positive
+# integer, not just given a string default: MAX_PR_TOTAL_INVOCATIONS' computed default further
+# down does real bash arithmetic on all four, and an unvalidated non-numeric override (an
+# operator typo, e.g. MAX_CODE_REVIEW_ITERATIONS=fifteen) would silently evaluate to 0 in that
+# arithmetic rather than erroring, quietly shrinking the runaway-invocation backstop.
 
 # Code review (PHASE E). Override with MAX_CODE_REVIEW_ITERATIONS in the environment before
 # calling oneshot.
 MAX_CODE_REVIEW_ITERATIONS="${MAX_CODE_REVIEW_ITERATIONS:-15}"
+[[ "${MAX_CODE_REVIEW_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_CODE_REVIEW_ITERATIONS=15
 
 # Security review (PHASE F), kept independent of MAX_CODE_REVIEW_ITERATIONS so the two can be
 # tuned separately: security review is the last line of defence before merge, with no
 # downstream phase re-checking its findings the way code review backstops Simplify. Override
 # with MAX_SECURITY_REVIEW_ITERATIONS in the environment before calling oneshot.
 MAX_SECURITY_REVIEW_ITERATIONS="${MAX_SECURITY_REVIEW_ITERATIONS:-15}"
+[[ "${MAX_SECURITY_REVIEW_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_SECURITY_REVIEW_ITERATIONS=15
 
 # Coverage ratchet (PHASE G). Lower than the review budgets above because each round is a full
 # test/coverage run, not a review pass. Override with MAX_COVERAGE_ITERATIONS in the environment
 # before calling oneshot.
 MAX_COVERAGE_ITERATIONS="${MAX_COVERAGE_ITERATIONS:-6}"
+[[ "${MAX_COVERAGE_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_COVERAGE_ITERATIONS=6
 
 # Hard cap on /simplify rounds (PHASE D), separate from the review/security/coverage budgets
 # above: Simplify is expected to run more rounds than the other phases and never blocks the PR
@@ -97,6 +106,7 @@ MAX_COVERAGE_ITERATIONS="${MAX_COVERAGE_ITERATIONS:-6}"
 # exit taken when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the
 # environment before calling oneshot.
 MAX_SIMPLIFY_ITERATIONS="${MAX_SIMPLIFY_ITERATIONS:-10}"
+[[ "${MAX_SIMPLIFY_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_SIMPLIFY_ITERATIONS=10
 
 # Once this many /simplify rounds have run, a thrashing round (its diff is flat or larger than
 # the previous round's, i.e. not shrinking) ends the Simplify phase immediately even though
@@ -112,7 +122,9 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # their own (setup/rebase, CI-fix rounds, finalize).  Computed once into
 # _max_pr_total_invocations_computed_default below and reused for BOTH the default substitution
 # and the invalid-override fallback, so the two can never disagree with each other or go stale
-# when any of the four budgets above is retuned.  Override with MAX_PR_TOTAL_INVOCATIONS.
+# when any of the four budgets above is retuned.  Safe to compute directly (no separate guard
+# needed here) since all four inputs are already regex-validated above.  Override with
+# MAX_PR_TOTAL_INVOCATIONS.
 _max_pr_total_invocations_computed_default=$(( ((MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS) * 23 + 19) / 20 ))
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
 [[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
