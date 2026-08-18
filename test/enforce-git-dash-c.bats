@@ -33,11 +33,7 @@ teardown() {
 run_hook() {
     local command="$1" dir="${2:-$TEST_TMP}" run_in_background="${3:-}"
     local payload
-    if [ -n "${run_in_background}" ]; then
-        payload=$(jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}')
-    else
-        payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    fi
+    payload=$(hook_payload "$command" "$run_in_background")
     run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${dir}"
 }
 

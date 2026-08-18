@@ -310,12 +310,8 @@ if [ "${#INSERT_OFFSETS[@]}" -gt 0 ]; then
   for off in "${sorted_offsets[@]}"; do
     new_cmd="${new_cmd:0:off}${insertion}${new_cmd:off}"
   done
-  # Merge into the original tool_input rather than building updatedInput from
-  # scratch (jq -n) - updatedInput replaces the whole tool_input the agent's
-  # call actually executes with, so a fresh {command: $cmd} object silently
-  # dropped every sibling field the caller had set (run_in_background,
-  # timeout, ...) back to their defaults. Confirmed live: a backgrounded git
-  # commit missing -C silently ran in the foreground instead (#1367).
+  # Merge into the original tool_input, not jq -n from scratch - see
+  # claude-hooks.instructions.md's auto-correction checklist for why (#1367).
   printf '%s' "$input" | jq --arg cmd "$new_cmd" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: ((.tool_input // {}) + {command: $cmd})}}'
 fi

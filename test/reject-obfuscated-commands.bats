@@ -13,9 +13,7 @@ teardown() {
     cleanup_stubs
 }
 
-# run_hook (command, [run_in_background]) comes from the shared test_helper.bash - see #1367,
-# which made this file's own local override byte-identical to it and removed the last reason
-# to keep the duplicate (test_helper.bash's own run_hook already targets $HOOK).
+# run_hook (command, [run_in_background]) comes from the shared test_helper.bash (#1367).
 
 @test "a plain bare command is allowed" {
     run_hook "git push"
