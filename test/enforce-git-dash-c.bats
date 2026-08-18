@@ -31,9 +31,13 @@ teardown() {
 # (#1357) pass a second argument instead - a real, writable git repository,
 # which the hook's own $PWD needs to be for that path.
 run_hook() {
-    local command="$1" dir="${2:-$TEST_TMP}"
+    local command="$1" dir="${2:-$TEST_TMP}" run_in_background="${3:-}"
     local payload
-    payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
+    if [ -n "${run_in_background}" ]; then
+        payload=$(jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}')
+    else
+        payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
+    fi
     run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${dir}"
 }
 
@@ -431,6 +435,18 @@ make_writable_repo() {
     local rewritten
     rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
     [[ "${rewritten}" == "git -C ${repo} status" ]]
+}
+
+@test "auto-correction preserves run_in_background from the original tool_input (#1367)" {
+    local repo
+    repo=$(make_writable_repo)
+    run_hook "git status" "${repo}" "true"
+    [ "${status}" -eq 0 ]
+    local rewritten bg
+    rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
+    bg=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.run_in_background')
+    [[ "${rewritten}" == "git -C ${repo} status" ]]
+    [ "${bg}" = "true" ]
 }
 
 @test "a compound command with two bare git calls gets both auto-corrected (#1357)" {

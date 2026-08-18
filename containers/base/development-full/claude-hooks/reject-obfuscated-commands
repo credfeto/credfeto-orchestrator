@@ -288,8 +288,17 @@ done <<< "$calls"
 # the normalized command back so it's what actually executes — rather than
 # just allowing the original text, which would still contain the
 # now-pointless Unicode punctuation.
+#
+# Merge into the original tool_input rather than building updatedInput from
+# scratch (jq -n) - updatedInput replaces the whole tool_input the agent's
+# call actually executes with, so a fresh {command: $cmd} object silently
+# dropped every sibling field the caller had set (run_in_background,
+# timeout, ...) back to their defaults (#1367, same defect as
+# enforce-git-dash-c's missing-`-C` auto-correct - see that hook for the
+# live repro).
 if [ "$cmd" != "$raw_cmd" ]; then
-  jq -n --arg cmd "$cmd" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: {command: $cmd}}}'
+  printf '%s' "$input" | jq --arg cmd "$cmd" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: ((.tool_input // {}) + {command: $cmd})}}'
 fi
 
 exit 0

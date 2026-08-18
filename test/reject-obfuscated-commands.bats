@@ -13,15 +13,9 @@ teardown() {
     cleanup_stubs
 }
 
-# Pipes a Claude Code PreToolUse hook payload for the given Bash command into
-# the hook under test. status 0 = allowed, 2 = blocked (matches the hook's
-# own contract).
-run_hook() {
-    local command="$1"
-    local payload
-    payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
-}
+# run_hook (command, [run_in_background]) comes from the shared test_helper.bash - see #1367,
+# which made this file's own local override byte-identical to it and removed the last reason
+# to keep the duplicate (test_helper.bash's own run_hook already targets $HOOK).
 
 @test "a plain bare command is allowed" {
     run_hook "git push"
@@ -435,6 +429,13 @@ git status'
     [ "${status}" -eq 0 ]
     [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.permissionDecision')" = "allow" ]
     [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'git -C . commit -m "wip - more work"' ]
+}
+
+@test "a rewrite preserves run_in_background from the original tool_input (#1367)" {
+    run_hook $'git -C . commit -m "wip \xe2\x80\x94 more work"' "true"
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')" = 'git -C . commit -m "wip - more work"' ]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.run_in_background')" = "true" ]
 }
 
 @test "an en dash is normalized to a hyphen and allowed" {
