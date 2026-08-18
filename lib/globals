@@ -64,17 +64,36 @@ PODMAN_CGROUP_PARENT=""
 # Minimum free disk space in kilobytes required to launch a container (10 GB).
 MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 
-# Maximum number of review rounds the agent runs per PR.  Each round is now its own
-# fresh invocation (one /code-review or /security-review round, then stop), so this cap is
-# advisory guidance passed into the prompt rather than an in-session loop counter.
-# Override with MAX_REVIEW_ITERATIONS in the environment before calling oneshot.
-MAX_REVIEW_ITERATIONS="${MAX_REVIEW_ITERATIONS:-3}"
+# Maximum number of code-review rounds the agent runs per PR (PHASE E).  Each round is now its
+# own fresh invocation (one /code-review round, then stop), so this cap is advisory guidance
+# passed into the prompt rather than an in-session loop counter.  It is a backstop only: PHASE E
+# self-detects non-convergence (this round's findings substantially repeating a prior round's)
+# and exits early, without blocking, well before this is normally reached — see lib/prompts.
+# Override with MAX_CODE_REVIEW_ITERATIONS in the environment before calling oneshot.
+MAX_CODE_REVIEW_ITERATIONS="${MAX_CODE_REVIEW_ITERATIONS:-15}"
 
-# Hard cap on /simplify rounds (PHASE D), separate from MAX_REVIEW_ITERATIONS: Simplify is
-# expected to run more rounds than the other phases and never blocks the PR on non-convergence,
-# so it gets its own, larger budget. See SIMPLIFY_THRASH_LIMIT below for the earlier exit taken
-# when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the environment
-# before calling oneshot.
+# Maximum number of security-review rounds the agent runs per PR (PHASE F).  Kept separate from
+# MAX_CODE_REVIEW_ITERATIONS so the two can be tuned independently: security review is the last
+# line of defence before merge, with no downstream phase re-checking its findings the way code
+# review backstops Simplify. Same self-detecting early-exit shape as PHASE E — see lib/prompts.
+# Override with MAX_SECURITY_REVIEW_ITERATIONS in the environment before calling oneshot.
+MAX_SECURITY_REVIEW_ITERATIONS="${MAX_SECURITY_REVIEW_ITERATIONS:-15}"
+
+# Maximum number of coverage-ratchet rounds the agent runs per PR (PHASE G). Lower than the
+# review budgets above because each round is a full test/coverage run, not a review pass.
+# PHASE G's early exit is a mechanical percentage-trend check (branch Overall % round over
+# round), not agentic self-detection, and — unlike PHASE E/F — it DOES add the Blocked label
+# when it fires, with a mandatory PR comment stating the agent's reasoning: coverage is a
+# release gate with nothing downstream re-checking it, so a human must be able to see and
+# dispute the reasoning rather than have the gate silently waved through. See lib/prompts.
+# Override with MAX_COVERAGE_ITERATIONS in the environment before calling oneshot.
+MAX_COVERAGE_ITERATIONS="${MAX_COVERAGE_ITERATIONS:-6}"
+
+# Hard cap on /simplify rounds (PHASE D), separate from the review/security/coverage budgets
+# above: Simplify is expected to run more rounds than the other phases and never blocks the PR
+# on non-convergence, so it gets its own budget. See SIMPLIFY_THRASH_LIMIT below for the earlier
+# exit taken when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the
+# environment before calling oneshot.
 MAX_SIMPLIFY_ITERATIONS="${MAX_SIMPLIFY_ITERATIONS:-10}"
 
 # Once this many /simplify rounds have run, a thrashing round (its diff is flat or larger than
@@ -86,9 +105,13 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
-# means the agent is churning without converging.  Override with MAX_PR_TOTAL_INVOCATIONS.
-MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-30}"
-[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=30
+# means the agent is churning without converging.  Default is ceil(1.15 * the sum of the four
+# per-phase round budgets above: MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS +
+# MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS = 10+15+15+6 = 46), leaving 15%
+# headroom for the phases with no itemised budget of their own (setup/rebase, CI-fix rounds,
+# finalize). Override with MAX_PR_TOTAL_INVOCATIONS.
+MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-53}"
+[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS=53
 
 # Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
 # Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked
