@@ -10618,6 +10618,16 @@ STUBEOF
     [[ "${output}" == *"still-failing languages and their gap"* ]]
 }
 
+@test "build_pr_claude_md PHASE G checks the round cap before the gap-closing/trend branches, so the cap is reachable regardless of trend" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    cap_line=$(printf '%s\n' "${output}" | grep -n "coverage rounds on this PR without the branch catching up" | head -1 | cut -d: -f1)
+    gap_closing_line=$(printf '%s\n' "${output}" | grep -n "If the gap is closing" | head -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${gap_closing_line}" ]
+    [ "${cap_line}" -lt "${gap_closing_line}" ]
+}
+
 @test "build_pr_claude_md PHASE G can bail early on a flat coverage trend, unlike PHASE E/F it blocks" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
