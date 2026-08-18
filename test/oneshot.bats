@@ -10478,9 +10478,15 @@ STUBEOF
     [ "${cap_line}" -lt "${fix_line}" ]
 }
 
-@test "MAX_PR_TOTAL_INVOCATIONS invalid-override fallback reuses the same computed default, not a separate stale literal" {
+@test "MAX_PR_TOTAL_INVOCATIONS's default reuses the same computed value as its invalid-override fallback, not a separate stale literal" {
     # shellcheck disable=SC2154  # assigned in lib/globals, sourced at runtime via source_oneshot; shellcheck can't statically follow that source path
     [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq "${_max_pr_total_invocations_computed_default}" ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS actually falls back to the computed default when given a non-numeric override" {
+    export MAX_PR_TOTAL_INVOCATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 53 ]
 }
 
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
