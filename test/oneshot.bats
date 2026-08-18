@@ -10595,8 +10595,8 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"trend is flat or worsening"* ]]
     [[ "${output}" == *"your specific reasoning for why you believe coverage cannot realistically be raised further"* ]]
-    [[ "${output}" == *"unlike Phase E/F's early exit"* ]]
-    [[ "${output}" == *"it DOES block"* ]]
+    [[ "${output}" == *"Unlike Phase E/F's early exit, this one blocks"* ]]
+    [[ "${output}" == *"a coverage round's pass/fail IS the ratchet's own verdict"* ]]
 }
 
 @test "build_pr_claude_md embeds MAX_COVERAGE_ITERATIONS value in coverage guidance" {
