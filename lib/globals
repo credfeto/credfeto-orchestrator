@@ -81,32 +81,44 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # down does real bash arithmetic on all four, and an unvalidated non-numeric override (an
 # operator typo, e.g. MAX_CODE_REVIEW_ITERATIONS=fifteen) would silently evaluate to 0 in that
 # arithmetic rather than erroring, quietly shrinking the runaway-invocation backstop.
+#
+# All four share the same "positive integer or fall back to the default" validation, so it is
+# factored into this one helper rather than copy-pasted four times. Indirect assignment is done
+# via `printf -v` (not a nameref/`declare -n`) to avoid depending on a bash feature this codebase
+# does not otherwise use; `${!var_name}` on an unset variable expands to an empty string here
+# since this codebase does not run under `set -u`.
+_set_validated_positive_int() {
+    local var_name="$1" default="$2"
+    local current="${!var_name}"
+    [ -n "${current}" ] || current="${default}"
+    if [[ "${current}" =~ ^[1-9][0-9]*$ ]]; then
+        printf -v "${var_name}" '%s' "${current}"
+    else
+        printf -v "${var_name}" '%s' "${default}"
+    fi
+}
 
 # Code review (PHASE E). Override with MAX_CODE_REVIEW_ITERATIONS in the environment before
 # calling oneshot.
-MAX_CODE_REVIEW_ITERATIONS="${MAX_CODE_REVIEW_ITERATIONS:-15}"
-[[ "${MAX_CODE_REVIEW_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_CODE_REVIEW_ITERATIONS=15
+_set_validated_positive_int MAX_CODE_REVIEW_ITERATIONS 15
 
 # Security review (PHASE F), kept independent of MAX_CODE_REVIEW_ITERATIONS so the two can be
 # tuned separately: security review is the last line of defence before merge, with no
 # downstream phase re-checking its findings the way code review backstops Simplify. Override
 # with MAX_SECURITY_REVIEW_ITERATIONS in the environment before calling oneshot.
-MAX_SECURITY_REVIEW_ITERATIONS="${MAX_SECURITY_REVIEW_ITERATIONS:-15}"
-[[ "${MAX_SECURITY_REVIEW_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_SECURITY_REVIEW_ITERATIONS=15
+_set_validated_positive_int MAX_SECURITY_REVIEW_ITERATIONS 15
 
 # Coverage ratchet (PHASE G). Lower than the review budgets above because each round is a full
 # test/coverage run, not a review pass. Override with MAX_COVERAGE_ITERATIONS in the environment
 # before calling oneshot.
-MAX_COVERAGE_ITERATIONS="${MAX_COVERAGE_ITERATIONS:-6}"
-[[ "${MAX_COVERAGE_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_COVERAGE_ITERATIONS=6
+_set_validated_positive_int MAX_COVERAGE_ITERATIONS 6
 
 # Hard cap on /simplify rounds (PHASE D), separate from the review/security/coverage budgets
 # above: Simplify is expected to run more rounds than the other phases and never blocks the PR
 # on non-convergence, so it gets its own budget. See SIMPLIFY_THRASH_LIMIT below for the earlier
 # exit taken when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the
 # environment before calling oneshot.
-MAX_SIMPLIFY_ITERATIONS="${MAX_SIMPLIFY_ITERATIONS:-10}"
-[[ "${MAX_SIMPLIFY_ITERATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_SIMPLIFY_ITERATIONS=10
+_set_validated_positive_int MAX_SIMPLIFY_ITERATIONS 10
 
 # Once this many /simplify rounds have run, a thrashing round (its diff is flat or larger than
 # the previous round's, i.e. not shrinking) ends the Simplify phase immediately even though
