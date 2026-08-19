@@ -10740,6 +10740,13 @@ STUBEOF
     [[ "${output}" == *"a coverage round's pass/fail IS the ratchet's own verdict"* ]]
 }
 
+@test "build_pr_claude_md PHASE G treats a language failing for the first time on a later round as trending, not as breaking the gap-closing verdict" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"the same applies per-language on a later round if this is the first time that specific language has failed (no prior comment mentions it), even if other languages already have history"* ]]
+    [[ "${output}" == *"or is being treated as trending per the carve-out above because it has no previous round to compare against"* ]]
+}
+
 @test "build_pr_claude_md embeds MAX_COVERAGE_ITERATIONS value in coverage guidance" {
     MAX_COVERAGE_ITERATIONS=6
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
