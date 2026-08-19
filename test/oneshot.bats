@@ -9848,6 +9848,18 @@ STUBEOF
     [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 5 ]
 }
 
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS falls back to its default when given a non-numeric override" {
+    export MIN_REVIEW_CONVERGENCE_ROUNDS="not-a-number"
+    source_oneshot
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS falls back to its default when given an overflow-sized override" {
+    export MIN_REVIEW_CONVERGENCE_ROUNDS="9999999"
+    source_oneshot
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
+}
+
 # --- build_issue_claude_md plan-first steps -----------------------------------
 
 @test "build_issue_claude_md includes plan-check command" {
