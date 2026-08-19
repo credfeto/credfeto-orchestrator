@@ -9809,8 +9809,8 @@ STUBEOF
     [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
 }
 
-@test "MAX_PR_TOTAL_INVOCATIONS defaults to 53 (ceil(1.15 * sum of per-phase budgets))" {
-    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 53 ]
+@test "MAX_PR_TOTAL_INVOCATIONS defaults to 57 (sum of per-phase budgets plus flat headroom)" {
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
 }
 
 # --- MAX_SIMPLIFY_ITERATIONS / SIMPLIFY_THRASH_LIMIT constants ----------------
@@ -10510,7 +10510,7 @@ STUBEOF
 @test "MAX_PR_TOTAL_INVOCATIONS actually falls back to the computed default when given a non-numeric override" {
     export MAX_PR_TOTAL_INVOCATIONS="not-a-number"
     source_oneshot
-    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 53 ]
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
 }
 
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
