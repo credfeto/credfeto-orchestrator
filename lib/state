@@ -111,8 +111,9 @@ save_pr_invocation_counts() {
 
 # Marks that an item is in (or is about to enter) a Blocked spell while its invocation total is
 # already at/above the cap, regardless of which mechanism applied the Blocked label — oneshot's
-# own runaway backstop, the code-review workflow's own rules (e.g. "3+ rounds with findings"),
-# CI-timeout, or idle-exhaustion. This is the signal the reset_*_invocation_counts_if_capped
+# own runaway backstop, the code-review/security-review/coverage workflow's own rules (e.g.
+# hitting its per-phase round cap, or a coverage trend judged unclosable), CI-timeout, or
+# idle-exhaustion. This is the signal the reset_*_invocation_counts_if_capped
 # helpers use to tell "the count happens to be at/above the cap while this item sits Blocked"
 # apart from "the count just reached the cap this tick and the backstop is about to fire for the
 # first time" — only the former should forgive the counter (#1115). Comparing the counter to the
@@ -126,10 +127,11 @@ runaway_blocked_marker_file_path() {
 
 # Writes the marker for an item observed carrying the Blocked label whose invocation total OR
 # idle counter is already at/above its cap (#1115, extended to the idle cap by #1264 review) —
-# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review workflow's "3+
-# rounds" rule, or block_pr_for_idle_exhausted_failure/_review / block_issue_for_idle_exhausted_
-# no_progress), none of which call this on their own. Without this, a human clearing such a
-# Blocked label is a no-op: the counters survive untouched, and the very next tick that reaches
+# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review/security-review/
+# coverage workflow's own per-phase round-cap rules, or block_pr_for_idle_exhausted_failure/
+# _review / block_issue_for_idle_exhausted_no_progress), none of which call this on their own.
+# Without this, a human clearing such a Blocked label is a no-op: the counters survive
+# untouched, and the very next tick that reaches
 # the item reloads the same at-or-over-cap value and re-blocks it before any new work happens —
 # turning "unblock" into a silent instant re-block. Checking the idle cap too matters just as
 # much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
