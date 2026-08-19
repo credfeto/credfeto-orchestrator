@@ -120,6 +120,8 @@
       "Bash(mkdir *)",
       "Bash(mktemp *)",
       "Bash(mv *)",
+      "Bash(npm --prefix * ci *)",
+      "Bash(npm --prefix * install *)",
       "Bash(npm --prefix * run *)",
       "Bash(npm --version)",
       "Bash(npm audit *)",
