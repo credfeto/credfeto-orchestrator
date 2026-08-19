@@ -300,8 +300,10 @@ EOF
 # phases - how the "substantially new" branch reports/fixes findings, since /code-review
 # --comment already posts inline but /security-review does not - is passed in explicitly as
 # fix_step rather than hand-copied. fix_step and downstream_note are interpolated as literal
-# prose into the CONVBLOCK heredoc below: neither may contain a literal single-quote, since
-# both call sites below wrap their arguments in single quotes.
+# prose into the CONVBLOCK heredoc below. fix_step is single-quoted at both call sites, so it
+# must not contain a literal single-quote; downstream_note is double-quoted at both call sites
+# instead, so it must not contain a literal double quote, backtick, or unescaped dollar sign
+# (the shell expands those before this function ever sees the value).
 _build_review_convergence_block() {
     local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5"
     local review_noun="${review_label//-/ }"
