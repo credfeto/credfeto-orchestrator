@@ -289,11 +289,28 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 EOF
 }
 
+# Renders the "round cap already exhausted" bullet reused by PHASE E/F (via
+# _build_review_convergence_block below) and PHASE G's coverage failure branch. This must always
+# render as the FIRST branch checked in whichever failure/non-convergence chain calls it, never a
+# trailing sibling after other STOP branches: a round-cap check placed after an exhaustive set of
+# other STOP branches can never be reached, and this exact ordering bug was independently found
+# and fixed twice in this PR (d2b4190, c609b6e). Every caller passes its arguments via a
+# double-quoted variable expansion ("${var}"), never a literal quoted string at the call site:
+# that lets each caller's own local variable assignment pick whatever quoting suits ITS content
+# (PHASE G's prose contains literal double quotes; PHASE E/F's prose contains apostrophes)
+# without either call site needing to worry about the other's content, since a double-quoted
+# variable expansion never re-parses the characters inside it.
+_build_round_cap_check_line() {
+    local max_iter="$1" round_noun="$2" cap_condition="$3" post_clause="$4"
+    cat <<CAPLINE
+    - If you have already run ${max_iter} ${round_noun} on this PR ${cap_condition}: ${post_clause}, add the Blocked label, and STOP.
+CAPLINE
+}
+
 # Renders the self-detected convergence-judgement block shared by PHASE E (code review) and
 # PHASE F (security review): compare this round's findings to the PR's prior review-comment
-# history, and branch on whether the round cap is already exhausted (Blocked, checked FIRST,
-# so it is a real backstop reachable even when every round keeps finding something genuinely
-# new, not just when findings repeat), the findings are a repeat (early-exit, no Blocked label,
+# history, and branch on whether the round cap is already exhausted (delegated to
+# _build_round_cap_check_line above), the findings are a repeat (early-exit, no Blocked label,
 # see downstream_note), or they are genuinely new (fix them). review_noun (used in prose, e.g.
 # "code review is not converging") is derived from review_label rather than passed separately,
 # so the two can never drift apart. The one genuine behavioural difference between the two
@@ -307,9 +324,10 @@ EOF
 _build_review_convergence_block() {
     local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5"
     local review_noun="${review_label//-/ }"
+    local cap_condition="(judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new"
     cat <<CONVBLOCK
   - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
-    - If you have already run ${max_iter} ${review_label} rounds on this PR (judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
+$(_build_round_cap_check_line "${max_iter}" "${review_label} rounds" "${cap_condition}" "post a PR comment listing the unresolved findings")
     - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging): post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
     - Otherwise (substantially new, and the round cap has not been reached): ${fix_step}
 CONVBLOCK
@@ -319,6 +337,10 @@ build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}"
     local checkout_step
     local needs_rebase=0
+    # PHASE G's round-cap-check_condition contains literal double quotes (the exact status-comment
+    # format it judges against), so it is assigned here as a single-quoted literal, then passed to
+    # _build_round_cap_check_line via a double-quoted variable expansion below (never re-parsed).
+    local phase_g_cap_condition='without the branch catching up (judge from prior "... - returning to Development" coverage comments)'
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
 
     if [ -n "${dirty_branch}" ] && [ "${needs_rebase}" = "1" ]; then
@@ -445,7 +467,7 @@ PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Otherwise, re-run the same per-language extraction against the branch's current (already checked out) working tree (per-component rows plus each language's Overall figure) and compare branch Overall vs. baseline Overall per language — component rows never gate, only Overall does.
   - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
   - On failure (any language's branch Overall below its baseline Overall):
-    - If you have already run ${MAX_COVERAGE_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP. Do not touch COVERAGE.md in this case. (This round-cap check must stay FIRST in this failure branch, same as PHASE E/F's - a round-cap check placed after an exhaustive set of other STOP branches can never be reached; this exact ordering bug was found and fixed here twice in one PR, see #1366.)
+$(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${phase_g_cap_condition}" "post a PR comment listing the still-failing languages and their gap") Do not touch COVERAGE.md in this case. (This round-cap check must stay FIRST in this failure branch, same as PHASE E/F's - a round-cap check placed after an exhaustive set of other STOP branches can never be reached; this exact ordering bug was found and fixed here twice in one PR, see #1366.)
     - Otherwise, compare each still-failing language's Overall this round against its Overall in the previous coverage round (judge from the PR's history of prior "... - returning to Development" coverage comments). Treat a first coverage round as trending, there is nothing yet to compare; the same applies per-language on a later round if this is the first time that specific language has failed (no prior comment mentions it), even if other languages already have history.
       - If the gap is closing (every still-failing language's Overall improved versus the previous coverage round, or this is the first round): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
       - If the trend is flat or worsening for a still-failing language AND you judge, from the actual gap and the code, that further Development-phase rounds are unlikely to close it: post a PR comment giving the per-language numbers, the round-over-round trend, and your specific reasoning for why you believe coverage cannot realistically be raised further here, add the Blocked label, and STOP. Do not touch COVERAGE.md in this case. This can fire before ${MAX_COVERAGE_ITERATIONS} is reached (checked above). Unlike Phase E/F's early exit, this one blocks: a coverage round's pass/fail IS the ratchet's own verdict, so giving up here means proposing to waive the gate itself, not merely reporting that no new findings turned up; a human must see and agree with that reasoning before the gate is treated as satisfied.
