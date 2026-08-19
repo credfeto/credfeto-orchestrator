@@ -9824,6 +9824,12 @@ STUBEOF
     [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 20 ]
 }
 
+@test "MAX_SIMPLIFY_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_SIMPLIFY_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 10 ]
+}
+
 @test "SIMPLIFY_THRASH_LIMIT defaults to 3" {
     [ "${SIMPLIFY_THRASH_LIMIT}" -eq 3 ]
 }
