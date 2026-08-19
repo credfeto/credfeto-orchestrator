@@ -3,6 +3,7 @@
 
 load test_helper
 
+# shellcheck disable=SC2034  # read by run_hook in test_helper.bash, not visible to shellcheck across `load`
 HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-background-for-long-running-commands"
 
 setup() {
@@ -13,20 +14,7 @@ teardown() {
     cleanup_stubs
 }
 
-# Pipes a Claude Code PreToolUse hook payload for the given Bash command into
-# the hook under test. status 0 = allowed, 2 = blocked (matches the hook's
-# own contract). run_in_background is omitted from the payload entirely
-# unless explicitly passed, mirroring a Bash tool call that never set it.
-run_hook() {
-    local command="$1" run_in_background="${2:-}"
-    local payload
-    if [ -n "${run_in_background}" ]; then
-        payload=$(jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}')
-    else
-        payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    fi
-    run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
-}
+# run_hook (command, [run_in_background]) comes from the shared test_helper.bash.
 
 # --- git commit --------------------------------------------------------
 

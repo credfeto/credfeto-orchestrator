@@ -33,7 +33,10 @@ teardown() {
 # own override rather than falling back to test_helper.bash's shared run_hook:
 # that one runs from bats' own CWD (the repo root, a real writable git
 # checkout), which is exactly the always-auto-corrects case this function
-# exists to avoid defaulting into.
+# exists to avoid defaulting into. Note the shared run_hook's 2nd argument is
+# run_in_background, not a directory - copying a call between this file and
+# reject-obfuscated-commands.bats needs the argument re-checked, not just the
+# function name.
 run_hook_in_dir() {
     local command="$1" dir="${2:-$TEST_TMP}" run_in_background="${3:-}"
     local payload
