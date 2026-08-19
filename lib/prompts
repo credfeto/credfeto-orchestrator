@@ -310,8 +310,9 @@ CAPLINE
 # Renders the self-detected convergence-judgement block shared by PHASE E (code review) and
 # PHASE F (security review): compare this round's findings to the PR's prior review-comment
 # history, and branch on whether the round cap is already exhausted (delegated to
-# _build_round_cap_check_line above), the findings are a repeat (early-exit, no Blocked label,
-# see downstream_note), or they are genuinely new (fix them). review_noun (used in prose, e.g.
+# _build_round_cap_check_line above), the findings are a repeat with enough rounds behind it to
+# trust that judgement (early-exit, no Blocked label, see downstream_note), or they are genuinely
+# new, or a repeat too early to trust (fix them either way). review_noun (used in prose, e.g.
 # "code review is not converging") is derived from review_label rather than passed separately,
 # so the two can never drift apart. The one genuine behavioural difference between the two
 # phases - how the "substantially new" branch reports/fixes findings, since /code-review
@@ -320,16 +321,21 @@ CAPLINE
 # prose into the CONVBLOCK heredoc below. fix_step is single-quoted at both call sites, so it
 # must not contain a literal single-quote; downstream_note is double-quoted at both call sites
 # instead, so it must not contain a literal double quote, backtick, or unescaped dollar sign
-# (the shell expands those before this function ever sees the value).
+# (the shell expands those before this function ever sees the value). min_rounds is the earliest
+# round on which the "repeat" branch is allowed to fire at all: mirroring PHASE D's
+# SIMPLIFY_THRASH_LIMIT (which requires a minimum number of rounds before it gives up early on
+# non-convergence grounds), a "repeat" verdict on round 2 is one failed fix attempt, not evidence
+# the phase is genuinely stuck, so it must not skip straight to a non-blocking early exit; see
+# MIN_REVIEW_CONVERGENCE_ROUNDS in lib/globals.
 _build_review_convergence_block() {
-    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5"
+    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5" min_rounds="$6"
     local review_noun="${review_label//-/ }"
     local cap_condition="(judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new"
     cat <<CONVBLOCK
   - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
 $(_build_round_cap_check_line "${max_iter}" "${review_label} rounds" "${cap_condition}" "post a PR comment listing the unresolved findings")
-    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging): post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
-    - Otherwise (substantially new, and the round cap has not been reached): ${fix_step}
+    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging) AND at least ${min_rounds} ${review_label} rounds (judge from the PR's history of ${review_label} comments, counting this round) have now run: post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
+    - Otherwise (either substantially new, or a repeat but fewer than ${min_rounds} rounds have run so far, so one failed fix attempt is not yet enough evidence to give up; and the round cap has not been reached): ${fix_step}
 CONVBLOCK
 }
 
@@ -452,14 +458,16 @@ PHASE E — Code review (do this ONLY when CI is fully green, there is no outsta
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
 $(_build_review_convergence_block "code-review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
     'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.' \
-    "this means no new correctness issues are surfacing, not that a known one is safe to ignore; unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review.")
+    "this means no new correctness issues are surfacing, not that a known one is safe to ignore; unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review." \
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
 $(_build_review_convergence_block "security-review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
     'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.' \
-    "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review.")
+    "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review." \
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: if the branch is non-code-only (every changed file is a dependency manifest/version-pin, a GitHub Actions workflow/composite action beyond a version pin, SQL/T-SQL, a shell script, a Dockerfile/Docker Compose file, or a documentation-only change — no source or test file touched), skip straight to the success step below without measuring anything. Otherwise, read COVERAGE.md from origin/main live (git -C <repodir> show origin/main:COVERAGE.md) — do NOT look for a PR comment, there isn't one. If COVERAGE.md doesn't exist on origin/main yet, this is the bootstrap case: there is nothing to compare against, so treat it as passed.

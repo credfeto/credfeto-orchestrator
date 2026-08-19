@@ -131,6 +131,16 @@ unset _budget_var_default _budget_var _budget_default _budget_current
 # environment before calling oneshot.
 SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 
+# The mirror image of SIMPLIFY_THRASH_LIMIT above, for PHASE E (code review) and PHASE F
+# (security review): the earliest round on which their self-detected non-convergence early exit
+# (see _build_review_convergence_block in lib/prompts) is allowed to fire at all. A "this round's
+# findings substantially repeat an earlier round" verdict on round 2 is just one failed fix
+# attempt, not evidence the phase is genuinely stuck; without this floor that single recurrence
+# could end the phase without the Blocked label after using almost none of MAX_CODE_REVIEW_ITERATIONS
+# / MAX_SECURITY_REVIEW_ITERATIONS, abandoning a real defect on the first retry. Override with
+# MIN_REVIEW_CONVERGENCE_ROUNDS in the environment before calling oneshot.
+MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
+
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
