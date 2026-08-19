@@ -155,11 +155,14 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 _UNTRACKED_PHASE_HEADROOM=11
 _max_pr_total_invocations_computed_default=$(( MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS + _UNTRACKED_PHASE_HEADROOM ))
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
-# Bounded to the same 6-digit magnitude as the four budgets above (not just "one or more
-# digits"), for the same reason: MAX_PR_TOTAL_INVOCATIONS is compared with -ge/-eq elsewhere
-# (lib/state), and an extreme override could otherwise exceed what bash's arithmetic evaluator
-# can represent, so this keeps every MAX_* round-budget constant to one consistent contract.
-[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]{0,5}$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
+# Bounded, not just "one or more digits", for the same reason as the four budgets above:
+# MAX_PR_TOTAL_INVOCATIONS is compared with -ge/-eq elsewhere (lib/state), and an extreme
+# override could otherwise exceed what bash's arithmetic evaluator can represent. 7 digits here,
+# not 6 like its four inputs: this value is their SUM (max 4 * 999999 + 11 = 4000007, itself a
+# 7-digit number), so a 6-digit cap would make the invalid-override fallback below a no-op in
+# the one case it exists to catch (all four inputs near their own max) - the fallback would
+# reassign the same over-limit computed default that just failed the regex.
+[[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]{0,6}$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
 
 # Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
 # Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked
