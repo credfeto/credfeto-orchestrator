@@ -10508,9 +10508,17 @@ STUBEOF
     [ "${cap_line}" -lt "${fix_line}" ]
 }
 
-@test "MAX_PR_TOTAL_INVOCATIONS's default reuses the same computed value as its invalid-override fallback, not a separate stale literal" {
-    # shellcheck disable=SC2154  # assigned in lib/globals, sourced at runtime via source_oneshot; shellcheck can't statically follow that source path
-    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq "${_max_pr_total_invocations_computed_default}" ]
+@test "MAX_PR_TOTAL_INVOCATIONS's default recomputes when a per-phase budget is overridden, proving it isn't a separate stale literal" {
+    export MAX_SIMPLIFY_ITERATIONS=20
+    # setup()'s own source_oneshot already defaulted MAX_PR_TOTAL_INVOCATIONS to 57; unset it first
+    # so this second source genuinely re-derives the default rather than short-circuiting on
+    # "${MAX_PR_TOTAL_INVOCATIONS:-...}" already being non-empty from that first sourcing.
+    unset MAX_PR_TOTAL_INVOCATIONS
+    source_oneshot
+    # 20 (overridden) + 15 (code-review) + 15 (security-review) + 6 (coverage) + 11 (headroom) = 67,
+    # not the unoverridden default of 57: only reachable if lib/globals genuinely reuses the four
+    # budgets above rather than a separately hardcoded literal that happens to equal 57.
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 67 ]
 }
 
 @test "MAX_PR_TOTAL_INVOCATIONS actually falls back to the computed default when given a non-numeric override" {
