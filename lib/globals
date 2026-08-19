@@ -143,9 +143,15 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # findings substantially repeat an earlier round" verdict on round 2 is just one failed fix
 # attempt, not evidence the phase is genuinely stuck; without this floor that single recurrence
 # could end the phase without the Blocked label after using almost none of MAX_CODE_REVIEW_ITERATIONS
-# / MAX_SECURITY_REVIEW_ITERATIONS, abandoning a real defect on the first retry. Override with
+# / MAX_SECURITY_REVIEW_ITERATIONS, abandoning a real defect on the first retry. Regex-validated
+# like the four budgets above even though it is only ever interpolated into prompt prose, never
+# bash arithmetic (so an invalid value can't crash oneshot the way an invalid budget could): an
+# unvalidated override of 0, negative, or non-numeric would still silently defeat the floor this
+# constant exists to enforce, since the raw text would render into PHASE E/F's prompt verbatim
+# ("at least 0 code-review rounds...") rather than falling back to a sane default. Override with
 # MIN_REVIEW_CONVERGENCE_ROUNDS in the environment before calling oneshot.
 MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
+[[ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" =~ ^[1-9][0-9]{0,5}$ ]] || MIN_REVIEW_CONVERGENCE_ROUNDS=3
 
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
