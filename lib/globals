@@ -143,6 +143,12 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # constant briefly used ceil(1.15 * sum) (~1.58x headroom over the old sum of 19, only ~1.15x
 # over the new, larger sum of 46). UNTRACKED_PHASE_HEADROOM (11) instead preserves that old
 # cap's absolute headroom exactly (30 - 19 = 11), regardless of how the itemised budgets change.
+# This is a deliberately simple model, not an exact one: PHASE C's CI-fix workload plausibly
+# scales somewhat with how many review/security rounds actually run (each pushed fix commit is a
+# fresh CI run that can need its own CI-fix invocation), so a PR with many long-running review
+# rounds could still approach this cap before PHASE E/F's own non-blocking early exit fires. If
+# that turns out to bite in practice, retune UNTRACKED_PHASE_HEADROOM (or override
+# MAX_PR_TOTAL_INVOCATIONS directly) rather than reintroducing a percentage multiplier.
 # Computed once into _max_pr_total_invocations_computed_default below and reused for BOTH the
 # default substitution and the invalid-override fallback, so the two can never disagree with
 # each other or go stale when any of the four budgets above is retuned.  Safe to compute
