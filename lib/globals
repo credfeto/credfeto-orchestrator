@@ -120,11 +120,8 @@ for _budget_var_default in \
     _budget_default="${_budget_var_default#*:}"
     _budget_current="${!_budget_var}"
     [ -n "${_budget_current}" ] || _budget_current="${_budget_default}"
-    if [[ "${_budget_current}" =~ ^[1-9][0-9]{0,5}$ ]]; then
-        printf -v "${_budget_var}" '%s' "${_budget_current}"
-    else
-        printf -v "${_budget_var}" '%s' "${_budget_default}"
-    fi
+    [[ "${_budget_current}" =~ ^[1-9][0-9]{0,5}$ ]] || _budget_current="${_budget_default}"
+    printf -v "${_budget_var}" '%s' "${_budget_current}"
 done
 unset _budget_var_default _budget_var _budget_default _budget_current
 
