@@ -76,55 +76,57 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # ratchet's own verdict, so giving up there means proposing to waive the gate itself, not merely
 # reporting that no new findings turned up. See lib/prompts for the full per-phase logic.
 #
-# All four budgets below (plus MAX_SIMPLIFY_ITERATIONS) are regex-validated to a positive
-# integer, not just given a string default: MAX_PR_TOTAL_INVOCATIONS' computed default further
+# All four budgets below are regex-validated to a positive integer of at most 6 digits (max
+# 999999), not just given a string default: MAX_PR_TOTAL_INVOCATIONS' computed default further
 # down does real bash arithmetic on all four, and an unvalidated non-numeric override (an
 # operator typo, e.g. MAX_CODE_REVIEW_ITERATIONS=fifteen) would silently evaluate to 0 in that
-# arithmetic rather than erroring, quietly shrinking the runaway-invocation backstop.
+# arithmetic rather than erroring, quietly shrinking the runaway-invocation backstop; an
+# unbounded-magnitude override (syntactically a valid integer, just huge) would instead silently
+# overflow bash's 64-bit signed arithmetic into a negative, garbage cap. 999999 is already far
+# beyond any realistic round budget, so this never constrains a legitimate override.
 #
-# All four share the same "positive integer or fall back to the default" validation, so it is
-# factored into this one helper rather than copy-pasted four times. Indirect assignment is done
-# via `printf -v` (not a nameref/`declare -n`) to avoid depending on a bash feature this codebase
-# does not otherwise use; `${!var_name}` on an unset variable expands to an empty string here
-# since this codebase does not run under `set -u`.
-_set_validated_positive_int() {
-    local var_name="$1" default="$2"
-    local current="${!var_name}"
-    [ -n "${current}" ] || current="${default}"
-    # Bounded to at most 6 digits (max 999999), not just "one or more digits": these four values
-    # feed real bash arithmetic further down (MAX_PR_TOTAL_INVOCATIONS' computed default sums and
-    # scales all four), and a syntactically valid but very large override would otherwise
-    # silently overflow bash's 64-bit signed arithmetic into a negative, garbage cap instead of
-    # erroring. 999999 is already far beyond any realistic round budget, so this never constrains
-    # a legitimate override.
-    if [[ "${current}" =~ ^[1-9][0-9]{0,5}$ ]]; then
-        printf -v "${var_name}" '%s' "${current}"
-    else
-        printf -v "${var_name}" '%s' "${default}"
-    fi
-}
-
 # Code review (PHASE E). Override with MAX_CODE_REVIEW_ITERATIONS in the environment before
 # calling oneshot.
-_set_validated_positive_int MAX_CODE_REVIEW_ITERATIONS 15
-
+#
 # Security review (PHASE F), kept independent of MAX_CODE_REVIEW_ITERATIONS so the two can be
 # tuned separately: security review is the last line of defence before merge, with no
 # downstream phase re-checking its findings the way code review backstops Simplify. Override
 # with MAX_SECURITY_REVIEW_ITERATIONS in the environment before calling oneshot.
-_set_validated_positive_int MAX_SECURITY_REVIEW_ITERATIONS 15
-
+#
 # Coverage ratchet (PHASE G). Lower than the review budgets above because each round is a full
 # test/coverage run, not a review pass. Override with MAX_COVERAGE_ITERATIONS in the environment
 # before calling oneshot.
-_set_validated_positive_int MAX_COVERAGE_ITERATIONS 6
-
+#
 # Hard cap on /simplify rounds (PHASE D), separate from the review/security/coverage budgets
 # above: Simplify is expected to run more rounds than the other phases and never blocks the PR
 # on non-convergence, so it gets its own budget. See SIMPLIFY_THRASH_LIMIT below for the earlier
 # exit taken when rounds stop making progress. Override with MAX_SIMPLIFY_ITERATIONS in the
 # environment before calling oneshot.
-_set_validated_positive_int MAX_SIMPLIFY_ITERATIONS 10
+#
+# All four share the same "positive integer, capped in magnitude, or fall back to the default"
+# validation, looped over a name:default list rather than copy-pasted four times or factored
+# into a helper function: this file is declarations-only (its own header above: no function
+# definitions, no I/O, no command calls), and lib/core, which owns config load/validate helpers
+# elsewhere in this codebase, is sourced only AFTER this file, so a real helper function is not
+# available here yet. Indirect assignment is done via `printf -v` (not a nameref/`declare -n`, a
+# bash feature this codebase does not otherwise use); `${!_budget_var}` on an unset variable
+# expands to an empty string here since this codebase does not run under `set -u`.
+for _budget_var_default in \
+    "MAX_CODE_REVIEW_ITERATIONS:15" \
+    "MAX_SECURITY_REVIEW_ITERATIONS:15" \
+    "MAX_COVERAGE_ITERATIONS:6" \
+    "MAX_SIMPLIFY_ITERATIONS:10"; do
+    _budget_var="${_budget_var_default%%:*}"
+    _budget_default="${_budget_var_default#*:}"
+    _budget_current="${!_budget_var}"
+    [ -n "${_budget_current}" ] || _budget_current="${_budget_default}"
+    if [[ "${_budget_current}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+        printf -v "${_budget_var}" '%s' "${_budget_current}"
+    else
+        printf -v "${_budget_var}" '%s' "${_budget_default}"
+    fi
+done
+unset _budget_var_default _budget_var _budget_default _budget_current
 
 # Once this many /simplify rounds have run, a thrashing round (its diff is flat or larger than
 # the previous round's, i.e. not shrinking) ends the Simplify phase immediately even though
