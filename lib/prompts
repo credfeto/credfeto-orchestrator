@@ -294,7 +294,7 @@ EOF
 # render as the FIRST branch checked in whichever failure/non-convergence chain calls it, never a
 # trailing sibling after other STOP branches: a round-cap check placed after an exhaustive set of
 # other STOP branches can never be reached, and this exact ordering bug was independently found
-# and fixed twice in this PR (d2b4190, c609b6e). cap_condition (the 3rd argument, the one
+# and fixed twice in this PR. cap_condition (the 3rd argument, the one
 # argument whose content actually varies between callers) is always passed via a double-quoted
 # variable expansion ("${var}"), never a literal quoted string, at every call site: that lets
 # each caller's own local variable assignment pick whatever quoting suits ITS content (PHASE G's
