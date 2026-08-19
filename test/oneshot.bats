@@ -9767,6 +9767,18 @@ STUBEOF
     [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 5 ]
 }
 
+@test "MAX_CODE_REVIEW_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_CODE_REVIEW_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_CODE_REVIEW_ITERATIONS falls back to its default when given an override too large to sum safely" {
+    export MAX_CODE_REVIEW_ITERATIONS="99999999999999999999"
+    source_oneshot
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
 @test "MAX_SECURITY_REVIEW_ITERATIONS defaults to 15" {
     [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 15 ]
 }
@@ -9776,6 +9788,12 @@ STUBEOF
     [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 5 ]
 }
 
+@test "MAX_SECURITY_REVIEW_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_SECURITY_REVIEW_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
 @test "MAX_COVERAGE_ITERATIONS defaults to 6" {
     [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
 }
@@ -9783,6 +9801,12 @@ STUBEOF
 @test "MAX_COVERAGE_ITERATIONS can be overridden via environment variable" {
     MAX_COVERAGE_ITERATIONS=2
     [ "${MAX_COVERAGE_ITERATIONS}" -eq 2 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_COVERAGE_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
 }
 
 @test "MAX_PR_TOTAL_INVOCATIONS defaults to 53 (ceil(1.15 * sum of per-phase budgets))" {
