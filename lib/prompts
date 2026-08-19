@@ -289,7 +289,7 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 EOF
 }
 
-# Renders the self-detected convergence-judgment block shared by PHASE E (code review) and
+# Renders the self-detected convergence-judgement block shared by PHASE E (code review) and
 # PHASE F (security review): compare this round's findings to the PR's prior review-comment
 # history, and branch on whether the round cap is already exhausted (Blocked, checked FIRST,
 # so it is a real backstop reachable even when every round keeps finding something genuinely
