@@ -9839,6 +9839,15 @@ STUBEOF
     [ "${SIMPLIFY_THRASH_LIMIT}" -eq 5 ]
 }
 
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS defaults to 3" {
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS can be overridden via environment variable" {
+    MIN_REVIEW_CONVERGENCE_ROUNDS=5
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 5 ]
+}
+
 # --- build_issue_claude_md plan-first steps -----------------------------------
 
 @test "build_issue_claude_md includes plan-check command" {
@@ -10464,11 +10473,24 @@ STUBEOF
     [[ "${output}" == *"Do NOT add the Blocked label"* ]]
 }
 
+@test "build_pr_claude_md PHASE E's non-convergence early exit requires MIN_REVIEW_CONVERGENCE_ROUNDS code-review rounds, not just a single repeat" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"AND at least 3 code-review rounds"* ]]
+    [[ "${output}" == *"a repeat but fewer than 3 rounds have run so far, so one failed fix attempt is not yet enough evidence to give up"* ]]
+}
+
+@test "build_pr_claude_md PHASE F's non-convergence early exit requires MIN_REVIEW_CONVERGENCE_ROUNDS security-review rounds, not just a single repeat" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"AND at least 3 security-review rounds"* ]]
+}
+
 @test "build_pr_claude_md PHASE E checks the round cap before the fix-new-findings branch, so the cap is reachable even when findings keep being new" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     cap_line=$(printf '%s\n' "${output}" | grep -n "code-review rounds on this PR" | head -1 | cut -d: -f1)
-    fix_line=$(printf '%s\n' "${output}" | grep -n "substantially new, and the round cap has not been reached" | head -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "and the round cap has not been reached" | head -1 | cut -d: -f1)
     [ -n "${cap_line}" ]
     [ -n "${fix_line}" ]
     [ "${cap_line}" -lt "${fix_line}" ]
@@ -10502,7 +10524,7 @@ STUBEOF
     # take the LAST occurrence of the (phase-agnostic) fix-branch phrase so this asserts PHASE F's
     # own ordering rather than accidentally comparing against PHASE E's.
     cap_line=$(printf '%s\n' "${output}" | grep -n "security-review rounds on this PR" | head -1 | cut -d: -f1)
-    fix_line=$(printf '%s\n' "${output}" | grep -n "substantially new, and the round cap has not been reached" | tail -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "and the round cap has not been reached" | tail -1 | cut -d: -f1)
     [ -n "${cap_line}" ]
     [ -n "${fix_line}" ]
     [ "${cap_line}" -lt "${fix_line}" ]
