@@ -193,21 +193,28 @@ make_stub_multiline() {
     chmod +x "${script}"
 }
 
+# Builds a Claude Code PreToolUse hook payload JSON string for the given Bash command.
+# run_in_background is omitted from tool_input entirely unless explicitly passed as $2,
+# mirroring a Bash tool call that never set it - only enforce-background-for-long-running-commands
+# actually reads that field, but every hook is fed the same payload shape. Shared by run_hook
+# below and enforce-git-dash-c.bats's own local override (which also needs a dir argument).
+hook_payload() {
+    local command="$1" run_in_background="${2:-}"
+    if [ -n "${run_in_background}" ]; then
+        jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}'
+    else
+        jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}'
+    fi
+}
+
 # Pipes a Claude Code PreToolUse hook payload for the given Bash command into
 # the hook script at $HOOK (a *.bats file under test must set that variable
 # before calling this). status 0 = allowed, 2 = blocked (matches every
-# PreToolUse hook's own contract). run_in_background is omitted from the
-# payload entirely unless explicitly passed as $2, mirroring a Bash tool call
-# that never set it - only enforce-background-for-long-running-commands
-# actually reads that field, but every hook is fed the same payload shape.
+# PreToolUse hook's own contract).
 run_hook() {
     local command="$1" run_in_background="${2:-}"
     local payload
-    if [ -n "${run_in_background}" ]; then
-        payload=$(jq -n --arg cmd "$command" --argjson bg "$run_in_background" '{tool_input: {command: $cmd, run_in_background: $bg}}')
-    else
-        payload=$(jq -n --arg cmd "$command" '{tool_input: {command: $cmd}}')
-    fi
+    payload=$(hook_payload "$command" "$run_in_background")
     run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
 }
 
