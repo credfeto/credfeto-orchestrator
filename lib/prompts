@@ -294,12 +294,16 @@ EOF
 # render as the FIRST branch checked in whichever failure/non-convergence chain calls it, never a
 # trailing sibling after other STOP branches: a round-cap check placed after an exhaustive set of
 # other STOP branches can never be reached, and this exact ordering bug was independently found
-# and fixed twice in this PR (d2b4190, c609b6e). Every caller passes its arguments via a
-# double-quoted variable expansion ("${var}"), never a literal quoted string at the call site:
-# that lets each caller's own local variable assignment pick whatever quoting suits ITS content
-# (PHASE G's prose contains literal double quotes; PHASE E/F's prose contains apostrophes)
-# without either call site needing to worry about the other's content, since a double-quoted
-# variable expansion never re-parses the characters inside it.
+# and fixed twice in this PR (d2b4190, c609b6e). cap_condition (the 3rd argument, the one
+# argument whose content actually varies between callers) is always passed via a double-quoted
+# variable expansion ("${var}"), never a literal quoted string, at every call site: that lets
+# each caller's own local variable assignment pick whatever quoting suits ITS content (PHASE G's
+# prose contains literal double quotes; PHASE E/F's prose contains apostrophes) without either
+# call site needing to worry about the other's content, since a double-quoted variable expansion
+# never re-parses the characters inside it. round_noun and post_clause are plain literal strings
+# at every call site instead, since none of their current content needs that discipline; if a
+# future edit gives either of them a literal double quote, backtick, or unescaped dollar sign, it
+# would need the same "assign to a local variable, pass via double-quoted expansion" treatment.
 _build_round_cap_check_line() {
     local max_iter="$1" round_noun="$2" cap_condition="$3" post_clause="$4"
     cat <<CAPLINE
