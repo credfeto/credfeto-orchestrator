@@ -91,7 +91,13 @@ _set_validated_positive_int() {
     local var_name="$1" default="$2"
     local current="${!var_name}"
     [ -n "${current}" ] || current="${default}"
-    if [[ "${current}" =~ ^[1-9][0-9]*$ ]]; then
+    # Bounded to at most 6 digits (max 999999), not just "one or more digits": these four values
+    # feed real bash arithmetic further down (MAX_PR_TOTAL_INVOCATIONS' computed default sums and
+    # scales all four), and a syntactically valid but very large override would otherwise
+    # silently overflow bash's 64-bit signed arithmetic into a negative, garbage cap instead of
+    # erroring. 999999 is already far beyond any realistic round budget, so this never constrains
+    # a legitimate override.
+    if [[ "${current}" =~ ^[1-9][0-9]{0,5}$ ]]; then
         printf -v "${var_name}" '%s' "${current}"
     else
         printf -v "${var_name}" '%s' "${default}"
@@ -135,8 +141,9 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # _max_pr_total_invocations_computed_default below and reused for BOTH the default substitution
 # and the invalid-override fallback, so the two can never disagree with each other or go stale
 # when any of the four budgets above is retuned.  Safe to compute directly (no separate guard
-# needed here) since all four inputs are already regex-validated above.  Override with
-# MAX_PR_TOTAL_INVOCATIONS.
+# needed here) since all four inputs are already validated above to be positive integers of at
+# most 6 digits each, so their sum cannot overflow bash's 64-bit signed arithmetic.  Override
+# with MAX_PR_TOTAL_INVOCATIONS.
 _max_pr_total_invocations_computed_default=$(( ((MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS) * 23 + 19) / 20 ))
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
 [[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
