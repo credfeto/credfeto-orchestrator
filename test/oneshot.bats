@@ -10561,6 +10561,24 @@ STUBEOF
     [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
 }
 
+@test "MAX_PR_TOTAL_INVOCATIONS falls back to the computed default when given an 8-digit override, exceeding its 7-digit bound" {
+    export MAX_PR_TOTAL_INVOCATIONS="10000000"
+    source_oneshot
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS's computed default self-validates when all four inputs are near their own 6-digit max" {
+    export MAX_SIMPLIFY_ITERATIONS=999999
+    export MAX_CODE_REVIEW_ITERATIONS=999999
+    export MAX_SECURITY_REVIEW_ITERATIONS=999999
+    export MAX_COVERAGE_ITERATIONS=999999
+    unset MAX_PR_TOTAL_INVOCATIONS
+    source_oneshot
+    # 4 * 999999 + 11 = 4000007, a 7-digit number: this is the exact edge case the 7-digit bound
+    # (one digit wider than its four inputs) exists to let through without falling back on itself.
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 4000007 ]
+}
+
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
