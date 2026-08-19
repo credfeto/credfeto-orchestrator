@@ -10,6 +10,17 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+## [0.0.3] - 2026-08-19
+### Security
 - development-node base image installs Node.js via a pinned NodeSource apt repository and the Bun runtime from a checksum-verified release archive instead of piping curl output straight to bash, and pins the markdownlint-cli2, markdownlint-cli, stylelint, stylelint-config-standard and eslint npm globals to explicit versions instead of 'latest' (#1106)
 - Pin npm to 11.18.0 in the development-node base image, overriding whatever version ships bundled with the NodeSource nodejs apt package, to fix CVE-2026-59873 (a critical denial-of-service vulnerability in npm's bundled tar dependency, fixed upstream in tar 7.5.19, first shipped in npm 11.18.0)
 - Base images now publish an SBOM and mode=max SLSA provenance attestation to ghcr.io on every push build, improving supply-chain auditability of the images the agent runs from.
@@ -97,12 +108,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Register a second per-invocation --add-dir at /workspace/tmp, a fresh throwaway scratch directory bind-mounted read-write; the agent container's entrypoint.sh now exports TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR pointing at it, so the agent has somewhere writable and registered with Claude Code's own file-write trust boundary to redirect scratch output to instead of an unregistered /tmp path (#1351 - an experiment testing whether that boundary respects --add-dir for output-redirect targets)
 - enforce-git-dash-c now auto-corrects a missing 'git -C <dir>' instead of blocking, injecting the hook's own $PWD (never the resolved repo toplevel, so a call with a relative pathspec run from a subdirectory keeps operating on that subdirectory) when git rev-parse --show-toplevel confirms $PWD sits inside a writable git repository and no directory-changing call (cd/pushd/popd, plain, wrapped, or backslash-escaped) appears anywhere in the command - both cases where it cannot be confident of the correct target directory (a preceding directory change, no enclosing repository, or an unwritable/foreign checkout) still block exactly as before (#1357)
 - SDK - Updated DotNet SDK to 10.0.400
-### Deprecated
-### Removed
-### Deployment Changes
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
+
 ## [0.0.2] - 2026-07-16
 ### Security
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
