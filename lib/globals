@@ -135,16 +135,23 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it
-# means the agent is churning without converging.  Defaults to ceil(1.15 * the sum of the four
-# per-phase round budgets above), leaving 15% headroom for the phases with no itemised budget of
-# their own (setup/rebase, CI-fix rounds, finalize).  Computed once into
-# _max_pr_total_invocations_computed_default below and reused for BOTH the default substitution
-# and the invalid-override fallback, so the two can never disagree with each other or go stale
-# when any of the four budgets above is retuned.  Safe to compute directly (no separate guard
-# needed here) since all four inputs are already validated above to be positive integers of at
-# most 6 digits each, so their sum cannot overflow bash's 64-bit signed arithmetic.  Override
-# with MAX_PR_TOTAL_INVOCATIONS.
-_max_pr_total_invocations_computed_default=$(( ((MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS) * 23 + 19) / 20 ))
+# means the agent is churning without converging.  Defaults to the sum of the four per-phase
+# round budgets above PLUS a flat headroom for the phases with no itemised budget of their own
+# (setup/rebase, CI-fix rounds, finalize).  The headroom is a flat add-on rather than a
+# percentage of the sum on purpose: those untracked phases' own workload did not grow when the
+# review/coverage budgets above did, so a percentage multiplier would let their relative
+# headroom shrink every time those budgets are retuned upward, exactly what happened when this
+# constant briefly used ceil(1.15 * sum) (~1.58x headroom over the old sum of 19, only ~1.15x
+# over the new, larger sum of 46). UNTRACKED_PHASE_HEADROOM (11) instead preserves that old
+# cap's absolute headroom exactly (30 - 19 = 11), regardless of how the itemised budgets change.
+# Computed once into _max_pr_total_invocations_computed_default below and reused for BOTH the
+# default substitution and the invalid-override fallback, so the two can never disagree with
+# each other or go stale when any of the four budgets above is retuned.  Safe to compute
+# directly (no separate guard needed here) since all four inputs are already validated above to
+# be positive integers of at most 6 digits each, so their sum cannot overflow bash's 64-bit
+# signed arithmetic.  Override with MAX_PR_TOTAL_INVOCATIONS.
+_UNTRACKED_PHASE_HEADROOM=11
+_max_pr_total_invocations_computed_default=$(( MAX_SIMPLIFY_ITERATIONS + MAX_CODE_REVIEW_ITERATIONS + MAX_SECURITY_REVIEW_ITERATIONS + MAX_COVERAGE_ITERATIONS + _UNTRACKED_PHASE_HEADROOM ))
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
 [[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]*$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
 
