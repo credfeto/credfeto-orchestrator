@@ -10620,6 +10620,13 @@ STUBEOF
     [[ "${output}" == *"Do not touch COVERAGE.md in this case"* ]]
 }
 
+@test "build_pr_claude_md PHASE G restates 'do not touch COVERAGE.md' on all three failure-branch STOPs, not just the gap-closing one" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    count=$(printf '%s\n' "${output}" | grep -c "Do not touch COVERAGE.md in this case")
+    [ "${count}" -eq 3 ]
+}
+
 @test "build_pr_claude_md PHASE G no longer looks for a PR comment" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
