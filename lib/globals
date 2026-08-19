@@ -161,10 +161,11 @@ MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
 # (setup/rebase, CI-fix rounds, finalize).  The headroom is a flat add-on rather than a
 # percentage of the sum on purpose: those untracked phases' own workload did not grow when the
 # review/coverage budgets above did, so a percentage multiplier would let their relative
-# headroom shrink every time those budgets are retuned upward, exactly what happened when this
-# constant briefly used ceil(1.15 * sum) (~1.58x headroom over the old sum of 19, only ~1.15x
-# over the new, larger sum of 46). UNTRACKED_PHASE_HEADROOM (11) instead preserves that old
-# cap's absolute headroom exactly (30 - 19 = 11), regardless of how the itemised budgets change.
+# headroom shrink every time those budgets are retuned upward - exactly what happened when this
+# constant briefly used a percentage multiplier of the sum instead, since the same relative
+# margin over a larger sum is a smaller absolute margin than it was over the smaller sum it
+# replaced. UNTRACKED_PHASE_HEADROOM (11) instead preserves the absolute headroom this constant
+# had before the four budgets were split out, regardless of how the itemised budgets change.
 # This is a deliberately simple model, not an exact one: PHASE C's CI-fix workload plausibly
 # scales somewhat with how many review/security rounds actually run (each pushed fix commit is a
 # fresh CI run that can need its own CI-fix invocation), so a PR with many long-running review
