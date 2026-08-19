@@ -26,7 +26,7 @@ exceeding the model context window. The `oneshot` script is structured to preven
 
 3. **Runaway/idle guards** — a per-PR `<total> <idle>` invocation-guard file bounds re-invocation:
    `MAX_PR_TOTAL_INVOCATIONS` (computed in lib/globals from the four per-phase round budgets plus a
-   flat headroom; 57 by default) marks a non-converging PR Blocked; `MAX_PR_IDLE_INVOCATIONS`
+   flat headroom — see lib/globals for the current value) marks a non-converging PR Blocked; `MAX_PR_IDLE_INVOCATIONS`
    (default 5) parks a PR whose fingerprint stops changing. See `debugging.instructions.md` §5.
 
 If a fresh single-phase session still hits `blocking_limit`, one phase is genuinely too large to
