@@ -181,7 +181,7 @@ MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
 # their sum cannot overflow bash's 64-bit signed arithmetic.  Override with MAX_PR_TOTAL_INVOCATIONS.
 _UNTRACKED_PHASE_HEADROOM=11
 _max_pr_total_invocations_computed_default=$(( _budget_sum + _UNTRACKED_PHASE_HEADROOM ))
-unset _budget_sum
+unset _budget_sum _UNTRACKED_PHASE_HEADROOM
 MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocations_computed_default}}"
 # Bounded, not just "one or more digits", for the same reason as the four budgets above:
 # MAX_PR_TOTAL_INVOCATIONS is compared with -ge/-eq elsewhere (lib/state), and an extreme
@@ -191,6 +191,7 @@ MAX_PR_TOTAL_INVOCATIONS="${MAX_PR_TOTAL_INVOCATIONS:-${_max_pr_total_invocation
 # the one case it exists to catch (all four inputs near their own max) - the fallback would
 # reassign the same over-limit computed default that just failed the regex.
 [[ "${MAX_PR_TOTAL_INVOCATIONS}" =~ ^[1-9][0-9]{0,6}$ ]] || MAX_PR_TOTAL_INVOCATIONS="${_max_pr_total_invocations_computed_default}"
+unset _max_pr_total_invocations_computed_default
 
 # Runaway backstop for Issues: max agent invocations spent on one Issue before marking it
 # Blocked for a human. MAX_PR_TOTAL_INVOCATIONS is PR-only; an Issue that keeps being worked
