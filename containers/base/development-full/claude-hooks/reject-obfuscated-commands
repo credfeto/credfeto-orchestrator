@@ -290,8 +290,8 @@ done <<< "$calls"
 # now-pointless Unicode punctuation.
 #
 # Merge into the original tool_input, not jq -n from scratch - see
-# claude-hooks.instructions.md's auto-correction checklist for why (#1367,
-# same defect as enforce-git-dash-c's missing-`-C` auto-correct).
+# claude-hooks.instructions.md's auto-correction checklist for why (same
+# defect as enforce-git-dash-c's missing-`-C` auto-correct).
 if [ "$cmd" != "$raw_cmd" ]; then
   printf '%s' "$input" | jq --arg cmd "$cmd" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: ((.tool_input // {}) + {command: $cmd})}}'

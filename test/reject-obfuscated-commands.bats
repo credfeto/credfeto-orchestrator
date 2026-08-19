@@ -13,7 +13,7 @@ teardown() {
     cleanup_stubs
 }
 
-# run_hook (command, [run_in_background]) comes from the shared test_helper.bash (#1367).
+# run_hook (command, [run_in_background]) comes from the shared test_helper.bash.
 
 @test "a plain bare command is allowed" {
     run_hook "git push"

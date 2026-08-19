@@ -311,7 +311,7 @@ if [ "${#INSERT_OFFSETS[@]}" -gt 0 ]; then
     new_cmd="${new_cmd:0:off}${insertion}${new_cmd:off}"
   done
   # Merge into the original tool_input, not jq -n from scratch - see
-  # claude-hooks.instructions.md's auto-correction checklist for why (#1367).
+  # claude-hooks.instructions.md's auto-correction checklist for why.
   printf '%s' "$input" | jq --arg cmd "$new_cmd" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: ((.tool_input // {}) + {command: $cmd})}}'
 fi
