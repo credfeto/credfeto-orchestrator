@@ -6694,6 +6694,25 @@ STUBEOF
     done
 }
 
+@test "claude_result_indicates_background_stall does not match an ordinary 'I'll resume/continue ... once/when' sentence unrelated to backgrounding" {
+    # Simplify-review finding on #1376: the first version of the #1374 fix added
+    # `I.ll (pick (this|it) up|resume|continue this)[^.]*(once|when|after)` with no
+    # background/monitor/notification anchor, so it matched any ordinary "I'll resume/continue
+    # X once/when Y" sentence regardless of subject matter - the exact false-positive shape the
+    # function's own header comment forbids. These three are all confirmed false positives of
+    # that unanchored version.
+    local texts=(
+        "I'll resume the migration script once the schema review is done, then continue with the rollout."
+        "I'll continue this work once code review comments land."
+        "I'll resume tomorrow once I have more context."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -ne 0 ] || { echo "expected no match for: ${t}"; false; }
+    done
+}
+
 # --- background-stall marker (lib/state, #1326/#1335) ---------------------------
 
 @test "background_stall_marked is false when no marker file exists" {
