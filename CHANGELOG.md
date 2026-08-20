@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Code review and security review phases (PHASE E/F) now self-detect non-convergence from the PR's prior review-comment history and exit early without blocking (unlike hitting the numeric cap, which still blocks), instead of only relying on a shared MAX_REVIEW_ITERATIONS cap; that cap is split into independent MAX_CODE_REVIEW_ITERATIONS and MAX_SECURITY_REVIEW_ITERATIONS budgets (default 15 each, up from 3) now that early-exit does the everyday convergence work. That early exit only fires once at least MIN_REVIEW_CONVERGENCE_ROUNDS rounds (default 3, mirroring the existing SIMPLIFY_THRASH_LIMIT) have run, so a single repeat after one failed fix attempt cannot end the phase early. Coverage (PHASE G) gets its own MAX_COVERAGE_ITERATIONS budget (default 6) and a percentage-trend early exit that DOES block, requiring a PR comment stating the agent's reasoning, since coverage is a release gate with no downstream re-check. MAX_PR_TOTAL_INVOCATIONS default rises from 30 to 57 (the sum of the four per-phase budgets plus a flat +11 headroom for phases with no itemised budget of their own, replacing an earlier percentage-based multiplier whose relative headroom shrank as those budgets grew). MAX_SIMPLIFY_ITERATIONS also gains the same regex validation as the other three budgets (previously any override, including 0 or non-numeric, passed through unchecked)
 ### Fixed
 ### Changed
 ### Deprecated
@@ -108,7 +109,6 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 - Register a second per-invocation --add-dir at /workspace/tmp, a fresh throwaway scratch directory bind-mounted read-write; the agent container's entrypoint.sh now exports TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR pointing at it, so the agent has somewhere writable and registered with Claude Code's own file-write trust boundary to redirect scratch output to instead of an unregistered /tmp path (#1351 - an experiment testing whether that boundary respects --add-dir for output-redirect targets)
 - enforce-git-dash-c now auto-corrects a missing 'git -C <dir>' instead of blocking, injecting the hook's own $PWD (never the resolved repo toplevel, so a call with a relative pathspec run from a subdirectory keeps operating on that subdirectory) when git rev-parse --show-toplevel confirms $PWD sits inside a writable git repository and no directory-changing call (cd/pushd/popd, plain, wrapped, or backslash-escaped) appears anywhere in the command - both cases where it cannot be confident of the correct target directory (a preceding directory change, no enclosing repository, or an unwritable/foreign checkout) still block exactly as before (#1357)
 - SDK - Updated DotNet SDK to 10.0.400
-
 ## [0.0.2] - 2026-07-16
 ### Security
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container

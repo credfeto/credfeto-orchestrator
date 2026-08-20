@@ -289,10 +289,77 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 EOF
 }
 
+# Renders the "round cap already exhausted" bullet reused by PHASE E/F (via
+# _build_review_convergence_block below) and PHASE G's coverage failure branch. This must always
+# render as the FIRST branch checked in whichever failure/non-convergence chain calls it, never a
+# trailing sibling after other STOP branches: a round-cap check placed after an exhaustive set of
+# other STOP branches can never be reached, and this exact ordering bug was independently found
+# and fixed twice in this PR. cap_condition (the 3rd argument, the one
+# argument whose content actually varies between callers) is always passed via a double-quoted
+# variable expansion ("${var}"), never a literal quoted string, at every call site: that lets
+# each caller's own local variable assignment pick whatever quoting suits ITS content (PHASE G's
+# prose contains literal double quotes; PHASE E/F's prose contains apostrophes) without either
+# call site needing to worry about the other's content, since a double-quoted variable expansion
+# never re-parses the characters inside it. round_noun and post_clause are plain literal strings
+# at every call site instead, since none of their current content needs that discipline; if a
+# future edit gives either of them a literal double quote, backtick, or unescaped dollar sign, it
+# would need the same "assign to a local variable, pass via double-quoted expansion" treatment.
+_build_round_cap_check_line() {
+    local max_iter="$1" round_noun="$2" cap_condition="$3" post_clause="$4"
+    cat <<CAPLINE
+    - If you have already run ${max_iter} ${round_noun} on this PR ${cap_condition}: ${post_clause}, add the Blocked label, and STOP.
+CAPLINE
+}
+
+# Renders the self-detected convergence-judgement block shared by PHASE E (code review) and
+# PHASE F (security review): compare this round's findings to the PR's prior review-comment
+# history, and branch on whether the round cap is already exhausted (delegated to
+# _build_round_cap_check_line above), the findings are a repeat with enough rounds behind it to
+# trust that judgement (early-exit, no Blocked label, see downstream_note), or they are genuinely
+# new, or a repeat too early to trust (fix them either way). review_noun (used in prose, e.g.
+# "code review is not converging") is derived from review_label rather than passed separately,
+# so the two can never drift apart. The one genuine behavioural difference between the two
+# phases - how the "substantially new" branch reports/fixes findings, since /code-review
+# --comment already posts inline but /security-review does not - is passed in explicitly as
+# fix_step rather than hand-copied. fix_step and downstream_note are interpolated as literal
+# prose into the CONVBLOCK heredoc below. fix_step is single-quoted at both call sites, so it
+# must not contain a literal single-quote; downstream_note is double-quoted at both call sites
+# instead, so it must not contain a literal double quote, backtick, or unescaped dollar sign
+# (the shell expands those before this function ever sees the value). min_rounds is the earliest
+# round on which the "repeat" branch is allowed to fire at all: mirroring PHASE D's
+# SIMPLIFY_THRASH_LIMIT (which requires a minimum number of rounds before it gives up early on
+# non-convergence grounds), a "repeat" verdict on round 2 is one failed fix attempt, not evidence
+# the phase is genuinely stuck, so it must not skip straight to a non-blocking early exit; see
+# MIN_REVIEW_CONVERGENCE_ROUNDS in lib/globals. If an operator overrides max_iter down to at or
+# below min_rounds, the round cap (checked first, per the invariant above) can become reachable
+# before the repeat-branch's own min_rounds condition would ever be evaluated at the same round;
+# this is intentional, not a bug, since the round cap is the hard blocking backstop and always
+# outranks the non-blocking early exit at a tie. Both max_iter and min_rounds count from the PR's
+# entire comment history, not rounds within the current AI Review/Security Review pass: a PR that
+# converges, later fails PHASE G, bounces to Development, and re-enters this phase still carries
+# its prior pass's round count forward. This is an existing characteristic of the whole
+# self-detected-convergence design (present since this mechanism's first commit, not specific to
+# min_rounds), not something introduced or fixed here; giving each pass its own count would need
+# an explicit pass-boundary marker this design does not currently have.
+_build_review_convergence_block() {
+    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5" min_rounds="$6"
+    local review_noun="${review_label//-/ }"
+    local cap_condition="(judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new"
+    cat <<CONVBLOCK
+  - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
+$(_build_round_cap_check_line "${max_iter}" "${review_label} rounds" "${cap_condition}" "post a PR comment listing the unresolved findings")
+    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging) AND at least ${min_rounds} ${review_label} rounds (judge from the PR's history of ${review_label} comments, counting this round) have now run: post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
+    - Otherwise (either substantially new, or a repeat but fewer than ${min_rounds} rounds have run so far, so one failed fix attempt is not yet enough evidence to give up; and the round cap has not been reached): ${fix_step}
+CONVBLOCK
+}
+
 build_pr_claude_md() {
     local item_id="$1" ai_instructions="$2" merge_state="${3:-UNKNOWN}" branch_name="${4:-}" repo_path="${5:-${REPO_WORK_DIR}}" dirty_branch="${6:-}" is_dependency_pr="${7:-false}" trusted_logins="${8:-}" background_stall="${9:-false}"
     local checkout_step
     local needs_rebase=0
+    # Assigned here, ahead of the heredoc that uses it below, per _build_round_cap_check_line's
+    # own doc comment on why callers pass this via a variable rather than a literal.
+    local phase_g_cap_condition='without the branch catching up (judge from prior "... - returning to Development" coverage comments)'
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
 
     if [ -n "${dirty_branch}" ] && [ "${needs_rebase}" = "1" ]; then
@@ -402,22 +469,30 @@ PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstandi
 
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
-  - If findings were posted: fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
-  - If you have already run ${MAX_REVIEW_ITERATIONS} code-review rounds on this PR (judge from the PR's history of code-review comments) and findings remain: post a PR comment listing the unresolved findings, add the Blocked label, and STOP.
+$(_build_review_convergence_block "code-review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
+    'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.' \
+    "this means no new correctness issues are surfacing, not that a known one is safe to ignore; unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review." \
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
-  - If findings were reported: post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
-  - If you have already run ${MAX_REVIEW_ITERATIONS} security-review rounds and findings remain: post a PR comment listing them, add the Blocked label, and STOP.
+$(_build_review_convergence_block "security-review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
+    'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.' \
+    "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review." \
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: if the branch is non-code-only (every changed file is a dependency manifest/version-pin, a GitHub Actions workflow/composite action beyond a version pin, SQL/T-SQL, a shell script, a Dockerfile/Docker Compose file, or a documentation-only change — no source or test file touched), skip straight to the success step below without measuring anything. Otherwise, read COVERAGE.md from origin/main live (git -C <repodir> show origin/main:COVERAGE.md) — do NOT look for a PR comment, there isn't one. If COVERAGE.md doesn't exist on origin/main yet, this is the bootstrap case: there is nothing to compare against, so treat it as passed.
   - Otherwise, re-run the same per-language extraction against the branch's current (already checked out) working tree (per-component rows plus each language's Overall figure) and compare branch Overall vs. baseline Overall per language — component rows never gate, only Overall does.
-  - On failure (any language's branch Overall below its baseline Overall): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
   - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
-  - If you have already run ${MAX_REVIEW_ITERATIONS} coverage rounds on this PR without the branch catching up (judge from prior "... - returning to Development" coverage comments): post a PR comment listing the still-failing languages and their gap, add the Blocked label, and STOP.
+  - On failure (any language's branch Overall below its baseline Overall):
+$(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${phase_g_cap_condition}" "post a PR comment listing the still-failing languages and their gap") Do not touch COVERAGE.md in this case.
+    - Otherwise, compare each still-failing language's Overall this round against its Overall in the most recent prior coverage comment that mentions that language by name (judge from the PR's history of prior "... - returning to Development" coverage comments) - this is not necessarily the immediately preceding round, since a language that passed in a round leaves no comment mentioning it for that round, so a later failure must be compared against its last-mentioned figure, not a stale or absent one. Treat a language as trending, with nothing yet to compare, only when no prior comment mentions it at all, regardless of which round this is.
+      - If the gap is closing (every still-failing language's Overall either improved versus its own previous coverage round, or is being treated as trending per the carve-out above because it has no previous round to compare against, or this is the whole PR's first coverage round): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>% - returning to Development"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
+      - If the trend is flat or worsening for a still-failing language AND you judge, from the actual gap and the code, that further Development-phase rounds are unlikely to close it: post a PR comment giving the per-language numbers, the round-over-round trend, and your specific reasoning for why you believe coverage cannot realistically be raised further here, add the Blocked label, and STOP. Do not touch COVERAGE.md in this case. This can fire before ${MAX_COVERAGE_ITERATIONS} is reached (checked above). Unlike Phase E/F's early exit, this one blocks: a coverage round's pass/fail IS the ratchet's own verdict, so giving up here means proposing to waive the gate itself, not merely reporting that no new findings turned up; a human must see and agree with that reasoning before the gate is treated as satisfied.
+      - Otherwise (trend is flat/worsening but you judge more rounds are still worth trying): post the status comment as above, move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - Enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}

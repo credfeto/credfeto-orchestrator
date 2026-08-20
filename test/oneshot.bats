@@ -9756,15 +9756,61 @@ STUBEOF
     [[ "${output}" != *"behind origin/main"* ]]
 }
 
-# --- MAX_REVIEW_ITERATIONS constant -------------------------------------------
+# --- MAX_CODE_REVIEW_ITERATIONS / MAX_SECURITY_REVIEW_ITERATIONS / MAX_COVERAGE_ITERATIONS ----
 
-@test "MAX_REVIEW_ITERATIONS defaults to 3" {
-    [ "${MAX_REVIEW_ITERATIONS}" -eq 3 ]
+@test "MAX_CODE_REVIEW_ITERATIONS defaults to 15" {
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
 }
 
-@test "MAX_REVIEW_ITERATIONS can be overridden via environment variable" {
-    MAX_REVIEW_ITERATIONS=5
-    [ "${MAX_REVIEW_ITERATIONS}" -eq 5 ]
+@test "MAX_CODE_REVIEW_ITERATIONS can be overridden via environment variable" {
+    MAX_CODE_REVIEW_ITERATIONS=5
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 5 ]
+}
+
+@test "MAX_CODE_REVIEW_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_CODE_REVIEW_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_CODE_REVIEW_ITERATIONS falls back to its default when given an override too large to sum safely" {
+    export MAX_CODE_REVIEW_ITERATIONS="99999999999999999999"
+    source_oneshot
+    [ "${MAX_CODE_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_SECURITY_REVIEW_ITERATIONS defaults to 15" {
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_SECURITY_REVIEW_ITERATIONS can be overridden via environment variable" {
+    MAX_SECURITY_REVIEW_ITERATIONS=5
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 5 ]
+}
+
+@test "MAX_SECURITY_REVIEW_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_SECURITY_REVIEW_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_SECURITY_REVIEW_ITERATIONS}" -eq 15 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS defaults to 6" {
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS can be overridden via environment variable" {
+    MAX_COVERAGE_ITERATIONS=2
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 2 ]
+}
+
+@test "MAX_COVERAGE_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_COVERAGE_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_COVERAGE_ITERATIONS}" -eq 6 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS defaults to 57 (sum of per-phase budgets plus flat headroom)" {
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
 }
 
 # --- MAX_SIMPLIFY_ITERATIONS / SIMPLIFY_THRASH_LIMIT constants ----------------
@@ -9778,6 +9824,12 @@ STUBEOF
     [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 20 ]
 }
 
+@test "MAX_SIMPLIFY_ITERATIONS falls back to its default when given a non-numeric override" {
+    export MAX_SIMPLIFY_ITERATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_SIMPLIFY_ITERATIONS}" -eq 10 ]
+}
+
 @test "SIMPLIFY_THRASH_LIMIT defaults to 3" {
     [ "${SIMPLIFY_THRASH_LIMIT}" -eq 3 ]
 }
@@ -9785,6 +9837,27 @@ STUBEOF
 @test "SIMPLIFY_THRASH_LIMIT can be overridden via environment variable" {
     SIMPLIFY_THRASH_LIMIT=5
     [ "${SIMPLIFY_THRASH_LIMIT}" -eq 5 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS defaults to 3" {
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS can be overridden via environment variable" {
+    MIN_REVIEW_CONVERGENCE_ROUNDS=5
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 5 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS falls back to its default when given a non-numeric override" {
+    export MIN_REVIEW_CONVERGENCE_ROUNDS="not-a-number"
+    source_oneshot
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
+}
+
+@test "MIN_REVIEW_CONVERGENCE_ROUNDS falls back to its default when given an overflow-sized override" {
+    export MIN_REVIEW_CONVERGENCE_ROUNDS="9999999"
+    source_oneshot
+    [ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" -eq 3 ]
 }
 
 # --- build_issue_claude_md plan-first steps -----------------------------------
@@ -10389,18 +10462,121 @@ STUBEOF
     [[ "${output}" == *"AI Security Review"* ]]
 }
 
-@test "build_pr_claude_md embeds MAX_REVIEW_ITERATIONS value in review guidance" {
-    MAX_REVIEW_ITERATIONS=3
+@test "build_pr_claude_md embeds MAX_CODE_REVIEW_ITERATIONS value in review guidance" {
+    MAX_CODE_REVIEW_ITERATIONS=3
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"already run 3 code-review rounds"* ]]
 }
 
-@test "build_pr_claude_md embeds custom MAX_REVIEW_ITERATIONS when overridden" {
-    MAX_REVIEW_ITERATIONS=5
+@test "build_pr_claude_md embeds custom MAX_CODE_REVIEW_ITERATIONS when overridden" {
+    MAX_CODE_REVIEW_ITERATIONS=5
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"already run 5 code-review rounds"* ]]
+}
+
+@test "build_pr_claude_md PHASE E self-detects non-convergence and advances without blocking" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"substantially repeating a prior round"* ]]
+    [[ "${output}" == *"code review is not converging"* ]]
+    [[ "${output}" == *'advance the board to "AI Security Review"'* ]]
+    [[ "${output}" == *"Do NOT add the Blocked label"* ]]
+}
+
+@test "build_pr_claude_md PHASE E's non-convergence early exit requires MIN_REVIEW_CONVERGENCE_ROUNDS code-review rounds, not just a single repeat" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"AND at least 3 code-review rounds"* ]]
+    [[ "${output}" == *"a repeat but fewer than 3 rounds have run so far, so one failed fix attempt is not yet enough evidence to give up"* ]]
+}
+
+@test "build_pr_claude_md PHASE F's non-convergence early exit requires MIN_REVIEW_CONVERGENCE_ROUNDS security-review rounds, not just a single repeat" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"AND at least 3 security-review rounds"* ]]
+}
+
+@test "build_pr_claude_md PHASE E checks the round cap before the fix-new-findings branch, so the cap is reachable even when findings keep being new" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    cap_line=$(printf '%s\n' "${output}" | grep -n "code-review rounds on this PR" | head -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "and the round cap has not been reached" | head -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${fix_line}" ]
+    [ "${cap_line}" -lt "${fix_line}" ]
+}
+
+@test "build_pr_claude_md embeds MAX_SECURITY_REVIEW_ITERATIONS value in security-review guidance" {
+    MAX_SECURITY_REVIEW_ITERATIONS=3
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 3 security-review rounds"* ]]
+}
+
+@test "build_pr_claude_md embeds custom MAX_SECURITY_REVIEW_ITERATIONS when overridden" {
+    MAX_SECURITY_REVIEW_ITERATIONS=5
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 5 security-review rounds"* ]]
+}
+
+@test "build_pr_claude_md PHASE F self-detects non-convergence and advances without blocking" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"security review is not converging"* ]]
+    [[ "${output}" == *'advance the board to "AI Coverage"'* ]]
+}
+
+@test "build_pr_claude_md PHASE F checks the round cap before the fix-new-findings branch, so the cap is reachable even when findings keep being new" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    # PHASE E's identical shared-template text appears earlier in the document than PHASE F's;
+    # take the LAST occurrence of the (phase-agnostic) fix-branch phrase so this asserts PHASE F's
+    # own ordering rather than accidentally comparing against PHASE E's.
+    cap_line=$(printf '%s\n' "${output}" | grep -n "security-review rounds on this PR" | head -1 | cut -d: -f1)
+    fix_line=$(printf '%s\n' "${output}" | grep -n "and the round cap has not been reached" | tail -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${fix_line}" ]
+    [ "${cap_line}" -lt "${fix_line}" ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS's default recomputes when a per-phase budget is overridden, proving it isn't a separate stale literal" {
+    export MAX_SIMPLIFY_ITERATIONS=20
+    # setup()'s own source_oneshot already defaulted MAX_PR_TOTAL_INVOCATIONS to 57; unset it first
+    # so this second source genuinely re-derives the default rather than short-circuiting on
+    # "${MAX_PR_TOTAL_INVOCATIONS:-...}" already being non-empty from that first sourcing.
+    unset MAX_PR_TOTAL_INVOCATIONS
+    source_oneshot
+    # 20 (overridden) + 15 (code-review) + 15 (security-review) + 6 (coverage) + 11 (headroom) = 67,
+    # not the unoverridden default of 57: only reachable if lib/globals genuinely reuses the four
+    # budgets above rather than a separately hardcoded literal that happens to equal 57.
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 67 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS actually falls back to the computed default when given a non-numeric override" {
+    export MAX_PR_TOTAL_INVOCATIONS="not-a-number"
+    source_oneshot
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS falls back to the computed default when given an 8-digit override, exceeding its 7-digit bound" {
+    export MAX_PR_TOTAL_INVOCATIONS="10000000"
+    source_oneshot
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 57 ]
+}
+
+@test "MAX_PR_TOTAL_INVOCATIONS's computed default self-validates when all four inputs are near their own 6-digit max" {
+    export MAX_SIMPLIFY_ITERATIONS=999999
+    export MAX_CODE_REVIEW_ITERATIONS=999999
+    export MAX_SECURITY_REVIEW_ITERATIONS=999999
+    export MAX_COVERAGE_ITERATIONS=999999
+    unset MAX_PR_TOTAL_INVOCATIONS
+    source_oneshot
+    # 4 * 999999 + 11 = 4000007, a 7-digit number: this is the exact edge case the 7-digit bound
+    # (one digit wider than its four inputs) exists to let through without falling back on itself.
+    [ "${MAX_PR_TOTAL_INVOCATIONS}" -eq 4000007 ]
 }
 
 @test "build_pr_claude_md PHASE D runs /simplify and stops before code review" {
@@ -10510,6 +10686,13 @@ STUBEOF
     [[ "${output}" == *"Do not touch COVERAGE.md in this case"* ]]
 }
 
+@test "build_pr_claude_md PHASE G restates 'do not touch COVERAGE.md' on all four failure-branch STOPs, not just the gap-closing one" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    count=$(printf '%s\n' "${output}" | grep -c "Do not touch COVERAGE.md in this case")
+    [ "${count}" -eq 4 ]
+}
+
 @test "build_pr_claude_md PHASE G no longer looks for a PR comment" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
@@ -10536,6 +10719,55 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"coverage rounds on this PR without the branch catching up"* ]]
     [[ "${output}" == *"still-failing languages and their gap"* ]]
+}
+
+@test "build_pr_claude_md PHASE G checks the round cap before the gap-closing/trend branches, so the cap is reachable regardless of trend" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    cap_line=$(printf '%s\n' "${output}" | grep -n "coverage rounds on this PR without the branch catching up" | head -1 | cut -d: -f1)
+    gap_closing_line=$(printf '%s\n' "${output}" | grep -n "If the gap is closing" | head -1 | cut -d: -f1)
+    [ -n "${cap_line}" ]
+    [ -n "${gap_closing_line}" ]
+    [ "${cap_line}" -lt "${gap_closing_line}" ]
+}
+
+@test "build_pr_claude_md PHASE G can bail early on a flat coverage trend, unlike PHASE E/F it blocks" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"trend is flat or worsening"* ]]
+    [[ "${output}" == *"your specific reasoning for why you believe coverage cannot realistically be raised further"* ]]
+    [[ "${output}" == *"Unlike Phase E/F's early exit, this one blocks"* ]]
+    [[ "${output}" == *"a coverage round's pass/fail IS the ratchet's own verdict"* ]]
+}
+
+@test "build_pr_claude_md PHASE G treats a language failing for the first time on a later round as trending, not as breaking the gap-closing verdict" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Treat a language as trending, with nothing yet to compare, only when no prior comment mentions it at all, regardless of which round this is."* ]]
+    [[ "${output}" == *"or is being treated as trending per the carve-out above because it has no previous round to compare against"* ]]
+}
+
+@test "build_pr_claude_md PHASE G's trend comparison targets the most recent comment mentioning a language, not necessarily the previous round" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"against its Overall in the most recent prior coverage comment that mentions that language by name"* ]]
+    [[ "${output}" == *"this is not necessarily the immediately preceding round, since a language that passed in a round leaves no comment mentioning it for that round"* ]]
+}
+
+@test "build_pr_claude_md embeds MAX_COVERAGE_ITERATIONS value in coverage guidance" {
+    MAX_COVERAGE_ITERATIONS=6
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 6 coverage rounds"* ]]
+    [[ "${output}" == *"fire before 6 is reached"* ]]
+}
+
+@test "build_pr_claude_md embeds custom MAX_COVERAGE_ITERATIONS when overridden" {
+    MAX_COVERAGE_ITERATIONS=2
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already run 2 coverage rounds"* ]]
+    [[ "${output}" == *"fire before 2 is reached"* ]]
 }
 
 @test "build_pr_claude_md does not include WF section when _WF_PROJECT_ID is empty" {
