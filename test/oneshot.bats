@@ -6663,6 +6663,20 @@ STUBEOF
     done
 }
 
+@test "claude_result_indicates_background_stall matches the #1374 recurrence phrasing that slipped past the #215 patterns" {
+    local texts=(
+        "Build and monitor are running in the background — I'll pick this up once the completion notification arrives."
+        "I'll pick it up once the background test run finishes."
+        "I'll resume once the background job completes."
+        "I'll continue this once the background check finishes."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -eq 0 ] || { echo "expected match for: ${t}"; false; }
+    done
+}
+
 @test "claude_result_indicates_background_stall does not match legitimate GitHub-side stop reasons" {
     local texts=(
         "PHASE H complete: PR #216 was still a draft, so it was moved out of draft and auto-merge was enabled, with a status comment posted. Stopping here per phase discipline — the next cycle will pick up once GitHub settles this state."
