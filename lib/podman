@@ -164,6 +164,12 @@ claude_result_indicates_background_stall() {
     stall_re+='|continue automatically'
     stall_re+='|I.ll continue (once|automatically)'
     stall_re+="|I.ll be notified"
+    # #1374: "Build and monitor are running in the background - I'll pick this up once the
+    # completion notification arrives" slipped past every alternative above (no "wait", no
+    # "notify me when/once") - deliberately requires "this"/"it" after "pick ... up" so it does
+    # not also catch the legitimate "the next cycle will pick up once CI settles" phrasing the
+    # comment above already calls out as something this function must not match.
+    stall_re+='|I.ll (pick (this|it) up|resume|continue this)[^.]*(once|when|after)'
     local shopt_nocasematch
     shopt_nocasematch=$(shopt -p nocasematch)
     shopt -s nocasematch
