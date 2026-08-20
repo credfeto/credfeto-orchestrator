@@ -6676,6 +6676,16 @@ STUBEOF
     done
 }
 
+@test "claude_result_indicates_background_stall matches when the background/monitor mention precedes the resume phrase, not just follows it" {
+    # The four cases above all happen to satisfy the anchor-after alternative
+    # (I.ll ...[^.]*(background|monitor|notification)) on its own - none of them isolate the
+    # anchor-before alternative added alongside it. Confirmed by testing the anchor-after
+    # pattern alone against all four: it matches every one, so this repo's own coverage never
+    # actually exercised the anchor-before branch. This case only matches via anchor-before.
+    run claude_result_indicates_background_stall "The build is running in the background; I'll resume when it finishes."
+    [ "${status}" -eq 0 ]
+}
+
 @test "claude_result_indicates_background_stall does not match legitimate GitHub-side stop reasons" {
     local texts=(
         "PHASE H complete: PR #216 was still a draft, so it was moved out of draft and auto-merge was enabled, with a status comment posted. Stopping here per phase discipline — the next cycle will pick up once GitHub settles this state."
