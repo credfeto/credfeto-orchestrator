@@ -111,7 +111,6 @@ Releases that have at least been deployed to staging, BUT NOT necessarily releas
 - Register a second per-invocation --add-dir at /workspace/tmp, a fresh throwaway scratch directory bind-mounted read-write; the agent container's entrypoint.sh now exports TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR pointing at it, so the agent has somewhere writable and registered with Claude Code's own file-write trust boundary to redirect scratch output to instead of an unregistered /tmp path (#1351 - an experiment testing whether that boundary respects --add-dir for output-redirect targets)
 - enforce-git-dash-c now auto-corrects a missing 'git -C <dir>' instead of blocking, injecting the hook's own $PWD (never the resolved repo toplevel, so a call with a relative pathspec run from a subdirectory keeps operating on that subdirectory) when git rev-parse --show-toplevel confirms $PWD sits inside a writable git repository and no directory-changing call (cd/pushd/popd, plain, wrapped, or backslash-escaped) appears anywhere in the command - both cases where it cannot be confident of the correct target directory (a preceding directory change, no enclosing repository, or an unwritable/foreign checkout) still block exactly as before (#1357)
 - SDK - Updated DotNet SDK to 10.0.400
-
 ## [0.0.2] - 2026-07-16
 ### Security
 - Replace host ~/.gitconfig volume mount in invoke_claude with a generated minimal gitconfig built from the host git global config, avoiding exposure of the full host gitconfig inside the container
