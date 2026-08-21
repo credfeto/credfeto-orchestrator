@@ -107,6 +107,7 @@ RUN useradd -m -s /bin/bash developer
 #                      see credfeto-orchestrator#1351.
 #   tini       — correct PID 1 / signal forwarding
 #   shfmt      — shell formatter
+#   parallel   — parrallel task execution e.g. with bats
 #   libicu76   — ICU Unicode library (required by .NET)
 #   libxml2-utils — provides xmllint (used by the credfeto pre-commit chain)
 #   ttf-mscorefonts-installer — real MS fonts needed by tools (e.g.
@@ -135,6 +136,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         jq \
         libicu76 \
         openssh-client \
+        parallel \
         procps \
         python3 \
         python3-pip \
