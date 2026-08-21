@@ -6663,6 +6663,30 @@ STUBEOF
     done
 }
 
+@test "claude_result_indicates_background_stall matches the #1374 recurrence phrasing that slipped past the #215 patterns" {
+    local texts=(
+        "Build and monitor are running in the background — I'll pick this up once the completion notification arrives."
+        "I'll pick it up once the background test run finishes."
+        "I'll resume once the background job completes."
+        "I'll continue this once the background check finishes."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -eq 0 ] || { echo "expected match for: ${t}"; false; }
+    done
+}
+
+@test "claude_result_indicates_background_stall matches when the background/monitor mention precedes the resume phrase, not just follows it" {
+    # The four cases above all happen to satisfy the anchor-after alternative
+    # (I.ll ...[^.]*(background|monitor|notification)) on its own - none of them isolate the
+    # anchor-before alternative added alongside it. Confirmed by testing the anchor-after
+    # pattern alone against all four: it matches every one, so this repo's own coverage never
+    # actually exercised the anchor-before branch. This case only matches via anchor-before.
+    run claude_result_indicates_background_stall "The build is running in the background; I'll resume when it finishes."
+    [ "${status}" -eq 0 ]
+}
+
 @test "claude_result_indicates_background_stall does not match legitimate GitHub-side stop reasons" {
     local texts=(
         "PHASE H complete: PR #216 was still a draft, so it was moved out of draft and auto-merge was enabled, with a status comment posted. Stopping here per phase discipline — the next cycle will pick up once GitHub settles this state."
@@ -6673,6 +6697,25 @@ STUBEOF
         "Waiting for a human to review and approve the plan before proceeding."
         "PR #99 CI checks pending — deferring to the next cycle when GitHub settles."
         ""
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_background_stall "${t}"
+        [ "${status}" -ne 0 ] || { echo "expected no match for: ${t}"; false; }
+    done
+}
+
+@test "claude_result_indicates_background_stall does not match an ordinary 'I'll resume/continue ... once/when' sentence unrelated to backgrounding" {
+    # Simplify-review finding on #1376: the first version of the #1374 fix added
+    # `I.ll (pick (this|it) up|resume|continue this)[^.]*(once|when|after)` with no
+    # background/monitor/notification anchor, so it matched any ordinary "I'll resume/continue
+    # X once/when Y" sentence regardless of subject matter - the exact false-positive shape the
+    # function's own header comment forbids. These three are all confirmed false positives of
+    # that unanchored version.
+    local texts=(
+        "I'll resume the migration script once the schema review is done, then continue with the rollout."
+        "I'll continue this work once code review comments land."
+        "I'll resume tomorrow once I have more context."
     )
     local t
     for t in "${texts[@]}"; do

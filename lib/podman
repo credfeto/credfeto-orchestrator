@@ -164,6 +164,20 @@ claude_result_indicates_background_stall() {
     stall_re+='|continue automatically'
     stall_re+='|I.ll continue (once|automatically)'
     stall_re+="|I.ll be notified"
+    # #1374: "Build and monitor are running in the background - I'll pick this up once the
+    # completion notification arrives" slipped past every alternative above (no "wait", no
+    # "notify me when/once"). The first version of this fix used
+    # `I.ll (pick (this|it) up|resume|continue this)[^.]*(once|when|after)` with no
+    # background/monitor/notification anchor at all, which matched ordinary unrelated sentences
+    # like "I'll resume the migration script once the schema review is done" - the exact
+    # false-positive shape the header comment above says this function must never produce
+    # (caught in review before merge, not live). Anchored both directions instead - the anchor
+    # word can appear either before or after the pick-up/resume/continue phrase within the same
+    # sentence (bash ERE has no lookbehind, hence two alternatives rather than one) - which still
+    # matches every #1374/#215 confirmed phrasing without matching the legitimate "the next cycle
+    # will pick up once CI settles" case or an unrelated "I'll resume ... once ..." sentence.
+    stall_re+='|I.ll (pick (this|it) up|resume|continue this)[^.]*(background|monitor|notification)'
+    stall_re+='|(background|monitor|notification)[^.]*I.ll (pick (this|it) up|resume|continue this)'
     local shopt_nocasematch
     shopt_nocasematch=$(shopt -p nocasematch)
     shopt -s nocasematch
