@@ -630,7 +630,7 @@ invoke_claude() {
         --print
         --output-format json
         --permission-mode dontAsk
-        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_SCRATCH_PATH}"
+        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
         # -- terminates option/variadic parsing before the positional prompt.
         # --add-dir takes <directories...> (variadic) — without this separator the
         # CLI parser greedily swallows the prompt as an extra --add-dir value

@@ -2607,7 +2607,7 @@ STUBEOF
     [ "$(sed -n "${separator_line}p" "${args_log}")" = "--" ]
 }
 
-@test "invoke_claude registers CONTAINER_SCRATCH_PATH as a second --add-dir alongside CONTAINER_REPO_PATH (#1351)" {
+@test "invoke_claude registers CONTAINER_REPO_PATH, CONTAINER_RULES_PATH, and CONTAINER_SCRATCH_PATH as --add-dir args in that order (#1351, #1377)" {
     local args_log="${TEST_TMP}/podman_args"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << STUBEOF
@@ -2624,7 +2624,8 @@ STUBEOF
     add_dir_line=$(grep -nx -- '--add-dir' "${args_log}" | cut -d: -f1)
     [ -n "${add_dir_line}" ]
     [ "$(sed -n "$((add_dir_line + 1))p" "${args_log}")" = "${CONTAINER_REPO_PATH}" ]
-    [ "$(sed -n "$((add_dir_line + 2))p" "${args_log}")" = "${CONTAINER_SCRATCH_PATH}" ]
+    [ "$(sed -n "$((add_dir_line + 2))p" "${args_log}")" = "${CONTAINER_RULES_PATH}" ]
+    [ "$(sed -n "$((add_dir_line + 3))p" "${args_log}")" = "${CONTAINER_SCRATCH_PATH}" ]
 }
 
 @test "invoke_claude bind-mounts a fresh host scratch dir at CONTAINER_SCRATCH_PATH read-write (#1351)" {
