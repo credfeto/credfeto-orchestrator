@@ -98,6 +98,13 @@ RUN useradd -m -s /bin/bash developer
 # via debconf so the install is fully non-interactive.
 #
 # Package notes:
+#   bubblewrap — provides bwrap; required for Claude Code's own Linux Bash-tool
+#                      sandbox (bwrap-based unprivileged-namespace sandboxing) to
+#                      initialize inside the agent container. Absent, the sandbox
+#                      fails closed and denies every command needing an escape from
+#                      it (redirect/write outside the registered directories,
+#                      dangerouslyDisableSandbox) regardless of path or flags —
+#                      see credfeto-orchestrator#1351.
 #   tini       — correct PID 1 / signal forwarding
 #   shfmt      — shell formatter
 #   libicu76   — ICU Unicode library (required by .NET)
@@ -118,6 +125,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         | debconf-set-selections \
     && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bats \
+        bubblewrap \
         ca-certificates \
         curl \
         dash \
@@ -413,6 +421,7 @@ RUN { \
       echo "trufflehog: $(trufflehog --version || echo 'version unknown')"; \
       echo "trivy: $(trivy --version | head -n1 | sed 's/^Version: *//' || echo 'version unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
+      echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -430,7 +439,7 @@ RUN set -e; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
                python3 ansible-lint flake8 pylint \
-               yamllint pre-commit xmllint; do \
+               yamllint pre-commit xmllint bwrap; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
         fi; \
