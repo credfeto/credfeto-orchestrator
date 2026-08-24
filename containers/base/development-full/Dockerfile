@@ -154,6 +154,7 @@ COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/develo
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /home/developer/.claude/hooks/enforce-ssh-host-and-key
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /home/developer/.claude/hooks/enforce-background-for-long-running-commands
+COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /home/developer/.claude/hooks/cache-gh-lookups
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /home/developer/.claude/hooks/env-var-blocklist
@@ -355,6 +356,10 @@ RUN set -e; \
         || { echo "FATAL sanity: enforce-background-for-long-running-commands hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/enforce-background-for-long-running-commands ] \
         || { echo "FATAL sanity: enforce-background-for-long-running-commands hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/cache-gh-lookups)" = "root:root 755" ] \
+        || { echo "FATAL sanity: cache-gh-lookups hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/cache-gh-lookups ] \
+        || { echo "FATAL sanity: cache-gh-lookups hook is not executable" >&2; exit 1; }; \
     for f in command-allowlist command-blocklist env-var-blocklist; do \
         [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Rewrites specific, known-safe-to-cache `gh` read calls into a read of a small persistent
+# cache file instead of letting them run against the live GitHub API every time. Never
+# blocks: this hook only ever allows (with or without a rewrite) or passes through silently
+# -- a parse failure, missing shfmt, or a non-matching command all just mean "no rewrite this
+# time", never a denial. Exit is always 0.
+#
+# Currently handles exactly one lookup:
+#   * `gh api user --jq '.login'` (single/double/unquoted `.login`) -> reads/populates
+#     "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json" instead. This is the
+#     literal command lib/github's resolve_gh_me runs on the host side; the agent's own Bash
+#     tool sometimes reaches for the same thing to resolve its own GitHub identity.
+#
+# Why this doesn't reopen #1344:
+#   Issue #1344 explicitly reviewed and rejected a blanket `gh api user*` permissions.allow
+#   entry for the agent's own Bash tool ("no real justification"). This hook does not grant
+#   that: the agent's literal `gh api user --jq '.login'` call is never executed as written --
+#   it is rewritten (via hookSpecificOutput.updatedInput, same mechanism enforce-git-dash-c's
+#   -C auto-insert uses) into a cache read that only ever calls the live API once per fresh
+#   copy of the cache file, not once per agent attempt. entrypoint.sh already seeds this same
+#   cache file eagerly at container start (containers/agent/entrypoint.sh's
+#   seed_orchestrator_cache), so the rewritten command's own `gh api user` fallback below is
+#   normally a no-op; it exists only to self-heal a cache entrypoint.sh failed to seed (that
+#   seeding is deliberately non-fatal -- see entrypoint.sh's own comment, #1086 precedent).
+#
+# Matching is deliberately narrow and whole-command-only (not "does this command contain a
+# matching call anywhere", unlike enforce-git-dash-c/block-git-worktree/etc.): the entire
+# parsed command must be exactly one bare call with no pipes, redirects, backgrounding,
+# negation, or surrounding statements. This hook is a convenience optimisation, not a
+# security control -- failing to match a call embedded in something more complex just means
+# no rewrite happens this time (falls through to the normal permission check, i.e. today's
+# behaviour), never a false allow.
+#
+# Adding another cached lookup later: extend the jq match below to also recognise the new
+# call shape, and give it its own cache filename under global/ (or local/, for something
+# that should not persist across container invocations) alongside user.json.
+
+export LC_ALL=C
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt > /dev/null 2>&1 || exit 0
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || exit 0
+
+# Resolves the whole command to a tab-joined line of its literal argv words, but only when
+# it is a single bare CallExpr statement with nothing else going on (see header comment).
+# Anything else (multiple statements, a pipeline/subshell/redirect/background/negation, or a
+# non-literal word such as a substitution or variable) yields an empty line: no match, no
+# rewrite. word_literal resolves a single-part Lit/SglQuoted/DblQuoted(single-Lit-part) word
+# to its literal value; anything else (an expansion, a multi-part word) resolves to the empty
+# string, which can never equal one of the plain-ASCII literals compared against below.
+words_line=$(printf '%s' "$ast" | jq -r '
+  def word_literal:
+    if ((.Parts // []) | length) == 1 then
+      (.Parts[0] as $p |
+        if $p.Type == "Lit" then $p.Value
+        elif $p.Type == "SglQuoted" then $p.Value
+        elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and $p.Parts[0].Type == "Lit" then $p.Parts[0].Value
+        else "" end)
+    else "" end;
+  if ((.Stmts // []) | length) == 1 then
+    (.Stmts[0] as $s |
+      if (($s.Negated // false) == false) and (($s.Background // false) == false) and (($s.Redirs // []) | length) == 0 and $s.Cmd.Type == "CallExpr" then
+        ([$s.Cmd.Args[]? | word_literal] | join("\t"))
+      else "" end)
+  else "" end
+')
+
+[ -z "$words_line" ] && exit 0
+IFS=$'\t' read -ra words <<< "$words_line"
+
+is_match_gh_api_user_login() {
+  [ "${#words[@]}" -eq 5 ] || return 1
+  { [ "${words[0]}" = "gh" ] || [[ "${words[0]}" == */gh ]]; } || return 1
+  [ "${words[1]}" = "api" ] || return 1
+  [ "${words[2]}" = "user" ] || return 1
+  [ "${words[3]}" = "--jq" ] || return 1
+  [ "${words[4]}" = ".login" ] || return 1
+  return 0
+}
+
+is_match_gh_api_user_login || exit 0
+
+# The rewritten command is returned as literal shell text -- "$HOME"/"$XDG_CACHE_HOME" are
+# expanded by whichever shell actually runs it (inside the container, as the developer user),
+# not by this hook, exactly like every other hook's rewrite in this chain. Kept byte-identical
+# to entrypoint.sh's own "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global" expression (see
+# that file's seed_orchestrator_cache) so the two cannot silently drift apart.
+new_cmd=$(cat << 'CMDEOF'
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global" && { [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json" ] || gh api user --jq '.login' > "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"; } && cat "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"
+CMDEOF
+)
+
+# Merged into the original tool_input, not built fresh from just the rewritten command
+# (#1367) -- see ai/local/claude-hooks.instructions.md's "Non-ASCII / Layer 0 block" section
+# for why a jq -n-built replacement would silently drop sibling fields like
+# run_in_background/timeout back to their defaults.
+printf '%s' "$input" | jq --arg cmd "$new_cmd" \
+  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: ((.tool_input // {}) + {command: $cmd})}}'
+
+exit 0
