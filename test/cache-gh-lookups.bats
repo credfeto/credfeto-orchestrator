@@ -18,7 +18,7 @@ teardown() {
 # deliberately: $HOME/$XDG_CACHE_HOME must stay unexpanded literal text, matching what the
 # hook itself emits for the shell that eventually runs the rewritten command to expand.
 # shellcheck disable=SC2016
-expected_rewrite='cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || gh api user --jq '"'"'.login'"'"' > "$cache_dir/user.json"; } && cat "$cache_dir/user.json"'
+expected_rewrite='cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || { gh api user --jq '"'"'.login'"'"' > "$cache_dir/user.json.tmp.$$" && mv "$cache_dir/user.json.tmp.$$" "$cache_dir/user.json"; }; } && cat "$cache_dir/user.json"'
 
 assert_rewrite() {
     [ "${status}" -eq 0 ]

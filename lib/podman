@@ -551,7 +551,7 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
-    # Backs the container's ~/.cache/orchestrator/global (#1380) — only "global" gets a
+    # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
     # container-ephemeral.
     mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
@@ -607,10 +607,17 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
     done
-    # /home/developer/.cache/orchestrator/global (#1380) — the container path matches
-    # containers/agent/Dockerfile's own ENV XDG_CACHE_HOME=/home/developer/.cache (pinned
-    # there specifically so this fixed, known-in-advance mount target and entrypoint.sh's/
-    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback can never disagree).
+    # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
+    # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
+    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
+    # directory (test/entrypoint-cache-path-parity.bats asserts the two literal copies of
+    # that expression match). Deliberately not pinned via an image-wide ENV XDG_CACHE_HOME:
+    # that would also redirect every other XDG-aware tool's cache in the container (npm, pip,
+    # eslint/stylelint wrappers, ...) onto this same path for no benefit to them, and some
+    # tools resolve their own default differently once XDG_CACHE_HOME is explicitly set versus
+    # left unset. containers/agent/Dockerfile instead pre-creates
+    # /home/developer/.cache/orchestrator/{local,global} with correct ownership directly, so
+    # this mount target already exists rather than depending on this assumption at all.
     PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
 
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )

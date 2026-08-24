@@ -116,9 +116,12 @@ is_match_gh_api_user_login || exit 0
 # "${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global" (see that file's seed_orchestrator_cache)
 # so the two cannot silently drift apart; test/entrypoint-cache-path-parity.bats asserts the two
 # literal copies actually match. Computed into a local var once rather than repeated inline, so
-# only one copy needs to stay in sync with entrypoint.sh's expression, not three.
+# only one copy needs to stay in sync with entrypoint.sh's expression, not three. The write on a
+# cache miss goes to a temp file then an atomic same-directory rename (matching
+# seed_orchestrator_cache's own write, so a concurrent cat here can never observe a
+# partially-written file) rather than a bare "> user.json" redirect.
 new_cmd=$(cat << 'CMDEOF'
-cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || gh api user --jq '.login' > "$cache_dir/user.json"; } && cat "$cache_dir/user.json"
+cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || { gh api user --jq '.login' > "$cache_dir/user.json.tmp.$$" && mv "$cache_dir/user.json.tmp.$$" "$cache_dir/user.json"; }; } && cat "$cache_dir/user.json"
 CMDEOF
 )
 
