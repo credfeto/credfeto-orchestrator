@@ -214,6 +214,16 @@ RUN set -e; \
 # Keep this wrapper list in sync with the development-full sanity check.
 USER developer
 
+# Pins the orchestrator cache location (#1380) as an image-enforced constant instead of
+# leaving it an implicit, comment-only assumption: entrypoint.sh's seed_orchestrator_cache
+# and the cache-gh-lookups hook's rewritten command both resolve
+# "${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/..." — same value this ENV produces, since
+# HOME for the developer user is already /home/developer — but lib/podman's --volume mount
+# target (/home/developer/.cache/orchestrator/global) has to be a fixed, known-in-advance
+# path. Setting it explicitly here removes the "as long as nothing else ever sets
+# XDG_CACHE_HOME differently" assumption that mount otherwise silently depended on.
+ENV XDG_CACHE_HOME=/home/developer/.cache
+
 # hadolint ignore=DL3059
 RUN set -e; \
     for wrapper in run-eslint run-stylelint run-psscriptanalyzer run-bats; do \

@@ -558,19 +558,13 @@ STUBEOF
 
 @test "entrypoint does not die and still invokes claude when gh api user fails" {
     setup_entrypoint_stubs
+    # Minimal override (just the api user branch) rather than re-declaring every branch of
+    # the shared gh stub: enforce_gh_git_protocol_ssh short-circuits via its own
+    # `[ -n "${hosts}" ] || return 0` when `gh config list` produces no output, so the
+    # config-related branches aren't needed here - same minimal shape as the
+    # "already-populated global/user.json" test above.
     cat > "${STUB_BIN}/gh" << 'STUBEOF'
 #!/usr/bin/env bash
-if [ "$1" = "config" ] && [ "$2" = "list" ]; then
-    printf 'hosts.github.com.git_protocol=ssh\n'
-    exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "git_protocol" ]; then
-    printf 'ssh\n'
-    exit 0
-fi
-if [ "$1" = "config" ] && [ "$2" = "set" ]; then
-    exit 0
-fi
 if [ "$1" = "api" ] && [ "$2" = "user" ]; then
     exit 1
 fi

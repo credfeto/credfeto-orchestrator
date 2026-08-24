@@ -7,7 +7,7 @@
 #
 # Currently handles exactly one lookup:
 #   * `gh api user --jq '.login'` (single/double/unquoted `.login`) -> reads/populates
-#     "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json" instead. This is the
+#     "${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global/user.json" instead. This is the
 #     literal command lib/github's resolve_gh_me runs on the host side; the agent's own Bash
 #     tool sometimes reaches for the same thing to resolve its own GitHub identity.
 #
@@ -42,6 +42,17 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 [ -z "$raw_cmd" ] && exit 0
 
+# Cheap pre-filter before the shfmt/jq parse below: this hook runs on every single Bash tool
+# call, unlike the AST walk it guards. word_literal further down only ever resolves a plain
+# Lit/SglQuoted/single-Lit-DblQuoted word to text, so any command that can possibly match
+# is_match_gh_api_user_login must literally contain "login" as plain text somewhere in its
+# source - a strict superset of the AST matcher's accept set, so this can only skip commands
+# that were always going to fail to match anyway.
+case "$raw_cmd" in
+  *login*) ;;
+  *) exit 0 ;;
+esac
+
 command -v shfmt > /dev/null 2>&1 || exit 0
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || exit 0
 
@@ -49,14 +60,17 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || exit 0
 # it is a single bare CallExpr statement with nothing else going on (see header comment).
 # Anything else (multiple statements, a pipeline/subshell/redirect/background/negation, or a
 # non-literal word such as a substitution or variable) yields an empty line: no match, no
-# rewrite. word_literal resolves a single-part Lit/SglQuoted/DblQuoted(single-Lit-part) word
-# to its literal value; anything else (an expansion, a multi-part word) resolves to the empty
-# string, which can never equal one of the plain-ASCII literals compared against below.
+# rewrite. word_literal (same shape as enforce-ssh-host-and-key's literal_value) resolves a
+# single-part Lit/SglQuoted/DblQuoted(single-Lit-part) word to its literal value, rejecting an
+# ANSI-C/locale-quoted word (shfmt's Dollar flag, e.g. $'...') even when it would otherwise
+# look like a plain SglQuoted; anything else (an expansion, a multi-part word) resolves to the
+# empty string, which can never equal one of the plain-ASCII literals compared against below.
 words_line=$(printf '%s' "$ast" | jq -r '
   def word_literal:
     if ((.Parts // []) | length) == 1 then
       (.Parts[0] as $p |
-        if $p.Type == "Lit" then $p.Value
+        if ($p.Dollar // false) then ""
+        elif $p.Type == "Lit" then $p.Value
         elif $p.Type == "SglQuoted" then $p.Value
         elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and $p.Parts[0].Type == "Lit" then $p.Parts[0].Value
         else "" end)
@@ -86,11 +100,14 @@ is_match_gh_api_user_login || exit 0
 
 # The rewritten command is returned as literal shell text -- "$HOME"/"$XDG_CACHE_HOME" are
 # expanded by whichever shell actually runs it (inside the container, as the developer user),
-# not by this hook, exactly like every other hook's rewrite in this chain. Kept byte-identical
-# to entrypoint.sh's own "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global" expression (see
-# that file's seed_orchestrator_cache) so the two cannot silently drift apart.
+# not by this hook, exactly like every other hook's rewrite in this chain. The cache directory
+# expression itself is kept byte-identical to entrypoint.sh's own
+# "${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global" (see that file's seed_orchestrator_cache)
+# so the two cannot silently drift apart; test/entrypoint-cache-path-parity.bats asserts the two
+# literal copies actually match. Computed into a local var once rather than repeated inline, so
+# only one copy needs to stay in sync with entrypoint.sh's expression, not three.
 new_cmd=$(cat << 'CMDEOF'
-mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global" && { [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json" ] || gh api user --jq '.login' > "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"; } && cat "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"
+cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || gh api user --jq '.login' > "$cache_dir/user.json"; } && cat "$cache_dir/user.json"
 CMDEOF
 )
 
