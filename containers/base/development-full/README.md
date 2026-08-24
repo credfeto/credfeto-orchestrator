@@ -54,9 +54,9 @@ retarget entries.
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
 `containers/base/development-full/claude-settings.json`, `claude-policy-limits.json`, and
-`claude-hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands}` are version-controlled copies of the operator's
-`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands}}`, copied into the image at
-`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands}}` as root:root
+`claude-hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands,cache-gh-lookups}` are version-controlled copies of the operator's
+`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands,cache-gh-lookups}}`, copied into the image at
+`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,enforce-background-for-long-running-commands,cache-gh-lookups}}` as root:root
 0444 (files) / 0755 (hook scripts and hooks directory) — read-only for `developer`. `reject-obfuscated-commands`
 runs first in the `PreToolUse` hook chain, ahead of every other hook, and parses each Bash command with
 `shfmt` (a real shell parser, baked into this image) rather than text-scanning: any non-printable or
@@ -81,18 +81,25 @@ missing or the command does not parse. `block-dotnet-tool-install` runs next, us
 AST to block `dotnet tool install` (local or global; `list`/`restore`/`uninstall`/`update`/`run`/... stay
 allowed) and `dotnet new tool-manifest` — this container's .NET global tools are pinned and baked into the
 image at build time, and either command would add an unpinned, unreviewed tool outside that set; it also
-fails closed if shfmt is missing or the command does not parse. `enforce-background-for-long-running-commands`
-runs last, using the same shfmt-parsed AST to block `git commit`, a directly-invoked `pre-commit`,
+fails closed if shfmt is missing or the command does not parse. `enforce-ssh-host-and-key` runs next,
+restricting `ssh` to a strict `user@host.lan` grammar with a usable key already loaded in the forwarded
+ssh-agent, since `claude-settings.json`'s own `Bash(ssh *)` allow entry is otherwise blanket; see
+`claude-hooks.instructions.md` for the full grammar/host-allowlist rules. `enforce-background-for-long-running-commands`
+runs next, using the same shfmt-parsed AST to block `git commit`, a directly-invoked `pre-commit`,
 `dotnet build`, `dotnet test`, `npm test`, and `bun test` unless the tool call sets `run_in_background: true`
 (a call that omits the field entirely is treated the same as `false`) — these five commands have no
 bounded, predictable duration, and a foreground run that outlives the tool's own timeout is killed mid-run,
 skipping the target process's own cleanup; it also fails closed if shfmt is missing or the command does
-not parse.
+not parse. `cache-gh-lookups` runs last and, unlike every hook above, never blocks: it rewrites an exact,
+whole-command `gh api user --jq '.login'` call into a read of a small persistent cache file instead
+(populating it first if it isn't there yet); anything else (a parse failure, missing shfmt, or a
+non-matching command) just passes through to the normal permission check.
 All hook paths referenced from `settings.json`'s `PreToolUse` block use the literal `$HOME` token
 (`$HOME/.claude/hooks/reject-obfuscated-commands`, `$HOME/.claude/hooks/enforce-git-dash-c`,
 `$HOME/.claude/hooks/enforce-git-identity`, `$HOME/.claude/hooks/block-git-worktree`,
-`$HOME/.claude/hooks/block-dotnet-tool-install`, and
-`$HOME/.claude/hooks/enforce-background-for-long-running-commands`) rather than a hardcoded path, since none of these hook
+`$HOME/.claude/hooks/block-dotnet-tool-install`, `$HOME/.claude/hooks/enforce-ssh-host-and-key`,
+`$HOME/.claude/hooks/enforce-background-for-long-running-commands`, and
+`$HOME/.claude/hooks/cache-gh-lookups`) rather than a hardcoded path, since none of these hook
 entries set an `args` field — Claude Code runs them in shell form (`sh -c`), which expands `$HOME` at
 execution time to whichever user actually invoked it (`/home/developer` in the container, the current
 user's home when installed on a host via `install-claude-hooks` below). This removes an entire class of
@@ -171,7 +178,9 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
 | `/home/developer/.claude/hooks/block-git-worktree` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-git-worktree`); read/execute only |
 | `/home/developer/.claude/hooks/block-dotnet-tool-install` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-dotnet-tool-install`); read/execute only |
+| `/home/developer/.claude/hooks/enforce-ssh-host-and-key` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-ssh-host-and-key`); read/execute only |
 | `/home/developer/.claude/hooks/enforce-background-for-long-running-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-background-for-long-running-commands`); read/execute only |
+| `/home/developer/.claude/hooks/cache-gh-lookups` | root:root | 0755 | Baked-in hook script (from `claude-hooks/cache-gh-lookups`); read/execute only |
 | `/home/developer/.claude/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
 | `/home/developer/.claude/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
 | `/home/developer/.claude/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
@@ -216,7 +225,8 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 **Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
 `.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c`,
 `.../hooks/enforce-git-identity`, `.../hooks/reject-obfuscated-commands`, `.../hooks/block-git-worktree`,
-`.../hooks/block-dotnet-tool-install`, and `.../hooks/enforce-background-for-long-running-commands` must
+`.../hooks/block-dotnet-tool-install`, `.../hooks/enforce-ssh-host-and-key`,
+`.../hooks/enforce-background-for-long-running-commands`, and `.../hooks/cache-gh-lookups` must
 each be root:root 0755 and executable; the
 `.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files must each be root:root 0444.
 

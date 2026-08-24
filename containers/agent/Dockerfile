@@ -100,6 +100,21 @@ RUN mkdir -p /workspace/repo /workspace/rules \
     && chown -R developer:developer /workspace \
     && chmod 0755 /workspace /workspace/repo /workspace/rules
 
+# ---- Orchestrator cache mount point (#1380) ----------------------------------
+# Pre-creates /home/developer/.cache/orchestrator/{local,global} with correct ownership,
+# the same reason /home/developer/.claude is pre-created in development-full's own Dockerfile
+# rather than left for a bind mount to auto-vivify: podman creates any missing parent
+# directory needed to establish a --volume mount point before the container's entrypoint ever
+# runs, and that auto-created parent is not guaranteed to be developer-owned. Without this,
+# lib/podman's --volume mount onto .../orchestrator/global could silently leave the sibling
+# .../orchestrator/local (created at runtime by entrypoint.sh's own `mkdir -p`, running as the
+# unprivileged developer user) unwritable, since it shares the same auto-vivified
+# .../.cache/orchestrator parent.
+RUN mkdir -p /home/developer/.cache/orchestrator/local /home/developer/.cache/orchestrator/global \
+    && chown -R developer:developer /home/developer/.cache \
+    && chmod 0755 /home/developer/.cache /home/developer/.cache/orchestrator \
+        /home/developer/.cache/orchestrator/local /home/developer/.cache/orchestrator/global
+
 # ---- Bake GitHub's SSH host key into the system-wide known_hosts -------------
 # ssh checks /etc/ssh/ssh_known_hosts (GlobalKnownHostsFile) automatically
 # alongside the per-user ~/.ssh/known_hosts, so baking it here removes the

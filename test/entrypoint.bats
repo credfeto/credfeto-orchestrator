@@ -73,7 +73,10 @@ STUBEOF
     # gpg stub: always succeeds (simulates key present + test sign succeeds).
     make_stub gpg 'exit 0'
 
-    # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value).
+    # gh stub: reports git_protocol=ssh for all hosts (the expected baked-in value), and a
+    # fake login for `gh api user --jq '.login'` (seed_orchestrator_cache's own call) so the
+    # default case is a successfully-populated cache; tests of the cache-miss/failure paths
+    # override this stub themselves after calling this function.
     cat > "${STUB_BIN}/gh" << 'STUBEOF'
 #!/usr/bin/env bash
 if [ "$1" = "config" ] && [ "$2" = "list" ]; then
@@ -85,6 +88,10 @@ if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "git_protocol" ]; then
     exit 0
 fi
 if [ "$1" = "config" ] && [ "$2" = "set" ]; then
+    exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+    printf 'testuser\n'
     exit 0
 fi
 exit 0
@@ -480,6 +487,96 @@ STUBEOF
         GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
         bash "${ENTRYPOINT}"
     [ "${status}" -eq 0 ]
+}
+
+# --- orchestrator cache (#1380) ------------------------------------------------
+
+@test "entrypoint creates ~/.cache/orchestrator/local and .../global" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ -d "${HOME}/.cache/orchestrator/local" ]
+    [ -d "${HOME}/.cache/orchestrator/global" ]
+}
+
+@test "entrypoint populates global/user.json via gh api user when it does not exist" {
+    setup_entrypoint_stubs
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ -f "${HOME}/.cache/orchestrator/global/user.json" ]
+    grep -qx 'testuser' "${HOME}/.cache/orchestrator/global/user.json"
+}
+
+@test "entrypoint respects XDG_CACHE_HOME when set" {
+    setup_entrypoint_stubs
+    local xdg_cache="${TEST_TMP}/custom-cache"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        XDG_CACHE_HOME="${xdg_cache}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [ -f "${xdg_cache}/orchestrator/global/user.json" ]
+    [ ! -e "${HOME}/.cache/orchestrator" ]
+}
+
+@test "entrypoint leaves an already-populated global/user.json untouched" {
+    setup_entrypoint_stubs
+    mkdir -p "${HOME}/.cache/orchestrator/global"
+    printf 'existinguser\n' > "${HOME}/.cache/orchestrator/global/user.json"
+    # Replaces the shared gh stub's `gh api user` success case with one that dies loudly,
+    # proving the already-populated cache short-circuits without calling gh again.
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+    echo "gh api user should not have been called" >&2
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'existinguser' "${HOME}/.cache/orchestrator/global/user.json"
+}
+
+@test "entrypoint retries a previously-empty global/user.json" {
+    setup_entrypoint_stubs
+    mkdir -p "${HOME}/.cache/orchestrator/global"
+    : > "${HOME}/.cache/orchestrator/global/user.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -qx 'testuser' "${HOME}/.cache/orchestrator/global/user.json"
+}
+
+@test "entrypoint does not die and still invokes claude when gh api user fails" {
+    setup_entrypoint_stubs
+    # Minimal override (just the api user branch) rather than re-declaring every branch of
+    # the shared gh stub: enforce_gh_git_protocol_ssh short-circuits via its own
+    # `[ -n "${hosts}" ] || return 0` when `gh config list` produces no output, so the
+    # config-related branches aren't needed here - same minimal shape as the
+    # "already-populated global/user.json" test above.
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [ "$1" = "api" ] && [ "$2" = "user" ]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'Failed to cache GitHub user identity'* ]]
+    [ ! -s "${HOME}/.cache/orchestrator/global/user.json" ]
 }
 
 # --- .claude.json bootstrapping ------------------------------------------------
