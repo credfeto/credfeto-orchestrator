@@ -460,7 +460,7 @@ PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddre
 PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
   - Set the board status to "AI Simplify" (if not already set).
   - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
-  - If it changed any files: commit them (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Simplify: applied cleanups"), then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
+  - If it changed any files: commit them (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "Simplify: applied cleanups" (detail may follow, e.g. "Simplify: applied cleanups — 3 files changed") — the orchestrator counts this exact prefix across the PR's comment history to report which simplify round this is, so it must appear verbatim, once, on every round that makes a change — then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
   - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
   - Otherwise, judge convergence from the PR's commit history of simplify rounds, comparing each round's diff size (lines changed by that round's commit) to the previous round's:
     - If ${SIMPLIFY_THRASH_LIMIT} or more simplify rounds have run AND the latest round is thrashing (its diff is flat or larger than the previous round's, i.e. not shrinking): give up now, even though ${MAX_SIMPLIFY_ITERATIONS} has not been reached.
@@ -471,7 +471,7 @@ PHASE E — Code review (do this ONLY when CI is fully green, there is no outsta
   - Run ONE round: /code-review --comment
   - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
 $(_build_review_convergence_block "code-review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
-    'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment ("Code review round: fixed N findings"), then STOP. The next cycle runs the next round.' \
+    'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "Code review round:" (e.g. "Code review round: fixed N findings") — the orchestrator counts this exact prefix across the PR comment history to report which code-review round this is, so it must appear verbatim, once, on every round that fixes findings — then STOP. The next cycle runs the next round.' \
     "this means no new correctness issues are surfacing, not that a known one is safe to ignore; unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review." \
     "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 
@@ -479,7 +479,7 @@ PHASE F — Security review (do this ONLY when the board is at "AI Security Revi
   - Run ONE round: /security-review
   - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
 $(_build_review_convergence_block "security-review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
-    'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment, then STOP.' \
+    'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "Security review round:" (e.g. "Security review round: fixed N findings") — the orchestrator counts this exact prefix across the PR comment history to report which security-review round this is, so it must appear verbatim, once, on every round that fixes findings — then STOP.' \
     "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review." \
     "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
 

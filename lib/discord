@@ -51,35 +51,55 @@ serialize_item_status_log() {
     printf '%s\n' "$@" | jq -s -c '.'
 }
 
-# Sends a Discord embed notification when starting or resuming work on an item.
-# Arguments: msg_type (start|resume), item_type, item_id, item_title, labels_json (JSON array
-# of {name,...} — the item's current labels, used for the Priority field)
+# Sends a Discord embed notification for an item's state this tick: starting/resuming real work,
+# or (since #1375) observed parked waiting on something external. Arguments: msg_type
+# (start|resume|waiting), item_type, item_id, item_title, priority_rank (the priorities feed's
+# own numeric .priority for this item — see fetch_all_priorities in lib/github — mapped to a tier
+# name via priority_name_for_rank for the Priority field; #1375), branch_name (a PR's own head
+# branch, used to enrich Sub-status with round-progress detail via
+# enrich_substatus_with_round_progress — #1375; empty/omitted for an Issue, which has no round-
+# tracked phases anyway), progress_state (free text for the Progress field — "Running" by default,
+# or e.g. "Waiting on CI"/"Waiting on human review" for msg_type=waiting — #1375), overall_text
+# (optional "N / cap" invocation-count text for the Overall field; omitted entirely when empty —
+# #1375)
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
-# Status/Sub-status/Priority are derived entirely from already-tracked GitHub state (labels,
-# the Workflow board) — no Claude invocation, zero extra agentic cost (#1136). Every session
-# is a fresh single-phase run, so "New vs. Resume" (the old Status field) was never actually
-# meaningful; this replaces it with the coarse board lifecycle stage instead.
+# Status/Sub-status/Priority/Progress are derived entirely from already-tracked GitHub/priorities-
+# feed state — no Claude invocation, zero extra agentic cost (#1136). Every session is a fresh
+# single-phase run, so "New vs. Resume" (the old Status field) was never actually meaningful;
+# this replaces it with the coarse board lifecycle stage instead.
+# start/resume fire every time, every tick, same as before #1375 (see docs/discord-notifications.md)
+# — waiting is different on purpose: it fires once per tick an item is OBSERVED parked, which
+# without suppression would repeat identically every single tick for as long as it stays parked
+# (potentially indefinitely, e.g. waiting on a slow human review). It is deduped on a content
+# hash of substatus+progress_state+priority, latched (no time-based re-arm, unlike the rolling-
+# window alerts elsewhere in this file) until that content actually changes, matching
+# notify_discord_blocked_item's persistent-latch shape rather than notify_discord_no_work's
+# hourly-heartbeat one — #1375 asked only for "don't repeat every tick", not a heartbeat.
 notify_discord_work_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" labels_json="${5:-[]}"
+    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" priority_rank="${5:-}" branch_name="${6:-}" progress_state="${7:-Running}" overall_text="${8:-}"
     local url color payload substatus status priority
 
     case "${msg_type}" in
-        start|resume) ;;
+        start|resume|waiting) ;;
         *) warn "Discord: unknown notification type '${msg_type}'"; return 0 ;;
     esac
 
     url="$(build_item_url "${item_type}" "${item_id}")"
 
-    if [ "${msg_type}" = "start" ]; then
-        color=3066993    # green  (#2ECC71)
-    else
-        color=15844367   # gold   (#F1C40F)
-    fi
+    case "${msg_type}" in
+        start)   color=3066993 ;;  # green (#2ECC71)
+        resume)  color=15844367 ;; # gold  (#F1C40F)
+        waiting) color=9807270 ;;  # grey  (#95A5A6) — parked, not actively running (#1375)
+    esac
 
     substatus=$(board_substatus_for_item "${item_id}")
     status=$(coarse_status_for_substatus "${substatus}")
-    priority=$(priority_for_labels "${labels_json}")
+    # Coarse status is derived from the RAW substatus above, before enrichment below — its case
+    # statement matches exact board names ("AI Review"), not the enriched display text ("AI
+    # Review (round 2 of 15)"), which would otherwise silently fall through to "Unknown" (#1375).
+    substatus=$(enrich_substatus_with_round_progress "${item_id}" "${substatus}" "${branch_name}")
+    priority=$(priority_name_for_rank "${priority_rank}")
 
     payload=$(jq --null-input \
         --argjson color "${color}" \
@@ -90,14 +110,40 @@ notify_discord_work_item() {
         --arg status "${status}" \
         --arg substatus "${substatus}" \
         --arg priority "${priority}" \
-        '{embeds:[{title:$title,url:$url,color:$color,fields:[
-            {name:"Repository",value:$repo,inline:true},
-            {name:"Type",value:$type,inline:true},
-            {name:"Priority",value:$priority,inline:true},
-            {name:"Status",value:$status,inline:true},
-            {name:"Sub-status",value:$substatus,inline:true}
-        ]}]}') \
+        --arg progress "${progress_state}" \
+        --arg overall "${overall_text}" \
+        '{embeds:[{title:$title,url:$url,color:$color,fields:(
+            [
+                {name:"Repository",value:$repo,inline:true},
+                {name:"Type",value:$type,inline:true},
+                {name:"Priority",value:$priority,inline:true},
+                {name:"Status",value:$status,inline:true},
+                {name:"Sub-status",value:$substatus,inline:true},
+                {name:"Progress",value:$progress,inline:true}
+            ] + (if ($overall | length) > 0 then [{name:"Overall",value:$overall,inline:true}] else [] end)
+        )}]}') \
         || { warn "Discord: failed to build payload for ${item_type} #${item_id}"; return 0; }
+
+    if [ "${msg_type}" = "waiting" ]; then
+        local dedup_hash state_file last_hash
+        dedup_hash=$(printf '%s\n%s\n%s' "${substatus}" "${progress_state}" "${priority}" | hash_sha256) \
+            || { warn "Discord: failed to hash waiting notification for dedup"; return 0; }
+        state_file=$(_discord_dedup_state_file "work_item_waiting" "${REPO_FULL}/${item_id}")
+        if [ -f "${state_file}" ]; then
+            last_hash=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
+            [ "${last_hash}" = "${dedup_hash}" ] && return 0
+        fi
+        if curl --silent --fail --max-time 5 \
+            -H "Content-Type: application/json" \
+            -d "${payload}" \
+            "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1; then
+            mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+            printf '%s\n' "${dedup_hash}" > "${state_file}"
+        else
+            warn "Discord webhook notification failed"
+        fi
+        return 0
+    fi
 
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \

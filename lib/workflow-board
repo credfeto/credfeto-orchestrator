@@ -806,9 +806,37 @@ coarse_status_for_substatus() {
     esac
 }
 
+# Maps the priorities feed's own numeric .priority rank (0-5, ascending urgency: 0 Default, 1
+# Low, 2 Medium, 3 High, 4 Urgent, 5 Security) to the same tier-name vocabulary
+# priority_for_labels below produces, for display in the Discord "start/resume" notification
+# (#1375). This is the item's REAL priority — the one the priorities feed itself used to decide
+# this item was worth working on this tick (oneshot's item_priority, see fetch_all_priorities in
+# lib/github) — unlike priority_for_labels, which only ever approximates it from whatever labels
+# happen to be on the item and was never actually the same value (#1375 found the two had quietly
+# diverged: notify_discord_work_item computed its Priority field from labels alone, discarding
+# the feed's own numeric rank after using it once for a log line). "Undefined" is reserved for a
+# missing/non-numeric/out-of-range rank (the field the priorities feed always sends, but a
+# defensive fallback if it doesn't), never confused with the valid rank 0 ("Default"). Pure
+# function — no I/O.
+priority_name_for_rank() {
+    local rank="$1"
+    case "${rank}" in
+        0) printf 'Default' ;;
+        1) printf 'Low' ;;
+        2) printf 'Medium' ;;
+        3) printf 'High' ;;
+        4) printf 'Urgent' ;;
+        5) printf 'Security' ;;
+        *) printf 'Undefined' ;;
+    esac
+}
+
 # Maps an item's labels (a JSON array of {name,...} objects) to its priority, matching
 # Security > Urgent > High > Medium > Low (first match wins, case-insensitive label name),
-# else "Undefined". Pure function — no I/O (#1136).
+# else "Undefined". Pure function — no I/O (#1136). Used only by notify_discord_blocked_item,
+# whose ~12 call sites don't have the priorities feed's own numeric rank in scope (see that
+# function's header comment) — notify_discord_work_item uses priority_name_for_rank above
+# instead, since it does have the real value (#1375).
 priority_for_labels() {
     local labels_json="$1"
     printf '%s' "${labels_json}" | jq -r '
@@ -821,4 +849,107 @@ priority_for_labels() {
           else "Undefined"
           end
     ' 2>/dev/null || printf 'Undefined'
+}
+
+# Maps a board substatus to the literal marker-comment prefix lib/prompts' PHASE D/E/F/G
+# instructions require on every round of that phase that continues (not the final "clean"/give-up
+# comment — see each phase's own instructions), and the MAX_*_ITERATIONS cap it's bounded by
+# (#1375). Output is "marker<TAB>cap"; empty output means substatus isn't one of the four
+# bounded-loop phases, so no round count applies (also true for every Issue-only substatus, since
+# these four only ever apply to a PullRequest). Pure function — no I/O.
+_round_marker_and_cap_for_substatus() {
+    local substatus="$1"
+    case "${substatus}" in
+        "AI Simplify")
+            printf 'Simplify: applied cleanups\t%s' "${MAX_SIMPLIFY_ITERATIONS}" ;;
+        "AI Review")
+            printf 'Code review round:\t%s' "${MAX_CODE_REVIEW_ITERATIONS}" ;;
+        "AI Security Review")
+            printf 'Security review round:\t%s' "${MAX_SECURITY_REVIEW_ITERATIONS}" ;;
+        "AI Coverage")
+            # PHASE G's own decision-procedure format (lib/prompts), not a marker invented for
+            # this purpose — already posted on every round that returns to Development, so no
+            # prompt change was needed for Coverage's own count, unlike the other three.
+            printf ' - returning to Development\t%s' "${MAX_COVERAGE_ITERATIONS}" ;;
+        *)
+            printf '' ;;
+    esac
+}
+
+# Counts how many of a PR's comments contain the given literal marker substring — each
+# qualifying comment represents exactly one completed round of whichever phase that marker
+# belongs to (#1375). Fetches fresh every call rather than caching: this only runs once per
+# active PR per tick, the same cost class as notify_discord_blocked_item's own item_json fetch.
+# Never dies — a fetch/parse failure counts as zero rounds rather than blocking the notification.
+count_pr_comments_matching() {
+    local item_id="$1" marker="$2" count
+    # gh's own --jq flag takes exactly one argument (the filter string) — it has no equivalent
+    # of jq's --arg for safely binding a shell variable into the filter, so the comments JSON is
+    # piped into a separate real `jq --arg` call instead, rather than interpolating ${marker}
+    # into the filter text directly (which would break/misbehave on a marker containing a quote).
+    count=$(gh pr view "${item_id}" --repo "${REPO_FULL}" --json comments 2>/dev/null \
+        | jq --arg m "${marker}" '[.comments[]? | select(.body // "" | contains($m))] | length' 2>/dev/null)
+    case "${count}" in
+        ''|*[!0-9]*) printf '0' ;;
+        *) printf '%s' "${count}" ;;
+    esac
+}
+
+# Extracts each language's Overall coverage percentage from a PR branch's own COVERAGE.md, for
+# appending to the "AI Coverage" sub-status (#1375). Reads it via `git show` against the branch's
+# already-fetched origin/<branch> ref, NOT the working tree: ensure_repo_current (lib/git) only
+# fetches — it never checks out the item's own branch, that happens later inside the agent's own
+# container session — so REPO_WORK_DIR's working tree can be sitting on a completely different
+# branch's checkout at the point this is called. Matches the same "**Overall (<Lang>)** |
+# **<pct>%**" row format the coverage-ratchet skill's own COVERAGE.md template produces, skipping
+# language sections marked "excluded"/"n/a" (those rows are never in that exact bold format, so
+# the pattern naturally excludes them without special-casing). Returns an empty string (never
+# dies) if the branch/file/format lookup fails for any reason — COVERAGE.md not existing yet on
+# this branch, no REPO_WORK_DIR checkout yet, or no matching rows — since this is purely a
+# display enhancement, never a gate: e.g. ".NET 82.1%, Node 91.4%".
+coverage_summary_for_branch() {
+    local branch_name="$1" cov_content line joined=""
+    [ -n "${branch_name}" ] && [ -d "${REPO_WORK_DIR}/.git" ] || { printf ''; return 0; }
+    cov_content=$(git -C "${REPO_WORK_DIR}" show "origin/${branch_name}:COVERAGE.md" 2>/dev/null) || { printf ''; return 0; }
+    while IFS= read -r line; do
+        [ -n "${line}" ] || continue
+        if [ -n "${joined}" ]; then
+            joined="${joined}, ${line}"
+        else
+            joined="${line}"
+        fi
+    done < <(printf '%s' "${cov_content}" \
+        | grep -oE '\*\*Overall \([^)]+\)\*\* \| \*\*[0-9]+(\.[0-9]+)?%\*\*' \
+        | sed -E 's/\*\*Overall \(([^)]+)\)\*\* \| \*\*([0-9.]+%)\*\*/\1 \2/')
+    printf '%s' "${joined}"
+}
+
+# Enriches a board substatus with round-progress detail for the four bounded-loop phases
+# (#1375): "AI Review" becomes e.g. "AI Review (round 2 of 15)". "AI Coverage" additionally
+# appends the measured percentage per language (coverage_summary_for_branch above), since that
+# data is already written to COVERAGE.md every round at no extra agentic cost — the other three
+# phases show only the round count, since nothing analogous to COVERAGE.md exists for them.
+# Returns substatus unchanged for any other phase (Issues, or a PR not yet in one of these four
+# states). Only meaningful for a PullRequest; branch_name may be empty for an Issue, which
+# harmlessly falls through the same unchanged-substatus path via
+# _round_marker_and_cap_for_substatus's own empty-output case.
+enrich_substatus_with_round_progress() {
+    local item_id="$1" substatus="$2" branch_name="${3:-}"
+    local marker_and_cap marker cap round_count cov_summary
+
+    marker_and_cap=$(_round_marker_and_cap_for_substatus "${substatus}")
+    [ -n "${marker_and_cap}" ] || { printf '%s' "${substatus}"; return 0; }
+    marker="${marker_and_cap%%$'\t'*}"
+    cap="${marker_and_cap##*$'\t'}"
+
+    round_count=$(count_pr_comments_matching "${item_id}" "${marker}")
+
+    if [ "${substatus}" = "AI Coverage" ]; then
+        cov_summary=$(coverage_summary_for_branch "${branch_name}")
+        if [ -n "${cov_summary}" ]; then
+            printf '%s (round %s of %s, %s)' "${substatus}" "${round_count}" "${cap}" "${cov_summary}"
+            return 0
+        fi
+    fi
+    printf '%s (round %s of %s)' "${substatus}" "${round_count}" "${cap}"
 }
