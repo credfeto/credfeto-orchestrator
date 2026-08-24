@@ -86,6 +86,15 @@ teardown() {
     [[ "${output}" == *'$HOME/.claude/hooks/block-dotnet-tool-install'* ]]
 }
 
+@test "generated settings.json includes cache-gh-lookups in the PreToolUse chain (#1380)" {
+    main
+
+    run jq -r '.hooks.PreToolUse[0].hooks[] | .command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == *'$HOME/.claude/hooks/cache-gh-lookups'* ]]
+}
+
 @test "generated settings.json registers block-git-worktree against the native EnterWorktree tool (#1322)" {
     main
 
