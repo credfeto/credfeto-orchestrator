@@ -3023,6 +3023,37 @@ STUBEOF
     done
 }
 
+@test "invoke_claude mounts the persistent orchestrator cache global directory read-write (#1380)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/jq" << 'JQEOF'
+#!/usr/bin/env bash
+case "$2" in
+    '.is_error // false')    printf 'false\n' ;;
+    '.result // ""')         printf '\n' ;;
+    '.session_id // empty')  printf '12345678-1234-1234-1234-123456789abc\n' ;;
+esac
+JQEOF
+    chmod +x "${STUB_BIN}/jq"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+[ "\$1" = "pull" ] && exit 0
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    grep -qx "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" "${args_log}"
+    [ -d "${ORCHESTRATOR_CACHE_DIR}/global" ]
+    # Only "global" is mounted - "local" is created by entrypoint.sh itself and stays
+    # container-ephemeral, so invoke_claude must not create or mount it.
+    [ ! -e "${ORCHESTRATOR_CACHE_DIR}/local" ]
+    [ "$(grep -c "${ORCHESTRATOR_CACHE_DIR}/local:" "${args_log}")" -eq 0 ]
+}
+
 @test "invoke_claude dies when claude_md_content is empty" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
@@ -3667,6 +3698,7 @@ STUBEOF
     [ "${REPO_WORK_DIR}" = "${WORK}/myorg/myrepo/repo" ]
     [ "${SESSION_BASE_DIR}" = "${HOME}/.orchestrator/myorg/myrepo" ]
     [ "${CLAUDE_STATE_DIR}" = "${SESSION_BASE_DIR}/claude" ]
+    [ "${ORCHESTRATOR_CACHE_DIR}" = "${SESSION_BASE_DIR}/orchestrator-cache" ]
 }
 
 @test "set_repo_context is idempotent when called twice with the same repo" {

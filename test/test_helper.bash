@@ -75,6 +75,12 @@ setup_isolated_env() {
     # S.gpg-agent.extra would bypass the "socket absent" code path and fail the
     # isolation test.  Tests that need this path set it explicitly.
     unset XDG_RUNTIME_DIR
+    # Without this, entrypoint.sh's own "${XDG_CACHE_HOME:-$HOME/.cache}" fallback (#1380)
+    # honours a real host XDG_CACHE_HOME (commonly set on a dev machine) instead of the
+    # isolated HOME above, writing the orchestrator cache outside TEST_TMP entirely —
+    # confirmed to actually create files under the real $HOME/.cache/orchestrator/ before
+    # this unset was added.
+    unset XDG_CACHE_HOME
 }
 
 # Sources the oneshot script so its functions are defined without running main.

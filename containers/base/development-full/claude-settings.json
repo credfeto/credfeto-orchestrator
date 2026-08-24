@@ -265,6 +265,10 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/enforce-background-for-long-running-commands"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-gh-lookups"
           }
         ]
       },

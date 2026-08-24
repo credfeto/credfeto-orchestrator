@@ -246,6 +246,30 @@ verify_no_repo_claude_config() {
     done
 }
 
+# Seeds a small persistent cache under ~/.cache/orchestrator/ for values that are constant
+# for a given container/repo — currently just the container's own resolved GitHub login,
+# used by the cache-gh-lookups PreToolUse hook (containers/base/development-full/claude-hooks/
+# cache-gh-lookups, #1380) to answer the agent's own `gh api user --jq '.login'` Bash calls
+# from a cached file instead of falling through to permission denial (see that hook's own
+# header comment for why this doesn't reopen #1344, which rejected a blanket live-API allow
+# for the same command). Only "global" is backed by a persistent --volume mount (lib/podman);
+# "local" is created here purely for future use and stays container-ephemeral.
+# Deliberately non-fatal on a gh failure (warns and continues) — this is optional cache infra,
+# not something worth aborting the whole session over, matching lib/github's resolve_gh_me
+# precedent (#1086) for the same underlying command.
+seed_orchestrator_cache() {
+    local cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator"
+    mkdir -p "${cache_root}/local" "${cache_root}/global" \
+        || { warn "Failed to create ${cache_root}/{local,global} — continuing without an orchestrator cache"; return 0; }
+
+    local user_cache="${cache_root}/global/user.json"
+    # -s (non-empty) rather than -f: a previous partial/failed write left an empty file
+    # behind, and this must retry rather than treat that as "already cached".
+    [ -s "${user_cache}" ] && return 0
+    gh api user --jq '.login' > "${user_cache}" 2>/dev/null \
+        || warn "Failed to cache GitHub user identity (gh api user failed) — continuing without a cache"
+}
+
 enforce_gh_git_protocol_ssh
 verify_gpg_signing
 ensure_github_known_hosts
@@ -260,6 +284,8 @@ git config --global user.name      "${GIT_USER_NAME}"
 git config --global user.email     "${GIT_USER_EMAIL}"
 git config --global user.signingkey "${GIT_SIGNING_KEY}"
 git config --global commit.gpgsign  true
+
+seed_orchestrator_cache
 
 # Claude Code requires ~/.claude.json to exist; without it every invocation prints
 # a "configuration file not found" warning on stderr before backing up and continuing.

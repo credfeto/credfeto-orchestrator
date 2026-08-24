@@ -551,6 +551,10 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
+    # Backs the container's ~/.cache/orchestrator/global (#1380) — only "global" gets a
+    # persistent host directory; "local" is created by entrypoint.sh itself and stays
+    # container-ephemeral.
+    mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
 
     # Export invocation-scoped globals so helper functions can read them.
     CLAUDE_PROMPT="${prompt}"
@@ -603,6 +607,11 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
     done
+    # /home/developer/.cache/orchestrator/global (#1380) — the container path assumes
+    # XDG_CACHE_HOME is unset in this image (it is; see containers/base/development-full/
+    # Dockerfile), matching entrypoint.sh's own "${XDG_CACHE_HOME:-$HOME/.cache}" fallback
+    # for the same directory. Keep both in sync if that ever changes.
+    PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
 
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
     [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
