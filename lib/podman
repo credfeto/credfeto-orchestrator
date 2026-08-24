@@ -607,10 +607,10 @@ invoke_claude() {
     for d in sessions session-env plans cache backups; do
         PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
     done
-    # /home/developer/.cache/orchestrator/global (#1380) — the container path assumes
-    # XDG_CACHE_HOME is unset in this image (it is; see containers/base/development-full/
-    # Dockerfile), matching entrypoint.sh's own "${XDG_CACHE_HOME:-$HOME/.cache}" fallback
-    # for the same directory. Keep both in sync if that ever changes.
+    # /home/developer/.cache/orchestrator/global (#1380) — the container path matches
+    # containers/agent/Dockerfile's own ENV XDG_CACHE_HOME=/home/developer/.cache (pinned
+    # there specifically so this fixed, known-in-advance mount target and entrypoint.sh's/
+    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback can never disagree).
     PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
 
     [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )

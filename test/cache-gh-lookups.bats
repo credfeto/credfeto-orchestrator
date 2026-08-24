@@ -18,11 +18,11 @@ teardown() {
 # deliberately: $HOME/$XDG_CACHE_HOME must stay unexpanded literal text, matching what the
 # hook itself emits for the shell that eventually runs the rewritten command to expand.
 # shellcheck disable=SC2016
-expected_rewrite='mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global" && { [ -s "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json" ] || gh api user --jq '"'"'.login'"'"' > "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"; } && cat "${XDG_CACHE_HOME:-$HOME/.cache}/orchestrator/global/user.json"'
+expected_rewrite='cache_dir="${XDG_CACHE_HOME:-${HOME}/.cache}/orchestrator/global"; mkdir -p "$cache_dir" && { [ -s "$cache_dir/user.json" ] || gh api user --jq '"'"'.login'"'"' > "$cache_dir/user.json"; } && cat "$cache_dir/user.json"'
 
 assert_rewrite() {
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *'"permissionDecision":"allow"'* ]] || [[ "${output}" == *'"permissionDecision": "allow"'* ]]
+    [ "$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.permissionDecision')" = "allow" ]
     local got_cmd
     got_cmd=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
     [ "${got_cmd}" = "${expected_rewrite}" ]
@@ -112,7 +112,7 @@ assert_pass_through() {
     ln -s "$(command -v bash)" "${STUB_BIN}/noshfmt/bash"
     ln -s "$(command -v cat)" "${STUB_BIN}/noshfmt/cat"
     local payload
-    payload=$(jq -n --arg cmd "gh api user --jq '.login'" '{tool_input: {command: $cmd}}')
+    payload=$(hook_payload "gh api user --jq '.login'")
     run bash -c 'printf "%s" "$1" | PATH="$2" "$3"' _ "$payload" "${STUB_BIN}/noshfmt" "$HOOK"
     assert_pass_through
 }
