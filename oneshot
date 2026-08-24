@@ -902,6 +902,14 @@ main() {
                     block_pr_for_ci_timeout "${item_id}" "${item_repo}"
                 else
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
+                    # discover_or_create_workflow_project is idempotent/cached — see the fuller
+                    # comment where the active-work notify call does the same, further down — so
+                    # calling it again here (it may already have run for this item, e.g. via the
+                    # Issue path above) just means a cheap cache hit, not a second GraphQL lookup.
+                    discover_or_create_workflow_project
+                    notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
+                        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+                        "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on CI"
                 fi
                 count_unchanged=$((count_unchanged + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "CI checks pending")")
@@ -919,6 +927,16 @@ main() {
                     fi
                     if [ "${pr_has_unaddressed_comment}" != "true" ]; then
                         info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        # Distinct from notify_discord_pr_needs_approval above (#1375): that alert
+                        # is a dedicated, hourly-deduped nudge specifically for the review-required
+                        # case; this is the general per-item status update the rest of this file
+                        # sends, so a human sees this item's Progress go from "Running" to "Waiting
+                        # on human review" the same way they'd see it go to "Waiting on CI" — not a
+                        # substitute for the dedicated alert, both can and do fire together.
+                        discover_or_create_workflow_project
+                        notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
+                            "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+                            "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on human review"
                         count_unchanged=$((count_unchanged + 1))
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
                         continue
@@ -977,6 +995,14 @@ main() {
                 else
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring agent invocation"
                     save_pr_fingerprint "${item_id}" "${pr_fp}"
+                    # This is the first CI-pending check reached for an Issue-to-PR pivot (#1375):
+                    # the earlier check above this Work block only runs for a PR selected directly
+                    # from the priorities feed, not one reached via pivot, so this is the only
+                    # place a pivoted PR's "waiting" notification can fire.
+                    discover_or_create_workflow_project
+                    notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
+                        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+                        "${branch_name}" "Waiting on CI"
                 fi
                 continue
             fi
@@ -1054,20 +1080,37 @@ main() {
         discover_or_create_workflow_project
         [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
 
-        local item_labels_json
         if [ "${item_type}" = "Issue" ]; then
             item_title=$(printf '%s' "${issue_json}" | jq -r '.title // empty')
-            item_labels_json=$(printf '%s' "${issue_json}" | jq -c '.labels // []')
         else
             item_title=$(printf '%s' "${pr_json}" | jq -r '.title // empty')
-            item_labels_json=$(printf '%s' "${pr_json}" | jq -c '.labels // []')
+        fi
+
+        # Loaded here — moved ahead of notify_discord_work_item, same reason as
+        # discover_or_create_workflow_project's own move above (#1375) — so the Overall field can
+        # show real invocation-count-vs-cap detail on every item's first notification of a run,
+        # not just from the second tick onward. The runaway-backstop checks further down reuse
+        # these same PR_INVOCATION_TOTAL/ISSUE_INVOCATION_TOTAL values rather than loading them a
+        # second time.
+        local overall_text=""
+        if [ "${item_type}" = "PullRequest" ]; then
+            load_pr_invocation_counts "${item_id}"
+            overall_text="${PR_INVOCATION_TOTAL} / ${MAX_PR_TOTAL_INVOCATIONS}"
+        elif [ "${item_type}" = "Issue" ]; then
+            load_issue_invocation_counts "${item_id}"
+            overall_text="${ISSUE_INVOCATION_TOTAL} / ${MAX_ISSUE_TOTAL_INVOCATIONS}"
         fi
 
         # Every run is a fresh single-phase session (no resume): the agent re-derives its
         # context from GitHub, does one workflow phase, and stops.  The orchestrator re-invokes
         # on later ticks to advance through the remaining phases.
         info "Starting fresh single-phase session for ${item_type} #${item_id} in ${item_repo}"
-        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}" "${item_labels_json}"
+        # item_priority is the priorities feed's own numeric rank for this item (set at the top
+        # of this loop iteration, carried through the Issue-to-PR pivot unchanged — see #1375):
+        # passing it straight through gives the notification the item's REAL priority instead of
+        # independently re-deriving a possibly-different value from labels (#1375). branch_name
+        # is empty for an Issue — harmless, since an Issue never has a round-tracked substatus.
+        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}" "${item_priority}" "${branch_name}" "Running" "${overall_text}"
 
         # Runaway backstop (PRs): cap the total number of agent invocations spent on one PR so a
         # non-converging PR cannot loop forever.  Absence of the guard file also tells us this is
