@@ -31,10 +31,34 @@ RUN mkdir -p /home/developer/.nuget/NuGet \
 <configuration>\n\
   <packageSources>\n\
     <clear />\n\
-    <add key="Cache: api.nuget.org" value="https://api-nuget.markridgwell.com/v3/index.json" protocolVersion="3" />\n\
+    <add key="Cache: Nuget" value="https://api-nuget.markridgwell.com/v3/index.json" protocolVersion="3" />\n\
     <add key="Cache: FunFair" value="https://funfair-nuget.markridgwell.com/index.json" protocolVersion="3" />\n\
     <add key="Cache: FunFair (Prerelease)" value="https://funfair-prerelease-nuget.markridgwell.com/index.json" protocolVersion="3" />\n\
   </packageSources>\n\
+\n\
+  <packageSourceMapping>\n\
+    <!-- Most specific prefix wins, regardless of which source lists it -->\n\
+    <packageSource key="Cache: Nuget">\n\
+      <package pattern="*" />\n\
+      <package pattern="FunFair.BuildCheck" />\n\
+      <package pattern="FunFair.BuildCheck.*" />\n\
+\n\
+      <package pattern="FunFair.BuildVersion" />\n\
+      <package pattern="FunFair.BuildVersion.*" />\n\
+\n\
+      <package pattern="FunFair.CodeAnalysis" />\n\
+\n\
+      <package pattern="FunFair.Test.*" />\n\
+    </packageSource>\n\
+\n\
+    <packageSource key="Cache: FunFair">\n\
+      <package pattern="FunFair.*" />\n\
+    </packageSource>\n\
+\n\
+    <packageSource key="Cache: FunFair (Prerelease)">\n\
+      <package pattern="FunFair.*" />\n\
+    </packageSource>\n\
+  </packageSourceMapping>\n\
 </configuration>\n' > /home/developer/.nuget/NuGet/NuGet.Config \
     && chown -R root:root /home/developer/.nuget \
     && chmod 0755 /home/developer/.nuget /home/developer/.nuget/NuGet \

@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Install bubblewrap (bwrap) in the development-tools base image, so it survives into development-agent. Claude Codes own Linux Bash-tool sandbox is built on bwrap; without it, sandbox initialization fails closed and denies every command needing an escape from the sandbox (a redirect or write outside the registered directories, dangerouslyDisableSandbox) regardless of path, command, or flags, which was being misdiagnosed as an --add-dir/--userns problem (#1351)
 - claude_result_indicates_background_stall (the #1326/#1335 self-healing warning for a session that ends its turn backgrounding a build/commit/test and expecting a later Monitor notification) now also catches an anchored 'I'll pick this up / resume / continue this' phrasing tied to a background/monitor/notification mention nearby, closing a gap that let a real stall recur undetected on credfeto-dispatcher#222 and recommendations-defi-dashboard#419 (#1374)
 ### Changed
+- development-dotnet-tools' baked-in NuGet.Config renames the api.nuget.org cache source to "Cache: Nuget" and adds explicit packageSourceMapping, routing FunFair.BuildCheck/FunFair.BuildVersion/FunFair.CodeAnalysis/FunFair.Test.* (plus everything else via the catch-all) through the Nuget cache while other FunFair.* packages continue to resolve via the FunFair and FunFair (Prerelease) feeds
 ### Deprecated
 ### Removed
 ### Deployment Changes
