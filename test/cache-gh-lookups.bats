@@ -91,6 +91,16 @@ assert_pass_through() {
     assert_pass_through
 }
 
+@test "a per-command environment assignment prefix does not match" {
+    run_hook "GH_TOKEN=x gh api user --jq '.login'"
+    assert_pass_through
+}
+
+@test "a trailing empty-string argument does not match (base64 word transport, not tab-joined)" {
+    run_hook "gh api user --jq '.login' ''"
+    assert_pass_through
+}
+
 @test "an unrelated gh subcommand does not match" {
     run_hook "gh pr list"
     assert_pass_through

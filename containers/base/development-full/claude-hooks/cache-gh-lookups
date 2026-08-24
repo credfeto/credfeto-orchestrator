@@ -56,16 +56,30 @@ esac
 command -v shfmt > /dev/null 2>&1 || exit 0
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || exit 0
 
-# Resolves the whole command to a tab-joined line of its literal argv words, but only when
-# it is a single bare CallExpr statement with nothing else going on (see header comment).
-# Anything else (multiple statements, a pipeline/subshell/redirect/background/negation, or a
-# non-literal word such as a substitution or variable) yields an empty line: no match, no
-# rewrite. word_literal (same shape as enforce-ssh-host-and-key's literal_value) resolves a
-# single-part Lit/SglQuoted/DblQuoted(single-Lit-part) word to its literal value, rejecting an
-# ANSI-C/locale-quoted word (shfmt's Dollar flag, e.g. $'...') even when it would otherwise
-# look like a plain SglQuoted; anything else (an expansion, a multi-part word) resolves to the
-# empty string, which can never equal one of the plain-ASCII literals compared against below.
-words_line=$(printf '%s' "$ast" | jq -r '
+# Resolves the whole command to one base64-encoded literal argv word per output line, but
+# only when it is a single bare CallExpr statement with nothing else going on (see header
+# comment): no pipes/redirects/backgrounding/negation/surrounding statements, and no per-
+# command variable-assignment prefix (Cmd.Assigns, e.g. `GH_TOKEN=x gh api user --jq
+# '.login'`) - a call with one of those still runs as that specific environment, which the
+# fixed rewrite below does not reproduce, so it must not match. Anything not matching that
+# shape produces zero output lines, which the word-count check below already rejects (no
+# separate empty-string sentinel needed). One base64-per-line entry per word, decoded in the
+# read loop below, rather than a delimiter-joined single line (tab or otherwise): bash's
+# `read -ra` with IFS set to a single character still treats it as IFS *whitespace* (tab is
+# one of the three default whitespace chars) and collapses/strips consecutive or trailing
+# empty fields, so a trailing empty-string argument (e.g. `gh api user --jq '.login' ''`)
+# would have silently been absorbed rather than counted - the same class of bug
+# enforce-ssh-host-and-key's own base64-per-line transport was introduced to fix (see its
+# header comment). word_literal (same shape as enforce-ssh-host-and-key's literal_value)
+# resolves a single-part Lit/SglQuoted/DblQuoted(single-Lit-part) word to its literal value,
+# rejecting an ANSI-C/locale-quoted word (shfmt's Dollar flag, e.g. $'...') even when it would
+# otherwise look like a plain SglQuoted; anything else (an expansion, a multi-part word)
+# resolves to the empty string, which can never equal one of the plain-ASCII literals compared
+# against below regardless of how it's transported.
+words=()
+while IFS= read -r entry; do
+  words+=("$(printf '%s' "$entry" | base64 -d 2> /dev/null)")
+done < <(printf '%s' "$ast" | jq -r '
   def word_literal:
     if ((.Parts // []) | length) == 1 then
       (.Parts[0] as $p |
@@ -77,14 +91,11 @@ words_line=$(printf '%s' "$ast" | jq -r '
     else "" end;
   if ((.Stmts // []) | length) == 1 then
     (.Stmts[0] as $s |
-      if (($s.Negated // false) == false) and (($s.Background // false) == false) and (($s.Redirs // []) | length) == 0 and $s.Cmd.Type == "CallExpr" then
-        ([$s.Cmd.Args[]? | word_literal] | join("\t"))
-      else "" end)
-  else "" end
+      if (($s.Negated // false) == false) and (($s.Background // false) == false) and (($s.Redirs // []) | length) == 0 and (($s.Cmd.Assigns // []) | length) == 0 and $s.Cmd.Type == "CallExpr" then
+        ($s.Cmd.Args[]? | word_literal | @base64)
+      else empty end)
+  else empty end
 ')
-
-[ -z "$words_line" ] && exit 0
-IFS=$'\t' read -ra words <<< "$words_line"
 
 is_match_gh_api_user_login() {
   [ "${#words[@]}" -eq 5 ] || return 1
