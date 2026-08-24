@@ -41,7 +41,7 @@ set_repo_context() {
     # matching how fingerprint/resume-session bookkeeping already works above.
     CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
     # Host-side persistent store backing the container's ~/.cache/orchestrator/global
-    # (the cache-gh-lookups hook / entrypoint.sh's gh-user-login cache, #1380) — a
+    # (the cache-gh-lookups hook / entrypoint.sh's gh-user-login cache, #1380): a
     # separate tree from CLAUDE_STATE_DIR above since it mounts under the container's
     # ~/.cache, not ~/.claude, but the same per-owner-per-repo scoping.
     ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
