@@ -153,6 +153,24 @@ SIMPLIFY_THRASH_LIMIT="${SIMPLIFY_THRASH_LIMIT:-3}"
 MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
 [[ "${MIN_REVIEW_CONVERGENCE_ROUNDS}" =~ ^[1-9][0-9]{0,5}$ ]] || MIN_REVIEW_CONVERGENCE_ROUNDS=3
 
+# Fixed, exact-format status-comment markers PHASE D/E/F/G (lib/prompts' build_pr_claude_md)
+# require the agent to post on every round of that phase that continues, and
+# _round_marker_and_cap_for_substatus (lib/workflow-board) greps the PR's comment history for to
+# count how many rounds have run, for the Discord round-progress display (#1375). Defined once
+# here and referenced from both sides so a future reword of either can't silently desync the two
+# — an earlier version of this feature hardcoded the same three literals independently in each
+# file, with nothing to catch a drift between them. Not overridable via the environment, unlike
+# the budgets above: these are internal wire-format constants between two parts of this codebase,
+# not an operator-facing tuning knob. ROUND_MARKER_COVERAGE is not a marker invented for this
+# purpose — it's a substring of PHASE G's own pre-existing decision-procedure line format
+# ("<lang> <pct>% < main <pct>% - returning to Development") — but is still defined here rather
+# than left as an independently-hardcoded literal, for the same single-source-of-truth reason as
+# the other three (see _round_marker_and_cap_for_substatus's own comment).
+ROUND_MARKER_SIMPLIFY="Simplify: applied cleanups"
+ROUND_MARKER_CODE_REVIEW="Code review round:"
+ROUND_MARKER_SECURITY_REVIEW="Security review round:"
+ROUND_MARKER_COVERAGE=" - returning to Development"
+
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
 # a single PR before marking it Blocked for a human to look at.  Normal end-to-end flow
 # (setup, rebase, fix, a few review rounds, finalize) uses well under this; exceeding it

@@ -856,21 +856,21 @@ priority_for_labels() {
 # comment — see each phase's own instructions), and the MAX_*_ITERATIONS cap it's bounded by
 # (#1375). Output is "marker<TAB>cap"; empty output means substatus isn't one of the four
 # bounded-loop phases, so no round count applies (also true for every Issue-only substatus, since
-# these four only ever apply to a PullRequest). Pure function — no I/O.
+# these four only ever apply to a PullRequest). The marker literals themselves are the same
+# ROUND_MARKER_* constants lib/prompts interpolates into the agent's own instructions (lib/globals)
+# — a single source of truth, not independently hardcoded on each side, so a future reword of
+# either can't silently desync round-counting from what actually gets posted. Pure function — no I/O.
 _round_marker_and_cap_for_substatus() {
     local substatus="$1"
     case "${substatus}" in
         "AI Simplify")
-            printf 'Simplify: applied cleanups\t%s' "${MAX_SIMPLIFY_ITERATIONS}" ;;
+            printf '%s\t%s' "${ROUND_MARKER_SIMPLIFY}" "${MAX_SIMPLIFY_ITERATIONS}" ;;
         "AI Review")
-            printf 'Code review round:\t%s' "${MAX_CODE_REVIEW_ITERATIONS}" ;;
+            printf '%s\t%s' "${ROUND_MARKER_CODE_REVIEW}" "${MAX_CODE_REVIEW_ITERATIONS}" ;;
         "AI Security Review")
-            printf 'Security review round:\t%s' "${MAX_SECURITY_REVIEW_ITERATIONS}" ;;
+            printf '%s\t%s' "${ROUND_MARKER_SECURITY_REVIEW}" "${MAX_SECURITY_REVIEW_ITERATIONS}" ;;
         "AI Coverage")
-            # PHASE G's own decision-procedure format (lib/prompts), not a marker invented for
-            # this purpose — already posted on every round that returns to Development, so no
-            # prompt change was needed for Coverage's own count, unlike the other three.
-            printf ' - returning to Development\t%s' "${MAX_COVERAGE_ITERATIONS}" ;;
+            printf '%s\t%s' "${ROUND_MARKER_COVERAGE}" "${MAX_COVERAGE_ITERATIONS}" ;;
         *)
             printf '' ;;
     esac
