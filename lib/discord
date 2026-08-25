@@ -61,7 +61,12 @@ serialize_item_status_log() {
 # tracked phases anyway), progress_state (free text for the Progress field — "Running" by default,
 # or e.g. "Waiting on CI"/"Waiting on human review" for msg_type=waiting — #1375), overall_text
 # (optional "N / cap" invocation-count text for the Overall field; omitted entirely when empty —
-# #1375)
+# #1375), comments_json (optional — the PR's own already-fetched .comments array, e.g. from
+# fetch_pr_json/pr_json; forwarded to enrich_substatus_with_round_progress so its round count is
+# read from data the caller already has in hand instead of count_pr_comments_matching issuing its
+# own redundant `gh pr view` call every tick a round-tracked PR is touched, including ticks whose
+# resulting payload the dedup latch above will just discard unsent. Omit for an Issue, or when the
+# caller has no pr_json handy — count_pr_comments_matching falls back to fetching fresh itself)
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 # Status/Sub-status/Priority/Progress are derived entirely from already-tracked GitHub/priorities-
 # feed state — no Claude invocation, zero extra agentic cost (#1136). Every session is a fresh
@@ -77,7 +82,7 @@ serialize_item_status_log() {
 # hourly-heartbeat one — #1375 asked only for "don't repeat every tick", not a heartbeat.
 notify_discord_work_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" priority_rank="${5:-}" branch_name="${6:-}" progress_state="${7:-Running}" overall_text="${8:-}"
+    local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" priority_rank="${5:-}" branch_name="${6:-}" progress_state="${7:-Running}" overall_text="${8:-}" comments_json="${9:-}"
     local url color payload substatus status priority
 
     case "${msg_type}" in
@@ -98,7 +103,7 @@ notify_discord_work_item() {
     # Coarse status is derived from the RAW substatus above, before enrichment below — its case
     # statement matches exact board names ("AI Review"), not the enriched display text ("AI
     # Review (round 2 of 15)"), which would otherwise silently fall through to "Unknown" (#1375).
-    substatus=$(enrich_substatus_with_round_progress "${item_id}" "${substatus}" "${branch_name}")
+    substatus=$(enrich_substatus_with_round_progress "${item_id}" "${substatus}" "${branch_name}" "${comments_json}")
     priority=$(priority_name_for_rank "${priority_rank}")
 
     payload=$(jq --null-input \
@@ -133,15 +138,10 @@ notify_discord_work_item() {
             last_hash=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
             [ "${last_hash}" = "${dedup_hash}" ] && return 0
         fi
-        if curl --silent --fail --max-time 5 \
-            -H "Content-Type: application/json" \
-            -d "${payload}" \
-            "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1; then
-            mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
-            printf '%s\n' "${dedup_hash}" > "${state_file}"
-        else
-            warn "Discord webhook notification failed"
-        fi
+        # Reuses the same send-only-record-on-success helper every other deduped notifier in this
+        # file already calls, passing the content hash in place of the timestamp its other callers
+        # use — see _discord_send_and_record's own doc comment for why that's a valid drop-in.
+        _discord_send_and_record "${payload}" "${state_file}" "${dedup_hash}"
         return 0
     fi
 
@@ -150,6 +150,27 @@ notify_discord_work_item() {
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
+}
+
+# Sends a msg_type=waiting notify_discord_work_item notification for a PullRequest, deriving
+# title/comments from the caller's already-fetched pr_json rather than each of oneshot's three
+# "PR parked waiting on something external" call sites re-deriving title via its own inline
+# `jq -r '.title // empty'` and re-fetching comments (#1375 review). Arguments: item_id, pr_json,
+# item_priority (the priorities feed's own numeric rank — passed straight through to
+# notify_discord_work_item, same as its own priority_rank argument), branch_name (the PR's head
+# branch — pass "" if the caller has not already resolved it; notify_discord_work_item degrades
+# gracefully for an empty branch_name the same way it does for an Issue), progress_text (free
+# text for the Progress field, e.g. "Waiting on CI"/"Waiting on human review"). Also runs
+# discover_or_create_workflow_project first, idempotent/cached, same as every other call site in
+# this codebase that needs _WF_PROJECT_ID populated before a Discord notification can report a
+# real Sub-status instead of "Unknown" (#1136).
+notify_discord_pr_waiting() {
+    local item_id="$1" pr_json="$2" item_priority="$3" branch_name="${4:-}" progress_text="$5"
+    discover_or_create_workflow_project
+    notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
+        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+        "${branch_name}" "${progress_text}" "" \
+        "$(printf '%s' "${pr_json}" | jq -c '.comments // []')"
 }
 
 # Builds the markdown item-breakdown for notify_discord_no_work's embed description: one line
@@ -290,11 +311,15 @@ _discord_dedup_allowed() {
     return 0
 }
 
-# Posts payload to DISCORD_WEBHOOK_URL and, only on success, records now (unix timestamp, from
-# the caller's _discord_dedup_allowed check) in state_file so a later call suppresses repeats
-# within the hour. A failed post must NOT be recorded — otherwise a Discord-webhook outage
-# coincident with the condition being reported would silently suppress the next hour of retries
-# of an alert that never actually reached anyone.
+# Posts payload to DISCORD_WEBHOOK_URL and, only on success, records the given value verbatim in
+# state_file so a later call can compare against it. A failed post must NOT be recorded —
+# otherwise a Discord-webhook outage coincident with the condition being reported would silently
+# suppress retries of an alert that never actually reached anyone. Named for its original callers
+# (a time-window dedup, so the recorded value is "now", a unix timestamp — see
+# _discord_dedup_allowed above), but the third argument is written as-is with no interpretation,
+# so a content-hash-latch caller (notify_discord_work_item's "waiting" branch — #1375) can pass a
+# hash instead and compare it directly on its own next call, rather than every caller needing its
+# own hand-rolled curl-then-record.
 _discord_send_and_record() {
     local payload="$1" state_file="$2" now="$3"
     if curl --silent --fail --max-time 5 \

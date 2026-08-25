@@ -878,16 +878,26 @@ _round_marker_and_cap_for_substatus() {
 
 # Counts how many of a PR's comments contain the given literal marker substring — each
 # qualifying comment represents exactly one completed round of whichever phase that marker
-# belongs to (#1375). Fetches fresh every call rather than caching: this only runs once per
-# active PR per tick, the same cost class as notify_discord_blocked_item's own item_json fetch.
-# Never dies — a fetch/parse failure counts as zero rounds rather than blocking the notification.
+# belongs to (#1375). Arguments: item_id, marker, comments_json (optional — a PR's own
+# already-fetched .comments array, e.g. from fetch_pr_json/pr_json). When comments_json is
+# non-empty, filters it directly rather than fetching — the caller already paid for that data
+# this tick, so a fresh `gh pr view` here would be a redundant round-trip, including on ticks
+# whose resulting notification the dedup latch in lib/discord will discard unsent. Falls back to
+# fetching fresh via `gh pr view` when comments_json is empty (e.g. no caller-side pr_json was
+# available). Never dies — a fetch/parse failure counts as zero rounds rather than blocking the
+# notification.
 count_pr_comments_matching() {
-    local item_id="$1" marker="$2" count
+    local item_id="$1" marker="$2" comments_json="${3:-}" count comments_source
+    if [ -n "${comments_json}" ]; then
+        comments_source="{\"comments\":${comments_json}}"
+    else
+        comments_source=$(gh pr view "${item_id}" --repo "${REPO_FULL}" --json comments 2>/dev/null)
+    fi
     # gh's own --jq flag takes exactly one argument (the filter string) — it has no equivalent
     # of jq's --arg for safely binding a shell variable into the filter, so the comments JSON is
     # piped into a separate real `jq --arg` call instead, rather than interpolating ${marker}
     # into the filter text directly (which would break/misbehave on a marker containing a quote).
-    count=$(gh pr view "${item_id}" --repo "${REPO_FULL}" --json comments 2>/dev/null \
+    count=$(printf '%s' "${comments_source}" \
         | jq --arg m "${marker}" '[.comments[]? | select(.body // "" | contains($m))] | length' 2>/dev/null)
     case "${count}" in
         ''|*[!0-9]*) printf '0' ;;
@@ -932,9 +942,10 @@ coverage_summary_for_branch() {
 # Returns substatus unchanged for any other phase (Issues, or a PR not yet in one of these four
 # states). Only meaningful for a PullRequest; branch_name may be empty for an Issue, which
 # harmlessly falls through the same unchanged-substatus path via
-# _round_marker_and_cap_for_substatus's own empty-output case.
+# _round_marker_and_cap_for_substatus's own empty-output case. comments_json (optional) is
+# forwarded to count_pr_comments_matching unchanged — see that function's own doc comment.
 enrich_substatus_with_round_progress() {
-    local item_id="$1" substatus="$2" branch_name="${3:-}"
+    local item_id="$1" substatus="$2" branch_name="${3:-}" comments_json="${4:-}"
     local marker_and_cap marker cap round_count cov_summary
 
     marker_and_cap=$(_round_marker_and_cap_for_substatus "${substatus}")
@@ -942,7 +953,7 @@ enrich_substatus_with_round_progress() {
     marker="${marker_and_cap%%$'\t'*}"
     cap="${marker_and_cap##*$'\t'}"
 
-    round_count=$(count_pr_comments_matching "${item_id}" "${marker}")
+    round_count=$(count_pr_comments_matching "${item_id}" "${marker}" "${comments_json}")
 
     if [ "${substatus}" = "AI Coverage" ]; then
         cov_summary=$(coverage_summary_for_branch "${branch_name}")
