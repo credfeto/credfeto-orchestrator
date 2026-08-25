@@ -135,7 +135,7 @@ notify_discord_work_item() {
             || { warn "Discord: failed to hash waiting notification for dedup"; return 0; }
         state_file=$(_discord_dedup_state_file "work_item_waiting" "${REPO_FULL}/${item_id}")
         if [ -f "${state_file}" ]; then
-            last_hash=$(sed -n '1p' "${state_file}" 2>/dev/null || true)
+            read -r last_hash < "${state_file}" 2>/dev/null
             [ "${last_hash}" = "${dedup_hash}" ] && return 0
         fi
         # Reuses the same send-only-record-on-success helper every other deduped notifier in this
@@ -153,23 +153,24 @@ notify_discord_work_item() {
 }
 
 # Sends a msg_type=waiting notify_discord_work_item notification for a PullRequest, deriving
-# title/comments from the caller's already-fetched pr_json rather than each of oneshot's three
-# "PR parked waiting on something external" call sites re-deriving title via its own inline
-# `jq -r '.title // empty'` and re-fetching comments (#1375 review). Arguments: item_id, pr_json,
-# item_priority (the priorities feed's own numeric rank — passed straight through to
-# notify_discord_work_item, same as its own priority_rank argument), branch_name (the PR's head
-# branch — pass "" if the caller has not already resolved it; notify_discord_work_item degrades
-# gracefully for an empty branch_name the same way it does for an Issue), progress_text (free
-# text for the Progress field, e.g. "Waiting on CI"/"Waiting on human review"). Also runs
-# discover_or_create_workflow_project first, idempotent/cached, same as every other call site in
-# this codebase that needs _WF_PROJECT_ID populated before a Discord notification can report a
-# real Sub-status instead of "Unknown" (#1136).
+# title/branch_name/comments from the caller's already-fetched pr_json rather than each of
+# oneshot's four "PR parked waiting on something external" call sites re-deriving title and
+# headRefName via their own inline `jq` expressions (#1375 review) — title+branch_name are
+# extracted in a single jq call (rather than one each) since both are plain scalars; comments
+# stays a separate call so its JSON array output is never squeezed through @tsv's row format.
+# Arguments: item_id, pr_json, item_priority (the priorities feed's own numeric rank — passed
+# straight through to notify_discord_work_item, same as its own priority_rank argument),
+# progress_text (free text for the Progress field, e.g. "Waiting on CI"/"Waiting on human
+# review"). Also runs discover_or_create_workflow_project first, idempotent/cached, same as every
+# other call site in this codebase that needs _WF_PROJECT_ID populated before a Discord
+# notification can report a real Sub-status instead of "Unknown" (#1136).
 notify_discord_pr_waiting() {
-    local item_id="$1" pr_json="$2" item_priority="$3" branch_name="${4:-}" progress_text="$5"
+    local item_id="$1" pr_json="$2" item_priority="$3" progress_text="$4"
+    local title branch_name
+    IFS=$'\t' read -r title branch_name < <(printf '%s' "${pr_json}" | jq -r '[.title // "", .headRefName // ""] | @tsv')
     discover_or_create_workflow_project
     notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
-        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
-        "${branch_name}" "${progress_text}" "" \
+        "${title}" "${item_priority}" "${branch_name}" "${progress_text}" "" \
         "$(printf '%s' "${pr_json}" | jq -c '.comments // []')"
 }
 

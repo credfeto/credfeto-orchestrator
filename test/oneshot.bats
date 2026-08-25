@@ -4658,7 +4658,11 @@ setup_main_mocks() {
     fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/x","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
     pr_json_has_blocked_label() { return 1; }
     local waiting_log="${TEST_TMP}/waiting_log"
-    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
 
     run main
     [ "${status}" -eq 0 ]
@@ -4677,7 +4681,11 @@ setup_main_mocks() {
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
     local waiting_log="${TEST_TMP}/waiting_log"
-    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
 
     run main
     [ "${status}" -eq 0 ]
@@ -4863,7 +4871,11 @@ setup_main_mocks() {
     fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/y","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
     pr_json_has_blocked_label() { return 1; }
     local waiting_log="${TEST_TMP}/waiting_log"
-    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
 
     run main
     [ "${status}" -eq 0 ]
@@ -4884,7 +4896,11 @@ setup_main_mocks() {
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
     local waiting_log="${TEST_TMP}/waiting_log"
-    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
 
     run main
     [ "${status}" -eq 0 ]
@@ -5732,14 +5748,14 @@ STUBEOF
 
 # --- notify_discord_pr_waiting -------------------------------------------------
 
-@test "notify_discord_pr_waiting derives title and comments from pr_json and forwards to notify_discord_work_item (#1375)" {
+@test "notify_discord_pr_waiting derives title, branch_name and comments from pr_json and forwards to notify_discord_work_item (#1375)" {
     set_repo_context "org/repo"
     discover_or_create_workflow_project() { return 0; }
     local call_log="${TEST_TMP}/notify_calls"
     notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
-    local pr_json='{"title":"Fix the bug","comments":[{"body":"hi"}]}'
+    local pr_json='{"title":"Fix the bug","headRefName":"feature/x","comments":[{"body":"hi"}]}'
 
-    run notify_discord_pr_waiting "42" "${pr_json}" "3" "feature/x" "Waiting on CI"
+    run notify_discord_pr_waiting "42" "${pr_json}" "3" "Waiting on CI"
     [ "${status}" -eq 0 ]
     [ -f "${call_log}" ]
     grep -q '^waiting PullRequest 42 Fix the bug 3 feature/x Waiting on CI  \[{"body":"hi"}\]$' "${call_log}"
@@ -5751,7 +5767,7 @@ STUBEOF
     discover_or_create_workflow_project() { printf 'called\n' >> "${call_log}"; }
     notify_discord_work_item() { return 0; }
 
-    run notify_discord_pr_waiting "42" '{"title":"T","comments":[]}' "" "" "Waiting on CI"
+    run notify_discord_pr_waiting "42" '{"title":"T","comments":[]}' "" "Waiting on CI"
     [ "${status}" -eq 0 ]
     [ -f "${call_log}" ]
 }
@@ -5762,7 +5778,7 @@ STUBEOF
     local call_log="${TEST_TMP}/notify_calls"
     notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
 
-    run notify_discord_pr_waiting "42" '{"title":"T"}' "" "" "Waiting on CI"
+    run notify_discord_pr_waiting "42" '{"title":"T"}' "" "Waiting on CI"
     [ "${status}" -eq 0 ]
     grep -q '\[\]$' "${call_log}"
 }

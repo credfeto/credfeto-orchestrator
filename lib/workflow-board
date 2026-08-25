@@ -881,17 +881,18 @@ _round_marker_and_cap_for_substatus() {
 # belongs to (#1375). Arguments: item_id, marker, comments_json (optional — a PR's own
 # already-fetched .comments array, e.g. from fetch_pr_json/pr_json). When comments_json is
 # non-empty, filters it directly rather than fetching — the caller already paid for that data
-# this tick, so a fresh `gh pr view` here would be a redundant round-trip, including on ticks
-# whose resulting notification the dedup latch in lib/discord will discard unsent. Falls back to
-# fetching fresh via `gh pr view` when comments_json is empty (e.g. no caller-side pr_json was
-# available). Never dies — a fetch/parse failure counts as zero rounds rather than blocking the
-# notification.
+# this tick, so a fresh fetch here would be a redundant round-trip, including on ticks whose
+# resulting notification the dedup latch in lib/discord will discard unsent. Falls back to
+# fetch_pr_fields_json (lib/github) when comments_json is empty (e.g. no caller-side pr_json was
+# available), the same retry-wrapped partial-PR fetch every other partial-field lookup in this
+# codebase uses (#1090), rather than a bare `gh pr view` with no retry protection of its own.
+# Never dies — a fetch/parse failure counts as zero rounds rather than blocking the notification.
 count_pr_comments_matching() {
     local item_id="$1" marker="$2" comments_json="${3:-}" count comments_source
     if [ -n "${comments_json}" ]; then
         comments_source="{\"comments\":${comments_json}}"
     else
-        comments_source=$(gh pr view "${item_id}" --repo "${REPO_FULL}" --json comments 2>/dev/null)
+        comments_source=$(fetch_pr_fields_json "${item_id}" comments) || comments_source=""
     fi
     # gh's own --jq flag takes exactly one argument (the filter string) — it has no equivalent
     # of jq's --arg for safely binding a shell variable into the filter, so the comments JSON is
@@ -955,12 +956,10 @@ enrich_substatus_with_round_progress() {
 
     round_count=$(count_pr_comments_matching "${item_id}" "${marker}" "${comments_json}")
 
+    local suffix=""
     if [ "${substatus}" = "AI Coverage" ]; then
         cov_summary=$(coverage_summary_for_branch "${branch_name}")
-        if [ -n "${cov_summary}" ]; then
-            printf '%s (round %s of %s, %s)' "${substatus}" "${round_count}" "${cap}" "${cov_summary}"
-            return 0
-        fi
+        [ -n "${cov_summary}" ] && suffix=", ${cov_summary}"
     fi
-    printf '%s (round %s of %s)' "${substatus}" "${round_count}" "${cap}"
+    printf '%s (round %s of %s%s)' "${substatus}" "${round_count}" "${cap}" "${suffix}"
 }
