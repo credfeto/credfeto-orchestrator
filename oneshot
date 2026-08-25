@@ -490,12 +490,23 @@ main() {
                 # These two checks run regardless of whether the fingerprint changed since last
                 # tick — see the matching comment on the direct-PR path above (#1256) for why:
                 # short version, mergeStateStatus/statusCheckRollup feed the fingerprint and can
-                # flap on their own while nothing about the PR's content changes.
+                # flap on their own while nothing about the PR's content changes. This is the ONLY
+                # CI-pending check a pivoted PR ever reaches (#1375 review): the shared Work block
+                # further down has its own copy of this same check, but by the time item_type is
+                # ever set to "PullRequest" — either here (below, once this check is passed) or on
+                # the direct-PR path (which clears its own pending state before falling through) —
+                # CI is guaranteed already non-pending, making that later copy permanently
+                # unreachable dead code. It has been removed; this is where the pivot's "waiting"
+                # notification actually needs to fire, not there (a #1375 review-time bug: the
+                # notification was originally added to the unreachable copy instead of here, so a
+                # pivoted PR with pending CI never actually got notified).
                 if pr_json_has_pending_ci_checks "${pr_json}"; then
                     if ci_checks_timed_out "${open_pr}" "${pr_json}"; then
                         block_pr_for_ci_timeout "${open_pr}" "${item_repo}"
                     else
                         info "PR #${open_pr} in ${item_repo}: CI checks pending — deferring"
+                        notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" \
+                            "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on CI"
                     fi
                     count_unchanged=$((count_unchanged + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "CI checks pending")")
@@ -513,6 +524,11 @@ main() {
                         fi
                         if [ "${pr_has_unaddressed_comment}" != "true" ]; then
                             info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                            # Same "waiting" notification as the direct-PR settled path above
+                            # (#1375 review) — a pivoted PR going settled must be just as visible
+                            # as one selected directly from the priorities feed.
+                            notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" \
+                                "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on human review"
                             count_unchanged=$((count_unchanged + 1))
                             item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
                             continue
@@ -902,13 +918,12 @@ main() {
                     block_pr_for_ci_timeout "${item_id}" "${item_repo}"
                 else
                     info "PR #${item_id} in ${item_repo}: CI checks pending — deferring"
-                    # discover_or_create_workflow_project is idempotent/cached — see the fuller
-                    # comment where the active-work notify call does the same, further down — so
-                    # calling it again here (it may already have run for this item, e.g. via the
-                    # Issue path above) just means a cheap cache hit, not a second GraphQL lookup.
-                    discover_or_create_workflow_project
-                    notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
-                        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+                    # notify_discord_pr_waiting's own discover_or_create_workflow_project call is
+                    # idempotent/cached — see the fuller comment where the active-work notify call
+                    # does the same, further down — so calling it again here (it may already have
+                    # run for this item, e.g. via the Issue path above) just means a cheap cache
+                    # hit, not a second GraphQL lookup.
+                    notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" \
                         "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on CI"
                 fi
                 count_unchanged=$((count_unchanged + 1))
@@ -933,9 +948,7 @@ main() {
                         # sends, so a human sees this item's Progress go from "Running" to "Waiting
                         # on human review" the same way they'd see it go to "Waiting on CI" — not a
                         # substitute for the dedicated alert, both can and do fire together.
-                        discover_or_create_workflow_project
-                        notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
-                            "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
+                        notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" \
                             "$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')" "Waiting on human review"
                         count_unchanged=$((count_unchanged + 1))
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
@@ -989,23 +1002,14 @@ main() {
             merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
 
-            if pr_json_has_pending_ci_checks "${pr_json}"; then
-                if ci_checks_timed_out "${item_id}" "${pr_json}"; then
-                    block_pr_for_ci_timeout "${item_id}" "${item_repo}"
-                else
-                    info "PR #${item_id} in ${item_repo}: CI checks pending — deferring agent invocation"
-                    save_pr_fingerprint "${item_id}" "${pr_fp}"
-                    # This is the first CI-pending check reached for an Issue-to-PR pivot (#1375):
-                    # the earlier check above this Work block only runs for a PR selected directly
-                    # from the priorities feed, not one reached via pivot, so this is the only
-                    # place a pivoted PR's "waiting" notification can fire.
-                    discover_or_create_workflow_project
-                    notify_discord_work_item "waiting" "PullRequest" "${item_id}" \
-                        "$(printf '%s' "${pr_json}" | jq -r '.title // empty')" "${item_priority}" \
-                        "${branch_name}" "Waiting on CI"
-                fi
-                continue
-            fi
+            # No CI-pending check here (deliberately, #1375 review): item_type only ever becomes
+            # "PullRequest" via the direct-PR path or the pivot path above, and both already check
+            # pr_json_has_pending_ci_checks and `continue` before item_type is set to
+            # "PullRequest" — so by this point CI is always already non-pending for this pr_json. A
+            # duplicate check used to sit here (and was where the pivot's own #1375 "waiting"
+            # notification was mistakenly wired up) but could never actually fire; removed rather
+            # than left as unreachable dead code — see the pivot path's own CI-pending check above
+            # for where that notification now actually lives.
             clear_pr_ci_pending_state "${item_id}"
             sync_pr_labels_from_linked_issues "${item_id}" "${pr_json}"
         fi
@@ -1089,9 +1093,11 @@ main() {
         # Loaded here — moved ahead of notify_discord_work_item, same reason as
         # discover_or_create_workflow_project's own move above (#1375) — so the Overall field can
         # show real invocation-count-vs-cap detail on every item's first notification of a run,
-        # not just from the second tick onward. The runaway-backstop checks further down reuse
-        # these same PR_INVOCATION_TOTAL/ISSUE_INVOCATION_TOTAL values rather than loading them a
-        # second time.
+        # not just from the second tick onward. The runaway-backstop checks further down call
+        # load_pr_invocation_counts/load_issue_invocation_counts again rather than reusing
+        # PR_INVOCATION_TOTAL/ISSUE_INVOCATION_TOTAL set here — that reload is a cheap local
+        # guard-file read, not a GraphQL call, so the duplication costs little, but it IS a
+        # duplicate call, not a reuse (#1375 review).
         local overall_text=""
         if [ "${item_type}" = "PullRequest" ]; then
             load_pr_invocation_counts "${item_id}"
@@ -1110,7 +1116,13 @@ main() {
         # passing it straight through gives the notification the item's REAL priority instead of
         # independently re-deriving a possibly-different value from labels (#1375). branch_name
         # is empty for an Issue — harmless, since an Issue never has a round-tracked substatus.
-        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}" "${item_priority}" "${branch_name}" "Running" "${overall_text}"
+        # The final comments_json argument is likewise empty for an Issue (pr_json is unset/stale
+        # in that case) — count_pr_comments_matching falls back to fetching fresh itself, same as
+        # before this argument existed, so an Issue's notification is unaffected either way
+        # (#1375 review).
+        local start_comments_json=""
+        [ "${item_type}" = "PullRequest" ] && start_comments_json=$(printf '%s' "${pr_json}" | jq -c '.comments // []')
+        notify_discord_work_item "start" "${item_type}" "${item_id}" "${item_title}" "${item_priority}" "${branch_name}" "Running" "${overall_text}" "${start_comments_json}"
 
         # Runaway backstop (PRs): cap the total number of agent invocations spent on one PR so a
         # non-converging PR cannot loop forever.  Absence of the guard file also tells us this is

@@ -4547,6 +4547,7 @@ setup_main_mocks() {
     get_trusted_logins()          { printf '["credfeto"]\n'; }
     fetch_pr_review_comments()    { printf '[]\n'; }
     notify_discord_work_item()         { return 0; }
+    notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
     notify_discord_pr_needs_approval() { return 0; }
@@ -4647,6 +4648,42 @@ setup_main_mocks() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [ ! -f "${discord_log}" ]
+}
+
+@test "main notifies Discord waiting on CI for a direct PR with pending required checks (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/x","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: CI checks pending — deferring"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=5 branch=feature/x progress=Waiting on CI$' "${waiting_log}"
+}
+
+@test "main notifies Discord waiting on human review for a settled direct PR (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/x","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=5 branch=feature/x progress=Waiting on human review$' "${waiting_log}"
 }
 
 @test "main evaluates second PR in same repo when first PR is unchanged" {
@@ -4811,6 +4848,49 @@ setup_main_mocks() {
     [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
     [ -f "${discord_log}" ]
     grep -q '^notified 99: .*"title":"PR title"' "${discord_log}"
+}
+
+@test "main notifies Discord waiting on CI for a pivot PR with pending required checks (#1375)" {
+    # This is the ONLY CI-pending check a pivoted PR ever reaches (#1375 review) — the shared
+    # Work block used to have its own (unreachable) copy where this notification was originally,
+    # and mistakenly, wired up.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/y","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: CI checks pending — deferring"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=99 branch=feature/y progress=Waiting on CI$' "${waiting_log}"
+}
+
+@test "main notifies Discord waiting on human review for a settled pivot PR (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/y","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() { printf 'id=%s branch=%s progress=%s\n' "$1" "$4" "$5" >> "${waiting_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=99 branch=feature/y progress=Waiting on human review$' "${waiting_log}"
 }
 
 @test "main re-runs via pivot PR when PR unchanged but issue has new comment" {
@@ -5648,6 +5728,43 @@ STUBEOF
     run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
     [ "${status}" -eq 0 ]
     [ "$(wc -l < "${call_log}")" -eq 1 ]
+}
+
+# --- notify_discord_pr_waiting -------------------------------------------------
+
+@test "notify_discord_pr_waiting derives title and comments from pr_json and forwards to notify_discord_work_item (#1375)" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { return 0; }
+    local call_log="${TEST_TMP}/notify_calls"
+    notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
+    local pr_json='{"title":"Fix the bug","comments":[{"body":"hi"}]}'
+
+    run notify_discord_pr_waiting "42" "${pr_json}" "3" "feature/x" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ -f "${call_log}" ]
+    grep -q '^waiting PullRequest 42 Fix the bug 3 feature/x Waiting on CI  \[{"body":"hi"}\]$' "${call_log}"
+}
+
+@test "notify_discord_pr_waiting calls discover_or_create_workflow_project before notifying (#1375)" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/discover_calls"
+    discover_or_create_workflow_project() { printf 'called\n' >> "${call_log}"; }
+    notify_discord_work_item() { return 0; }
+
+    run notify_discord_pr_waiting "42" '{"title":"T","comments":[]}' "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ -f "${call_log}" ]
+}
+
+@test "notify_discord_pr_waiting defaults comments to an empty array when pr_json has none (#1375)" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { return 0; }
+    local call_log="${TEST_TMP}/notify_calls"
+    notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
+
+    run notify_discord_pr_waiting "42" '{"title":"T"}' "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    grep -q '\[\]$' "${call_log}"
 }
 
 # --- notify_discord_no_work ---------------------------------------------------
@@ -10696,6 +10813,17 @@ STUBEOF
     [ "${output}" = "0" ]
 }
 
+@test "count_pr_comments_matching filters a given comments_json without fetching via gh (#1375)" {
+    set_repo_context "org/repo"
+    local gh_call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${gh_call_log}'"
+    local comments_json='[{"body":"Code review round: fixed 2 findings"},{"body":"unrelated"}]'
+
+    run count_pr_comments_matching "5" "Code review round:" "${comments_json}"
+    [ "${output}" = "1" ]
+    [ ! -f "${gh_call_log}" ]
+}
+
 @test "coverage_summary_for_branch reads Overall percentages from the branch's own COVERAGE.md via origin, not the working tree" {
     set_repo_context "org/repo"
     setup_local_git_remote >/dev/null
@@ -10782,6 +10910,17 @@ EOF
     [ "${output}" = "Human Review" ]
     run enrich_substatus_with_round_progress "5" "Unknown" ""
     [ "${output}" = "Unknown" ]
+}
+
+@test "enrich_substatus_with_round_progress uses a given comments_json without fetching via gh (#1375)" {
+    set_repo_context "org/repo"
+    local gh_call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${gh_call_log}'"
+    local comments_json='[{"body":"Code review round: fixed 2 findings"}]'
+
+    run enrich_substatus_with_round_progress "5" "AI Review" "" "${comments_json}"
+    [ "${output}" = "AI Review (round 1 of ${MAX_CODE_REVIEW_ITERATIONS})" ]
+    [ ! -f "${gh_call_log}" ]
 }
 
 # --- build_pr_claude_md review-loop steps ------------------------------------
