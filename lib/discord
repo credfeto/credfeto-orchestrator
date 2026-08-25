@@ -79,7 +79,13 @@ serialize_item_status_log() {
 # hash of substatus+progress_state+priority, latched (no time-based re-arm, unlike the rolling-
 # window alerts elsewhere in this file) until that content actually changes, matching
 # notify_discord_blocked_item's persistent-latch shape rather than notify_discord_no_work's
-# hourly-heartbeat one — #1375 asked only for "don't repeat every tick", not a heartbeat.
+# hourly-heartbeat one — #1375 asked only for "don't repeat every tick", not a heartbeat. Every
+# start/resume call clears that latch (#1375 review): without an explicit episode boundary, a
+# later, genuinely new waiting episode that happens to reproduce the exact same content hash as an
+# earlier, already-notified one (e.g. round-tripping back through the same substatus/progress/
+# priority after an intervening review cycle) would otherwise compare equal to the stale hash and
+# silently never notify — the same problem notify_discord_blocked_item avoids via
+# clear_blocked_marker on its own observed-open-and-unblocked path.
 notify_discord_work_item() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
     local msg_type="$1" item_type="$2" item_id="$3" item_title="$4" priority_rank="${5:-}" branch_name="${6:-}" progress_state="${7:-Running}" overall_text="${8:-}" comments_json="${9:-}"
@@ -128,6 +134,17 @@ notify_discord_work_item() {
             ] + (if ($overall | length) > 0 then [{name:"Overall",value:$overall,inline:true}] else [] end)
         )}]}') \
         || { warn "Discord: failed to build payload for ${item_type} #${item_id}"; return 0; }
+
+    if [ "${msg_type}" != "waiting" ]; then
+        # A start/resume observation means the item is no longer parked, the same "episode
+        # boundary" signal notify_discord_blocked_item's clear_blocked_marker call sites use to
+        # re-arm that latch — so the waiting latch below must not stay keyed off content from a
+        # now-closed episode: a later, genuinely new waiting episode that happens to reproduce the
+        # exact same substatus+progress+priority text (e.g. round-tripping back to "Human Review"/
+        # "Waiting on human review"/"High" after an intervening review cycle) would otherwise
+        # compare equal to the stale hash and never notify (#1375 review).
+        rm -f "$(_discord_dedup_state_file "work_item_waiting" "${REPO_FULL}/${item_id}")" 2>/dev/null || true
+    fi
 
     if [ "${msg_type}" = "waiting" ]; then
         local dedup_hash state_file last_hash

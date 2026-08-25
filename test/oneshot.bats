@@ -5731,6 +5731,27 @@ STUBEOF
     [ "$(wc -l < "${call_log}")" -eq 2 ]
 }
 
+@test "notify_discord_work_item start clears the waiting latch so a repeated later waiting episode re-sends (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/curl_calls"
+    make_stub curl "printf 'call\n' >> '${call_log}'"
+
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+
+    # Item observed actively running again — closes the waiting episode.
+    run notify_discord_work_item "start" "PullRequest" "42" "Fix the bug"
+    [ "${status}" -eq 0 ]
+
+    # A later waiting episode reproducing the exact same content hash must NOT be treated as a
+    # stale repeat of the closed episode above (#1375 review).
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 3 ]
+}
+
 @test "notify_discord_work_item waiting does not record the dedup state on a failed send (#1375)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
