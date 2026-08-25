@@ -4547,6 +4547,7 @@ setup_main_mocks() {
     get_trusted_logins()          { printf '["credfeto"]\n'; }
     fetch_pr_review_comments()    { printf '[]\n'; }
     notify_discord_work_item()         { return 0; }
+    notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }
     notify_discord_blocked_item()      { return 0; }
     notify_discord_pr_needs_approval() { return 0; }
@@ -4647,6 +4648,50 @@ setup_main_mocks() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [ ! -f "${discord_log}" ]
+}
+
+@test "main notifies Discord waiting on CI for a direct PR with pending required checks (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/x","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: CI checks pending — deferring"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=5 branch=feature/x progress=Waiting on CI$' "${waiting_log}"
+}
+
+@test "main notifies Discord waiting on human review for a settled direct PR (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/x","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=5 branch=feature/x progress=Waiting on human review$' "${waiting_log}"
 }
 
 @test "main evaluates second PR in same repo when first PR is unchanged" {
@@ -4811,6 +4856,57 @@ setup_main_mocks() {
     [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
     [ -f "${discord_log}" ]
     grep -q '^notified 99: .*"title":"PR title"' "${discord_log}"
+}
+
+@test "main notifies Discord waiting on CI for a pivot PR with pending required checks (#1375)" {
+    # This is the ONLY CI-pending check a pivoted PR ever reaches (#1375 review) — the shared
+    # Work block used to have its own (unreachable) copy where this notification was originally,
+    # and mistakenly, wired up.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/y","comments":[],"reviews":[],"statusCheckRollup":[{"isRequired":true,"status":"IN_PROGRESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: CI checks pending — deferring"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=99 branch=feature/y progress=Waiting on CI$' "${waiting_log}"
+}
+
+@test "main notifies Discord waiting on human review for a settled pivot PR (#1375)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feature/y","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    local waiting_log="${TEST_TMP}/waiting_log"
+    notify_discord_pr_waiting() {
+        local branch
+        branch=$(printf '%s' "$2" | jq -r '.headRefName // empty')
+        printf 'id=%s branch=%s progress=%s\n' "$1" "${branch}" "$4" >> "${waiting_log}"
+    }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
+    [ -f "${waiting_log}" ]
+    grep -q '^id=99 branch=feature/y progress=Waiting on human review$' "${waiting_log}"
 }
 
 @test "main re-runs via pivot PR when PR unchanged but issue has new comment" {
@@ -5526,25 +5622,186 @@ STUBEOF
     grep -q "Update deps" "${args_log}"
 }
 
-@test "notify_discord_work_item includes the item's priority label in the payload (#1136)" {
+@test "notify_discord_work_item includes the item's priority-rank name in the payload (#1375)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" '[{"name":"High"}]'
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" "3"
     [ "${status}" -eq 0 ]
     grep -q "Priority" "${args_log}"
     grep -q "High" "${args_log}"
 }
 
-@test "notify_discord_work_item matches Security before Urgent when both labels are present (#1136)" {
+@test "notify_discord_work_item maps priority rank 5 to Security and 0 to Default (#1375)" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
-    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" '[{"name":"Urgent"},{"name":"Security"}]'
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" "5"
     [ "${status}" -eq 0 ]
     grep -q "Security" "${args_log}"
+
+    : > "${args_log}"
+    run notify_discord_work_item "start" "Issue" "43" "Fix another bug" "0"
+    [ "${status}" -eq 0 ]
+    grep -q "Default" "${args_log}"
+}
+
+@test "notify_discord_work_item falls back to Undefined for a missing or out-of-range priority rank (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" "99"
+    [ "${status}" -eq 0 ]
+    grep -q "Undefined" "${args_log}"
+}
+
+@test "notify_discord_work_item enriches Sub-status with round progress and keeps Status derived from the raw substatus (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    # Shadow board_substatus_for_item rather than standing up a full fake GraphQL board — proves
+    # notify_discord_work_item feeds its raw output into enrich_substatus_with_round_progress for
+    # display, while still deriving the coarse Status field from the raw (unenriched) name (a real
+    # ordering bug caught during review: computing Status from the already-enriched text made
+    # every round-tracked phase silently show "Unknown").
+    board_substatus_for_item() { printf 'AI Review'; }
+    make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\"Code review round: fixed 1 finding\"}]}"'
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "PullRequest" "42" "Fix the bug" "3" "feature/x"
+    [ "${status}" -eq 0 ]
+    grep -q "AI Review (round 1 of ${MAX_CODE_REVIEW_ITERATIONS})" "${args_log}"
+    grep -q "In Progress" "${args_log}"
+}
+
+@test "notify_discord_work_item defaults Progress to Running and omits Overall when not given (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug"
+    [ "${status}" -eq 0 ]
+    grep -q "Progress" "${args_log}"
+    grep -q "Running" "${args_log}"
+    [ "$(grep -c "Overall" "${args_log}")" -eq 0 ]
+}
+
+@test "notify_discord_work_item includes Overall when given (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "start" "Issue" "42" "Fix the bug" "" "" "Running" "3 / 57"
+    [ "${status}" -eq 0 ]
+    grep -q "Overall" "${args_log}"
+    grep -q "3 / 57" "${args_log}"
+}
+
+@test "notify_discord_work_item waiting sends a Progress field describing why it's parked (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    grep -q "Progress" "${args_log}"
+    grep -q "Waiting on CI" "${args_log}"
+}
+
+@test "notify_discord_work_item waiting suppresses an identical repeat but re-sends on a real change (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/curl_calls"
+    make_stub curl "printf 'call\n' >> '${call_log}'"
+
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+
+    # Identical content again — suppressed, no second curl call.
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+
+    # Genuine state change (now waiting on human review instead) — sends again.
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on human review"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 2 ]
+}
+
+@test "notify_discord_work_item start clears the waiting latch so a repeated later waiting episode re-sends (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/curl_calls"
+    make_stub curl "printf 'call\n' >> '${call_log}'"
+
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+
+    # Item observed actively running again — closes the waiting episode.
+    run notify_discord_work_item "start" "PullRequest" "42" "Fix the bug"
+    [ "${status}" -eq 0 ]
+
+    # A later waiting episode reproducing the exact same content hash must NOT be treated as a
+    # stale repeat of the closed episode above (#1375 review).
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 3 ]
+}
+
+@test "notify_discord_work_item waiting does not record the dedup state on a failed send (#1375)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    make_stub curl 'exit 1'
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"webhook notification failed"* ]]
+
+    local call_log="${TEST_TMP}/curl_calls"
+    make_stub curl "printf 'call\n' >> '${call_log}'"
+    run notify_discord_work_item "waiting" "PullRequest" "42" "Fix the bug" "" "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+}
+
+# --- notify_discord_pr_waiting -------------------------------------------------
+
+@test "notify_discord_pr_waiting derives title, branch_name and comments from pr_json and forwards to notify_discord_work_item (#1375)" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { return 0; }
+    local call_log="${TEST_TMP}/notify_calls"
+    notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
+    local pr_json='{"title":"Fix the bug","headRefName":"feature/x","comments":[{"body":"hi"}]}'
+
+    run notify_discord_pr_waiting "42" "${pr_json}" "3" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ -f "${call_log}" ]
+    grep -q '^waiting PullRequest 42 Fix the bug 3 feature/x Waiting on CI  \[{"body":"hi"}\]$' "${call_log}"
+}
+
+@test "notify_discord_pr_waiting calls discover_or_create_workflow_project before notifying (#1375)" {
+    set_repo_context "org/repo"
+    local call_log="${TEST_TMP}/discover_calls"
+    discover_or_create_workflow_project() { printf 'called\n' >> "${call_log}"; }
+    notify_discord_work_item() { return 0; }
+
+    run notify_discord_pr_waiting "42" '{"title":"T","comments":[]}' "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    [ -f "${call_log}" ]
+}
+
+@test "notify_discord_pr_waiting defaults comments to an empty array when pr_json has none (#1375)" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { return 0; }
+    local call_log="${TEST_TMP}/notify_calls"
+    notify_discord_work_item() { printf '%s\n' "$*" >> "${call_log}"; }
+
+    run notify_discord_pr_waiting "42" '{"title":"T"}' "" "Waiting on CI"
+    [ "${status}" -eq 0 ]
+    grep -q '\[\]$' "${call_log}"
 }
 
 # --- notify_discord_no_work ---------------------------------------------------
@@ -10520,6 +10777,187 @@ STUBEOF
     run priority_for_labels 'not json'
     [ "${status}" -eq 0 ]
     [ "${output}" = "Undefined" ]
+}
+
+# --- priority_name_for_rank (#1375) ----------------------------------------------
+
+@test "priority_name_for_rank maps every defined rank to its name" {
+    run priority_name_for_rank "0"
+    [ "${output}" = "Default" ]
+    run priority_name_for_rank "1"
+    [ "${output}" = "Low" ]
+    run priority_name_for_rank "2"
+    [ "${output}" = "Medium" ]
+    run priority_name_for_rank "3"
+    [ "${output}" = "High" ]
+    run priority_name_for_rank "4"
+    [ "${output}" = "Urgent" ]
+    run priority_name_for_rank "5"
+    [ "${output}" = "Security" ]
+}
+
+@test "priority_name_for_rank returns Undefined for an out-of-range rank" {
+    run priority_name_for_rank "6"
+    [ "${output}" = "Undefined" ]
+    run priority_name_for_rank "-1"
+    [ "${output}" = "Undefined" ]
+}
+
+@test "priority_name_for_rank returns Undefined for a missing or non-numeric rank" {
+    run priority_name_for_rank ""
+    [ "${output}" = "Undefined" ]
+    run priority_name_for_rank "abc"
+    [ "${output}" = "Undefined" ]
+}
+
+# --- round-progress enrichment (#1375) ---------------------------------------
+
+@test "_round_marker_and_cap_for_substatus returns the marker and cap for each bounded-loop phase" {
+    run _round_marker_and_cap_for_substatus "AI Simplify"
+    [[ "${output}" == "Simplify: applied cleanups"$'\t'"${MAX_SIMPLIFY_ITERATIONS}" ]]
+    run _round_marker_and_cap_for_substatus "AI Review"
+    [[ "${output}" == "Code review round:"$'\t'"${MAX_CODE_REVIEW_ITERATIONS}" ]]
+    run _round_marker_and_cap_for_substatus "AI Security Review"
+    [[ "${output}" == "Security review round:"$'\t'"${MAX_SECURITY_REVIEW_ITERATIONS}" ]]
+    run _round_marker_and_cap_for_substatus "AI Coverage"
+    [[ "${output}" == " - returning to Development"$'\t'"${MAX_COVERAGE_ITERATIONS}" ]]
+}
+
+@test "_round_marker_and_cap_for_substatus returns empty for a non-bounded-loop substatus" {
+    run _round_marker_and_cap_for_substatus "Development"
+    [ -z "${output}" ]
+    run _round_marker_and_cap_for_substatus "Human Review"
+    [ -z "${output}" ]
+    run _round_marker_and_cap_for_substatus "Unknown"
+    [ -z "${output}" ]
+}
+
+@test "count_pr_comments_matching counts only comments containing the marker" {
+    set_repo_context "org/repo"
+    make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\"Code review round: fixed 2 findings\"},{\"body\":\"unrelated\"},{\"body\":\"Code review round: fixed 1 finding\"}]}"'
+    run count_pr_comments_matching "5" "Code review round:"
+    [ "${output}" = "2" ]
+}
+
+@test "count_pr_comments_matching returns 0 when nothing matches or the fetch fails" {
+    set_repo_context "org/repo"
+    make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\"unrelated\"}]}"'
+    run count_pr_comments_matching "5" "Code review round:"
+    [ "${output}" = "0" ]
+
+    make_stub gh 'exit 1'
+    run count_pr_comments_matching "5" "Code review round:"
+    [ "${output}" = "0" ]
+}
+
+@test "count_pr_comments_matching filters a given comments_json without fetching via gh (#1375)" {
+    set_repo_context "org/repo"
+    local gh_call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${gh_call_log}'"
+    local comments_json='[{"body":"Code review round: fixed 2 findings"},{"body":"unrelated"}]'
+
+    run count_pr_comments_matching "5" "Code review round:" "${comments_json}"
+    [ "${output}" = "1" ]
+    [ ! -f "${gh_call_log}" ]
+}
+
+@test "coverage_summary_for_branch reads Overall percentages from the branch's own COVERAGE.md via origin, not the working tree" {
+    set_repo_context "org/repo"
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b feature/cov >/dev/null 2>&1
+    cat > "${REPO_WORK_DIR}/COVERAGE.md" <<'EOF'
+# Coverage
+
+## .NET
+| Project | Line Coverage |
+| --- | --- |
+| Credfeto.Foo | 82.1% |
+| **Overall (.NET)** | **82.1%** |
+
+## Node
+| Package | Line Coverage |
+| --- | --- |
+| **Overall (Node)** | **91.4%** |
+
+## Shell
+
+excluded
+EOF
+    git -C "${REPO_WORK_DIR}" add COVERAGE.md
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -q -m "coverage"
+    git -C "${REPO_WORK_DIR}" push origin feature/cov >/dev/null 2>&1
+    # The working tree is left checked out on feature/cov above, but the function must not rely
+    # on that — switch back to main to prove it reads via origin/<branch>, not the working tree.
+    git -C "${REPO_WORK_DIR}" checkout main >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    run coverage_summary_for_branch "feature/cov"
+    [ "${output}" = ".NET 82.1%, Node 91.4%" ]
+}
+
+@test "coverage_summary_for_branch returns empty when COVERAGE.md does not exist on the branch" {
+    set_repo_context "org/repo"
+    setup_local_git_remote >/dev/null
+    run coverage_summary_for_branch "main"
+    [ -z "${output}" ]
+}
+
+@test "coverage_summary_for_branch returns empty for a missing branch name or repo checkout" {
+    set_repo_context "org/repo"
+    run coverage_summary_for_branch ""
+    [ -z "${output}" ]
+
+    REPO_WORK_DIR="${TEST_TMP}/nonexistent/repo"
+    run coverage_summary_for_branch "main"
+    [ -z "${output}" ]
+}
+
+@test "enrich_substatus_with_round_progress appends the round count for AI Review" {
+    set_repo_context "org/repo"
+    make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\"Code review round: fixed 2 findings\"}]}"'
+    run enrich_substatus_with_round_progress "5" "AI Review" ""
+    [ "${output}" = "AI Review (round 1 of ${MAX_CODE_REVIEW_ITERATIONS})" ]
+}
+
+@test "enrich_substatus_with_round_progress appends round count and coverage percentages for AI Coverage" {
+    set_repo_context "org/repo"
+    setup_local_git_remote >/dev/null
+    git -C "${REPO_WORK_DIR}" checkout -b feature/cov2 >/dev/null 2>&1
+    printf '## .NET\n| **Overall (.NET)** | **75.0%%** |\n' > "${REPO_WORK_DIR}/COVERAGE.md"
+    git -C "${REPO_WORK_DIR}" add COVERAGE.md
+    git -C "${REPO_WORK_DIR}" -c commit.gpgsign=false commit -q -m "coverage"
+    git -C "${REPO_WORK_DIR}" push origin feature/cov2 >/dev/null 2>&1
+    git -C "${REPO_WORK_DIR}" fetch origin >/dev/null 2>&1
+
+    make_stub gh 'printf "%s" "{\"comments\":[{\"body\":\".NET 75.0%% < main 80.0%% - returning to Development\"}]}"'
+    run enrich_substatus_with_round_progress "5" "AI Coverage" "feature/cov2"
+    [ "${output}" = "AI Coverage (round 1 of ${MAX_COVERAGE_ITERATIONS}, .NET 75.0%)" ]
+}
+
+@test "enrich_substatus_with_round_progress falls back to round count only when COVERAGE.md has no summary" {
+    set_repo_context "org/repo"
+    make_stub gh 'printf "%s" "{\"comments\":[]}"'
+    run enrich_substatus_with_round_progress "5" "AI Coverage" ""
+    [ "${output}" = "AI Coverage (round 0 of ${MAX_COVERAGE_ITERATIONS})" ]
+}
+
+@test "enrich_substatus_with_round_progress leaves a non-bounded-loop substatus unchanged" {
+    set_repo_context "org/repo"
+    run enrich_substatus_with_round_progress "5" "Human Review" ""
+    [ "${output}" = "Human Review" ]
+    run enrich_substatus_with_round_progress "5" "Unknown" ""
+    [ "${output}" = "Unknown" ]
+}
+
+@test "enrich_substatus_with_round_progress uses a given comments_json without fetching via gh (#1375)" {
+    set_repo_context "org/repo"
+    local gh_call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> '${gh_call_log}'"
+    local comments_json='[{"body":"Code review round: fixed 2 findings"}]'
+
+    run enrich_substatus_with_round_progress "5" "AI Review" "" "${comments_json}"
+    [ "${output}" = "AI Review (round 1 of ${MAX_CODE_REVIEW_ITERATIONS})" ]
+    [ ! -f "${gh_call_log}" ]
 }
 
 # --- build_pr_claude_md review-loop steps ------------------------------------
