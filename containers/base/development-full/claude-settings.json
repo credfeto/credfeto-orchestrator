@@ -350,6 +350,18 @@
       }
     ]
   },
+  "sandbox": {
+    "enabled": false,
+    "filesystem": {
+       "read": {
+         "denyOnly": ["/"],
+         "allowWithinDeny": [
+           "/workspace/",
+           "~/work"
+         ]
+       }
+    }
+  },
   "tui": "default",
   "autoMemoryEnabled": false,
   "theme": "dark",
