@@ -1,0 +1,658 @@
+#!/usr/bin/env bash
+# Restricts every directory- or path-taking argument of the commands below to
+# a configured allowlist of directory roots, and denies the flags on those same
+# commands that turn a "path argument" into arbitrary code execution.
+# Exit 2 = blocked, 0 = allowed.
+#
+# Why this hook exists (#1385): claude-settings.json's permissions.allow rule
+# syntax has exactly two matching primitives - literal text and `*` - and no
+# typed placeholder for "a directory goes here". So every rule of the shape
+# `git -C <dir> config ...`, `npm --prefix <dir> ci ...`, `find <dir> ...`,
+# `cd <dir> && ...` has to be written with a `*` in the directory position,
+# and that `*` matches any option injected there too: `git -C d -c
+# core.hooksPath=/evil status`, `npm --prefix d --script-shell=/evil run x`,
+# `find d -exec /evil {} +`. Claude Code itself warns about exactly this at
+# startup ("has a wildcard before the rest of the command, so it also matches
+# any options inserted at that position"). The permission layer cannot
+# express the check; this hook can, because it parses argv with a real shell
+# parser and inspects each word by position and value. With this hook in the
+# chain, the per-subcommand wildcard rules in claude-settings.json are
+# redundant and are removed, leaving the bare tool-level entries plus a
+# belt-and-braces permissions.deny for the same code-execution flags.
+#
+# Checked commands (in the command-name position, or the position immediately
+# after a known wrapper name - see WRAPPERS):
+#   cd, pushd     exactly one argument, no flags; it must resolve under a root.
+#                 popd, or a bare cd/pushd, or cd -, changes to a directory
+#                 this hook cannot see, so they are blocked.
+#   git           every `-C <dir>` (cumulative, each relative to the previous)
+#                 must resolve under a root; `--exec-path`, `--git-dir`,
+#                 `--work-tree`, `--namespace`, `--super-prefix` are denied
+#                 outright; `-c <key>=<value>` / `--config-env <key>=<env>`
+#                 is allowed only for the short list of inert keys in
+#                 is_git_inert_config (colour, advice, log/status display,
+#                 pull/push/fetch/rebase behaviour, core.pager=cat) - every
+#                 other key is denied, the same "git config is read-only for
+#                 sessions" stance enforce-git-dash-c takes: a denylist of
+#                 dangerous keys can never be complete (core.hooksPath,
+#                 alias.*, credential.*, diff/merge drivers, filters,
+#                 gpg.program, ...) and would also let `-c
+#                 commit.gpgsign=false` quietly defeat enforce-git-identity.
+#                 Only the global options before the subcommand are
+#                 inspected; enforce-git-dash-c still owns "must have -C".
+#   npm           `--prefix <dir>` / `--prefix=<dir>` must resolve under a
+#                 root; `--script-shell`, `--userconfig`, `--globalconfig`
+#                 (any form) are denied outright.
+#   find          every starting-point path (the non-option words before the
+#                 first expression word) must resolve under a root - no
+#                 starting point means `.`, resolved the same way. `-H`/`-L`/
+#                 `-P` before the starting points are skipped; `-D` and `-O`
+#                 (debug/optimisation options that also take arguments, so
+#                 they would otherwise shift where the starting points are)
+#                 are denied outright; -exec, -execdir, -ok, -okdir, -delete,
+#                 -fprint*, -fls anywhere are denied outright.
+#   rm, mv, cp    every operand (non-flag word, or every word after `--`)
+#                 must resolve under a root; `rm`/`mv` additionally may not
+#                 target a root itself (deleting or moving the whole
+#                 workspace is never the intent); `--no-preserve-root` is
+#                 denied.
+#
+# Path resolution: a word is resolved with `realpath -m` (existing symlink
+# components followed, so a symlink inside a root pointing outside it fails;
+# non-existent trailing components allowed, since rm/mv/cp/find/git -C
+# targets need not exist yet) against a base directory, then must equal a
+# root or sit strictly beneath one. The base is this hook's own $PWD unless
+# the command's very first call expression is its only `cd <dir>` (or
+# `pushd <dir>`), in which case that already-validated directory is the base
+# for every later relative path. Any other cd/pushd/popd arrangement - more
+# than one, not first, or nested inside a substitution - makes the base
+# unknowable by static parsing (the flat call walk discards control flow:
+# `cd a || cd b`, `(cd x; ...)`), so every later relative path is blocked
+# (absolute paths still work). A glob (`*`, `?`, `[`) in a path word is
+# allowed but only the literal prefix before the first glob character is
+# resolved: a glob cannot expand to `..` (pathname expansion never matches
+# `..`, and `.`-prefixed names only with dotglob), so the expansion can never
+# climb above that prefix. Brace expansion, tilde and backslash are blocked
+# in a path word - each can turn one literal into a different word (or
+# several) at runtime, and enforce-ssh-host-and-key documents the same
+# exclusion for the same reason. A non-literal word (variable, substitution,
+# ANSI-C quoting) in a path position is blocked: it could evaluate to
+# anything.
+#
+# Allowed roots come from the data file `allowed-dirs` next to this hook
+# (baked root:root read-only into the container, listing /workspace/repo,
+# /workspace/rules and /workspace/tmp). On a host, where those do not exist,
+# an `allowed-dirs.local` in the same directory takes precedence when present
+# (created by hand, never shipped; the container's hooks directory is
+# root-owned, so it cannot be planted there). One path per line, `#`
+# comments and blank lines ignored, a leading `~` expands to $HOME and a
+# `$NAME` prefix to that environment variable - a line whose variable is
+# unset or empty is skipped rather than resolving to `/`. Each surviving
+# line is itself passed through `realpath -m`. No usable roots at all fails
+# closed: every checked call is blocked, commands without one still pass.
+#
+# Parses the command with shfmt (mvdan/sh) and walks the resulting AST with
+# a single jq pass that emits a header (does any checked command appear at
+# all, how many cd-family calls, is the first call one) followed by every
+# call's words, base64-encoded one per line - the same delimiter-collision-
+# free transport as enforce-ssh-host-and-key (see its header for why a tab/
+# newline text join was a live bypass), folded into the AST query so there
+# is one jq fork per command rather than one per call. A command with no
+# checked command name exits before the allowlist is even read, so the
+# common no-op case costs jq + shfmt + jq and nothing else. Obfuscated
+# command names, quote-splices and non-ASCII bytes are not this hook's job:
+# reject-obfuscated-commands rejects those categorically before this hook
+# ever runs, which is also what makes the plain substring permissions.deny
+# entries in claude-settings.json a genuine second layer rather than a weak
+# one. No auto-correction: a directory outside the allowed roots is a fact
+# about what the command would do, not a syntax slip a rewrite could fix.
+#
+# Fails closed: jq, shfmt or realpath missing, the command not parsing as
+# shell, a realpath failure, or no usable allowed roots all block.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# Directory of this script (a symlink path on a host install resolves to the
+# ~/.claude/hooks directory it was linked into, which is where allowed-dirs
+# and any allowed-dirs.local live - no need to follow the link).
+case "${BASH_SOURCE[0]}" in
+  */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) HOOK_DIR="." ;;
+esac
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+in_list() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [ "$needle" = "$item" ] && return 0
+  done
+  return 1
+}
+
+# Known wrapper names for the defense-in-depth `sudo rm ...` check - mirrors
+# the "Wrapper commands" section of command-blocklist, which is what actually
+# bans these upstream in the normal PreToolUse chain.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+CD_NAMES=(cd pushd popd)
+CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
+# Commands that can leave a new symlink behind (see resolve_word), plus the
+# git subcommands that materialise repo content - which the prompt-injection
+# threat model says may contain symlinks. Read-only git (status, log, diff,
+# ...) cannot, so it does not trip the rule.
+LINK_CAPABLE_NAMES=(ln cp mv tar unzip rsync)
+GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase cherry-pick revert am apply stash reset worktree submodule archive read-tree)
+LINK_SEEN=0
+GIT_SUBCOMMAND=""
+
+is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
+
+# git -c / --config-env key=value pairs that cannot make git run anything or
+# change what a later hook verifies. Matched case-insensitively on the whole
+# key=value; anything not listed is denied (see header).
+is_git_inert_config() {
+  case "${1,,}" in
+    color.* | advice.* | log.* | status.* | pull.* | push.* | fetch.* | rebase.*) return 0 ;;
+    init.defaultbranch | init.defaultbranch=*) return 0 ;; # not init.* - init.templateDir plants hooks
+    diff.noprefix | diff.noprefix=* | diff.renames | diff.renames=*) return 0 ;;
+    core.quotepath | core.quotepath=* | core.autocrlf | core.autocrlf=* | core.pager=cat) return 0 ;;
+  esac
+  return 1
+}
+
+# -files0-from is not an action but supplies starting points from a file,
+# bypassing the starting-point check entirely, so it is denied with them.
+FIND_DENIED_ACTIONS=(-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls -files0-from)
+
+MARKER='(non-literal)'
+
+# ---- allowed roots ---------------------------------------------------------
+
+ROOTS=()
+load_roots() {
+  local file="${HOOK_DIR}/allowed-dirs" line expanded resolved name rest
+  [ -f "${HOOK_DIR}/allowed-dirs.local" ] && file="${HOOK_DIR}/allowed-dirs.local"
+  ALLOWED_DIRS_FILE="$file"
+  [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \~ | \~/*) expanded="${HOME}${line#\~}" ;;
+      '$'*)
+        # $NAME or $NAME/rest - only a plain identifier is expanded, nothing
+        # else in the line is.
+        name="${line#\$}" rest=""
+        case "$name" in */*) rest="/${name#*/}"; name="${name%%/*}" ;; esac
+        [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        [ -n "${!name:-}" ] || continue
+        expanded="${!name}${rest}"
+        ;;
+      /*) expanded="$line" ;;
+      *) continue ;; # relative roots are meaningless - skip
+    esac
+    # Lines come from read -r, so they cannot contain a newline for $(...)
+    # to strip.
+    resolved=$(realpath -m -- "$expanded" 2>/dev/null) || continue
+    [ -n "$resolved" ] && ROOTS+=("$resolved")
+  done <"$file"
+}
+
+is_root() { in_list "$1" "${ROOTS[@]}"; }
+
+under_root() {
+  local path="$1" root
+  is_root "$path" && return 0
+  for root in "${ROOTS[@]}"; do
+    [ "$root" = "/" ] && return 0
+    [[ "$path" == "$root"/* ]] && return 0
+  done
+  return 1
+}
+
+# ---- path validation -------------------------------------------------------
+
+# Base directory relative paths resolve against, and whether relative paths
+# are allowed at all - see the header. Both are only ever changed by the main
+# loop after the first call; per-call checks pass their own cursor instead.
+BASE_DIR="$PWD"
+RELATIVE_OK=1
+
+# Resolves literal word $1 against base $3 (default BASE_DIR), with relative
+# paths permitted iff $4 (default RELATIVE_OK) is 1, into the global RESOLVED.
+# Blocks on anything that could change meaning at runtime. $2 is the label
+# used in messages, e.g. "git -C" or "rm operand". Runs in the main shell
+# (never inside $(...)) so that block's exit is the hook's exit.
+RESOLVED=""
+resolve_word() {
+  local word="$1" label="$2" base="${3:-$BASE_DIR}" relative_ok="${4:-$RELATIVE_OK}" prefix
+  [ "$word" = "$MARKER" ] && block "${label} argument could not be verified (non-literal argument)"
+  case "$word" in
+    *$'\n'* | *$'\t'* | *$'\r'*) block "${label} argument contains a control character" ;;
+    *'{'* | *'}'* | *\~* | *\\*) block "${label} argument '${word}' contains a character that could expand into a different path at runtime (brace, tilde or backslash)" ;;
+  esac
+  # Only the literal prefix before the first glob character is resolved - a
+  # glob can never expand upward past it (see header).
+  prefix="$word"
+  case "$prefix" in
+    *'*'* | *'?'* | *'['*)
+      # A glob component itself never matches `..`, but a literal `..`
+      # component AFTER the glob is expanded by bash exactly as written
+      # (`su*/../../etc` -> `sub/../../etc`), so the unresolved remainder
+      # must not climb. Blocking any `..` component in a glob word is the
+      # simple, complete rule.
+      case "/${word}/" in
+        */../*) block "${label} argument '${word}' combines a glob with a .. component - the part after the glob is not resolved and could climb out of the allowed directories" ;;
+      esac
+      prefix="${prefix%%[\*\?\[]*}"
+      prefix="${prefix%/*}"
+      [[ "$word" == /* ]] && [ -z "$prefix" ] && prefix="/"
+      ;;
+  esac
+  if [[ "$prefix" != /* ]]; then
+    [ "$relative_ok" = 1 ] || block "${label} argument '${word}' is relative, but a directory change earlier in this command makes the working directory unknowable - use an absolute path"
+    prefix="${base}/${prefix}"
+  fi
+  # A word containing a newline was blocked above, so $(...) has nothing to
+  # strip here.
+  RESOLVED=$(realpath -m -- "$prefix" 2>/dev/null) || block "${label} argument '${word}' could not be resolved"
+  # Symlinks are resolved as they exist NOW. An earlier call in the same
+  # command that can create one (ln, cp/mv of a link, tar/unzip, any git
+  # checkout-shaped subcommand materialising repo content) could make a
+  # path that resolves under a root at hook time point elsewhere by the
+  # time this call runs. Once such a call has been seen, only paths that
+  # already exist - and therefore resolved through real, current links -
+  # are accepted.
+  if [ "$LINK_SEEN" -eq 1 ] && [ ! -e "$RESOLVED" ]; then
+    block "${label} argument '${word}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+  fi
+}
+
+require_under_root() {
+  resolve_word "$@"
+  under_root "$RESOLVED" || block "${2} argument '${1}' resolves to '${RESOLVED}', which is outside the allowed directories"
+}
+
+# ---- per-command checks ----------------------------------------------------
+# Each receives the call's words in the array `words` with `i` = index of the
+# command name, and either blocks or returns 0.
+
+# Set by check_cd for the main loop's base-directory tracking.
+CD_TARGET=""
+check_cd() {
+  local name="${words[$i]}" arg="${words[$((i + 1))]:-}" extra="${words[$((i + 2))]:-}"
+  [ "$name" = "popd" ] && block 'popd changes to a directory this hook cannot see - use cd <absolute dir>'
+  [ -z "$arg" ] && block "${name} requires a directory - a bare ${name} goes to \$HOME, which is not an allowed directory"
+  [ -n "$extra" ] && block "${name} takes exactly one argument (no flags)"
+  case "$arg" in
+    -*) block "${name} flags (including 'cd -') are not permitted - use ${name} <absolute dir>" ;;
+  esac
+  require_under_root "$arg" "$name"
+  # A cd to a directory that does not exist fails at runtime and leaves the
+  # shell where it was, so a later relative path would resolve somewhere
+  # this hook did not check. Only an existing directory may become the base.
+  [ -d "$RESOLVED" ] || block "${name} target '${arg}' does not exist - the cd would fail and leave the working directory unknown"
+  CD_TARGET="$RESOLVED"
+}
+
+# Called when the git subcommand (or the end of the global options) is
+# reached: a git call with no -C at all runs against the hook's cwd -
+# enforce-git-dash-c auto-corrects it to `-C "$PWD"` and allows it via
+# updatedInput, which this hook never sees - so the cwd itself must be under
+# a root, exactly as `-C .` would have to be.
+require_git_cwd_when_no_dash_c() {
+  [ "$1" -eq 1 ] && return 0
+  require_under_root "." "git (implicit -C ., the working directory)"
+}
+
+check_git() {
+  local j=$((i + 1)) tok keyval base="$BASE_DIR" relative_ok="$RELATIVE_OK" saw_C=0
+  GIT_SUBCOMMAND=""
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    case "$tok" in
+      "$MARKER") block 'a git global option could not be verified (non-literal argument)' ;;
+      -C)
+        [ "$((j + 1))" -lt "${#words[@]}" ] || block 'git -C requires a directory'
+        # Each -C is relative to the previous one, exactly as git applies
+        # them - a local cursor, never the globals.
+        require_under_root "${words[$((j + 1))]}" "git -C" "$base" "$relative_ok"
+        base="$RESOLVED"
+        relative_ok=1
+        saw_C=1
+        j=$((j + 2))
+        continue
+        ;;
+      -c | --config-env)
+        [ "$((j + 1))" -lt "${#words[@]}" ] || block "git ${tok} requires a key=value argument"
+        keyval="${words[$((j + 1))]}"
+        [ "$keyval" = "$MARKER" ] && block "git ${tok} key could not be verified (non-literal argument)"
+        is_git_inert_config "$keyval" || block "git ${tok} ${keyval%%=*} is not permitted - only display/behaviour keys may be overridden per call; git config is otherwise read-only here"
+        j=$((j + 2))
+        continue
+        ;;
+      --config-env=*)
+        keyval="${tok#--config-env=}"
+        is_git_inert_config "$keyval" || block "git --config-env ${keyval%%=*} is not permitted - only display/behaviour keys may be overridden per call; git config is otherwise read-only here"
+        ;;
+      --exec-path | --exec-path=* | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --namespace | --namespace=* | --super-prefix | --super-prefix=*)
+        block "git ${tok%%=*} is not permitted - it redirects git to code or repository state outside the allowed directories"
+        ;;
+      --) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;;
+      -*) : ;; # any other global option (--no-pager, --bare, -p, ...) is inert here
+      *) GIT_SUBCOMMAND="$tok"; require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;; # the subcommand - global options end here
+    esac
+    j=$((j + 1))
+  done
+  require_git_cwd_when_no_dash_c "$saw_C"
+  return 0
+}
+
+# npm accepts any unambiguous abbreviation of a long option (nopt), so
+# `--prefi`, `--script-shel`, `--userconf` all take effect; canonicalise the
+# option name before matching. Prints the canonical name, or the input
+# unchanged when it abbreviates none of the options this hook cares about.
+npm_canonical_option() {
+  local name="$1" full
+  [ "${#name}" -ge 2 ] || { printf '%s' "$name"; return; }
+  for full in prefix script-shell userconfig globalconfig; do
+    if [[ "$full" == "$name"* ]]; then
+      printf '%s' "$full"
+      return
+    fi
+  done
+  printf '%s' "$name"
+}
+
+check_npm() {
+  local j=$((i + 1)) tok opt val has_val
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    case "$tok" in
+      -C) opt="prefix"; has_val=0 ;; # npm's short alias for --prefix
+      # nopt strips ALL leading dashes, so -prefix and -script-shell are the
+      # long options too; only a single letter after one dash is a short.
+      -?) j=$((j + 1)); continue ;;
+      -*=*) opt="${tok#"${tok%%[!-]*}"}"; opt=$(npm_canonical_option "${opt%%=*}"); val="${tok#*=}"; has_val=1 ;;
+      -*) opt=$(npm_canonical_option "${tok#"${tok%%[!-]*}"}"); has_val=0 ;;
+      *) j=$((j + 1)); continue ;;
+    esac
+    case "$opt" in
+      prefix)
+        if [ "$has_val" -eq 0 ]; then
+          [ "$((j + 1))" -lt "${#words[@]}" ] || block 'npm --prefix requires a directory'
+          val="${words[$((j + 1))]}"
+          j=$((j + 1))
+        fi
+        require_under_root "$val" "npm --prefix"
+        ;;
+      script-shell | userconfig | globalconfig)
+        block "npm --${opt} is not permitted (any abbreviation of it too) - it changes which program npm runs scripts through or which config it trusts"
+        ;;
+    esac
+    j=$((j + 1))
+  done
+  return 0
+}
+
+check_find() {
+  local j=$((i + 1)) tok paths=0
+  # Starting points: everything before the first expression word. -H/-L/-P
+  # are the only leading options skipped; -D/-O take their own arguments
+  # and would shift where the starting points begin, so they are denied
+  # rather than guessed at.
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    case "$tok" in
+      -H | -L | -P) j=$((j + 1)); continue ;;
+      -D | -D* | -O | -O*) block "find ${tok} is not permitted - debug/optimisation options are not needed here and hide where the starting points begin" ;;
+      -* | '(' | '!' | ',') break ;;
+    esac
+    require_under_root "$tok" "find starting point"
+    paths=$((paths + 1))
+    j=$((j + 1))
+  done
+  [ "$paths" -eq 0 ] && require_under_root "." "find starting point (implicit .)"
+  # Denied actions anywhere in the expression.
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    in_list "$tok" "${FIND_DENIED_ACTIONS[@]}" && block "find ${tok} is not permitted - it runs a program or deletes/writes files from inside find; pipe the results to a checked command instead"
+    j=$((j + 1))
+  done
+  return 0
+}
+
+# Classifies one cp/mv option word: returns 0 when it is --target-directory
+# in any spelling getopt accepts, setting TARGET_DIR_VALUE to the attached
+# value ("" when the value is the next word). Long: `--target-directory`,
+# any unique abbreviation of it (`--t` onwards - no other cp/mv long option
+# starts with t), with or without `=value`. Short: `-t`, or a bundled
+# cluster containing t (`-rt`, `-rt/etc`): everything after the first t is
+# the attached value.
+TARGET_DIR_VALUE=""
+target_directory_option() {
+  local tok="$1" name
+  TARGET_DIR_VALUE=""
+  case "$tok" in
+    --*)
+      name="${tok#--}"
+      name="${name%%=*}"
+      [ -n "$name" ] || return 1
+      [[ "target-directory" == "$name"* ]] || return 1
+      case "$tok" in *=*) TARGET_DIR_VALUE="${tok#*=}" ;; esac
+      return 0
+      ;;
+    -[A-Za-z]*)
+      [[ "$tok" == *t* ]] || return 1
+      TARGET_DIR_VALUE="${tok#*t}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# rm may not delete an allowed root itself, and mv may not move one away;
+# a glob under a root (`rm -rf <root>/*`) empties it but leaves it in place,
+# and mv's last operand is a destination, into which moving is fine.
+deny_root_operand() {
+  local name="$1" word="$2"
+  case "$word" in *'*'* | *'?'* | *'['*) return 0 ;; esac
+  is_root "$RESOLVED" && block "${name} may not target an allowed root directory itself ('${word}' resolves to '${RESOLVED}')"
+  return 0
+}
+
+check_rm_mv_cp() {
+  local name="${words[$i]}" j=$((i + 1)) tok operands_only=0 last_operand=""
+  local -a operands=()
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    if [ "$operands_only" -eq 0 ]; then
+      case "$tok" in
+        --) operands_only=1; j=$((j + 1)); continue ;;
+        --no-preserve-root) block 'rm --no-preserve-root is not permitted' ;;
+        -*)
+          # mv/cp write into a directory named by --target-directory, which
+          # getopt also accepts as any unique abbreviation (--t, --target,
+          # --target-dir), and as -t inside a bundled short cluster with the
+          # value attached or following (-rt/etc, -rt /etc).
+          if [ "$name" != "rm" ] && target_directory_option "$tok"; then
+            if [ -n "$TARGET_DIR_VALUE" ]; then
+              require_under_root "$TARGET_DIR_VALUE" "${name} --target-directory"
+            else
+              [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
+              require_under_root "${words[$((j + 1))]}" "${name} --target-directory"
+              j=$((j + 1))
+            fi
+          fi
+          j=$((j + 1))
+          continue
+          ;;
+      esac
+    fi
+    require_under_root "$tok" "${name} operand"
+    operands+=("$tok")
+    case "$name" in
+      rm) deny_root_operand rm "$tok" ;;
+      mv) last_operand="$tok" ;;
+    esac
+    j=$((j + 1))
+  done
+  # For mv every operand but the last is a source being moved away.
+  if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
+    for tok in "${operands[@]}"; do
+      [ "$tok" = "$last_operand" ] && continue
+      resolve_word "$tok" "mv operand"
+      deny_root_operand mv "$tok"
+    done
+  fi
+  return 0
+}
+
+# ---- main ------------------------------------------------------------------
+
+command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+command -v realpath >/dev/null 2>&1 || block 'realpath is not available to resolve paths - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
+
+to_json_array() {
+  local out="" item
+  for item in "$@"; do out="${out:+${out},}\"${item}\""; done
+  printf '[%s]' "$out"
+}
+
+# One jq pass over the AST. Line 1 is a header:
+#   H<TAB><any checked command present: 0/1><TAB><cd-family call count><TAB><first call is cd-family: 0/1>
+# then, per CallExpr in document order, a line "C" followed by one line per
+# word: "L:<base64 of the literal>" for a single plain literal word (bare, or
+# one layer of ordinary quoting with no expansion inside), "N" for anything
+# else (substitution, expansion, ANSI-C quoting, mixed quoting). The command
+# name a call dispatches on is word 0, or word 1 when word 0 is a known
+# wrapper - the same two positions the per-call loop below checks. See
+# enforce-ssh-host-and-key for the transport rationale.
+transport=$(printf '%s' "$ast" | jq -r \
+  --argjson wrappers "$(to_json_array "${WRAPPERS[@]}")" \
+  --argjson cd_names "$(to_json_array "${CD_NAMES[@]}")" \
+  --argjson checked "$(to_json_array "${CHECKED_NAMES[@]}")" '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
+  def basename: if . == null then "" else (split("/") | last) end;
+  def cmdname: (.[0] | basename) as $n0
+    | if ($wrappers | index($n0)) != null then (.[1] | basename) else $n0 end;
+  [ .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) | [ .Args[] | literal_value ] ] as $calls
+  | ($calls | map(cmdname)) as $names
+  | "H\t" + (if any($names[]; . as $n | ($checked | index($n)) != null) then "1" else "0" end)
+    + "\t" + ([ $names[] | select(. as $n | ($cd_names | index($n)) != null) ] | length | tostring)
+    + "\t" + (if ($names | length) > 0 and (($cd_names | index($names[0])) != null) then "1" else "0" end),
+    ( $calls[] | "C", ( .[] | if . == null then "N" else "L:" + @base64 end ) )
+') || block 'command structure could not be analyzed - failing closed'
+
+header="${transport%%$'\n'*}"
+IFS=$'\t' read -r _ has_checked cd_count first_is_cd <<<"$header"
+[ "$has_checked" = 1 ] || exit 0
+
+# PreToolUse hooks run in parallel on the ORIGINAL command, and
+# reject-obfuscated-commands may allow a rewritten one (its Layer 0 turns a
+# curly-quoted word into a plainly quoted one via updatedInput). This hook
+# would then have judged `rm -rf <curly>/etc/x<curly>` as one harmless
+# literal while the command that actually runs is `rm -rf '/etc/x'`. So
+# once a checked command is present, any non-ASCII byte fails closed here
+# regardless of what the normalising hook decides - the agent retries in
+# plain ASCII.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]' # same class reject-obfuscated-commands' Layer 0 uses; LC_ALL=C makes it byte-exact
+if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+  block 'command contains non-ASCII or non-printable bytes and includes a directory-taking command - rewrite it in plain ASCII'
+fi
+
+load_roots
+[ "${#ROOTS[@]}" -gt 0 ] || block "no allowed directories are configured (${ALLOWED_DIRS_FILE}) - failing closed"
+
+# Runs the checks for the call currently accumulated in `words`, then, after
+# the first call only, fixes the base directory for everything that follows:
+# a single cd that is also the first call makes its validated target the
+# base; any cd at all in any other arrangement disables relative paths from
+# here on (see header).
+first_call=1
+process_call() {
+  local tok base_name positions=(0)
+  is_wrapper "${words[0]:-}" && positions+=(1)
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    base_name="${tok##*/}"
+    case "$base_name" in
+      cd | pushd | popd) check_cd ;;
+      git) check_git ;;
+      npm) check_npm ;;
+      find) check_find ;;
+      rm | mv | cp) check_rm_mv_cp ;;
+    esac
+    # Only after this call's own checks: a call cannot exploit a link it
+    # has not created yet.
+    if in_list "$base_name" "${LINK_CAPABLE_NAMES[@]}"; then
+      LINK_SEEN=1
+    elif [ "$base_name" = "git" ] && in_list "$GIT_SUBCOMMAND" "${GIT_MATERIALISING_SUBCOMMANDS[@]}"; then
+      LINK_SEEN=1
+    fi
+  done
+  if [ "$first_call" -eq 1 ]; then
+    if [ "$cd_count" -eq 1 ] && [ "$first_is_cd" -eq 1 ]; then
+      BASE_DIR="$CD_TARGET"
+    elif [ "$cd_count" -gt 0 ]; then
+      RELATIVE_OK=0
+    fi
+    first_call=0
+  fi
+}
+
+words=()
+in_call=0
+while IFS= read -r line; do
+  case "$line" in
+    H*) ;;
+    C)
+      [ "$in_call" -eq 1 ] && process_call
+      words=()
+      in_call=1
+      ;;
+    L:*)
+      # $(...) strips trailing newlines; the sentinel keeps a real trailing
+      # newline in a quoted word intact so the path checks see it (and block).
+      decoded=$(
+        printf '%s' "${line#L:}" | base64 -d 2>/dev/null
+        printf '.'
+      )
+      words+=("${decoded%.}")
+      ;;
+    *) words+=("$MARKER") ;; # "N", or any unrecognised tag - fail closed, not silently drop
+  esac
+done <<<"$transport"
+[ "$in_call" -eq 1 ] && process_call
+
+exit 0

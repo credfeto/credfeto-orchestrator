@@ -160,9 +160,14 @@ while IFS= read -r var; do
   [ -z "$var" ] && continue
   for pattern in "${env_var_patterns[@]}"; do
     [ -z "$pattern" ] && continue
+    # Case-insensitive: npm matches npm_config_* env keys with /i, so
+    # NPM_config_script_shell=... is honoured as much as npm_config_... is,
+    # and a glob matched under LC_ALL=C is case-sensitive (#1385 security
+    # review). Both sides lower-cased, so an all-caps pattern (PATH, GIT_*)
+    # keeps matching its own spelling too.
     # shellcheck disable=SC2254  # patterns from the blocklist file are globs by design
-    case "$var" in
-      $pattern)
+    case "${var,,}" in
+      ${pattern,,})
         block "assignment to ${var} is not permitted - it changes how other commands are interpreted"
         ;;
     esac

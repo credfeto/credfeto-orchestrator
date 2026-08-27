@@ -86,6 +86,58 @@ teardown() {
     [[ "${output}" == *'$HOME/.claude/hooks/block-dotnet-tool-install'* ]]
 }
 
+@test "generated settings.json includes enforce-allowed-dirs immediately after reject-obfuscated-commands in the PreToolUse chain (#1385)" {
+    main
+
+    run jq -r '.hooks.PreToolUse[0].hooks[1].command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [ "${output}" = '$HOME/.claude/hooks/enforce-allowed-dirs' ]
+}
+
+@test "allowed-dirs is symlinked alongside the hooks and a missing allowed-dirs.local is called out, not fabricated (#1385)" {
+    run main
+    [ "${status}" -eq 0 ]
+    [ -L "${HOME}/.claude/hooks/allowed-dirs" ]
+    [ ! -e "${HOME}/.claude/hooks/allowed-dirs.local" ]
+    [[ "${output}" == *'allowed-dirs.local'* ]]
+}
+
+@test "an existing allowed-dirs.local is left alone and not warned about (#1385)" {
+    mkdir -p "${HOME}/.claude/hooks"
+    printf '%s\n' "${HOME}/work" > "${HOME}/.claude/hooks/allowed-dirs.local"
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -L "${HOME}/.claude/hooks/allowed-dirs.local" ]
+    [ "$(cat "${HOME}/.claude/hooks/allowed-dirs.local")" = "${HOME}/work" ]
+    [[ "${output}" != *'will block every directory-taking command'* ]]
+}
+
+@test "every code-execution/destructive flag is denied in both the first and a later argument position (#1385)" {
+    # `*` matches one-or-more characters, so `Bash(rm * --no-preserve-root*)` alone does not
+    # match `rm --no-preserve-root -rf /` - each flag needs the pair. Pinned here so a new deny
+    # cannot be added in only one position.
+    local denies pair tool flag
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_SETTINGS}")
+    for pair in \
+        "find:-delete" "find:-exec " "find:-execdir " "find:-fls " "find:-fprint" "find:-ok " "find:-okdir " \
+        "git:--exec-path" "git:--git-dir" "git:--namespace" "git:--super-prefix" "git:--work-tree" \
+        "npm:--globalconfig" "npm:--script-shell" "npm:--userconfig" \
+        "npm:-globalconfig" "npm:-script-shell" "npm:-userconfig" \
+        "rm:--no-preserve-root"; do
+        tool="${pair%%:*}"
+        flag="${pair#*:}"
+        printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} ${flag}*)" \
+            || { echo "missing first-position deny: Bash(${tool} ${flag}*)" >&2; return 1; }
+        printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} * ${flag}*)" \
+            || { echo "missing later-position deny: Bash(${tool} * ${flag}*)" >&2; return 1; }
+    done
+    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)"; do
+        printf '%s\n' "${denies}" | grep -qxF "${exact}" \
+            || { echo "missing exact deny: ${exact}" >&2; return 1; }
+    done
+}
+
 @test "generated settings.json includes cache-gh-lookups in the PreToolUse chain (#1380)" {
     main
 

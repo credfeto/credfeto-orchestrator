@@ -82,8 +82,13 @@ verify_ssh_signing() {
     pubkey=$(ssh-add -L 2>/dev/null | head -1)
     [ -n "${pubkey}" ] || die "SSH agent returned no public keys"
 
-    printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - >/dev/null 2>&1 \
-        || die "SSH signing test failed — ensure the loaded SSH key supports signing"
+    # Keep ssh-keygen's own stderr for the die message: a bare "signing test
+    # failed" hid an intermittent exec failure of the test suite's stub for
+    # hours (#1392); the reason is always more useful than the summary.
+    local sign_err sign_status=0
+    sign_err=$(printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - 2>&1 >/dev/null) || sign_status=$?
+    [ "${sign_status}" -eq 0 ] \
+        || die "SSH signing test failed (ssh-keygen exited ${sign_status}: ${sign_err:-no output}) — ensure the loaded SSH key supports signing"
 
     # BatchMode=yes disables any interactive prompt (host-key confirmation, password);
     # ConnectTimeout/ServerAliveInterval/ServerAliveCountMax bound both a dropped SYN

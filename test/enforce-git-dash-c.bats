@@ -3,6 +3,7 @@
 
 load test_helper
 
+# shellcheck disable=SC2034  # read by run_hook_in_dir in test_helper.bash, not visible to shellcheck across `load`
 HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-git-dash-c"
 
 setup() {
@@ -18,31 +19,20 @@ teardown() {
     fi
 }
 
-# Pipes a Claude Code PreToolUse hook payload for the given Bash command into
-# the hook under test. status 0 = allowed, 2 = blocked (matches the hook's
-# own contract). Runs from dir (default TEST_TMP - confirmed, via direct
-# testing before #1357's auto-correction feature was written, to always sit
-# under BATS_TEST_TMPDIR, itself never nested inside this checkout's own git
-# tree), so every test below keeps exercising the hook exactly as it behaved
-# before #1357: bats itself is normally invoked from the repo root, which IS a
-# real, writable git checkout, so without this every "bare git X is blocked"
-# test here would silently start passing through the new auto-correct path
-# instead of the block path they're named for. The auto-correction tests
-# (#1357) pass a second argument instead - a real, writable git repository,
-# which the hook's own $PWD needs to be for that path. This file must keep its
-# own override rather than falling back to test_helper.bash's shared run_hook:
-# that one runs from bats' own CWD (the repo root, a real writable git
-# checkout), which is exactly the always-auto-corrects case this function
-# exists to avoid defaulting into. Note the shared run_hook's 2nd argument is
-# run_in_background, not a directory - copying a call between this file and
-# reject-obfuscated-commands.bats needs the argument re-checked, not just the
-# function name.
-run_hook_in_dir() {
-    local command="$1" dir="${2:-$TEST_TMP}" run_in_background="${3:-}"
-    local payload
-    payload=$(hook_payload "$command" "$run_in_background")
-    run bash -c 'cd "$3" && printf "%s" "$1" | "$2"' _ "$payload" "$HOOK" "${dir}"
-}
+# Tests below use test_helper.bash's shared run_hook_in_dir (promoted there in
+# #1385 when a second hook needed it). Its dir argument defaults to TEST_TMP -
+# confirmed, via direct testing before #1357's auto-correction feature was
+# written, to always sit under BATS_TEST_TMPDIR, itself never nested inside
+# this checkout's own git tree - so every test below keeps exercising the hook
+# exactly as it behaved before #1357: bats itself is normally invoked from the
+# repo root, which IS a real, writable git checkout, so without this every
+# "bare git X is blocked" test here would silently start passing through the
+# new auto-correct path instead of the block path they're named for. The
+# auto-correction tests (#1357) pass a second argument instead - a real,
+# writable git repository, which the hook's own $PWD needs to be for that
+# path. Not the shared run_hook: that one runs from bats' own CWD (the repo
+# root), which is exactly the always-auto-corrects case this default exists
+# to avoid.
 
 # Creates a fresh, writable git repository under TEST_TMP and echoes its path.
 make_writable_repo() {

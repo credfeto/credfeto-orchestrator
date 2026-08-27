@@ -23,3 +23,9 @@ PYTHONPATH
 PYTHONSTARTUP
 NODE_OPTIONS
 GIT_*
+# npm reads any option from the environment as npm_config_<option>, so a
+# prefixed assignment (npm_config_script_shell=/evil npm run x) is the same
+# bypass of enforce-allowed-dirs' --script-shell/--userconfig checks as the
+# flag itself (#1385 review).
+npm_config_*
+NPM_CONFIG_*
