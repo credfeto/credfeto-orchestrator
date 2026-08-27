@@ -366,6 +366,60 @@ assert_blocked() {
     assert_blocked "git -C ${ROOT} status"
 }
 
+# --- code-review round 1 (#1386) ------------------------------------------------------
+
+@test "a curly-quoted path word fails closed here even though reject-obfuscated-commands would normalise it (parallel hooks see the original)" {
+    assert_blocked $'rm -rf \xe2\x80\x98/etc/x\xe2\x80\x99' 'plain ASCII'
+}
+
+@test "non-ASCII in a command with no checked call is left to reject-obfuscated-commands" {
+    assert_allowed $'echo \xe2\x80\x94'
+}
+
+@test "cp/mv --target-directory and -t are validated in every spelling" {
+    assert_blocked "cp x --target-directory=${OUTSIDE}" '--target-directory'
+    assert_blocked "cp x --target-directory ${OUTSIDE}"
+    assert_blocked "cp x -t ${OUTSIDE}"
+    assert_blocked "cp x -t${OUTSIDE}"
+    assert_blocked "mv --target-directory=${OUTSIDE} x"
+    assert_allowed "cp x -t sub"
+}
+
+@test "git -c init.templateDir is blocked - init.* is not inert" {
+    assert_blocked "git -C ${ROOT} -c init.templateDir=${OUTSIDE}/tpl init"
+    assert_allowed "git -C ${ROOT} -c init.defaultBranch=main init"
+}
+
+@test "npm -C and nopt abbreviations of --prefix/--script-shell are handled like the full option" {
+    assert_blocked "npm -C ${OUTSIDE} ci"
+    assert_allowed "npm -C sub ci"
+    assert_blocked "npm --prefi=${OUTSIDE} ci"
+    assert_blocked "npm --script-shel=/evil run x" '--script-shell'
+    assert_blocked "npm run x --userconf /evil"
+}
+
+@test "a leading cd to a directory that does not exist is blocked - a failed cd leaves the cwd unknown" {
+    assert_blocked "cd ${ROOT}/nope; rm -rf ../../outside/y" 'does not exist'
+}
+
+@test "rm of a glob under a root, and mv into a root, are allowed; mv of a root away is blocked" {
+    assert_allowed "rm -rf ${ROOT}/*"
+    assert_allowed "rm -rf ./*"
+    assert_allowed "mv sub/x ${ROOT}"
+    assert_blocked "mv ${ROOT} ${ROOT}/sub/moved" 'may not target an allowed root'
+}
+
+@test "find -files0-from is blocked - it supplies starting points this hook cannot see" {
+    assert_blocked "find -files0-from ${OUTSIDE}/list -name x" '-files0-from'
+    assert_blocked "find ${ROOT} -files0-from ${OUTSIDE}/list"
+}
+
+@test "a git call with no -C is checked against the hook's cwd, since enforce-git-dash-c auto-corrects it to -C \$PWD" {
+    assert_allowed "git status"
+    assert_blocked "git status" 'implicit -C' "${OUTSIDE}"
+    assert_blocked "git -c color.ui=false log" '' "${OUTSIDE}"
+}
+
 # --- fail-closed infrastructure -----------------------------------------------------
 
 @test "a failing jq fails closed" {
