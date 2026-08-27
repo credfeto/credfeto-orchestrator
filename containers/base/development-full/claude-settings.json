@@ -243,7 +243,10 @@
       "Read(~/.database)",
       "Read(**/.database)",
       "Edit(~/.database)",
-      "Edit(**/.database)"
+      "Edit(**/.database)",
+      "Read(/tmp/**)",
+      "Write(/tmp/**)",
+      "Edit(/tmp/**)"
     ]
   },
   "advisorModel": "opus",
