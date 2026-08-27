@@ -62,6 +62,11 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
+@test "git checkout is allowed by the subcommand allowlist (mandated by git.instructions.md's branch-switch guidance)" {
+    run_hook_in_dir "git -C . checkout some-branch"
+    [ "${status}" -eq 0 ]
+}
+
 @test "git filter-branch is blocked by the subcommand allowlist even with -C present" {
     run_hook_in_dir "git -C . filter-branch --tag-name-filter cat -- --all"
     [ "${status}" -eq 2 ]
