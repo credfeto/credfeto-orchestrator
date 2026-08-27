@@ -1,0 +1,13 @@
+# Directory roots the enforce-allowed-dirs hook permits as targets for cd,
+# pushd, git -C, npm --prefix, find starting points and rm/mv/cp operands.
+# One absolute path per line; blank lines and #-comments are ignored; a
+# leading ~ expands to $HOME and a leading $NAME to that environment
+# variable (a line whose variable is unset is skipped). Every path is
+# canonicalised with realpath -m before use. This copy is baked root:root
+# 0444 into the container; on a host, an allowed-dirs.local next to it
+# (hand-written, never shipped) takes precedence - see the hook header.
+
+# The agent container's three mounts - see containers/agent/Dockerfile.
+/workspace/repo
+/workspace/rules
+/workspace/tmp
