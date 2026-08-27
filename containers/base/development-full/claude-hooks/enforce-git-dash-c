@@ -110,17 +110,25 @@ block() {
   exit 2
 }
 
+# Generic array-membership check, same shape as enforce-allowed-dirs' own
+# in_list() - shared by is_wrapper() below and is_allowed_subcommand()
+# further down instead of each hand-rolling its own scan loop.
+in_list() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [ "$needle" = "$item" ] && return 0
+  done
+  return 1
+}
+
 # Known wrapper names for the defense-in-depth `sudo git ...` check below —
 # mirrors the "Wrapper commands" section of command-blocklist, which is what
 # actually bans these upstream in the normal PreToolUse chain.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
 is_wrapper() {
-  local w
-  for w in "${WRAPPERS[@]}"; do
-    [ "$1" = "$w" ] && return 0
-  done
-  return 1
+  in_list "$1" "${WRAPPERS[@]}"
 }
 
 # Directory of this script (a symlink path on a host install resolves to the
@@ -133,18 +141,22 @@ case "${BASH_SOURCE[0]}" in
 esac
 
 # Allowed git subcommands (#1387) - anything not on this list blocks
-# outright (see the header comment). An unreadable/missing file yields an
-# empty array, which blocks every subcommand - fails closed, same as
-# reject-obfuscated-commands' identical command-allowlist handling.
+# outright (see the header comment). Loaded lazily, on the first git call
+# actually encountered, rather than unconditionally up front: this hook
+# fires on every Bash tool call, not just git ones, so an eager read would
+# fork grep and read the data file for every non-git command too. An
+# unreadable/missing file yields an empty array, which blocks every
+# subcommand - fails closed, same as reject-obfuscated-commands' identical
+# command-allowlist handling.
 GIT_SUBCOMMAND_ALLOWLIST="${HOOK_DIR}/git-subcommand-allowlist"
-mapfile -t allowed_subcommands < <(grep -vE '^[[:space:]]*(#|$)' "$GIT_SUBCOMMAND_ALLOWLIST" 2> /dev/null)
+allowed_subcommands_loaded=0
 
 is_allowed_subcommand() {
-  local s
-  for s in "${allowed_subcommands[@]}"; do
-    [ "$1" = "$s" ] && return 0
-  done
-  return 1
+  if [ "$allowed_subcommands_loaded" -eq 0 ]; then
+    mapfile -t allowed_subcommands < <(grep -vE '^[[:space:]]*(#|$)' "$GIT_SUBCOMMAND_ALLOWLIST" 2> /dev/null)
+    allowed_subcommands_loaded=1
+  fi
+  in_list "$1" "${allowed_subcommands[@]}"
 }
 
 input=$(cat)
