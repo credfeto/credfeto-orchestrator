@@ -94,6 +94,49 @@ make_writable_repo() {
     [ "${status}" -eq 2 ]
 }
 
+# The following have no confirmed use in this repo's own instructions, unlike every entry
+# actually on GIT_ALLOWED_SUBCOMMANDS - pinned as blocked so a future edit can't silently
+# widen the list back to them without a deliberate, reviewed change.
+@test "git am is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . am some.patch"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git cherry-pick is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . cherry-pick abc123"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git mv is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . mv old new"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git remote is blocked - actively moved away from in favour of git config --local" {
+    run_hook_in_dir "git -C . remote -v"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git restore is blocked - only mentioned as a destructive command to be careful with, not an instructed operation" {
+    run_hook_in_dir "git -C . restore ."
+    [ "${status}" -eq 2 ]
+}
+
+@test "git revert is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . revert abc123"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git rm is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . rm file"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git tag is blocked - no confirmed use in this repo" {
+    run_hook_in_dir "git -C . tag v1.0.0"
+    [ "${status}" -eq 2 ]
+}
+
 @test "a disallowed subcommand is blocked outright when -C is missing, not offered an auto-correct rewrite (#1387)" {
     local repo
     repo=$(make_writable_repo)
