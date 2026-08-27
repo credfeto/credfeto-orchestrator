@@ -113,6 +113,30 @@ teardown() {
     [[ "${output}" != *'will block every directory-taking command'* ]]
 }
 
+@test "every code-execution/destructive flag is denied in both the first and a later argument position (#1385)" {
+    # `*` matches one-or-more characters, so `Bash(rm * --no-preserve-root*)` alone does not
+    # match `rm --no-preserve-root -rf /` - each flag needs the pair. Pinned here so a new deny
+    # cannot be added in only one position.
+    local denies pair tool flag
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_SETTINGS}")
+    for pair in \
+        "find:-delete" "find:-exec " "find:-execdir " "find:-fls " "find:-fprint" "find:-ok " "find:-okdir " \
+        "git:--exec-path" "git:--git-dir" "git:--work-tree" \
+        "npm:--globalconfig" "npm:--script-shell" "npm:--userconfig" \
+        "rm:--no-preserve-root"; do
+        tool="${pair%%:*}"
+        flag="${pair#*:}"
+        printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} ${flag}*)" \
+            || { echo "missing first-position deny: Bash(${tool} ${flag}*)" >&2; return 1; }
+        printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} * ${flag}*)" \
+            || { echo "missing later-position deny: Bash(${tool} * ${flag}*)" >&2; return 1; }
+    done
+    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)"; do
+        printf '%s\n' "${denies}" | grep -qxF "${exact}" \
+            || { echo "missing exact deny: ${exact}" >&2; return 1; }
+    done
+}
+
 @test "generated settings.json includes cache-gh-lookups in the PreToolUse chain (#1380)" {
     main
 
