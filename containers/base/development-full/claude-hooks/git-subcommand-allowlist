@@ -12,6 +12,7 @@
 add
 am
 branch
+checkout
 cherry-pick
 clone
 commit
