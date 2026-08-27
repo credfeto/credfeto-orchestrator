@@ -224,6 +224,21 @@ run_hook() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
 }
 
+# Same as run_hook, but with cwd set to dir first (default TEST_TMP, which
+# always sits under BATS_TEST_TMPDIR and never inside this checkout's own git
+# tree) - for hooks whose decision depends on the working directory
+# (enforce-git-dash-c's auto-correct, enforce-allowed-dirs' relative-path
+# resolution). Invokes the hook via bash rather than directly so a copy placed
+# under BATS_TEST_TMPDIR (which may be a noexec mount) still runs. Note the
+# argument order differs from run_hook: (command, dir, run_in_background)
+# here versus (command, run_in_background).
+run_hook_in_dir() {
+    local command="$1" dir="${2:-$TEST_TMP}" run_in_background="${3:-}"
+    local payload
+    payload=$(hook_payload "$command" "$run_in_background")
+    run bash -c 'cd "$3" && printf "%s" "$1" | bash "$2"' _ "$payload" "$HOOK" "${dir}"
+}
+
 # Runs the script under test (a *.bats file must set $SCRIPT before calling
 # this) with cwd set to $1.
 run_script() {
