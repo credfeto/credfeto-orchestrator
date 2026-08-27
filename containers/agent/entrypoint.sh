@@ -334,5 +334,11 @@ export TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 export TMP="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 export TEMP="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 export XDG_RUNTIME_DIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
+# CLAUDE_CODE_TMPDIR (Claude Code v2.1.5+) overrides where Claude Code writes its
+# own internal temp files, separately from the standard TMPDIR/TMP/TEMP above -
+# without it, some of Claude Code's internal writes fall back to unregistered /tmp
+# even though TMPDIR is set (upstream only partially respects it: some paths, e.g.
+# CWD tracking files, still hardcode /tmp/claude-* regardless - anthropics/claude-code#31024).
+export CLAUDE_CODE_TMPDIR="${WORKSPACE_TMP_DIR:-/workspace/tmp}"
 
 exec claude "$@"

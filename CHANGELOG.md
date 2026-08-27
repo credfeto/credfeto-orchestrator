@@ -19,14 +19,17 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Install bubblewrap (bwrap) in the development-tools base image, so it survives into development-agent. Claude Codes own Linux Bash-tool sandbox is built on bwrap; without it, sandbox initialization fails closed and denies every command needing an escape from the sandbox (a redirect or write outside the registered directories, dangerouslyDisableSandbox) regardless of path, command, or flags, which was being misdiagnosed as an --add-dir/--userns problem (#1351)
 - claude_result_indicates_background_stall (the #1326/#1335 self-healing warning for a session that ends its turn backgrounding a build/commit/test and expecting a later Monitor notification) now also catches an anchored 'I'll pick this up / resume / continue this' phrasing tied to a background/monitor/notification mention nearby, closing a gap that let a real stall recur undetected on credfeto-dispatcher#222 and recommendations-defi-dashboard#419 (#1374)
 - A pivoted (Issue-to-PR) PR's 'waiting on CI'/'waiting on human review' Discord notification (#1375) never actually fired - it was wired to a code path in oneshot's shared Work block that pivoted PRs can never reach, since their CI-pending/settled state is always already resolved by an earlier check first; moved the notification to that earlier, actually-reachable check and removed the now-confirmed-dead duplicate
+- entrypoint.sh now also exports CLAUDE_CODE_TMPDIR (alongside the existing TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR) pointed at WORKSPACE_TMP_DIR, so Claude Code v2.1.5+'s own internal temp-file writes land inside the registered --add-dir scratch mount instead of falling back to unregistered /tmp (upstream tracked at anthropics/claude-code#31024)
 ### Changed
 - development-dotnet-tools' baked-in NuGet.Config renames the api.nuget.org cache source to "Cache: Nuget" and adds explicit packageSourceMapping, routing FunFair.BuildCheck/FunFair.BuildVersion/FunFair.CodeAnalysis/FunFair.Test.* (plus everything else via the catch-all) through the Nuget cache while other FunFair.* packages continue to resolve via the FunFair and FunFair (Prerelease) feeds
 ### Deprecated
 ### Removed
 ### Deployment Changes
+
 <!--
 Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
 -->
+
 ## [0.0.3] - 2026-08-19
 ### Security
 - development-node base image installs Node.js via a pinned NodeSource apt repository and the Bun runtime from a checksum-verified release archive instead of piping curl output straight to bash, and pins the markdownlint-cli2, markdownlint-cli, stylelint, stylelint-config-standard and eslint npm globals to explicit versions instead of 'latest' (#1106)
