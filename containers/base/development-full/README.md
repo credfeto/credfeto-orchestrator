@@ -73,9 +73,10 @@ second, on the already-normalised command: every directory- or path-taking argum
 `git -C`, `npm --prefix`, `find` (starting points) and `rm`/`mv`/`cp` (operands) must resolve (symlinks
 followed) under one of the roots listed in `claude-hooks/allowed-dirs` — baked root:root 0444 with the
 agent container's three mounts, `/workspace/repo`, `/workspace/rules`, `/workspace/tmp` — and the flags
-that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--work-tree`, `git -c`
-keys such as `core.hooksPath`/`alias.*`/`credential.*`, `npm --script-shell`/`--userconfig`/`--globalconfig`,
-`find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`, `rm --no-preserve-root`) are denied outright. This is
+that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--work-tree`/`--namespace`/
+`--super-prefix`, every `git -c` key outside a short allowlist of inert display/behaviour keys,
+`npm --script-shell`/`--userconfig`/`--globalconfig`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`/`-D`/`-O`,
+`rm --no-preserve-root`) are denied outright. This is
 the check `claude-settings.json`'s own rule syntax cannot express (it has only literal text and `*`, so a
 `git -C <dir> ...` allow entry needs a `*` in the directory position that also matches any option injected
 there — the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
