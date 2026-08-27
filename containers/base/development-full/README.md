@@ -71,15 +71,15 @@ rejected too — extending policy is a one-line data-file change, not hook logic
 (python3, ...) are additionally refused inline-code flags (`-c`/`-e`/...). `enforce-allowed-dirs` runs
 second, on the already-normalised command: every directory- or path-taking argument of `cd`/`pushd`,
 `git -C`, `npm --prefix`, `find` (starting points) and `rm`/`mv`/`cp` (operands) must resolve (symlinks
-followed) under one of the roots listed in `claude-hooks/allowed-dirs` — baked root:root 0444 with the
-agent container's three mounts, `/workspace/repo`, `/workspace/rules`, `/workspace/tmp` — and the flags
+followed) under one of the roots listed in `claude-hooks/allowed-dirs` (baked root:root 0444 with the
+agent container's three mounts, `/workspace/repo`, `/workspace/rules`, `/workspace/tmp`), and the flags
 that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--work-tree`/`--namespace`/
 `--super-prefix`, every `git -c` key outside a short allowlist of inert display/behaviour keys,
 `npm --script-shell`/`--userconfig`/`--globalconfig`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`/`-D`/`-O`,
 `rm --no-preserve-root`) are denied outright. This is
 the check `claude-settings.json`'s own rule syntax cannot express (it has only literal text and `*`, so a
 `git -C <dir> ...` allow entry needs a `*` in the directory position that also matches any option injected
-there — the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
+there, the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
 the hook in place the per-subcommand wildcard entries are gone from `permissions.allow` and the same flags
 are also listed in `permissions.deny` as belt-and-braces. See `claude-hooks.instructions.md` for the path
 resolution rules and the host-side `allowed-dirs.local` override. `enforce-git-dash-c` uses the
