@@ -27,6 +27,16 @@
 #     `git -c core.pager=cat -C /repo status`. Only these two positions are
 #     checked — a `git` token appearing elsewhere is an ordinary argument
 #     (e.g. `grep -r git .`), not a git invocation.
+#   * Subcommand allowlist (#1387): whatever git subcommand follows -C (or
+#     the bare git token, before any -C auto-correction below) must be on
+#     git-subcommand-allowlist, the same one-name-per-line data-file
+#     convention reject-obfuscated-commands uses for command-allowlist. A
+#     missing subcommand or one not on the list blocks outright, regardless
+#     of whether -C is present or would be auto-corrected - this runs before
+#     the config/clone/auto-correct handling below, so a disallowed
+#     subcommand is never rewritten into an allowed-looking call. `config`
+#     and `clone` still need their own listed entries: they pass through
+#     this gate first, then their existing dedicated handling.
 #   * Exemptions from the `-C` requirement, kept deliberately narrow — do
 #     not widen without re-reading the PR #1159/#1105 bypass history above:
 #       - `git clone ...` — creates a new repo, doesn't read an existing one.
@@ -109,6 +119,30 @@ is_wrapper() {
   local w
   for w in "${WRAPPERS[@]}"; do
     [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+# Directory of this script (a symlink path on a host install resolves to the
+# ~/.claude/hooks directory it was linked into, which is where
+# git-subcommand-allowlist lives - no need to follow the link). Same
+# resolution pattern as enforce-allowed-dirs' own HOOK_DIR.
+case "${BASH_SOURCE[0]}" in
+  */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) HOOK_DIR="." ;;
+esac
+
+# Allowed git subcommands (#1387) - anything not on this list blocks
+# outright (see the header comment). An unreadable/missing file yields an
+# empty array, which blocks every subcommand - fails closed, same as
+# reject-obfuscated-commands' identical command-allowlist handling.
+GIT_SUBCOMMAND_ALLOWLIST="${HOOK_DIR}/git-subcommand-allowlist"
+mapfile -t allowed_subcommands < <(grep -vE '^[[:space:]]*(#|$)' "$GIT_SUBCOMMAND_ALLOWLIST" 2> /dev/null)
+
+is_allowed_subcommand() {
+  local s
+  for s in "${allowed_subcommands[@]}"; do
+    [ "$1" = "$s" ] && return 0
   done
   return 1
 }
@@ -288,6 +322,12 @@ while IFS= read -r words_line && IFS= read -r ends_line; do
         done
       fi
       sub="${words[$j]:-}"
+
+      if [ -z "$sub" ]; then
+        block "git commands must include a subcommand"
+      elif ! is_allowed_subcommand "$sub"; then
+        block "git subcommand '${sub}' is not permitted - see ${GIT_SUBCOMMAND_ALLOWLIST##*/}"
+      fi
 
       if [ "$sub" = "config" ]; then
         check_config_call

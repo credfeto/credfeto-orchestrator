@@ -160,6 +160,7 @@ COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/develop
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /home/developer/.claude/hooks/env-var-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /home/developer/.claude/hooks/allowed-dirs
+COPY --chown=root:root --chmod=0444 claude-hooks/git-subcommand-allowlist /home/developer/.claude/hooks/git-subcommand-allowlist
 RUN chown root:root /home/developer/.claude/hooks \
     && chmod 0755 /home/developer/.claude/hooks
 
@@ -342,7 +343,7 @@ RUN set -e; \
         grep -qxF "$d" /home/developer/.claude/hooks/allowed-dirs \
             || { echo "FATAL sanity: allowed-dirs does not list the agent mount $d" >&2; exit 1; }; \
     done; \
-    for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs; do \
+    for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs git-subcommand-allowlist; do \
         [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \
     done; \

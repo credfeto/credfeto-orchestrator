@@ -51,6 +51,50 @@ make_writable_repo() {
 @test "git alone with no subcommand is blocked" {
     run_hook_in_dir "git"
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *'must include a subcommand'* ]]
+}
+
+# Subcommand allowlist tests (#1387): git-subcommand-allowlist gates every
+# git call before the existing -C/config/clone/auto-correct handling below.
+
+@test "an allowed subcommand (worktree) is not blocked by the allowlist gate" {
+    run_hook_in_dir "git -C . worktree list"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git filter-branch is blocked by the subcommand allowlist even with -C present" {
+    run_hook_in_dir "git -C . filter-branch --tag-name-filter cat -- --all"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand 'filter-branch' is not permitted"* ]]
+}
+
+@test "git daemon is blocked by the subcommand allowlist" {
+    run_hook_in_dir "git -C . daemon"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand 'daemon' is not permitted"* ]]
+}
+
+@test "git instaweb is blocked by the subcommand allowlist" {
+    run_hook_in_dir "git -C . instaweb"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git credential is blocked by the subcommand allowlist" {
+    run_hook_in_dir "git -C . credential fill"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git submodule is blocked by the subcommand allowlist" {
+    run_hook_in_dir "git -C . submodule update --init"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a disallowed subcommand is blocked outright when -C is missing, not offered an auto-correct rewrite (#1387)" {
+    local repo
+    repo=$(make_writable_repo)
+    run_hook_in_dir "git filter-branch --tag-name-filter cat -- --all" "${repo}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" != *'hookSpecificOutput'* ]]
 }
 
 @test "git -C . push is allowed" {
