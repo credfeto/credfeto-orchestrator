@@ -123,6 +123,7 @@ teardown() {
         "find:-delete" "find:-exec " "find:-execdir " "find:-fls " "find:-fprint" "find:-ok " "find:-okdir " \
         "git:--exec-path" "git:--git-dir" "git:--namespace" "git:--super-prefix" "git:--work-tree" \
         "npm:--globalconfig" "npm:--script-shell" "npm:--userconfig" \
+        "npm:-globalconfig" "npm:-script-shell" "npm:-userconfig" \
         "rm:--no-preserve-root"; do
         tool="${pair%%:*}"
         flag="${pair#*:}"

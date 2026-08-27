@@ -598,6 +598,13 @@ git status'
     [ "${status}" -eq 2 ]
 }
 
+@test "env-var-blocklist matching is case-insensitive - npm honours any case of npm_config_ (#1385 security review)" {
+    run_hook 'NPM_config_script_shell=/evil npm run build'
+    [ "${status}" -eq 2 ]
+    run_hook 'Path=/evil ls'
+    [ "${status}" -eq 2 ]
+}
+
 @test "assigning a GIT_* identity variable is blocked" {
     run_hook 'GIT_AUTHOR_NAME=evil git -C . commit -m x'
     [ "${status}" -eq 2 ]
