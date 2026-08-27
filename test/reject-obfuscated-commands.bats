@@ -590,6 +590,14 @@ git status'
     [[ "${output}" == *'assignment to IFS is not permitted'* ]]
 }
 
+@test "assigning an npm_config_* option variable is blocked - it is the same bypass as the flag (#1385 review)" {
+    run_hook 'npm_config_script_shell=/evil npm run x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to npm_config_script_shell is not permitted'* ]]
+    run_hook 'NPM_CONFIG_USERCONFIG=/evil/.npmrc npm ci'
+    [ "${status}" -eq 2 ]
+}
+
 @test "assigning a GIT_* identity variable is blocked" {
     run_hook 'GIT_AUTHOR_NAME=evil git -C . commit -m x'
     [ "${status}" -eq 2 ]

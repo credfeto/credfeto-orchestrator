@@ -152,14 +152,17 @@ is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
 # key=value; anything not listed is denied (see header).
 is_git_inert_config() {
   case "${1,,}" in
-    color.* | advice.* | log.* | status.* | pull.* | push.* | fetch.* | rebase.* | init.*) return 0 ;;
+    color.* | advice.* | log.* | status.* | pull.* | push.* | fetch.* | rebase.*) return 0 ;;
+    init.defaultbranch | init.defaultbranch=*) return 0 ;; # not init.* - init.templateDir plants hooks
     diff.noprefix | diff.noprefix=* | diff.renames | diff.renames=*) return 0 ;;
     core.quotepath | core.quotepath=* | core.autocrlf | core.autocrlf=* | core.pager=cat) return 0 ;;
   esac
   return 1
 }
 
-FIND_DENIED_ACTIONS=(-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls)
+# -files0-from is not an action but supplies starting points from a file,
+# bypassing the starting-point check entirely, so it is denied with them.
+FIND_DENIED_ACTIONS=(-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls -files0-from)
 
 MARKER='(non-literal)'
 
@@ -269,11 +272,25 @@ check_cd() {
     -*) block "${name} flags (including 'cd -') are not permitted - use ${name} <absolute dir>" ;;
   esac
   require_under_root "$arg" "$name"
+  # A cd to a directory that does not exist fails at runtime and leaves the
+  # shell where it was, so a later relative path would resolve somewhere
+  # this hook did not check. Only an existing directory may become the base.
+  [ -d "$RESOLVED" ] || block "${name} target '${arg}' does not exist - the cd would fail and leave the working directory unknown"
   CD_TARGET="$RESOLVED"
 }
 
+# Called when the git subcommand (or the end of the global options) is
+# reached: a git call with no -C at all runs against the hook's cwd -
+# enforce-git-dash-c auto-corrects it to `-C "$PWD"` and allows it via
+# updatedInput, which this hook never sees - so the cwd itself must be under
+# a root, exactly as `-C .` would have to be.
+require_git_cwd_when_no_dash_c() {
+  [ "$1" -eq 1 ] && return 0
+  require_under_root "." "git (implicit -C ., the working directory)"
+}
+
 check_git() {
-  local j=$((i + 1)) tok keyval base="$BASE_DIR" relative_ok="$RELATIVE_OK"
+  local j=$((i + 1)) tok keyval base="$BASE_DIR" relative_ok="$RELATIVE_OK" saw_C=0
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     case "$tok" in
@@ -285,6 +302,7 @@ check_git() {
         require_under_root "${words[$((j + 1))]}" "git -C" "$base" "$relative_ok"
         base="$RESOLVED"
         relative_ok=1
+        saw_C=1
         j=$((j + 2))
         continue
         ;;
@@ -303,29 +321,53 @@ check_git() {
       --exec-path | --exec-path=* | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --namespace | --namespace=* | --super-prefix | --super-prefix=*)
         block "git ${tok%%=*} is not permitted - it redirects git to code or repository state outside the allowed directories"
         ;;
-      --) return 0 ;;
+      --) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;;
       -*) : ;; # any other global option (--no-pager, --bare, -p, ...) is inert here
-      *) return 0 ;; # the subcommand - global options end here
+      *) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;; # the subcommand - global options end here
     esac
     j=$((j + 1))
   done
+  require_git_cwd_when_no_dash_c "$saw_C"
   return 0
 }
 
+# npm accepts any unambiguous abbreviation of a long option (nopt), so
+# `--prefi`, `--script-shel`, `--userconf` all take effect; canonicalise the
+# option name before matching. Prints the canonical name, or the input
+# unchanged when it abbreviates none of the options this hook cares about.
+npm_canonical_option() {
+  local name="$1" full
+  [ "${#name}" -ge 2 ] || { printf '%s' "$name"; return; }
+  for full in prefix script-shell userconfig globalconfig; do
+    if [[ "$full" == "$name"* ]]; then
+      printf '%s' "$full"
+      return
+    fi
+  done
+  printf '%s' "$name"
+}
+
 check_npm() {
-  local j=$((i + 1)) tok
+  local j=$((i + 1)) tok opt val has_val
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     case "$tok" in
-      --prefix)
-        [ "$((j + 1))" -lt "${#words[@]}" ] || block 'npm --prefix requires a directory'
-        require_under_root "${words[$((j + 1))]}" "npm --prefix"
-        j=$((j + 2))
-        continue
+      -C) opt="prefix"; has_val=0 ;; # npm's short alias for --prefix
+      --*=*) opt="${tok#--}"; opt=$(npm_canonical_option "${opt%%=*}"); val="${tok#*=}"; has_val=1 ;;
+      --*) opt=$(npm_canonical_option "${tok#--}"); has_val=0 ;;
+      *) j=$((j + 1)); continue ;;
+    esac
+    case "$opt" in
+      prefix)
+        if [ "$has_val" -eq 0 ]; then
+          [ "$((j + 1))" -lt "${#words[@]}" ] || block 'npm --prefix requires a directory'
+          val="${words[$((j + 1))]}"
+          j=$((j + 1))
+        fi
+        require_under_root "$val" "npm --prefix"
         ;;
-      --prefix=*) require_under_root "${tok#--prefix=}" "npm --prefix" ;;
-      --script-shell | --script-shell=* | --userconfig | --userconfig=* | --globalconfig | --globalconfig=*)
-        block "npm ${tok%%=*} is not permitted - it changes which program npm runs scripts through or which config it trusts"
+      script-shell | userconfig | globalconfig)
+        block "npm --${opt} is not permitted (any abbreviation of it too) - it changes which program npm runs scripts through or which config it trusts"
         ;;
     esac
     j=$((j + 1))
@@ -360,24 +402,54 @@ check_find() {
   return 0
 }
 
+# rm may not delete an allowed root itself, and mv may not move one away;
+# a glob under a root (`rm -rf <root>/*`) empties it but leaves it in place,
+# and mv's last operand is a destination, into which moving is fine.
+deny_root_operand() {
+  local name="$1" word="$2"
+  case "$word" in *'*'* | *'?'* | *'['*) return 0 ;; esac
+  is_root "$RESOLVED" && block "${name} may not target an allowed root directory itself ('${word}' resolves to '${RESOLVED}')"
+  return 0
+}
+
 check_rm_mv_cp() {
-  local name="${words[$i]}" j=$((i + 1)) tok operands_only=0
+  local name="${words[$i]}" j=$((i + 1)) tok operands_only=0 last_operand=""
+  local -a operands=()
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     if [ "$operands_only" -eq 0 ]; then
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
         --no-preserve-root) block 'rm --no-preserve-root is not permitted' ;;
+        # mv/cp write into a directory named by an option, not an operand.
+        --target-directory=*) require_under_root "${tok#*=}" "${name} --target-directory"; j=$((j + 1)); continue ;;
+        --target-directory | -t)
+          [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
+          require_under_root "${words[$((j + 1))]}" "${name} --target-directory"
+          j=$((j + 2))
+          continue
+          ;;
+        -t*) require_under_root "${tok#-t}" "${name} --target-directory"; j=$((j + 1)); continue ;;
         "$MARKER") ;; # falls through to require_under_root's own check
         -*) j=$((j + 1)); continue ;;
       esac
     fi
     require_under_root "$tok" "${name} operand"
-    if [ "$name" != "cp" ] && is_root "$RESOLVED"; then
-      block "${name} may not target an allowed root directory itself ('${tok}' resolves to '${RESOLVED}')"
-    fi
+    operands+=("$tok")
+    case "$name" in
+      rm) deny_root_operand rm "$tok" ;;
+      mv) last_operand="$tok" ;;
+    esac
     j=$((j + 1))
   done
+  # For mv every operand but the last is a source being moved away.
+  if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
+    for tok in "${operands[@]}"; do
+      [ "$tok" = "$last_operand" ] && continue
+      resolve_word "$tok" "mv operand"
+      deny_root_operand mv "$tok"
+    done
+  fi
   return 0
 }
 
@@ -440,6 +512,19 @@ transport=$(printf '%s' "$ast" | jq -r \
 header="${transport%%$'\n'*}"
 IFS=$'\t' read -r _ has_checked cd_count first_is_cd <<<"$header"
 [ "$has_checked" = 1 ] || exit 0
+
+# PreToolUse hooks run in parallel on the ORIGINAL command, and
+# reject-obfuscated-commands may allow a rewritten one (its Layer 0 turns a
+# curly-quoted word into a plainly quoted one via updatedInput). This hook
+# would then have judged `rm -rf <curly>/etc/x<curly>` as one harmless
+# literal while the command that actually runs is `rm -rf '/etc/x'`. So
+# once a checked command is present, any non-ASCII byte fails closed here
+# regardless of what the normalising hook decides - the agent retries in
+# plain ASCII.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]' # same class reject-obfuscated-commands' Layer 0 uses; LC_ALL=C makes it byte-exact
+if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+  block 'command contains non-ASCII or non-printable bytes and includes a directory-taking command - rewrite it in plain ASCII'
+fi
 
 load_roots
 [ "${#ROOTS[@]}" -gt 0 ] || block "no allowed directories are configured (${ALLOWED_DIRS_FILE}) - failing closed"
