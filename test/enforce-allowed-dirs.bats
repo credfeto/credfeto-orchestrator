@@ -420,6 +420,44 @@ assert_blocked() {
     assert_blocked "git -c color.ui=false log" '' "${OUTSIDE}"
 }
 
+# --- security-review round 1 (#1386) ---------------------------------------------------
+
+@test "a glob word with a .. component after the glob is blocked - bash expands the .. literally" {
+    assert_blocked "rm -rf su*/../../outside/x" 'glob with a .. component'
+    assert_blocked "cp x su*/../../outside/"
+    assert_blocked "rm -rf ${ROOT}/*/../../outside/x"
+    assert_blocked "git -C 'su*/../../outside' status"
+    assert_blocked "find su*/../.. -name x"
+    assert_allowed "rm -rf sub/*/bin"
+}
+
+@test "a path that does not exist yet is blocked when an earlier call in the same command can create a symlink" {
+    assert_blocked "ln -s ${OUTSIDE} ${ROOT}/l && rm -rf ${ROOT}/l/*" 'can create symlinks'
+    assert_blocked "ln -s ${OUTSIDE} ${ROOT}/l && cp -r x ${ROOT}/l/y"
+    assert_blocked "git -C ${ROOT} checkout evil && rm -rf ${ROOT}/newlink/x"
+    assert_allowed "ln -s ${OUTSIDE} ${ROOT}/l && rm -rf ${ROOT}/sub"
+    assert_allowed "mkdir -p ${ROOT}/a/b && cp x ${ROOT}/a/b/"
+    assert_allowed "rm -rf ${ROOT}/new/x && ln -s ${ROOT}/sub ${ROOT}/l"
+}
+
+@test "cp/mv --target-directory abbreviations and bundled -t clusters are validated" {
+    assert_blocked "cp -rt${OUTSIDE} payload"
+    assert_blocked "cp -rt ${OUTSIDE} payload"
+    assert_blocked "cp -r --target=${OUTSIDE} payload"
+    assert_blocked "cp -r --t=${OUTSIDE} payload"
+    assert_blocked "mv -ft${OUTSIDE} sub"
+    assert_allowed "cp -rt sub payload"
+    assert_allowed "cp -r --target=sub payload"
+}
+
+@test "npm single-dash long options are treated as the long option (nopt strips all leading dashes)" {
+    assert_blocked "npm -script-shell /evil run build" '--script-shell'
+    assert_blocked "npm -prefix ${OUTSIDE} prefix"
+    assert_blocked "npm -userconf /evil ci"
+    assert_allowed "npm -prefix sub ci"
+    assert_allowed "npm -g ls"
+}
+
 # --- fail-closed infrastructure -----------------------------------------------------
 
 @test "a failing jq fails closed" {

@@ -144,6 +144,14 @@ in_list() {
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 CD_NAMES=(cd pushd popd)
 CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
+# Commands that can leave a new symlink behind (see resolve_word), plus the
+# git subcommands that materialise repo content - which the prompt-injection
+# threat model says may contain symlinks. Read-only git (status, log, diff,
+# ...) cannot, so it does not trip the rule.
+LINK_CAPABLE_NAMES=(ln cp mv tar unzip rsync)
+GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase cherry-pick revert am apply stash reset worktree submodule archive read-tree)
+LINK_SEEN=0
+GIT_SUBCOMMAND=""
 
 is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
 
@@ -238,6 +246,14 @@ resolve_word() {
   prefix="$word"
   case "$prefix" in
     *'*'* | *'?'* | *'['*)
+      # A glob component itself never matches `..`, but a literal `..`
+      # component AFTER the glob is expanded by bash exactly as written
+      # (`su*/../../etc` -> `sub/../../etc`), so the unresolved remainder
+      # must not climb. Blocking any `..` component in a glob word is the
+      # simple, complete rule.
+      case "/${word}/" in
+        */../*) block "${label} argument '${word}' combines a glob with a .. component - the part after the glob is not resolved and could climb out of the allowed directories" ;;
+      esac
       prefix="${prefix%%[\*\?\[]*}"
       prefix="${prefix%/*}"
       [[ "$word" == /* ]] && [ -z "$prefix" ] && prefix="/"
@@ -250,6 +266,16 @@ resolve_word() {
   # A word containing a newline was blocked above, so $(...) has nothing to
   # strip here.
   RESOLVED=$(realpath -m -- "$prefix" 2>/dev/null) || block "${label} argument '${word}' could not be resolved"
+  # Symlinks are resolved as they exist NOW. An earlier call in the same
+  # command that can create one (ln, cp/mv of a link, tar/unzip, any git
+  # checkout-shaped subcommand materialising repo content) could make a
+  # path that resolves under a root at hook time point elsewhere by the
+  # time this call runs. Once such a call has been seen, only paths that
+  # already exist - and therefore resolved through real, current links -
+  # are accepted.
+  if [ "$LINK_SEEN" -eq 1 ] && [ ! -e "$RESOLVED" ]; then
+    block "${label} argument '${word}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+  fi
 }
 
 require_under_root() {
@@ -291,6 +317,7 @@ require_git_cwd_when_no_dash_c() {
 
 check_git() {
   local j=$((i + 1)) tok keyval base="$BASE_DIR" relative_ok="$RELATIVE_OK" saw_C=0
+  GIT_SUBCOMMAND=""
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     case "$tok" in
@@ -323,7 +350,7 @@ check_git() {
         ;;
       --) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;;
       -*) : ;; # any other global option (--no-pager, --bare, -p, ...) is inert here
-      *) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;; # the subcommand - global options end here
+      *) GIT_SUBCOMMAND="$tok"; require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;; # the subcommand - global options end here
     esac
     j=$((j + 1))
   done
@@ -353,8 +380,11 @@ check_npm() {
     tok="${words[$j]}"
     case "$tok" in
       -C) opt="prefix"; has_val=0 ;; # npm's short alias for --prefix
-      --*=*) opt="${tok#--}"; opt=$(npm_canonical_option "${opt%%=*}"); val="${tok#*=}"; has_val=1 ;;
-      --*) opt=$(npm_canonical_option "${tok#--}"); has_val=0 ;;
+      # nopt strips ALL leading dashes, so -prefix and -script-shell are the
+      # long options too; only a single letter after one dash is a short.
+      -?) j=$((j + 1)); continue ;;
+      -*=*) opt="${tok#"${tok%%[!-]*}"}"; opt=$(npm_canonical_option "${opt%%=*}"); val="${tok#*=}"; has_val=1 ;;
+      -*) opt=$(npm_canonical_option "${tok#"${tok%%[!-]*}"}"); has_val=0 ;;
       *) j=$((j + 1)); continue ;;
     esac
     case "$opt" in
@@ -402,6 +432,35 @@ check_find() {
   return 0
 }
 
+# Classifies one cp/mv option word: returns 0 when it is --target-directory
+# in any spelling getopt accepts, setting TARGET_DIR_VALUE to the attached
+# value ("" when the value is the next word). Long: `--target-directory`,
+# any unique abbreviation of it (`--t` onwards - no other cp/mv long option
+# starts with t), with or without `=value`. Short: `-t`, or a bundled
+# cluster containing t (`-rt`, `-rt/etc`): everything after the first t is
+# the attached value.
+TARGET_DIR_VALUE=""
+target_directory_option() {
+  local tok="$1" name
+  TARGET_DIR_VALUE=""
+  case "$tok" in
+    --*)
+      name="${tok#--}"
+      name="${name%%=*}"
+      [ -n "$name" ] || return 1
+      [[ "target-directory" == "$name"* ]] || return 1
+      case "$tok" in *=*) TARGET_DIR_VALUE="${tok#*=}" ;; esac
+      return 0
+      ;;
+    -[A-Za-z]*)
+      [[ "$tok" == *t* ]] || return 1
+      TARGET_DIR_VALUE="${tok#*t}"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 # rm may not delete an allowed root itself, and mv may not move one away;
 # a glob under a root (`rm -rf <root>/*`) empties it but leaves it in place,
 # and mv's last operand is a destination, into which moving is fine.
@@ -421,17 +480,23 @@ check_rm_mv_cp() {
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
         --no-preserve-root) block 'rm --no-preserve-root is not permitted' ;;
-        # mv/cp write into a directory named by an option, not an operand.
-        --target-directory=*) require_under_root "${tok#*=}" "${name} --target-directory"; j=$((j + 1)); continue ;;
-        --target-directory | -t)
-          [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
-          require_under_root "${words[$((j + 1))]}" "${name} --target-directory"
-          j=$((j + 2))
+        -*)
+          # mv/cp write into a directory named by --target-directory, which
+          # getopt also accepts as any unique abbreviation (--t, --target,
+          # --target-dir), and as -t inside a bundled short cluster with the
+          # value attached or following (-rt/etc, -rt /etc).
+          if [ "$name" != "rm" ] && target_directory_option "$tok"; then
+            if [ -n "$TARGET_DIR_VALUE" ]; then
+              require_under_root "$TARGET_DIR_VALUE" "${name} --target-directory"
+            else
+              [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
+              require_under_root "${words[$((j + 1))]}" "${name} --target-directory"
+              j=$((j + 1))
+            fi
+          fi
+          j=$((j + 1))
           continue
           ;;
-        -t*) require_under_root "${tok#-t}" "${name} --target-directory"; j=$((j + 1)); continue ;;
-        "$MARKER") ;; # falls through to require_under_root's own check
-        -*) j=$((j + 1)); continue ;;
       esac
     fi
     require_under_root "$tok" "${name} operand"
@@ -548,6 +613,13 @@ process_call() {
       find) check_find ;;
       rm | mv | cp) check_rm_mv_cp ;;
     esac
+    # Only after this call's own checks: a call cannot exploit a link it
+    # has not created yet.
+    if in_list "$base_name" "${LINK_CAPABLE_NAMES[@]}"; then
+      LINK_SEEN=1
+    elif [ "$base_name" = "git" ] && in_list "$GIT_SUBCOMMAND" "${GIT_MATERIALISING_SUBCOMMANDS[@]}"; then
+      LINK_SEEN=1
+    fi
   done
   if [ "$first_call" -eq 1 ]; then
     if [ "$cd_count" -eq 1 ] && [ "$first_is_cd" -eq 1 ]; then
