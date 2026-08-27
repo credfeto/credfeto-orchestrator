@@ -190,7 +190,7 @@ STUBEOF
     grep -qx -- '--print' "${TEST_TMP}/claude_args"
 }
 
-@test "entrypoint exports TMPDIR, TMP, TEMP, and XDG_RUNTIME_DIR to /workspace/tmp before invoking claude (#1351)" {
+@test "entrypoint exports TMPDIR, TMP, TEMP, XDG_RUNTIME_DIR, and CLAUDE_CODE_TMPDIR to /workspace/tmp before invoking claude (#1351)" {
     setup_entrypoint_stubs
     cat > "${STUB_BIN}/claude" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -205,6 +205,7 @@ STUBEOF
     grep -qx "TMP=/workspace/tmp" "${TEST_TMP}/claude_env"
     grep -qx "TEMP=/workspace/tmp" "${TEST_TMP}/claude_env"
     grep -qx "XDG_RUNTIME_DIR=/workspace/tmp" "${TEST_TMP}/claude_env"
+    grep -qx "CLAUDE_CODE_TMPDIR=/workspace/tmp" "${TEST_TMP}/claude_env"
 }
 
 @test "entrypoint exports TMPDIR etc from WORKSPACE_TMP_DIR when overridden (#1351)" {
@@ -221,6 +222,7 @@ STUBEOF
         bash "${ENTRYPOINT}" --print 2>/dev/null
     grep -qx "TMPDIR=${TEST_TMP}/custom-tmp" "${TEST_TMP}/claude_env"
     grep -qx "XDG_RUNTIME_DIR=${TEST_TMP}/custom-tmp" "${TEST_TMP}/claude_env"
+    grep -qx "CLAUDE_CODE_TMPDIR=${TEST_TMP}/custom-tmp" "${TEST_TMP}/claude_env"
 }
 
 @test "entrypoint does not consume stdin before passing it to claude" {
