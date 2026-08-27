@@ -1,5 +1,4 @@
 {
-  "outputStyle": "Concise",
   "attribution": {
     "commit": "",
     "pr": ""
@@ -316,5 +315,8 @@
   "autoMemoryEnabled": false,
   "theme": "dark",
   "agentPushNotifEnabled": false,
-  "autoCompactEnabled": true
+  "autoCompactEnabled": true,
+  "outputStyle": "Concise",
+  "remoteControlAtStartup": true,
+  "includeGitInstructions": false
 }
