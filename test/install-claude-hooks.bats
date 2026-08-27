@@ -86,6 +86,33 @@ teardown() {
     [[ "${output}" == *'$HOME/.claude/hooks/block-dotnet-tool-install'* ]]
 }
 
+@test "generated settings.json includes enforce-allowed-dirs immediately after reject-obfuscated-commands in the PreToolUse chain (#1385)" {
+    main
+
+    run jq -r '.hooks.PreToolUse[0].hooks[1].command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [ "${output}" = '$HOME/.claude/hooks/enforce-allowed-dirs' ]
+}
+
+@test "allowed-dirs is symlinked alongside the hooks and a missing allowed-dirs.local is called out, not fabricated (#1385)" {
+    run main
+    [ "${status}" -eq 0 ]
+    [ -L "${HOME}/.claude/hooks/allowed-dirs" ]
+    [ ! -e "${HOME}/.claude/hooks/allowed-dirs.local" ]
+    [[ "${output}" == *'allowed-dirs.local'* ]]
+}
+
+@test "an existing allowed-dirs.local is left alone and not warned about (#1385)" {
+    mkdir -p "${HOME}/.claude/hooks"
+    printf '%s\n' "${HOME}/work" > "${HOME}/.claude/hooks/allowed-dirs.local"
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -L "${HOME}/.claude/hooks/allowed-dirs.local" ]
+    [ "$(cat "${HOME}/.claude/hooks/allowed-dirs.local")" = "${HOME}/work" ]
+    [[ "${output}" != *'will block every directory-taking command'* ]]
+}
+
 @test "generated settings.json includes cache-gh-lookups in the PreToolUse chain (#1380)" {
     main
 

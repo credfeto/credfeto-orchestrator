@@ -81,6 +81,17 @@ install_settings() {
     info "Installed settings.json"
 }
 
+# The symlinked allowed-dirs lists the agent container's /workspace mounts,
+# which do not exist on a host - so without a hand-written
+# allowed-dirs.local next to it, enforce-allowed-dirs fails closed on every
+# cd/git -C/npm --prefix/find/rm/mv/cp here. Point it out rather than
+# guessing a host layout (a real file, never a symlink into the repo).
+warn_if_no_allowed_dirs_override() {
+    local target_hooks_dir="$1"
+    [ -f "${target_hooks_dir}/allowed-dirs.local" ] && return 0
+    info "No ${target_hooks_dir}/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Create it with one allowed root per line, e.g. '~/work' and '\$TMPDIR'."
+}
+
 main() {
     is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
 
@@ -98,6 +109,7 @@ main() {
     mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
     install_hook_symlinks "${target_hooks_dir}"
     install_settings "${target_claude_dir}"
+    warn_if_no_allowed_dirs_override "${target_hooks_dir}"
 
     success "Claude Code settings/hooks installed for local testing outside the container"
 }
