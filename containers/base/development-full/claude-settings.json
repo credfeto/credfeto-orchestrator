@@ -273,8 +273,12 @@
       "Edit(~/.database)",
       "Edit(**/.database)",
       "Read(/tmp/**)",
-      "Write(/tmp/**)",
-      "Edit(/tmp/**)"
+      "Edit(/tmp/**)",
+      "Edit(~/.claude/**)",
+      "Edit(~/.claude)",
+      "Edit(*/.claude/**)",
+      "Edit(*/.claude)"
+
     ]
   },
   "advisorModel": "opus",
