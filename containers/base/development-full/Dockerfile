@@ -150,6 +150,7 @@ COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /home/developer/.claude/hooks/enforce-git-dash-c
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/developer/.claude/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /home/developer/.claude/hooks/reject-obfuscated-commands
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /home/developer/.claude/hooks/enforce-allowed-dirs
 COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /home/developer/.claude/hooks/enforce-ssh-host-and-key
@@ -158,6 +159,7 @@ COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /home/develope
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
 COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
 COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /home/developer/.claude/hooks/env-var-blocklist
+COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /home/developer/.claude/hooks/allowed-dirs
 RUN chown root:root /home/developer/.claude/hooks \
     && chmod 0755 /home/developer/.claude/hooks
 
@@ -340,6 +342,16 @@ RUN set -e; \
         || { echo "FATAL sanity: reject-obfuscated-commands hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/reject-obfuscated-commands ] \
         || { echo "FATAL sanity: reject-obfuscated-commands hook is not executable" >&2; exit 1; }; \
+    [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/enforce-allowed-dirs)" = "root:root 755" ] \
+        || { echo "FATAL sanity: enforce-allowed-dirs hook has wrong owner/perms" >&2; exit 1; }; \
+    [ -x /home/developer/.claude/hooks/enforce-allowed-dirs ] \
+        || { echo "FATAL sanity: enforce-allowed-dirs hook is not executable" >&2; exit 1; }; \
+    [ ! -e /home/developer/.claude/hooks/allowed-dirs.local ] \
+        || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
+    for d in /workspace/repo /workspace/rules /workspace/tmp; do \
+        grep -qxF "$d" /home/developer/.claude/hooks/allowed-dirs \
+            || { echo "FATAL sanity: allowed-dirs does not list the agent mount $d" >&2; exit 1; }; \
+    done; \
     [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/block-git-worktree)" = "root:root 755" ] \
         || { echo "FATAL sanity: block-git-worktree hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/block-git-worktree ] \
@@ -360,7 +372,7 @@ RUN set -e; \
         || { echo "FATAL sanity: cache-gh-lookups hook has wrong owner/perms" >&2; exit 1; }; \
     [ -x /home/developer/.claude/hooks/cache-gh-lookups ] \
         || { echo "FATAL sanity: cache-gh-lookups hook is not executable" >&2; exit 1; }; \
-    for f in command-allowlist command-blocklist env-var-blocklist; do \
+    for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs; do \
         [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \
     done; \
