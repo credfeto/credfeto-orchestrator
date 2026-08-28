@@ -27,6 +27,22 @@
 #     `git -c core.pager=cat -C /repo status`. Only these two positions are
 #     checked — a `git` token appearing elsewhere is an ordinary argument
 #     (e.g. `grep -r git .`), not a git invocation.
+#   * Subcommand allowlist (#1387): whatever git subcommand follows -C (or
+#     the bare git token, before any -C auto-correction below) must be in
+#     GIT_ALLOWED_SUBCOMMANDS below. A missing subcommand or one not on the
+#     list blocks outright, regardless of whether -C is present or would be
+#     auto-corrected - this runs before the config/clone/auto-correct
+#     handling below, so a disallowed subcommand is never rewritten into an
+#     allowed-looking call. `config` and `clone` still need their own listed
+#     entries: they pass through this gate first, then their existing
+#     dedicated handling. Hardcoded here (not a data file like
+#     command-allowlist) since this hook is its only consumer and the real
+#     enforcement is this hook's own AST-based parse - unlike
+#     claude-settings.json's permissions.allow, which does plain text
+#     matching and can't reliably identify "the real subcommand" for a tool
+#     whose subcommand follows a wildcarded -C <dir>, so that layer is kept
+#     coarse (bare Bash(git -C *)) and this hook is the sole place that
+#     enforces subcommand scope.
 #   * Exemptions from the `-C` requirement, kept deliberately narrow — do
 #     not widen without re-reading the PR #1159/#1105 bypass history above:
 #       - `git clone ...` — creates a new repo, doesn't read an existing one.
@@ -100,17 +116,36 @@ block() {
   exit 2
 }
 
+# Generic array-membership check, same shape as enforce-allowed-dirs' own
+# in_list() - shared by is_wrapper() below and is_allowed_subcommand()
+# further down instead of each hand-rolling its own scan loop.
+in_list() {
+  local needle="$1" item
+  shift
+  for item in "$@"; do
+    [ "$needle" = "$item" ] && return 0
+  done
+  return 1
+}
+
 # Known wrapper names for the defense-in-depth `sudo git ...` check below —
 # mirrors the "Wrapper commands" section of command-blocklist, which is what
 # actually bans these upstream in the normal PreToolUse chain.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
 is_wrapper() {
-  local w
-  for w in "${WRAPPERS[@]}"; do
-    [ "$1" = "$w" ] && return 0
-  done
-  return 1
+  in_list "$1" "${WRAPPERS[@]}"
+}
+
+# Allowed git subcommands (#1387) - anything not on this list blocks
+# outright (see the header comment). `config` and `worktree` are listed
+# here too even though they also get their own dedicated handling further
+# down (check_config_call, block-git-worktree's separate add/non-add
+# split) - they still have to clear this gate first.
+GIT_ALLOWED_SUBCOMMANDS=(add branch checkout clone commit config diff fetch log ls-remote merge pull push rebase reset rev-list rev-parse show stash status switch worktree)
+
+is_allowed_subcommand() {
+  in_list "$1" "${GIT_ALLOWED_SUBCOMMANDS[@]}"
 }
 
 input=$(cat)
@@ -288,6 +323,12 @@ while IFS= read -r words_line && IFS= read -r ends_line; do
         done
       fi
       sub="${words[$j]:-}"
+
+      if [ -z "$sub" ]; then
+        block "git commands must include a subcommand"
+      elif ! is_allowed_subcommand "$sub"; then
+        block "git subcommand '${sub}' is not permitted"
+      fi
 
       if [ "$sub" = "config" ]; then
         check_config_call
