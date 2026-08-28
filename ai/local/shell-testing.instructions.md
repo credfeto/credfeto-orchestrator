@@ -136,6 +136,15 @@ Stubs must not perform real work: a `sleep` stub returns immediately, a `git` st
 and a `gh`/`curl` stub echoes canned JSON. This keeps the suite fast, deterministic, and free
 of side effects.
 
+`make_stub`/`make_stub_multiline` write stub content to a temp file in `STUB_BIN` first, then
+`chmod +x` and `mv` it onto the final name (see `_finalize_stub`). Writing directly to the
+final name and `chmod +x`-ing it afterwards left a window where a concurrent process (e.g. a
+parallel bats job under load) could see the file mid-write or not yet executable; `mv` within
+the same directory is atomic, so no reader ever observes a partial file. This was the suspected
+cause of an intermittent stub-exec failure under `bats --jobs N` (#1392). Keep any new stub
+helper on this same write-temp-then-rename pattern rather than writing straight to the final
+path.
+
 ## Static Analysis
 
 - `shellcheck` must pass for the top-level bash scripts (`shellcheck oneshot loop create-project

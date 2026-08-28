@@ -164,6 +164,20 @@ cleanup_stubs() {
     STUB_BIN_DIRS=()
 }
 
+# Makes a just-written stub temp file executable, then renames it onto its final
+# "${name}" path in STUB_BIN. mv within the same directory (so the same filesystem)
+# is atomic, so a concurrent PATH lookup for this name - e.g. from a parallel bats
+# job under load - either finds no file yet or the complete, already-executable
+# one, never a partial or not-yet-executable write in progress. Writing content
+# directly to the final name and chmod-ing it afterwards (the previous approach)
+# left exactly that window open and was the suspected cause of an intermittent
+# stub-exec failure under parallel test runs.
+_finalize_stub() {
+    local name="$1" tmp="$2"
+    chmod +x "${tmp}"
+    mv "${tmp}" "${STUB_BIN}/${name}"
+}
+
 # Writes an executable PATH stub named "$1" whose body is the remaining arguments,
 # in the per-test stub directory that is first on PATH. Use this for commands invoked
 # as subprocesses. For commands that the test must inspect or vary per call — or that
@@ -173,12 +187,12 @@ cleanup_stubs() {
 make_stub() {
     local name="$1"
     shift
-    local script="${STUB_BIN}/${name}"
+    local tmp="${STUB_BIN}/.${name}.$$_${RANDOM}${RANDOM}"
     {
         printf '#!/usr/bin/env bash\n'
         printf '%s\n' "$*"
-    } > "${script}"
-    chmod +x "${script}"
+    } > "${tmp}"
+    _finalize_stub "${name}" "${tmp}"
 }
 
 # Writes an executable PATH stub named "$1" whose body consists of each subsequent
@@ -188,15 +202,15 @@ make_stub() {
 make_stub_multiline() {
     local name="$1"
     shift
-    local script="${STUB_BIN}/${name}"
+    local tmp="${STUB_BIN}/.${name}.$$_${RANDOM}${RANDOM}"
     {
         printf '#!/usr/bin/env bash\n'
         local line
         for line; do
             printf '%s\n' "${line}"
         done
-    } > "${script}"
-    chmod +x "${script}"
+    } > "${tmp}"
+    _finalize_stub "${name}" "${tmp}"
 }
 
 # Builds a Claude Code PreToolUse hook payload JSON string for the given Bash command.
