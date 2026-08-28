@@ -137,12 +137,25 @@ is_wrapper() {
   in_list "$1" "${WRAPPERS[@]}"
 }
 
-# Allowed git subcommands (#1387) - anything not on this list blocks
-# outright (see the header comment). `config` and `worktree` are listed
-# here too even though they also get their own dedicated handling further
-# down (check_config_call, block-git-worktree's separate add/non-add
-# split) - they still have to clear this gate first.
-GIT_ALLOWED_SUBCOMMANDS=(add branch checkout clone commit config diff fetch log ls-remote merge pull push rebase reset rev-list rev-parse show stash status switch worktree)
+# Allowed git subcommands (#1387), split by -C policy so it's obvious where
+# a new subcommand belongs when this list is next extended. `worktree` is
+# listed in the -C-required bucket even though it also gets its own
+# dedicated handling further down (block-git-worktree's separate add/non-add
+# split) - it still has to clear this gate first.
+#
+#   - GIT_SUBCOMMANDS_NO_REPO: creates a new repo rather than reading an
+#     existing one, so -C doesn't apply.
+GIT_SUBCOMMANDS_NO_REPO=(clone)
+#   - GIT_SUBCOMMANDS_BESPOKE_POLICY: has its own -C policy (see
+#     check_config_call) instead of the generic -C requirement.
+GIT_SUBCOMMANDS_BESPOKE_POLICY=(config)
+#   - GIT_SUBCOMMANDS_REQUIRE_C: the default case - must be preceded by -C.
+GIT_SUBCOMMANDS_REQUIRE_C=(add branch checkout commit diff fetch log ls-remote merge pull push rebase reset rev-list rev-parse show stash status switch worktree)
+
+# Combined allowlist derived from the three lists above - single source of
+# truth for is_allowed_subcommand(), so the lists above and the "is this
+# subcommand permitted at all" gate can never drift apart.
+GIT_ALLOWED_SUBCOMMANDS=("${GIT_SUBCOMMANDS_NO_REPO[@]}" "${GIT_SUBCOMMANDS_BESPOKE_POLICY[@]}" "${GIT_SUBCOMMANDS_REQUIRE_C[@]}")
 
 is_allowed_subcommand() {
   in_list "$1" "${GIT_ALLOWED_SUBCOMMANDS[@]}"
@@ -330,13 +343,13 @@ while IFS= read -r words_line && IFS= read -r ends_line; do
         block "git subcommand '${sub}' is not permitted"
       fi
 
-      if [ "$sub" = "config" ]; then
+      if in_list "$sub" "${GIT_SUBCOMMANDS_BESPOKE_POLICY[@]}"; then
         check_config_call
         continue
       fi
 
       [ "$has_C" = 1 ] && continue
-      [ "$sub" = "clone" ] && continue
+      in_list "$sub" "${GIT_SUBCOMMANDS_NO_REPO[@]}" && continue
 
       maybe_autocorrect_or_block "${ends[$i]}"
       continue

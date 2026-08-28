@@ -26,6 +26,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Changed
 - development-dotnet-tools' baked-in NuGet.Config renames the api.nuget.org cache source to "Cache: Nuget" and adds explicit packageSourceMapping, routing FunFair.BuildCheck/FunFair.BuildVersion/FunFair.CodeAnalysis/FunFair.Test.* (plus everything else via the catch-all) through the Nuget cache while other FunFair.* packages continue to resolve via the FunFair and FunFair (Prerelease) feeds
 - Remove the per-subcommand wildcard allow rules from claude-settings.json (find * -exec cat *, the ten git -C * config ... entries and the three npm --prefix * ... entries) that Claude Code warned about at every startup because the * in the directory position also matched injected options, now that enforce-allowed-dirs checks that position properly, and add permissions.deny entries for the same code-execution and destructive flags in both the first and a later argument position (a * only matches one-or-more characters, so a single later-position deny misses the flag-first form), plus the exact rm -rf / spellings, as a second layer (#1385)
+- Split the enforce-git-dash-c hook's hardcoded git subcommand allowlist into three named policy arrays, making it clear where a subcommand belongs when the list is next extended
 ### Deprecated
 ### Removed
 ### Deployment Changes
