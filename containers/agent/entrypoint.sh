@@ -59,8 +59,10 @@ verify_gpg_signing() {
         || die "gpg-agent is not responding (or timed out after 30s) — run 'gpgconf --launch gpg-agent' on the host"
     gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
         || die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
-    printf 'test' | timeout 30 gpg --batch --no-tty --armor --detach-sign \
-        --default-key "${GIT_SIGNING_KEY}" --output - >/dev/null 2>&1 \
+    # Herestring, not a `printf 'test' | ...` pipe: avoids a SIGPIPE/pipefail race under
+    # CPU contention - see verify_ssh_signing below for the full explanation.
+    timeout 30 gpg --batch --no-tty --armor --detach-sign \
+        --default-key "${GIT_SIGNING_KEY}" --output - <<< 'test' >/dev/null 2>&1 \
         || die "GPG signing test failed (or timed out after 30s) — ensure key ${GIT_SIGNING_KEY} is unlocked and the agent is accessible"
 }
 
@@ -85,8 +87,17 @@ verify_ssh_signing() {
     # Keep ssh-keygen's own stderr for the die message: a bare "signing test
     # failed" hid an intermittent exec failure of the test suite's stub for
     # hours (#1392); the reason is always more useful than the summary.
+    #
+    # Feed the signing input via a herestring, not a `printf 'test' | ssh-keygen ...`
+    # pipe: with `set -o pipefail` above, if ssh-keygen exits before the pipe writer's
+    # small write is scheduled - readily reproducible under CPU contention, and equally
+    # possible for a real ssh-keygen that fails fast on a bad key - the writer dies of
+    # SIGPIPE and pipefail reports *that* exit status (141, no stderr) instead of
+    # ssh-keygen's own, turning this die message into a red herring. A herestring has
+    # bash write the content to a real temp file up front, so there is no pipe and
+    # nothing to race regardless of when or whether ssh-keygen reads it.
     local sign_err sign_status=0
-    sign_err=$(printf 'test' | ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - 2>&1 >/dev/null) || sign_status=$?
+    sign_err=$(ssh-keygen -Y sign -f <(printf '%s\n' "${pubkey}") -n git - <<< 'test' 2>&1 >/dev/null) || sign_status=$?
     [ "${sign_status}" -eq 0 ] \
         || die "SSH signing test failed (ssh-keygen exited ${sign_status}: ${sign_err:-no output}) — ensure the loaded SSH key supports signing"
 
