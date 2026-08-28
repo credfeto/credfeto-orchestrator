@@ -369,5 +369,12 @@
   "autoCompactEnabled": true,
   "outputStyle": "Concise",
   "remoteControlAtStartup": true,
-  "includeGitInstructions": false
+  "includeGitInstructions": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_AUTO_BACKGROUND_TASKS": "1",
+    "DISABLE_EXTRA_USAGE_COMMAND": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1"
+  }
 }
