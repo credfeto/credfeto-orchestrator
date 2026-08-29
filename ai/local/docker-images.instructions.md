@@ -156,7 +156,7 @@ See the `~/.claude/skills` symlink count in `containers/base/development-full/Do
 
 ## Workflow Build Chain
 
-Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`, in addition to the cron fallback:
+Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`. `build-development-tools.yml` carries the *only* cron in the whole chain (daily); every other stage relies solely on `workflow_run` chaining plus real-change triggers (`push`, `pull_request`, and `development-full`'s `repository_dispatch: pre-commit-updated`) — do not add a per-stage cron to any downstream workflow. Stacking an independent schedule at every stage previously meant `development-agent` at the bottom inherited the union of all of them, moving its `:latest` digest every 15-30 minutes and starving the orchestrator host, which re-pulls before every invocation (#1401).
 
 ```yaml
 on:
@@ -174,14 +174,14 @@ The build job MUST include an `if` condition so it skips when the parent workflo
 
 Stage 2-4 workflows MUST include `pull: true` in the build-push step to ensure the base `:latest` image is always pulled fresh.
 
-Every `build-development-*.yml` workflow's `cache-to` MUST include `ignore-error=true`:
+Every `build-development-*.yml` workflow's `cache-from`/`cache-to` MUST include a `scope=<image-name>` matching its own stage, and `cache-to` MUST include `ignore-error=true`:
 
 ```yaml
-          cache-from: "type=gha"
-          cache-to: "type=gha,mode=max,ignore-error=true"
+          cache-from: "type=gha,scope=development-tools"
+          cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
 ```
 
-GitHub's Actions Cache backend has per-repo storage/write-rate limits; with five build workflows all writing `type=gha` caches on an hourly cron plus push triggers, cache-write contention/quota exhaustion periodically fails the export with `error writing layer blob: failed to reserve cache` — **after** the actual image has already been fully pushed to ghcr.io. Without `ignore-error=true`, buildx treats that as a fatal build failure even though the image is fine; with it, a cache-export failure just logs a warning.
+Without an explicit `scope=`, all `build-development-*.yml` workflows share BuildKit's default `type=gha` scope, and their cache writes collide/evict each other — this was previously misdiagnosed as a per-repo storage/write-rate quota problem, but is confirmed (from a real scheduled run's log, zero `CACHED` markers, full `apt-get` re-execution on every build) to be the missing `scope=` alone (#1401). `ignore-error=true` remains required regardless: a cache-export failure can still occur **after** the image has already been fully pushed to ghcr.io, and without `ignore-error=true` buildx treats that as a fatal build failure even though the image itself is fine.
 
 ## SBOM and Provenance (MANDATORY)
 
@@ -203,4 +203,4 @@ Both MUST stay disabled on the `pull_request` (`load: true`) path: buildx's dock
 - Dockerfiles: `containers/base/<stage>/Dockerfile`
 - Files COPYd into images: place them alongside the Dockerfile in `containers/base/<stage>/` — do not reference files from other directories
 - Workflows: `.github/workflows/build-development-<stage>.yml`
-- Cron schedules: staggered by 15 min per stage (tools: :00, node: :15, python: :30, full: :45)
+- Cron schedules: exactly one daily cron, on `development-tools` only; every other stage relies solely on `workflow_run` chaining plus real-change triggers (see "Workflow Build Chain" above)

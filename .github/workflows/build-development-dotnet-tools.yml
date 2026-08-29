@@ -12,11 +12,6 @@ name: "Build development-dotnet-tools base image"
 # built-in GITHUB_TOKEN — no extra secrets to manage.
 
 on:
-  schedule:
-    # Hourly — the nuget-latest-versions check below decides whether anything
-    # actually needs to rebuild; unchanged hours hit the GHA cache fully (only
-    # a layer-validation / tag-push noop runs).
-    - cron: "35 * * * *"
   workflow_run:
     workflows: ["Build development-python base image"]
     types:
@@ -120,8 +115,8 @@ jobs:
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             STABLE_TOOLS_CACHE_BUST=${{ steps.cb.outputs.version-hash }}
-          cache-from: "type=gha"
-          cache-to: "type=gha,mode=max,ignore-error=true"
+          cache-from: "type=gha,scope=development-dotnet-tools"
+          cache-to: "type=gha,scope=development-dotnet-tools,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}

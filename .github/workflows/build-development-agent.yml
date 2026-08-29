@@ -12,11 +12,6 @@ name: "Build development-agent image"
 # built-in GITHUB_TOKEN — no extra secrets to manage.
 
 on:
-  schedule:
-    # Every 30 minutes — keeps the image in sync with the parent development-full
-    # image which is rebuilt hourly.  The workflow_run trigger below also fires
-    # immediately when development-full finishes.
-    - cron: "*/30 * * * *"
   workflow_run:
     workflows: ["Build development-full base image"]
     types:
@@ -51,7 +46,7 @@ permissions:
 jobs:
   # @@required: main
   build-development-agent:
-    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.event != 'pull_request') }}
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: "ubuntu-latest"
     timeout-minutes: 30
     permissions:
@@ -113,8 +108,8 @@ jobs:
           build-args: |
             BUILD_GIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
             GITHUB_SSH_KNOWN_HOSTS_CACHE_BUST=${{ steps.cb.outputs.date }}
-          cache-from: "type=gha"
-          cache-to: "type=gha,mode=max,ignore-error=true"
+          cache-from: "type=gha,scope=development-agent"
+          cache-to: "type=gha,scope=development-agent,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}

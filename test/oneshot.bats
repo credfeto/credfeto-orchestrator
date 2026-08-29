@@ -9088,6 +9088,51 @@ STUBEOF
     grep -q "no cached local image is available" "${notify_log}"
 }
 
+@test "invoke_claude pulls the image only once across multiple invocations in the same run (#1401)" {
+    local call_log="${TEST_TMP}/podman_calls"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ]    && printf 'pull\n' >> "${call_log}" && exit 0
+[ "\$1" = "image" ]   && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "2" "# mock CLAUDE.md" 2>/dev/null
+
+    [ "$(grep -c '^pull$' "${call_log}")" -eq 1 ]
+}
+
+@test "invoke_claude retries the pull on the next item after a fallback within the same run (#1401)" {
+    # Deliberately does NOT use bats' "run" helper for the invoke_claude calls: "run" captures
+    # output via command substitution, which forks a subshell — any mutation invoke_claude makes
+    # to ORCHESTRATOR_IMAGE_PULLED_THIS_RUN inside that subshell would be lost on return, making
+    # it impossible to observe whether the flag was really left clear across the two calls.
+    local call_log="${TEST_TMP}/podman_calls"
+    local first_output="${TEST_TMP}/first_output"
+    local second_output="${TEST_TMP}/second_output"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ]    && printf 'pull\n' >> "${call_log}" && exit 1
+[ "\$1" = "image" ] && [ "\$2" = "exists" ] && exit 0
+[ "\$1" = "image" ]   && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" > "${first_output}" 2>&1
+    invoke_claude "test prompt" "Issue" "2" "# mock CLAUDE.md" > "${second_output}" 2>&1
+
+    grep -q "falling back to the cached local image" "${first_output}"
+    grep -q "falling back to the cached local image" "${second_output}"
+    [ "$(grep -c '^pull$' "${call_log}")" -eq 2 ]
+}
+
 @test "invoke_claude prunes dangling images before pulling the orchestrator image" {
     local call_log="${TEST_TMP}/podman_calls"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"

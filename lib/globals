@@ -10,6 +10,10 @@
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
+# Set to 1 by invoke_claude after its first successful pull in this process. Deliberately NOT
+# seeded from the environment (no ${VAR:-0} indirection) — an inherited value would let a stray
+# export permanently suppress image pulls for a whole run.
+ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=0
 CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
 # A second registered --add-dir, distinct from CONTAINER_REPO_PATH: throwaway per-invocation
