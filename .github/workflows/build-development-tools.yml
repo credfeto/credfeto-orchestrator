@@ -13,10 +13,14 @@ name: "Build development-tools base image"
 
 on:
   schedule:
-    # Hourly — composite-action-lint can move multiple times a day; the
-    # COMPOSITE_ACTION_LINT_CACHE_BUST is the upstream HEAD SHA, so unchanged
-    # hours hit cache fully (only a layer-validation / tag-push noop runs).
-    - cron: "0 * * * *"
+    # Daily, and the only cron anywhere in the image chain — every downstream stage rebuilds via
+    # its workflow_run trigger from this one tick. Real changes still rebuild immediately via
+    # push (paths-filtered) and, for development-full, repository_dispatch: pre-commit-updated.
+    # Previously each of the 7 stages had its own hourly-or-tighter cron; stacked through the
+    # chain that moved development-agent:latest every 15-30 minutes, and the orchestrator host,
+    # which pulls before every invocation, lost ~2 hours of a 4.5-hour window purely to podman
+    # pull. See #1401.
+    - cron: "0 4 * * *"
   push:
     branches: ["main"]
     paths:
@@ -105,8 +109,8 @@ jobs:
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
             BUILD_GIT_SHA=${{ github.sha }}
-          cache-from: "type=gha"
-          cache-to: "type=gha,mode=max,ignore-error=true"
+          cache-from: "type=gha,scope=development-tools"
+          cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
 
       - name: "Scan image for vulnerabilities"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}

@@ -498,12 +498,19 @@ invoke_claude() {
     fi
 
     cleanup_dangling_images
-    info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
-    if ! podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
-        # A registry hiccup should not fail the run when a usable cached image already exists
-        # locally — fall back to it instead of dying outright (#1090). Only die if there is truly
-        # no image to run at all.
-        if podman image exists "${ORCHESTRATOR_IMAGE}"; then
+    # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
+    # and a tick with several actionable items would otherwise pay that cost once per item.
+    if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
+        info "Image ${ORCHESTRATOR_IMAGE} already pulled this run — not re-pulling" >&2
+    else
+        info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
+        if podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
+            ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1
+        elif podman image exists "${ORCHESTRATOR_IMAGE}"; then
+            # A registry hiccup should not fail the run when a usable cached image already exists
+            # locally — fall back to it instead of dying outright (#1090). Deliberately leaves the
+            # flag at 0 so the next item in this run retries the pull rather than being stuck on
+            # the fallback for the whole tick.
             warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
         else
             notify_discord_claude_error "${item_type}" "${item_id}" \
@@ -733,8 +740,9 @@ invoke_claude() {
 
 # Reads the git SHA baked into the agent image's IMAGE_SHA_DEVELOPMENT_AGENT env var (set at build
 # time — see containers/agent/Dockerfile) directly off the image config, without running a
-# container (#1118). Assumes invoke_claude has already pulled the current ${ORCHESTRATOR_IMAGE}
-# tag. Best-effort: prints nothing and returns non-zero on any inspect failure — a failure here
+# container (#1118). Assumes invoke_claude has already pulled ${ORCHESTRATOR_IMAGE} at least once
+# so far this run (ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1) — not necessarily on this specific call.
+# Best-effort: prints nothing and returns non-zero on any inspect failure — a failure here
 # only means the auto-unblock check below is skipped for this tick, never that anything breaks.
 current_agent_image_sha() {
     local sha

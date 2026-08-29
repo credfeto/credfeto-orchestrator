@@ -274,9 +274,11 @@
       "Edit(**/.database)",
       "Read(/tmp/**)",
       "Edit(/tmp/**)",
-      "Edit(~/.claude/**)",
+      "Edit(~/.claude/settings.json)",
+      "Edit(~/.claude/settings.local.json)",
       "Edit(~/.claude)",
-      "Edit(*/.claude/**)",
+      "Edit(*/.claude/settings.json)",
+      "Edit(*/.claude/settings.local.json)",
       "Edit(*/.claude)"
 
     ]
