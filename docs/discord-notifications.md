@@ -19,23 +19,26 @@ rule, matched to what actually makes sense for that alert:
 | Item observed waiting | A PR is skipped this tick because a required CI check is still pending, or because it's "settled" (auto-merge armed, nothing failed/pending) but stuck on `reviewDecision: REVIEW_REQUIRED` (#1375). Same embed shape as work started/resumed, but Progress reads "Waiting on CI" or "Waiting on human review" and the colour is grey rather than green/gold. Distinct from the dedicated "PR needs approval" alert below — both can fire for the same PR. | Content-hash latch (substatus+progress+priority) — silent on every tick nothing about that content has changed, sent again immediately the moment it does. Not time-based: unlike the rolling-window alerts below, a PR can sit "Waiting on CI" for hours without a heartbeat repeat. |
 | No work found | An entire tick found nothing actionable to do. The embed title carries the same count breakdown as before (how many were unchanged, blocked, already-active, not-open, errored, or standing off for a human); the embed description now also lists every skipped item individually — `<Type> #<id> in <repo>` as a link to the Issue/PR, followed by the same status text already used in the run's own log for that item (see [oneshot.md](oneshot.md)). The per-item list is truncated (with a stated count of how many more were dropped) if it would otherwise exceed Discord's embed-description size limit. | At most one per hour per owner, but only while the content (title and item breakdown) stays identical — any change is always sent immediately regardless of timing. |
 | Low disk space | Available disk space drops below a configured threshold before launching a container. | At most one per hour, per owner. |
+| Slow image pull (#1400) | A `podman pull` of `ORCHESTRATOR_IMAGE` takes longer than `PULL_DURATION_THRESHOLD_MULTIPLIER` times the owner's own rolling median pull duration (last `PULL_DURATION_HISTORY_SIZE` successful pulls). Skipped entirely until at least `PULL_DURATION_MIN_SAMPLES` pulls have been recorded for that owner — there is no fixed "normal" duration, since it legitimately varies with how many image layers actually changed. | At most one per hour, per owner. |
 | Priorities API unreachable | The priorities feed itself could not be reached after retrying (see [oneshot.md](oneshot.md)) — distinct from the feed answering with something that failed to parse, which is not treated as a connectivity problem. | At most one per hour, shared across all owners (see below). |
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
 | PR needs approval | A Pull Request is "settled" (auto-merge armed, nothing failed/pending) but GitHub's `reviewDecision` is `REVIEW_REQUIRED` — it cannot merge purely because no approving review exists, whether one was dismissed by a later force-push or never requested at all. | At most one per hour, per repo-and-PR (not per owner, so the same PR number in two different repos never suppresses each other's alert). |
 | Self-update stale | Only when systemd-invoked (gated on `ORCHESTRATOR_SELF_UPDATE_MANAGED`, a variable install-timer's generated unit declares explicitly — not systemd's generic `INVOCATION_ID`, which would also wrongly catch a manual shell descended from an unrelated systemd session — so `loop` and manual runs are unaffected): this checkout's own `HEAD` is behind `origin/main` — the systemd unit's self-update `ExecStartPre` steps did not converge (a stalled/unreachable remote is tolerated by design, but a permanently wedged merge, e.g. a stale git lock left by a killed process, previously had nothing surfacing it). The run refuses to continue this tick and exits non-zero, so `systemctl`/`journalctl` also show the unit as failed. | At most one per hour, per owner. |
 | Claude error | The agent session itself returned an application-level error. | None — fires every time, every tick. |
 | Rate limited | The Claude API rate-limited the current owner; work pauses until the reported reset time. | None — fires every time, every tick. |
+| Image pull failed (#1400) | A `podman pull` of `ORCHESTRATOR_IMAGE` fails outright with no cached local image to fall back to. Distinct from "Claude error": the two used to share the same misleadingly-titled alert, which read "Claude Error" for a registry/pull failure that has nothing to do with Claude itself erroring. | None — fires every time, every tick; the caller dies immediately after, so this is already self-limiting the same way Claude error/rate limited are. |
 
 Three different suppression shapes are in play, not one universal rule:
 
-1. **No suppression** (work started, Claude error, rate limited) — these are expected to be rare
-   or already self-limiting (a rate limit, once hit, stops further work — and further alerts —
-   until it clears), so nothing extra is layered on top.
-2. **A rolling one-hour window** (low disk space, priorities unreachable, PR needs approval,
-   self-update stale, and no-work *when the content is unchanged*) — a small state file records
-   the last time this alert actually sent, and a repeat within the hour is dropped. The no-work
-   alert compares a hash of its title and item breakdown rather than the raw text, since the
-   breakdown can now be long and multi-line.
+1. **No suppression** (work started, Claude error, rate limited, image pull failed) — these are
+   expected to be rare or already self-limiting (a rate limit, once hit, stops further work — and
+   further alerts — until it clears; a pull failure kills the run immediately after), so nothing
+   extra is layered on top.
+2. **A rolling one-hour window** (low disk space, slow image pull, priorities unreachable, PR
+   needs approval, self-update stale, and no-work *when the content is unchanged*) — a small
+   state file records the last time this alert actually sent, and a repeat within the hour is
+   dropped. The no-work alert compares a hash of its title and item breakdown rather than the raw
+   text, since the breakdown can now be long and multi-line.
 3. **A persistent latch** (item blocked; item observed waiting, since #1375) — not time-based at
    all: exactly one notification per *episode* the underlying condition holds, however long that
    episode lasts. Item blocked re-arms only when the item is later seen open and un-blocked again;
@@ -53,11 +56,12 @@ write their state/marker file unconditionally, even when the `curl` call itself 
 Discord outage at the exact moment either of those fires can silently suppress the next
 occurrence for up to an hour (no-work) or for the rest of that blocked episode (item-blocked).
 
-Some alerts are deduplicated **per owner** (disk space is a genuinely separate concern for each
-machine/owner running the orchestrator); the priorities-unreachable alert instead uses a
-**single shared key** across all owners (the priorities API is one global endpoint everyone
-shares — if it goes down, every owner running concurrently would otherwise flood the same
-channel with one identical alert each, right when the channel's signal-to-noise matters most).
+Some alerts are deduplicated **per owner** (disk space and slow image pulls are each a genuinely
+separate concern for each machine/owner running the orchestrator); the priorities-unreachable
+alert instead uses a **single shared key** across all owners (the priorities API is one global
+endpoint everyone shares — if it goes down, every owner running concurrently would otherwise
+flood the same channel with one identical alert each, right when the channel's signal-to-noise
+matters most).
 
 ## Assumptions
 
@@ -68,7 +72,12 @@ channel with one identical alert each, right when the channel's signal-to-noise 
   job, never a dependency of it.
 - One hour is an acceptable dedup window for the alerts that use a rolling window; nothing here
   supports a different window per alert kind.
-- The alerts with no suppression at all (work started, Claude error, rate limited) are assumed to
-  fire rarely enough in practice that flooding isn't a real concern — this hasn't been true in
-  every historical incident (a persistently erroring agent could, in principle, alert every
-  single tick), so treat this as a known trade-off, not a guarantee.
+- The alerts with no suppression at all (work started, Claude error, rate limited, image pull
+  failed) are assumed to fire rarely enough in practice that flooding isn't a real concern — this
+  hasn't been true in every historical incident (a persistently erroring agent could, in
+  principle, alert every single tick), so treat this as a known trade-off, not a guarantee.
+- "Normal" pull duration is calculated dynamically per owner (the median of that owner's last
+  `PULL_DURATION_HISTORY_SIZE` successful pulls) rather than a fixed constant, since pull time
+  legitimately varies with how many layers actually changed upstream; a fixed threshold multiplier
+  (`PULL_DURATION_THRESHOLD_MULTIPLIER`) and minimum sample count (`PULL_DURATION_MIN_SAMPLES`)
+  are still hardcoded starting defaults, open to adjustment.

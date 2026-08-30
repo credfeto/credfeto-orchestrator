@@ -68,6 +68,15 @@ PODMAN_CGROUP_PARENT=""
 # Minimum free disk space in kilobytes required to launch a container (10 GB).
 MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 
+# Rolling baseline for podman pull duration (#1400): how many recent successful pull durations
+# to keep per owner, how far above their median counts as "slow enough to alert on", and the
+# minimum sample count before a baseline is trusted at all (fewer samples than this and the
+# check is skipped entirely, rather than comparing against a baseline built from too little
+# history to be meaningful).
+PULL_DURATION_HISTORY_SIZE=10
+PULL_DURATION_THRESHOLD_MULTIPLIER=3
+PULL_DURATION_MIN_SAMPLES=5
+
 # Code review, security review, and coverage each get their own round budget below rather than
 # sharing one constant: each round is its own fresh invocation (one /code-review, one
 # /security-review, or one coverage round, then stop), so these are advisory guidance passed

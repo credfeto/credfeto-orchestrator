@@ -342,6 +342,41 @@ owner_rate_limit_file() {
     printf '%s/.orchestrator/%s/rate-limit' "${HOME}" "${OWNER}"
 }
 
+# State file path for the current owner's rolling podman-pull-duration history (#1400): one
+# duration (seconds) per line, oldest first.
+pull_duration_state_file_path() {
+    printf '%s/.orchestrator/%s/pull-durations' "${HOME}" "${OWNER}"
+}
+
+# Appends a successful pull's duration (seconds) to the current owner's rolling history,
+# keeping only the most recent PULL_DURATION_HISTORY_SIZE entries.
+record_pull_duration() {
+    local duration_secs="$1"
+    local state_file existing
+    state_file=$(pull_duration_state_file_path)
+    mkdir -p "$(dirname "${state_file}")" \
+        || die "Failed to create pull-duration directory for owner ${OWNER}"
+    existing=""
+    [ -f "${state_file}" ] && existing=$(cat "${state_file}" 2>/dev/null)
+    { printf '%s\n' "${existing}" | grep -E '^[0-9]+$'; printf '%s\n' "${duration_secs}"; } \
+        | tail -n "${PULL_DURATION_HISTORY_SIZE}" > "${state_file}.tmp" \
+        && mv "${state_file}.tmp" "${state_file}" \
+        || die "Failed to write pull-duration file: ${state_file}"
+}
+
+# Returns the median of the current owner's recorded pull durations on stdout, or nothing (and
+# a non-zero exit) when fewer than PULL_DURATION_MIN_SAMPLES samples are recorded yet - the
+# caller must skip the slow-pull check entirely in that case rather than compare against a
+# baseline built from too little history to be meaningful.
+pull_duration_baseline() {
+    local state_file count
+    state_file=$(pull_duration_state_file_path)
+    [ -f "${state_file}" ] || return 1
+    count=$(grep -cE '^[0-9]+$' "${state_file}" 2>/dev/null) || count=0
+    [ "${count}" -ge "${PULL_DURATION_MIN_SAMPLES}" ] || return 1
+    grep -E '^[0-9]+$' "${state_file}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}'
+}
+
 # Saves a rate-limit reset unix timestamp for the current owner.
 save_rate_limit() {
     local reset_unix="$1"
