@@ -9823,20 +9823,22 @@ STUBEOF
     local curl_log="${TEST_TMP}/curl_log"
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
-    run notify_discord_pull_failed "owner" "pull failed"
+    run notify_discord_pull_failed "Issue" "42" "pull failed"
     [ "${status}" -eq 0 ]
     [ ! -f "${curl_log}" ]
 }
 
-@test "notify_discord_pull_failed sends an embed titled Image Pull Failed, not Claude Error" {
+@test "notify_discord_pull_failed sends an embed titled Image Pull Failed, not Claude Error, linking to the item" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="owner/repo"
     local curl_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
     hash curl
-    run notify_discord_pull_failed "owner" "no cached local image is available"
+    run notify_discord_pull_failed "Issue" "42" "no cached local image is available"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
     grep -q "Image Pull Failed" "${curl_log}"
+    grep -q "owner/repo/issues/42" "${curl_log}"
     run ! grep -q "Claude Error" "${curl_log}"
 }
 
@@ -9845,8 +9847,8 @@ STUBEOF
     local curl_log="${TEST_TMP}/curl_log"
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
-    notify_discord_pull_failed "owner" "first failure"
-    notify_discord_pull_failed "owner" "second failure"
+    notify_discord_pull_failed "Issue" "42" "first failure"
+    notify_discord_pull_failed "Issue" "42" "second failure"
     [ "$(wc -l < "${curl_log}")" -eq 2 ]
 }
 
