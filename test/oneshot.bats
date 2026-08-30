@@ -9068,7 +9068,7 @@ STUBEOF
     [[ "${output}" == *"no cached local image is available"* ]]
 }
 
-@test "invoke_claude notifies Discord before dying when podman pull fails and no cached image exists locally (#1103)" {
+@test "invoke_claude notifies Discord before dying when podman pull fails and no cached image exists locally (#1103, #1400)" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -9081,11 +9081,16 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     local notify_log="${TEST_TMP}/notify.log"
-    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+    # #1400: the hard pull-failure branch now calls the purpose-named
+    # notify_discord_pull_failed instead of the misleadingly-titled
+    # notify_discord_claude_error - stubbing the old function to detect a regression.
+    notify_discord_pull_failed() { printf '%s\n' "$*" >> "${notify_log}"; }
+    notify_discord_claude_error() { printf 'WRONG_FUNCTION_CALLED %s\n' "$*" >> "${notify_log}"; }
 
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "no cached local image is available" "${notify_log}"
+    run ! grep -q "WRONG_FUNCTION_CALLED" "${notify_log}"
 }
 
 @test "invoke_claude pulls the image only once across multiple invocations in the same run (#1401)" {
@@ -9727,6 +9732,122 @@ STUBEOF
     run notify_discord_low_disk_space "myowner"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
+}
+
+# --- pull_duration state helpers (#1400) --------------------------------------
+
+@test "record_pull_duration appends a duration to the owner's state file" {
+    OWNER="owner"
+    record_pull_duration 42
+    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
+    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "42" ]
+}
+
+@test "record_pull_duration caps history at PULL_DURATION_HISTORY_SIZE, keeping the most recent" {
+    OWNER="owner"
+    PULL_DURATION_HISTORY_SIZE=3
+    record_pull_duration 1
+    record_pull_duration 2
+    record_pull_duration 3
+    record_pull_duration 4
+    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "$(printf '2\n3\n4')" ]
+}
+
+@test "pull_duration_baseline fails when no samples are recorded" {
+    OWNER="owner"
+    run pull_duration_baseline
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_baseline fails when fewer than PULL_DURATION_MIN_SAMPLES are recorded" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=5
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_baseline
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_baseline returns the median once PULL_DURATION_MIN_SAMPLES are recorded" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    record_pull_duration 30
+    record_pull_duration 10
+    record_pull_duration 20
+    run pull_duration_baseline
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "20" ]
+}
+
+# --- notify_discord_slow_pull (#1400) ------------------------------------------
+
+@test "notify_discord_slow_pull does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_slow_pull sends embed with duration and baseline" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "owner" "${curl_log}"
+}
+
+@test "notify_discord_slow_pull suppresses duplicate notification within 1 hour, per owner" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.slow_pull_owner.state"
+
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+# --- notify_discord_pull_failed (#1400) ----------------------------------------
+
+@test "notify_discord_pull_failed does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_pull_failed "owner" "pull failed"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_pull_failed sends an embed titled Image Pull Failed, not Claude Error" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pull_failed "owner" "no cached local image is available"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "Image Pull Failed" "${curl_log}"
+    run ! grep -q "Claude Error" "${curl_log}"
+}
+
+@test "notify_discord_pull_failed fires again immediately on a second call (no suppression)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    notify_discord_pull_failed "owner" "first failure"
+    notify_discord_pull_failed "owner" "second failure"
+    [ "$(wc -l < "${curl_log}")" -eq 2 ]
 }
 
 # --- notify_discord_self_update_stale (#1298) ---------------------------------

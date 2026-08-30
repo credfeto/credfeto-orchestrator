@@ -504,8 +504,23 @@ invoke_claude() {
         info "Image ${ORCHESTRATOR_IMAGE} already pulled this run — not re-pulling" >&2
     else
         info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
+        local pull_start_unix pull_end_unix pull_duration_secs
+        pull_start_unix=$(date +%s)
         if podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
             ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1
+            pull_end_unix=$(date +%s)
+            pull_duration_secs=$(( pull_end_unix - pull_start_unix ))
+            record_pull_duration "${pull_duration_secs}"
+            # #1400: alert when this pull took disproportionately longer than the owner's own
+            # recent history — a pathologically slow pull otherwise just looks like the
+            # orchestrator "not doing anything" from the outside. Skipped entirely until enough
+            # history exists (pull_duration_baseline returns non-zero) rather than comparing
+            # against a baseline built from too little history to be meaningful.
+            local pull_baseline_secs
+            if pull_baseline_secs=$(pull_duration_baseline) \
+                    && [ "${pull_duration_secs}" -gt "$(( pull_baseline_secs * PULL_DURATION_THRESHOLD_MULTIPLIER ))" ]; then
+                notify_discord_slow_pull "${OWNER}" "${pull_duration_secs}" "${pull_baseline_secs}"
+            fi
         elif podman image exists "${ORCHESTRATOR_IMAGE}"; then
             # A registry hiccup should not fail the run when a usable cached image already exists
             # locally — fall back to it instead of dying outright (#1090). Deliberately leaves the
@@ -513,7 +528,7 @@ invoke_claude() {
             # the fallback for the whole tick.
             warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
         else
-            notify_discord_claude_error "${item_type}" "${item_id}" \
+            notify_discord_pull_failed "${OWNER}" \
                 "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
             die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
         fi

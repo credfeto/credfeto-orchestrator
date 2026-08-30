@@ -383,6 +383,65 @@ notify_discord_low_disk_space() {
     _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
+# Sends a Discord embed notification when a podman pull of ORCHESTRATOR_IMAGE takes longer than
+# PULL_DURATION_THRESHOLD_MULTIPLIER times the owner's rolling baseline (#1400) - see
+# pull_duration_baseline in lib/state. Deduplicates: at most one notification per hour per owner,
+# same shape as notify_discord_low_disk_space - a persistently slow registry/network condition
+# could otherwise fire on every tick.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_slow_pull() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}" duration_secs="$2" baseline_secs="$3"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file slow_pull "${owner}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Slow Image Pull${owner:+ [${owner}]}" \
+        --argjson duration "${duration_secs}" \
+        --argjson baseline "${baseline_secs}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"Duration",value:("\($duration)s"),inline:true},
+            {name:"Baseline",value:("\($baseline)s"),inline:true}
+        ]}]}') \
+        || { warn "Discord: failed to build slow-pull payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+}
+
+# Sends a Discord embed notification when a podman pull of ORCHESTRATOR_IMAGE fails outright
+# with no cached local image to fall back to (#1400) - distinct from notify_discord_claude_error,
+# whose "Claude Error" title is misleading for a registry/pull failure that has nothing to do
+# with Claude erroring. No suppression, matching notify_discord_claude_error's own rationale: a
+# hard pull failure is already rare and self-limiting (the caller dies immediately after).
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_pull_failed() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local owner="${1:-}" error_message="$2"
+
+    local truncated_error="${error_message:0:900}"
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Image Pull Failed${owner:+ [${owner}]}" \
+        --arg error "${truncated_error}" \
+        '{embeds:[{title:$title,color:$color,fields:[
+            {name:"Error",value:$error,inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build pull-failed payload"; return 0; }
+
+    curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        || warn "Discord webhook notification failed"
+}
+
 # Sends a Discord embed notification when oneshot detects its OWN checkout is behind
 # origin/main — install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate
 # failure, #1098), so a permanently wedged merge (e.g. a stale git lock left by a killed process,
