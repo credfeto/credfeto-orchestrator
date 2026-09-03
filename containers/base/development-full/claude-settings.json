@@ -170,6 +170,7 @@
       "Bash(tail *)",
       "Bash(tee *)",
       "Bash(test *)",
+      "Bash(./testdb *)",
       "Bash(testdb *)",
       "Bash(testdocker *)",
       "Bash(touch *)",
