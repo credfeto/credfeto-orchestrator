@@ -26,6 +26,10 @@ outputs:
   new-version:
     description: "Newly pinned version"
     value: "${{steps.bump.outputs.new-version}}"
+  dockerfile-path:
+    description: "The Dockerfile path actually used (echoes the resolved input, single source of
+      truth for callers that need it, e.g. a git-auto-commit file_pattern)"
+    value: "${{steps.bump.outputs.dockerfile-path}}"
 
 runs:
   using: composite
@@ -47,64 +51,50 @@ runs:
           // the bare number (e.g. "1.7.12") - the two conventions already coexist in the
           // Dockerfile today (see its own "Pin CLI versions" comment block), so this mirrors
           // each ARG's existing format rather than normalising it, keeping this bump a pure
-          // value substitution with no unrelated reformatting. `assetUrl` reproduces the exact
-          // download URL each tool's own Dockerfile RUN step already constructs, given the
-          // resolved ARG-format version string and one of the two archTokens below.
+          // value substitution with no unrelated reformatting. The three ARG names
+          // (<PREFIX>_VERSION / <PREFIX>_SHA256_AMD64 / <PREFIX>_SHA256_ARM64) are derived from
+          // the tool key below rather than typed out per entry, since all six follow that
+          // convention with no exception (verified against the Dockerfile's own ARG block).
+          // `assetName` returns just the release asset's filename for one arch - the download
+          // URL itself is always `https://github.com/<repo>/releases/download/<tag>/<name>`,
+          // built once below from `repo` and the release's own tag_name, so `repo` is never
+          // duplicated inside a URL template the way an inlined URL would.
           const TOOLS = {
             hadolint: {
               repo: "hadolint/hadolint",
-              versionArg: "HADOLINT_VERSION",
-              shaAmd64Arg: "HADOLINT_SHA256_AMD64",
-              shaArm64Arg: "HADOLINT_SHA256_ARM64",
               versionHasVPrefix: true,
               archTokens: { amd64: "x86_64", arm64: "arm64" },
-              assetUrl: (version, arch) => `https://github.com/hadolint/hadolint/releases/download/${version}/hadolint-Linux-${arch}`,
+              assetName: (_version, arch) => `hadolint-Linux-${arch}`,
             },
             "dotenv-linter": {
               repo: "dotenv-linter/dotenv-linter",
-              versionArg: "DOTENV_LINTER_VERSION",
-              shaAmd64Arg: "DOTENV_LINTER_SHA256_AMD64",
-              shaArm64Arg: "DOTENV_LINTER_SHA256_ARM64",
               versionHasVPrefix: true,
               archTokens: { amd64: "x86_64", arm64: "aarch64" },
-              assetUrl: (version, arch) => `https://github.com/dotenv-linter/dotenv-linter/releases/download/${version}/dotenv-linter-linux-${arch}.tar.gz`,
+              assetName: (_version, arch) => `dotenv-linter-linux-${arch}.tar.gz`,
             },
             sqlcmd: {
               repo: "microsoft/go-sqlcmd",
-              versionArg: "SQLCMD_VERSION",
-              shaAmd64Arg: "SQLCMD_SHA256_AMD64",
-              shaArm64Arg: "SQLCMD_SHA256_ARM64",
               versionHasVPrefix: true,
               archTokens: { amd64: "amd64", arm64: "arm64" },
-              assetUrl: (version, arch) => `https://github.com/microsoft/go-sqlcmd/releases/download/${version}/sqlcmd-linux-${arch}.tar.bz2`,
+              assetName: (_version, arch) => `sqlcmd-linux-${arch}.tar.bz2`,
             },
             actionlint: {
               repo: "rhysd/actionlint",
-              versionArg: "ACTIONLINT_VERSION",
-              shaAmd64Arg: "ACTIONLINT_SHA256_AMD64",
-              shaArm64Arg: "ACTIONLINT_SHA256_ARM64",
               versionHasVPrefix: false,
               archTokens: { amd64: "amd64", arm64: "arm64" },
-              assetUrl: (version, arch) => `https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_${arch}.tar.gz`,
+              assetName: (version, arch) => `actionlint_${version}_linux_${arch}.tar.gz`,
             },
             trufflehog: {
               repo: "trufflesecurity/trufflehog",
-              versionArg: "TRUFFLEHOG_VERSION",
-              shaAmd64Arg: "TRUFFLEHOG_SHA256_AMD64",
-              shaArm64Arg: "TRUFFLEHOG_SHA256_ARM64",
               versionHasVPrefix: false,
               archTokens: { amd64: "amd64", arm64: "arm64" },
-              assetUrl: (version, arch) =>
-                `https://github.com/trufflesecurity/trufflehog/releases/download/v${version}/trufflehog_${version}_linux_${arch}.tar.gz`,
+              assetName: (version, arch) => `trufflehog_${version}_linux_${arch}.tar.gz`,
             },
             trivy: {
               repo: "aquasecurity/trivy",
-              versionArg: "TRIVY_VERSION",
-              shaAmd64Arg: "TRIVY_SHA256_AMD64",
-              shaArm64Arg: "TRIVY_SHA256_ARM64",
               versionHasVPrefix: false,
               archTokens: { amd64: "64bit", arm64: "ARM64" },
-              assetUrl: (version, arch) => `https://github.com/aquasecurity/trivy/releases/download/v${version}/trivy_${version}_Linux-${arch}.tar.gz`,
+              assetName: (version, arch) => `trivy_${version}_Linux-${arch}.tar.gz`,
             },
           };
 
@@ -116,12 +106,19 @@ runs:
           }
 
           const dockerfilePath = process.env.DOCKERFILE_PATH;
+          core.setOutput("dockerfile-path", dockerfilePath);
           const dockerfile = fs.readFileSync(dockerfilePath, "utf8");
 
-          const versionLineRe = new RegExp(`^ARG ${tool.versionArg}=(\\S+)$`, "m");
+          // <PREFIX>_VERSION / <PREFIX>_SHA256_AMD64 / <PREFIX>_SHA256_ARM64 - derived, not
+          // stored per tool, since the Dockerfile's own ARG names follow this uniformly.
+          const prefix = toolKey.toUpperCase().replace(/-/g, "_");
+          const versionArg = `${prefix}_VERSION`;
+          const shaArgs = { amd64: `${prefix}_SHA256_AMD64`, arm64: `${prefix}_SHA256_ARM64` };
+
+          const versionLineRe = new RegExp(`^ARG ${versionArg}=(\\S+)$`, "m");
           const currentMatch = dockerfile.match(versionLineRe);
           if (!currentMatch) {
-            core.setFailed(`❌ Could not find "ARG ${tool.versionArg}=" in ${dockerfilePath}`);
+            core.setFailed(`❌ Could not find "ARG ${versionArg}=" in ${dockerfilePath}`);
             return;
           }
           const currentVersion = currentMatch[1];
@@ -145,7 +142,8 @@ runs:
           // (each Dockerfile RUN step ends by running the installed tool) validate that a newly
           // pinned release actually works, once this PR's branch is built.
           async function sha256OfAsset(arch) {
-            const url = tool.assetUrl(newVersion, tool.archTokens[arch]);
+            const name = tool.assetName(newVersion, tool.archTokens[arch]);
+            const url = `https://github.com/${tool.repo}/releases/download/${release.tag_name}/${name}`;
             const response = await fetch(url);
             if (!response.ok) {
               throw new Error(`download failed for ${toolKey} ${arch}: HTTP ${response.status} from ${url}`);
@@ -156,9 +154,15 @@ runs:
 
           const [shaAmd64, shaArm64] = await Promise.all([sha256OfAsset("amd64"), sha256OfAsset("arm64")]);
 
-          let updated = dockerfile.replace(versionLineRe, `ARG ${tool.versionArg}=${newVersion}`);
-          updated = updated.replace(new RegExp(`^ARG ${tool.shaAmd64Arg}=\\S+$`, "m"), `ARG ${tool.shaAmd64Arg}=${shaAmd64}`);
-          updated = updated.replace(new RegExp(`^ARG ${tool.shaArm64Arg}=\\S+$`, "m"), `ARG ${tool.shaArm64Arg}=${shaArm64}`);
+          const replacements = [
+            [versionArg, newVersion],
+            [shaArgs.amd64, shaAmd64],
+            [shaArgs.arm64, shaArm64],
+          ];
+          const updated = replacements.reduce(
+            (text, [name, value]) => text.replace(new RegExp(`^ARG ${name}=\\S+$`, "m"), `ARG ${name}=${value}`),
+            dockerfile
+          );
           fs.writeFileSync(dockerfilePath, updated);
 
           core.info(`✅ Bumped ${toolKey}: ${currentVersion} -> ${newVersion}`);
