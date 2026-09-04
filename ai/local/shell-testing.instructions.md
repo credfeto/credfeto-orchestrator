@@ -22,7 +22,7 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 | --- | --- |
 | `lib/globals` | Config env-var defaults and every `declare -gA` array / mutable counter. **Sourced first** — every other file reads or writes globals declared here, and bash requires an associative array to be `declare -A`'d before any assignment into it. |
 | `lib/core` | `die`/`success`/`info`/`warn`/`is_ai_agent`/`hash_sha256`/`check_required_tools`, token loading, config load/validate, disk-space checks, and `interactive`'s first-run bootstrap of `$XDG_CONFIG_HOME/orchestrator` (`bootstrap_orchestrator_config`). |
-| `lib/git` | Repo context (`set_repo_context`) and git plumbing. |
+| `lib/git` | Repo context (`set_repo_context`, with optional work/rules dir overrides used by `interactive`) and git plumbing, including `interactive`'s checkout resolution (`resolve_repo_dir`, `resolve_repo_full`, `github_repo_full_from_url`, `check_rules_checkout`). |
 | `lib/github` | Trust/collaborators, the priorities feed, PR/issue discovery and authorship predicates. |
 | `lib/github-status` | Pure PR/issue JSON status predicates and Blocked-label application/escalation. |
 | `lib/fingerprints` | PR/issue fingerprinting and the CI pending-timeout clock. |

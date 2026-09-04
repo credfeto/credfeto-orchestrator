@@ -43,11 +43,16 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
-check_required_tools() {
+# Dies naming the first of the given commands that is not on PATH.
+require_tools() {
     local tool
-    for tool in curl jq podman gh git awk grep flock timeout; do
+    for tool in "$@"; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
+}
+
+check_required_tools() {
+    require_tools curl jq podman gh git awk grep flock timeout
 
     if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
         die "Required tool not found: sha256sum or shasum"
@@ -218,10 +223,11 @@ check_disk_space() {
 
 # --- first-run bootstrap of $XDG_CONFIG_HOME/orchestrator (the `interactive` script) -------------
 
-# True when stdin is a terminal. Its own function (rather than an inline [ -t 0 ]) so tests
-# can override it — bats never runs a test body on a TTY.
-stdin_is_terminal() {
-    [ -t 0 ]
+# True when stdin and stdout are both terminals: what `claude setup-token` and
+# `podman run --tty` each need. Its own function (rather than inline [ -t ] tests) so bats
+# tests can override it, since a test body never runs on a TTY.
+terminal_available() {
+    [ -t 0 ] && [ -t 1 ]
 }
 
 # Creates dir (and any parents) owner-only (0700). Dies on failure.
@@ -258,8 +264,8 @@ bootstrap_orchestrator_env_file() {
     [ "${gpg_format}" != "ssh" ] || die "git config --global gpg.format is ssh, the agent container signs with GPG, so user.signingkey must be a GPG key id"
 
     _ensure_private_dir "${config_dir}"
-    # umask 077 in a subshell, with the redirect inside it so the file is created under that
-    # umask: it is never world-readable, not even between creation and the chmod below.
+    # umask 077 in a subshell, with the redirect inside it so the file is created 0600 and is
+    # never world-readable, not even briefly.
     (
         umask 077
         {
@@ -268,7 +274,6 @@ bootstrap_orchestrator_env_file() {
             printf 'GIT_SIGNING_KEY=%s\n' "${git_key}"
         } > "${env_file}"
     ) || die "Failed to write ${env_file}"
-    chmod 600 "${env_file}" || die "Failed to set permissions on ${env_file}"
     if [ -n "${GH_HOST:-}" ] && [ "${GH_HOST}" != "github.com" ]; then
         gh_token=$(gh auth token 2>/dev/null) || gh_token=""
         if [ -n "${gh_token}" ]; then
@@ -292,11 +297,12 @@ bootstrap_orchestrator_env_file() {
 # clean single-line value. Dies without a terminal, since neither step can run unattended.
 bootstrap_owner_token() {
     local owner="$1"
-    local tokens_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/tokens"
+    local config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator"
+    local tokens_dir="${config_dir}/tokens"
     local token_file="${tokens_dir}/${owner}"
     [ -f "${token_file}" ] && return 0
 
-    stdin_is_terminal || die "No Claude OAuth token file at ${token_file} and no terminal to run 'claude setup-token', create it by hand (see README.md, Per-owner OAuth token)"
+    terminal_available || die "No Claude OAuth token file at ${token_file} and no terminal to run 'claude setup-token', create it by hand (see README.md, Per-owner OAuth token)"
     info "No Claude OAuth token for owner ${owner} yet, running 'claude setup-token'. Complete the browser flow, then paste the token it prints when asked."
     claude setup-token || die "claude setup-token failed, no token stored"
 
@@ -307,12 +313,11 @@ bootstrap_owner_token() {
     token="${token//[[:space:]]/}"
     [ -n "${token}" ] || die "No token entered, nothing stored at ${token_file}"
 
-    _ensure_private_dir "$(dirname "${tokens_dir}")"
+    _ensure_private_dir "${config_dir}"
     _ensure_private_dir "${tokens_dir}"
-    # umask 077 in a subshell: the file is never world-readable, not even between creation and
-    # the chmod (read_token_if_safe refuses anything other than 600/400).
+    # umask 077 in a subshell: the file is created 0600 (read_token_if_safe refuses anything
+    # other than 600/400) and is never world-readable, not even briefly.
     ( umask 077 && printf '%s' "${token}" > "${token_file}" ) || die "Failed to write ${token_file}"
-    chmod 600 "${token_file}" || die "Failed to set permissions on ${token_file}"
     success "Stored Claude OAuth token for ${owner} at ${token_file} (mode 600)"
 }
 

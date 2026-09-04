@@ -550,7 +550,7 @@ IBGRULE
 # the owner drives the session; the repo's own interactive-session instructions (loaded via the
 # AI instructions) say how far each piece of work must be taken.
 build_interactive_claude_md() {
-    local ai_instructions="$1" repo_path="${2:-${CONTAINER_REPO_PATH}}" rules_path="${3:-${CONTAINER_RULES_PATH}}"
+    local ai_instructions="$1" repo_path="${CONTAINER_REPO_PATH}" rules_path="${CONTAINER_RULES_PATH}"
     cat <<EOF
 You are working in an interactive Claude Code session with the repository owner, inside the orchestrator's locked-down agent container.
 

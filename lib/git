@@ -27,13 +27,15 @@ host_to_container_path() {
 
 # Sets the per-repo globals used by all sub-functions.
 # Call once for each repository before invoking any function that reads these globals.
+# repo_work_dir and rules_dir default to oneshot's per-owner clones under WORK; `interactive`
+# passes the checkout it was run from and the host's cs-template checkout instead.
 set_repo_context() {
-    local repo_full="$1"
+    local repo_full="$1" repo_work_dir="${2:-}" rules_dir="${3:-}"
     OWNER="${repo_full%%/*}"
     REPO="${repo_full##*/}"
     REPO_FULL="${repo_full}"
-    RULES_DIR="${WORK}/${OWNER}/${REPO}/rules"
-    REPO_WORK_DIR="${WORK}/${OWNER}/${REPO}/repo"
+    RULES_DIR="${rules_dir:-${WORK}/${OWNER}/${REPO}/rules}"
+    REPO_WORK_DIR="${repo_work_dir:-${WORK}/${OWNER}/${REPO}/repo}"
     SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
     # Host-side persistent store for the parts of the container's ~/.claude that
     # must survive across invocations (sessions, session-env, plans, cache,
@@ -291,4 +293,38 @@ github_repo_full_from_url() {
     path="${path%.git}"
     [[ "${path}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
     printf '%s' "${path}"
+}
+
+# Outputs the top-level directory of the git checkout containing dir, or dies.
+resolve_repo_dir() {
+    local dir="$1" top
+    top=$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null) \
+        || die "${dir} is not inside a git repository, run interactive from within a checkout"
+    printf '%s' "${top}"
+}
+
+# Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
+resolve_repo_full() {
+    local repo_dir="$1" origin repo_full
+    origin=$(git -C "${repo_dir}" config --get remote.origin.url 2>/dev/null) \
+        || die "${repo_dir} has no origin remote, interactive needs a GitHub-hosted repository"
+    repo_full=$(github_repo_full_from_url "${origin}") \
+        || die "origin remote ${origin} is not a GitHub repository URL"
+    printf '%s' "${repo_full}"
+}
+
+# Dies unless rules_dir is a git checkout; warns when it is not on main. The rules checkout is
+# mounted read-only into the container, so anything wrong with it can only be fixed on the
+# host; and the entrypoint's own hooks-freshness check (verify_hooks_fresh in
+# containers/agent/entrypoint.sh) dies inside the container if /workspace/rules/.env carries a
+# stale SHA, so a wrong-branch checkout is called out here, where the fix is a single git
+# command, rather than surfacing as a confusing in-container death later.
+check_rules_checkout() {
+    local rules_dir="$1" branch
+    [ -d "${rules_dir}/.git" ] \
+        || die "cs-template checkout not found at ${rules_dir}, clone git@github.com:credfeto/cs-template.git there, or set INTERACTIVE_RULES_DIR"
+    branch=$(git -C "${rules_dir}" branch --show-current 2>/dev/null) || branch=""
+    if [ "${branch}" != "main" ]; then
+        warn "${rules_dir} is on branch '${branch:-<detached>}', not main: the agent will read those rules, and the container may refuse to start if its .env SHA is stale (git -C ${rules_dir} switch main && git -C ${rules_dir} pull --ff-only)"
+    fi
 }

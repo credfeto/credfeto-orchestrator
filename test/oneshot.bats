@@ -13442,3 +13442,25 @@ STUBEOF
     [ ! -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"CI checks pending"* ]]
 }
+
+# --- invoke_claude keeps its --print behaviour after the shared-builder split (#1409) ---------
+
+@test "invoke_claude still passes --print, --output-format json and --permission-mode dontAsk" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx -- '--print' "${args_log}"
+    grep -qx -- '--output-format' "${args_log}"
+    grep -qx -- '--permission-mode' "${args_log}"
+    grep -qx 'dontAsk' "${args_log}"
+    [ "$(grep -c -- '^--tty$' "${args_log}")" -eq 0 ]
+    grep -qx 'orchestrator-credfeto' "${args_log}"
+}
