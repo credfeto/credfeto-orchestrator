@@ -482,6 +482,100 @@ invoke_claude() {
     owner_token=$(load_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
+    ensure_agent_container_ready "${container_name}" "${item_type}" "${item_id}"
+
+    # Registered BEFORE prepare_claude_container_args populates CLAUDE_MD_TMPFILE — not after
+    # its mkdir loop — so a die() from that loop (or anything else between here and the
+    # container run) cannot leak the tmpfile before anything is tracking it (#1103). Backstop
+    # only: every normal exit path below now calls cleanup_claude_invocation_tmpfiles itself
+    # (#1133 review), so by the time this trap fires those globals are usually already empty
+    # and its cleanup calls are no-ops — it only does real work if invoke_claude is
+    # interrupted somewhere that skips its own cleanup (a signal, an unexpected die()
+    # elsewhere). stop_ssh_agent is oneshot-specific: it tears down the agent oneshot itself
+    # started (start_ssh_agent), which is why invoke_claude_interactive installs its own
+    # narrower trap instead of sharing this one.
+    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
+    # The prompt travels as a trailing positional argument to claude (see
+    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
+    # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
+    # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
+    # under any argv-length limit.
+    CLAUDE_PROMPT="${prompt}"
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
+
+    PODMAN_CLAUDE_ARGS=(
+        --model opusplan
+        --print
+        --output-format json
+        --permission-mode dontAsk
+        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
+        # -- terminates option/variadic parsing before the positional prompt.
+        # --add-dir takes <directories...> (variadic) — without this separator the
+        # CLI parser greedily swallows the prompt as an extra --add-dir value
+        # instead of recognizing it as the [prompt] argument, which then dies with
+        # "Input must be provided either through stdin or as a prompt argument"
+        # despite a real prompt being passed (#1062 recurrence after #1077).
+        --
+        "${CLAUDE_PROMPT}"
+    )
+
+    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
+
+    run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
+    local run_claude_exit=$?
+    if [ "${run_claude_exit}" -eq 2 ]; then
+        # Infra/pre-flight failure — Claude never started (#1133). run_claude_fresh already
+        # removed tmpfile; propagate the distinguishable code so main() skips just this item
+        # instead of dying the whole run and counting it against the invocation budget.
+        cleanup_claude_invocation_tmpfiles
+        cleanup_dangling_images
+        return 2
+    fi
+
+    # Parsed before the is_error check below: handle_claude_is_error always dies (and deletes
+    # tmpfile) on an errored run, so denials would otherwise never surface on exactly the runs
+    # where they are most likely to explain the failure.
+    handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
+
+    local is_error
+    is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
+    if [ "${is_error}" = "true" ]; then
+        handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
+    fi
+
+    local result_text
+    result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
+
+    # Persist whether THIS session ended in the background-stall pattern (see
+    # claude_result_indicates_background_stall above) so the next invocation's prompt can warn
+    # about it explicitly — deliberately overwritten every time, not accumulated, so the marker
+    # always reflects only the most recent session's outcome.
+    if claude_result_indicates_background_stall "${result_text}"; then
+        mark_background_stall "${item_type}" "${item_id}"
+    else
+        clear_background_stall_marker "${item_type}" "${item_id}"
+    fi
+
+    printf '%s\n' "${result_text}" >&2
+
+    # Sanity check that Claude actually produced a JSON result object rather than empty output
+    # or a stream fragment — a fresh run that dies before the final result would otherwise be
+    # treated as a silent success.
+    jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
+        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
+    rm -f "${tmpfile}"
+
+    cleanup_claude_invocation_tmpfiles
+    cleanup_dangling_images
+}
+
+# Pre-flight for any agent container launch (invoke_claude / invoke_claude_interactive):
+# removes a leftover non-running container holding container_name, dies if a running one
+# holds it, prunes dangling images, and pulls ORCHESTRATOR_IMAGE (once per process). item_type
+# and item_id are optional and only feed the Discord error notifications.
+ensure_agent_container_ready() {
+    local container_name="$1" item_type="${2:-}" item_id="${3:-}"
+
     if podman inspect "${container_name}" >/dev/null 2>&1; then
         # A container left behind by a hard host crash (despite --rm) previously made every
         # subsequent run die permanently until a human removed it manually (#1090). If it is not
@@ -534,6 +628,21 @@ invoke_claude() {
             die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
         fi
     fi
+}
+
+# Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
+# container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
+# (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
+# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, and the Podman secrets for
+# the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
+# phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
+# or expose. The caller MUST have installed an EXIT trap that calls
+# cleanup_claude_invocation_tmpfiles before calling this, so a die() from inside here cannot
+# leak the tmpfile (#1103). item_type and item_id are optional: when both are set they feed
+# the WORK_ITEM_URL banner and the Discord error notifications.
+prepare_claude_container_args() {
+    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}"
+    local d
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     if [ -z "${claude_md_content}" ]; then
@@ -557,20 +666,6 @@ invoke_claude() {
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
     PODMAN_SECRET_NAME=""
     GH_ENTERPRISE_SECRET_NAME=""
-    # Registered immediately after CLAUDE_MD_TMPFILE is populated — not after the mkdir loop
-    # below — so a die() from that loop (or anything else between here and the container run)
-    # cannot leak the tmpfile before anything is tracking it (#1103). Backstop only: every
-    # normal exit path below now calls cleanup_claude_invocation_tmpfiles itself (#1133
-    # review), so by the time this trap fires those globals are usually already empty and its
-    # cleanup calls are no-ops — it only does real work if invoke_claude is interrupted
-    # somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
-    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
-    # The prompt travels as a trailing positional argument to claude (see
-    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
-    # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
-    # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
-    # under any argv-length limit.
-    CLAUDE_PROMPT="${prompt}"
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
@@ -580,7 +675,6 @@ invoke_claude() {
     mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
 
     # Export invocation-scoped globals so helper functions can read them.
-    CLAUDE_PROMPT="${prompt}"
     PODMAN_CONTAINER_NAME="${container_name}"
     PODMAN_RUN_ARGS=(
         run
@@ -677,71 +771,6 @@ invoke_claude() {
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
-
-    PODMAN_CLAUDE_ARGS=(
-        --model opusplan
-        --print
-        --output-format json
-        --permission-mode dontAsk
-        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
-        # -- terminates option/variadic parsing before the positional prompt.
-        # --add-dir takes <directories...> (variadic) — without this separator the
-        # CLI parser greedily swallows the prompt as an extra --add-dir value
-        # instead of recognizing it as the [prompt] argument, which then dies with
-        # "Input must be provided either through stdin or as a prompt argument"
-        # despite a real prompt being passed (#1062 recurrence after #1077).
-        --
-        "${CLAUDE_PROMPT}"
-    )
-
-    tmpfile=$(mktemp --suffix=.json) || die "Failed to create temp file for Claude output"
-
-    run_claude_fresh "${tmpfile}" "${item_type}" "${item_id}"
-    local run_claude_exit=$?
-    if [ "${run_claude_exit}" -eq 2 ]; then
-        # Infra/pre-flight failure — Claude never started (#1133). run_claude_fresh already
-        # removed tmpfile; propagate the distinguishable code so main() skips just this item
-        # instead of dying the whole run and counting it against the invocation budget.
-        cleanup_claude_invocation_tmpfiles
-        cleanup_dangling_images
-        return 2
-    fi
-
-    # Parsed before the is_error check below: handle_claude_is_error always dies (and deletes
-    # tmpfile) on an errored run, so denials would otherwise never surface on exactly the runs
-    # where they are most likely to explain the failure.
-    handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
-
-    local is_error
-    is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
-    if [ "${is_error}" = "true" ]; then
-        handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
-    fi
-
-    local result_text
-    result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
-
-    # Persist whether THIS session ended in the background-stall pattern (see
-    # claude_result_indicates_background_stall above) so the next invocation's prompt can warn
-    # about it explicitly — deliberately overwritten every time, not accumulated, so the marker
-    # always reflects only the most recent session's outcome.
-    if claude_result_indicates_background_stall "${result_text}"; then
-        mark_background_stall "${item_type}" "${item_id}"
-    else
-        clear_background_stall_marker "${item_type}" "${item_id}"
-    fi
-
-    printf '%s\n' "${result_text}" >&2
-
-    # Sanity check that Claude actually produced a JSON result object rather than empty output
-    # or a stream fragment — a fresh run that dies before the final result would otherwise be
-    # treated as a silent success.
-    jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
-    rm -f "${tmpfile}"
-
-    cleanup_claude_invocation_tmpfiles
-    cleanup_dangling_images
 }
 
 # owner_rate_limit_file, save_rate_limit, is_owner_rate_limited, report_unparseable_rate_limit,
