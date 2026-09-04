@@ -10,6 +10,12 @@ name: "Bump pinned tool versions"
 # GitHub release, and where the pin is behind, downloads the new release asset(s), recomputes
 # their SHA256, rewrites the three ARGs together, and opens a PR - the same shape of update
 # Dependabot itself would open, so it flows through the existing dependency-update review path.
+#
+# Pushes with SOURCE_PUSH_TOKEN (not the default GITHUB_TOKEN) and opens the PR with
+# PR_CREATE_TOKEN, matching dotnet-version.yml/pull-request.yml's own convention for this exact
+# class of workflow: GitHub does not trigger downstream workflow runs (including required status
+# checks) from a push or PR authored by the default GITHUB_TOKEN, which would silently leave
+# build-development-tools.yml's required check permanently pending on every bump PR.
 
 on:
   schedule:
@@ -49,6 +55,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          token: "${{secrets.SOURCE_PUSH_TOKEN}}"
+          persist-credentials: true
 
       - name: "Check latest release and rewrite Dockerfile pins"
         id: bump
@@ -57,30 +65,54 @@ jobs:
           tool: "${{matrix.tool}}"
           github-token: "${{secrets.GITHUB_TOKEN}}"
 
+      - name: "Compute branch name and PR/commit subject"
+        id: plan
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        shell: bash
+        run: |
+          {
+            echo "branch=deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
+            echo "subject=[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: "Check Required Secrets"
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        uses: ./.github/actions/check-required-secret
+        with:
+          secret-name: "SOURCE_PUSH_TOKEN"
+          secret-value: "${{secrets.SOURCE_PUSH_TOKEN}}"
+
       - name: "Commit changes to new branch"
         if: ${{steps.bump.outputs.changed == 'true'}}
         uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
         with:
-          commit_message: "[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
-          branch: "deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
-          file_pattern: "containers/base/development-tools/Dockerfile"
+          commit_message: "${{steps.plan.outputs.subject}}"
+          branch: "${{steps.plan.outputs.branch}}"
+          file_pattern: "${{steps.bump.outputs.dockerfile-path}}"
           commit_user_name: "credfeto-tool-bump[bot]"
           commit_user_email: "credfeto@users.noreply.github.com"
           commit_author: "credfeto-tool-bump[bot] <credfeto@users.noreply.github.com>"
           skip_dirty_check: false
           create_branch: true
 
+      - name: "Check Required Secrets"
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        uses: ./.github/actions/check-required-secret
+        with:
+          secret-name: "PR_CREATE_TOKEN"
+          secret-value: "${{secrets.PR_CREATE_TOKEN}}"
+
       - name: "Open pull request"
         if: ${{steps.bump.outputs.changed == 'true'}}
         uses: ./.github/actions/create-pull-request
         with:
-          github-token: "${{secrets.GITHUB_TOKEN}}"
-          source-branch: "deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
+          github-token: "${{secrets.PR_CREATE_TOKEN}}"
+          source-branch: "${{steps.plan.outputs.branch}}"
           destination-branch: "main"
-          title: "[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
+          title: "${{steps.plan.outputs.subject}}"
           body: |
             Bumps the pinned `${{matrix.tool}}` release in
-            `containers/base/development-tools/Dockerfile` from
+            `${{steps.bump.outputs.dockerfile-path}}` from
             `${{steps.bump.outputs.old-version}}` to `${{steps.bump.outputs.new-version}}`, along
             with its recomputed amd64/arm64 SHA256 checksums.
 
