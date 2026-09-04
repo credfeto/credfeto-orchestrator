@@ -143,6 +143,9 @@ should be on `main`. Scratch space is a fresh directory under `$XDG_RUNTIME_DIR`
 `/workspace/tmp` and removed when the session ends. Persistent Claude state (sessions, plans,
 cache) is shared with `oneshot` under `$HOME/.orchestrator/<owner>/<repo>`.
 
+Like `oneshot`, every launch pulls `ORCHESTRATOR_IMAGE` first so the session runs the current
+agent image; when the registry is unreachable the cached local image is used instead.
+
 ### First run
 
 On the first run, `interactive` creates `$XDG_CONFIG_HOME/orchestrator/` (default

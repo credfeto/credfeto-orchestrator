@@ -484,24 +484,16 @@ invoke_claude() {
 
     ensure_agent_container_ready "${container_name}" "${item_type}" "${item_id}"
 
-    # Registered BEFORE prepare_claude_container_args populates CLAUDE_MD_TMPFILE — not after
-    # its mkdir loop — so a die() from that loop (or anything else between here and the
-    # container run) cannot leak the tmpfile before anything is tracking it (#1103). Backstop
-    # only: every normal exit path below now calls cleanup_claude_invocation_tmpfiles itself
-    # (#1133 review), so by the time this trap fires those globals are usually already empty
-    # and its cleanup calls are no-ops — it only does real work if invoke_claude is
-    # interrupted somewhere that skips its own cleanup (a signal, an unexpected die()
-    # elsewhere). stop_ssh_agent is oneshot-specific: it tears down the agent oneshot itself
-    # started (start_ssh_agent), which is why invoke_claude_interactive installs its own
-    # narrower trap instead of sharing this one.
-    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
     # The prompt travels as a trailing positional argument to claude (see
-    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
+    # PODMAN_CLAUDE_ARGS below), not via stdin: passing it as an argv element
     # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
     # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
     # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
-    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
+    # stop_ssh_agent rides on the EXIT trap prepare_claude_container_args installs: it tears
+    # down the agent oneshot itself started (start_ssh_agent), which is why the interactive
+    # path does not pass it.
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}" stop_ssh_agent
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
@@ -569,12 +561,6 @@ invoke_claude() {
     cleanup_dangling_images
 }
 
-# True when both stdin and stdout are terminals — what podman run --tty needs. Its own
-# function so tests can override it (bats never runs a test body on a TTY).
-interactive_terminal_available() {
-    [ -t 0 ] && [ -t 1 ]
-}
-
 # Runs claude inside the agent container as a live, attached terminal session (the
 # `interactive` script) instead of a single --print phase: the same image, mounts, resource
 # limits, secrets and GPG/SSH wiring as invoke_claude, but with a TTY attached, no launch
@@ -587,7 +573,7 @@ invoke_claude_interactive() {
     local claude_md_content="$1"
     local owner_token container_name
 
-    interactive_terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
+    terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
 
     owner_token=$(load_token_for_owner "${OWNER}")
     [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER} — run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
@@ -595,10 +581,9 @@ invoke_claude_interactive() {
 
     ensure_agent_container_ready "${container_name}"
 
-    # Only the tmpfile cleanup — deliberately NOT stop_ssh_agent (see invoke_claude): that
-    # pkills any "ssh-agent -a ${SSH_AUTH_SOCK}" process, which on a desktop is the user's own
+    # No extra EXIT-trap command: oneshot passes stop_ssh_agent here, which pkills any
+    # "ssh-agent -a ${SSH_AUTH_SOCK}" process, and on a desktop that is the user's own
     # long-lived agent, not one this script started.
-    trap 'cleanup_claude_invocation_tmpfiles' EXIT
     prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}"
     PODMAN_RUN_ARGS+=( --tty )
 
@@ -684,13 +669,19 @@ ensure_agent_container_ready() {
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, and the Podman secrets for
 # the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
 # phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
-# or expose. The caller MUST have installed an EXIT trap that calls
-# cleanup_claude_invocation_tmpfiles before calling this, so a die() from inside here cannot
-# leak the tmpfile (#1103). item_type and item_id are optional: when both are set they feed
-# the WORK_ITEM_URL banner and the Discord error notifications.
+# or expose. Installs the EXIT trap that removes everything it creates
+# (cleanup_claude_invocation_tmpfiles) before the first mktemp, so a die() from inside here
+# cannot leak a tmpfile or a secret (#1103); bash traps replace rather than append, so a
+# caller that needs more on EXIT passes it as extra_exit_cmd (oneshot: stop_ssh_agent). The
+# trap is a backstop only: every normal exit path in the callers runs the cleanup itself.
+# item_type and item_id are optional: when both are set they feed the WORK_ITEM_URL banner
+# and the Discord error notifications.
 prepare_claude_container_args() {
-    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}"
+    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}" extra_exit_cmd="${6:-}"
     local d
+
+    # shellcheck disable=SC2064  # expanded now on purpose: the command is fixed at install time
+    trap "cleanup_claude_invocation_tmpfiles${extra_exit_cmd:+; ${extra_exit_cmd}}" EXIT
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     if [ -z "${claude_md_content}" ]; then
@@ -728,7 +719,7 @@ prepare_claude_container_args() {
         run
         --name "${container_name}"
         # Takes over the name if something still holds it, instead of refusing to start (#1361).
-        # The pre-flight check above already handles a leftover container podman inspect can SEE
+        # ensure_agent_container_ready already handles a leftover container podman inspect can SEE
         # (removing it when stopped, dying when genuinely running), and that guard is what keeps
         # --replace from silently destroying another invocation's in-flight work. This covers the
         # case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm

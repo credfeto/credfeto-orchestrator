@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Runs a live, attached Claude Code session inside the orchestrator's agent container against
-# the git repository containing the current directory — the same image, mounts, resource
+# the git repository containing the current directory: the same image, mounts, resource
 # limits, secrets, GPG/SSH wiring and baked-in permission settings oneshot uses for its
 # unattended --print phases, but with a terminal attached and the owner driving the session.
 #
@@ -70,6 +70,9 @@ git repository containing the current directory. On first run, creates
 $XDG_CONFIG_HOME/orchestrator/.env from the host's global git config and prompts for a
 long-lived Claude OAuth token via `claude setup-token`.
 
+Every launch pulls the agent image first (falling back to the cached copy if the registry
+is unreachable), exactly as oneshot does.
+
 Environment:
   INTERACTIVE_RULES_DIR  cs-template checkout to mount at /workspace/rules
                          (default: $HOME/work/personal/cs-template)
@@ -77,47 +80,15 @@ Environment:
 USAGE
 }
 
-# A smaller list than oneshot's check_required_tools: no curl/flock/timeout/awk — nothing
+# A smaller list than oneshot's check_required_tools: no curl/flock/timeout/awk, nothing
 # here polls a feed, takes a lock, or bounds a container's runtime.
 check_interactive_tools() {
-    local tool
-    for tool in git jq podman gh claude; do
-        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
-    done
+    require_tools git jq podman gh claude
 }
 
-# Outputs the top-level directory of the git checkout containing dir, or dies.
-resolve_repo_dir() {
-    local dir="$1" top
-    top=$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null) \
-        || die "${dir} is not inside a git repository — run interactive from within a checkout"
-    printf '%s' "${top}"
-}
-
-# Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
-resolve_repo_full() {
-    local repo_dir="$1" origin repo_full
-    origin=$(git -C "${repo_dir}" config --get remote.origin.url 2>/dev/null) \
-        || die "${repo_dir} has no origin remote — interactive needs a GitHub-hosted repository"
-    repo_full=$(github_repo_full_from_url "${origin}") \
-        || die "origin remote ${origin} is not a GitHub repository URL"
-    printf '%s' "${repo_full}"
-}
-
-# The rules checkout is mounted read-only, so anything wrong with it can only be fixed on the
-# host. The entrypoint's own hooks-freshness check (verify_hooks_fresh in
-# containers/agent/entrypoint.sh) dies inside the container if /workspace/rules/.env carries a
-# stale SHA — so a not-on-main or behind checkout is called out here, where the fix is a
-# single git command, rather than surfacing as a confusing in-container death later.
-check_rules_checkout() {
-    local rules_dir="$1" branch
-    [ -d "${rules_dir}/.git" ] \
-        || die "cs-template checkout not found at ${rules_dir} — clone git@github.com:credfeto/cs-template.git there, or set INTERACTIVE_RULES_DIR"
-    branch=$(git -C "${rules_dir}" branch --show-current 2>/dev/null) || branch=""
-    if [ "${branch}" != "main" ]; then
-        warn "${rules_dir} is on branch '${branch:-<detached>}', not main — the agent will read those rules, and the container may refuse to start if its .env SHA is stale (git -C ${rules_dir} switch main && git -C ${rules_dir} pull --ff-only)"
-    fi
-}
+# resolve_repo_dir, resolve_repo_full, check_rules_checkout and github_repo_full_from_url are
+# declared in lib/git; bootstrap_orchestrator_config in lib/core; invoke_claude_interactive in
+# lib/podman; build_interactive_claude_md in lib/prompts.
 
 main() {
     case "${1:-}" in
@@ -128,23 +99,20 @@ main() {
 
     check_interactive_tools
 
-    local repo_dir repo_full owner ai_instructions container_ai_instructions claude_md
+    local repo_dir repo_full ai_instructions container_ai_instructions claude_md
+    # die() inside a command substitution only exits that subshell, hence the explicit exits.
     repo_dir=$(resolve_repo_dir "${PWD}") || exit 1
     repo_full=$(resolve_repo_full "${repo_dir}") || exit 1
-    owner="${repo_full%%/*}"
+    set_repo_context "${repo_full}" "${repo_dir}" "${INTERACTIVE_RULES_DIR}"
 
-    bootstrap_orchestrator_config "${owner}"
+    bootstrap_orchestrator_config "${OWNER}"
     load_env_config
-    validate_config "${owner}"
-
-    set_repo_context "${repo_full}"
-    REPO_WORK_DIR="${repo_dir}"
-    RULES_DIR="${INTERACTIVE_RULES_DIR}"
+    validate_config "${OWNER}"
     check_rules_checkout "${RULES_DIR}"
 
     ai_instructions=$(find_ai_instructions) || die "No .ai-instructions in ${REPO_WORK_DIR} or ${RULES_DIR}"
     container_ai_instructions=$(host_to_container_path "${ai_instructions}")
-    claude_md=$(build_interactive_claude_md "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}")
+    claude_md=$(build_interactive_claude_md "${container_ai_instructions}")
 
     info "Repository: ${repo_full} at ${REPO_WORK_DIR}"
     info "Rules: ${RULES_DIR}"

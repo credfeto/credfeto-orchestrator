@@ -90,9 +90,16 @@ setup_isolated_env() {
 source_oneshot() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/oneshot"
+    seed_test_repo_context
+}
+
+# Seeds the canonical test repo context after a script that sources lib/git has been loaded,
+# then points every derived state directory into the isolated test directory.
+seed_test_repo_context() {
     set_repo_context "credfeto/credfeto-orchestrator"
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
     export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
+    export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
 }
 
 # Sources the loop script so its functions are defined without running main.
@@ -131,10 +138,7 @@ source_setup_owner() {
 source_interactive() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/interactive"
-    set_repo_context "credfeto/credfeto-orchestrator"
-    SESSION_BASE_DIR="${TEST_TMP}/sessions"
-    export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
-    export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
+    seed_test_repo_context
 }
 
 # Sources the create-project script so its functions are defined without running main.

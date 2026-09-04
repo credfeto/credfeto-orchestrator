@@ -19,8 +19,13 @@ teardown() {
 
 # Writes a git stub that answers `git config --global --get <key>` from GITSTUB_<KEY> env
 # vars (dots and dashes mapped to underscores, upper-cased) and exits 1 for unset keys, the
-# way real git does. Every other git invocation is a no-op.
+# way real git does. Every other git invocation is a no-op. Seeds a complete GPG identity
+# (name, email, signing key) so a test only exports what it wants to differ; unset a
+# GITSTUB_* variable to make the stub report that key as missing.
 make_git_config_stub() {
+    export GITSTUB_USER_NAME="${GITSTUB_USER_NAME-Test User}"
+    export GITSTUB_USER_EMAIL="${GITSTUB_USER_EMAIL-test@example.com}"
+    export GITSTUB_USER_SIGNINGKEY="${GITSTUB_USER_SIGNINGKEY-ABCDEF1234567890}"
     cat > "${STUB_BIN}/git" << 'GITEOF'
 #!/usr/bin/env bash
 if [ "$1" = "config" ] && [ "$2" = "--global" ] && [ "$3" = "--get" ]; then
@@ -189,9 +194,6 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file writes .env from host git config with 700/600 permissions" {
     make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
-    export GITSTUB_USER_SIGNINGKEY="ABCDEF1234567890"
     run bootstrap_orchestrator_env_file
     [ "${status}" -eq 0 ]
     [ -f "${CONFIG_DIR}/.env" ]
@@ -208,7 +210,6 @@ make_owner_token() {
     mkdir -p "${CONFIG_DIR}"
     printf 'GIT_USER_NAME=Existing\n' > "${CONFIG_DIR}/.env"
     make_git_config_stub
-    export GITSTUB_USER_NAME="Other"
     run bootstrap_orchestrator_env_file
     [ "${status}" -eq 0 ]
     [ "$(cat "${CONFIG_DIR}/.env")" = "GIT_USER_NAME=Existing" ]
@@ -217,8 +218,7 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file dies when user.signingkey is not set" {
     make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
+    unset GITSTUB_USER_SIGNINGKEY
     run bootstrap_orchestrator_env_file
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"user.signingkey is not set"* ]]
@@ -227,7 +227,7 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file dies when user.name or user.email is not set" {
     make_git_config_stub
-    export GITSTUB_USER_SIGNINGKEY="ABCDEF1234567890"
+    unset GITSTUB_USER_NAME GITSTUB_USER_EMAIL
     run bootstrap_orchestrator_env_file
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"user.name is not set"* ]]
@@ -238,10 +238,8 @@ make_owner_token() {
 }
 
 @test "bootstrap_orchestrator_env_file rejects an SSH-format signing key" {
-    make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
     export GITSTUB_USER_SIGNINGKEY="/home/test/.ssh/id_ed25519.pub"
+    make_git_config_stub
     export GITSTUB_GPG_FORMAT="ssh"
     run bootstrap_orchestrator_env_file
     [ "${status}" -eq 1 ]
@@ -251,9 +249,6 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file writes GH_HOST and GH_TOKEN when gh is proxied and a token is available" {
     make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
-    export GITSTUB_USER_SIGNINGKEY="ABCDEF1234567890"
     export GH_HOST="github-api.example.com"
     make_stub gh 'printf "ghp_stubtoken\n"'
     run bootstrap_orchestrator_env_file
@@ -265,9 +260,6 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file warns and omits GH_* when gh auth token fails under a proxy" {
     make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
-    export GITSTUB_USER_SIGNINGKEY="ABCDEF1234567890"
     export GH_HOST="github-api.example.com"
     make_stub gh 'exit 1'
     run bootstrap_orchestrator_env_file
@@ -278,9 +270,6 @@ make_owner_token() {
 
 @test "bootstrap_orchestrator_env_file ignores GH_HOST=github.com (no proxy)" {
     make_git_config_stub
-    export GITSTUB_USER_NAME="Test User"
-    export GITSTUB_USER_EMAIL="test@example.com"
-    export GITSTUB_USER_SIGNINGKEY="ABCDEF1234567890"
     export GH_HOST="github.com"
     make_stub gh 'printf "ghp_stubtoken\n"'
     run bootstrap_orchestrator_env_file
@@ -300,7 +289,7 @@ make_owner_token() {
 }
 
 @test "bootstrap_owner_token dies without a terminal when the token file is missing" {
-    stdin_is_terminal() { return 1; }
+    terminal_available() { return 1; }
     make_stub claude "touch '${TEST_TMP}/claude-ran'; exit 0"
     run bootstrap_owner_token credfeto
     [ "${status}" -eq 1 ]
@@ -310,7 +299,7 @@ make_owner_token() {
 }
 
 @test "bootstrap_owner_token runs claude setup-token then stores the pasted token with 600 permissions" {
-    stdin_is_terminal() { return 0; }
+    terminal_available() { return 0; }
     cat > "${STUB_BIN}/claude" << 'CLAUDEEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "${TEST_TMP}/claude_args"
@@ -329,7 +318,7 @@ CLAUDEEOF
 }
 
 @test "bootstrap_owner_token dies when claude setup-token fails" {
-    stdin_is_terminal() { return 0; }
+    terminal_available() { return 0; }
     make_stub claude 'exit 1'
     run bootstrap_owner_token credfeto <<< "sk-ant-oat01-pasted"
     [ "${status}" -eq 1 ]
@@ -338,7 +327,7 @@ CLAUDEEOF
 }
 
 @test "bootstrap_owner_token dies when no token is pasted" {
-    stdin_is_terminal() { return 0; }
+    terminal_available() { return 0; }
     make_stub claude 'exit 0'
     run bootstrap_owner_token credfeto <<< "   "
     [ "${status}" -eq 1 ]
@@ -382,7 +371,7 @@ CLAUDEEOF
 
 @test "build_interactive_claude_md includes the shared git SSH and scratch sections" {
     run build_interactive_claude_md "/workspace/repo/.ai-instructions"
-    [[ "${output}" == *"Git transport — SSH is always configured and always works"* ]]
+    [[ "${output}" == *"SSH is always configured and always works"* ]]
     [[ "${output}" == *"Scratch/temporary output"* ]]
     [[ "${output}" == *"run_in_background: true"* ]]
     [[ "${output}" == *"Monitor tool"* ]]
@@ -415,16 +404,15 @@ STUBEOF
 }
 
 setup_interactive_run() {
-    interactive_terminal_available() { return 0; }
+    terminal_available() { return 0; }
     make_owner_token
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_interactive_podman_stub
 }
 
 @test "invoke_claude_interactive dies without a terminal" {
-    interactive_terminal_available() { return 1; }
-    make_owner_token
-    make_interactive_podman_stub
+    setup_interactive_run
+    terminal_available() { return 1; }
     run invoke_claude_interactive "# CLAUDE.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"need a terminal"* ]]
@@ -432,10 +420,9 @@ setup_interactive_run() {
 }
 
 @test "invoke_claude_interactive dies when the owner has no token file (no env-var fallback)" {
-    interactive_terminal_available() { return 0; }
+    setup_interactive_run
+    rm "${CONFIG_DIR}/tokens/credfeto"
     export CLAUDE_CODE_OAUTH_TOKEN="from-the-environment"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    make_interactive_podman_stub
     run invoke_claude_interactive "# CLAUDE.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"No Claude OAuth token file for owner credfeto"* ]]
@@ -531,24 +518,14 @@ setup_interactive_run() {
     [ ! -e "${TEST_TMP}/ssh-agent-stopped" ]
 }
 
-# --- invoke_claude keeps its behaviour after the shared-builder split ------------------------
+# --- set_repo_context overrides ---------------------------------------------------------------
 
-@test "invoke_claude still passes --print, --output-format json and --permission-mode dontAsk" {
-    local args_log="${TEST_TMP}/podman_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "pull" ] && exit 0
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    grep -qx -- '--print' "${args_log}"
-    grep -qx -- '--output-format' "${args_log}"
-    grep -qx -- '--permission-mode' "${args_log}"
-    grep -qx 'dontAsk' "${args_log}"
-    [ "$(grep -c -- '^--tty$' "${args_log}")" -eq 0 ]
-    grep -qx 'orchestrator-credfeto' "${args_log}"
+@test "set_repo_context takes optional repo work dir and rules dir, defaulting to the WORK clones" {
+    set_repo_context "credfeto/example" "${TEST_TMP}/checkout" "${TEST_TMP}/rules"
+    [ "${OWNER}" = "credfeto" ]
+    [ "${REPO_WORK_DIR}" = "${TEST_TMP}/checkout" ]
+    [ "${RULES_DIR}" = "${TEST_TMP}/rules" ]
+    set_repo_context "credfeto/example"
+    [ "${REPO_WORK_DIR}" = "${WORK}/credfeto/example/repo" ]
+    [ "${RULES_DIR}" = "${WORK}/credfeto/example/rules" ]
 }
