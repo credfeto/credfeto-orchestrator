@@ -121,6 +121,51 @@ It reuses the same config key as above, deliberately shares no code with `lib/` 
 there assumes an intact environment, which is the assumption being violated when it runs), and
 redacts token-shaped strings from the journal excerpt it forwards.
 
+## interactive
+
+The `interactive` script runs a live, attached Claude Code session inside the same locked-down
+agent container that `oneshot` uses (see [docs/agent-container.md](docs/agent-container.md)),
+against the git checkout containing your current directory. It is the developer-machine
+counterpart to the unattended timer: same image, mounts, resource limits, GPG/SSH wiring and
+baked-in permission settings, but with your terminal attached and no fixed work item.
+
+### Running a session
+
+```sh
+cd ~/work/personal/some-repo
+~/work/personal/credfeto-orchestrator/interactive
+```
+
+The repository must have a GitHub `origin` remote (its owner picks the Claude token and the
+state directory). Your `cs-template` checkout is mounted read-only at `/workspace/rules`; it is
+read from `$HOME/work/personal/cs-template` unless `INTERACTIVE_RULES_DIR` says otherwise, and
+should be on `main`. Scratch space is a fresh directory under `$XDG_RUNTIME_DIR`, mounted at
+`/workspace/tmp` and removed when the session ends. Persistent Claude state (sessions, plans,
+cache) is shared with `oneshot` under `$HOME/.orchestrator/<owner>/<repo>`.
+
+### First run
+
+On the first run, `interactive` creates `$XDG_CONFIG_HOME/orchestrator/` (default
+`~/.config/orchestrator/`, mode `700`) for you:
+
+- `.env` is written from `git config --global user.name`, `user.email` and `user.signingkey`
+  (the agent container GPG-signs every commit, so an SSH-format signing key is rejected). When
+  `GH_HOST` points at a `gh` proxy, `GH_HOST` and the host's `gh auth token` are written too so
+  `gh` inside the container is authenticated the same way it is on the host.
+- `tokens/<owner>` (mode `600`) is created by running `claude setup-token`, which walks you
+  through a browser sign-in and prints a long-lived token; paste it when prompted. The token
+  from `~/.claude/.credentials.json` is deliberately not used: it expires within hours and
+  cannot be refreshed from inside the container.
+
+Existing files are never rewritten; edit them by hand.
+
+### What the host needs
+
+- `podman`
+- `git`, `jq`, `gh` (authenticated)
+- `claude` (Claude Code CLI) on the host, for `claude setup-token`
+- a running `gpg-agent` holding the signing key, and an `ssh-agent` with a GitHub key loaded
+
 ## Build Status
 
 | Branch  | Status                                                                                                                                                                                                                                          |
