@@ -9068,7 +9068,7 @@ STUBEOF
     [[ "${output}" == *"no cached local image is available"* ]]
 }
 
-@test "invoke_claude notifies Discord before dying when podman pull fails and no cached image exists locally (#1103)" {
+@test "invoke_claude notifies Discord before dying when podman pull fails and no cached image exists locally (#1103, #1400)" {
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     cat > "${STUB_BIN}/podman" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -9081,11 +9081,81 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     local notify_log="${TEST_TMP}/notify.log"
-    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+    # #1400: the hard pull-failure branch now calls the purpose-named
+    # notify_discord_pull_failed instead of the misleadingly-titled
+    # notify_discord_claude_error - stubbing the old function to detect a regression.
+    notify_discord_pull_failed() { printf '%s\n' "$*" >> "${notify_log}"; }
+    notify_discord_claude_error() { printf 'WRONG_FUNCTION_CALLED %s\n' "$*" >> "${notify_log}"; }
 
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "no cached local image is available" "${notify_log}"
+    [ "$(grep -c "WRONG_FUNCTION_CALLED" "${notify_log}")" -eq 0 ]
+}
+
+@test "invoke_claude records the pull duration on a successful pull (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
+}
+
+@test "invoke_claude fires notify_discord_slow_pull when pull_duration_exceeds_baseline trips (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    # Stubs the predicate itself rather than controlling real wall-clock timing - this test is
+    # about invoke_claude's wiring (does it call notify_discord_slow_pull with the right
+    # arguments when told the pull was slow?), not about pull_duration_exceeds_baseline's own
+    # threshold arithmetic, which has its own direct tests above.
+    pull_duration_exceeds_baseline() { printf '10\n'; }
+    notify_discord_slow_pull() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ -f "${notify_log}" ]
+    grep -q "^owner " "${notify_log}"
+    grep -q " 10$" "${notify_log}"
+}
+
+@test "invoke_claude does not fire notify_discord_slow_pull when pull_duration_exceeds_baseline says the pull wasn't slow (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    pull_duration_exceeds_baseline() { return 1; }
+    notify_discord_slow_pull() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ ! -f "${notify_log}" ]
 }
 
 @test "invoke_claude pulls the image only once across multiple invocations in the same run (#1401)" {
@@ -9727,6 +9797,170 @@ STUBEOF
     run notify_discord_low_disk_space "myowner"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
+}
+
+# --- pull_duration state helpers (#1400) --------------------------------------
+
+@test "record_pull_duration appends a duration to the owner's state file" {
+    OWNER="owner"
+    record_pull_duration 42
+    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
+    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "42" ]
+}
+
+@test "record_pull_duration caps history at PULL_DURATION_HISTORY_SIZE, keeping the most recent" {
+    OWNER="owner"
+    PULL_DURATION_HISTORY_SIZE=3
+    record_pull_duration 1
+    record_pull_duration 2
+    record_pull_duration 3
+    record_pull_duration 4
+    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "$(printf '2\n3\n4')" ]
+}
+
+@test "pull_duration_baseline fails when no samples are recorded" {
+    OWNER="owner"
+    run pull_duration_baseline
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_baseline fails when fewer than PULL_DURATION_MIN_SAMPLES are recorded" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=5
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_baseline
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_baseline returns the median once PULL_DURATION_MIN_SAMPLES are recorded" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    record_pull_duration 30
+    record_pull_duration 10
+    record_pull_duration 20
+    run pull_duration_baseline
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "20" ]
+}
+
+# --- pull_duration_exceeds_baseline (#1400 review) -----------------------------
+
+@test "pull_duration_exceeds_baseline fails when there is no trusted baseline yet" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 600
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_exceeds_baseline fails when the pull is not disproportionately slower" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 10
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 20
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_exceeds_baseline succeeds and echoes the baseline when the pull is disproportionately slower" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 10
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 40
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "10" ]
+}
+
+@test "pull_duration_exceeds_baseline fails on a zero-second baseline rather than flagging every nonzero pull (#1400 review)" {
+    # date +%s has 1-second resolution: an owner whose last few pulls all rounded to 0s would
+    # otherwise see any nonzero-duration pull satisfy "> 0 * PULL_DURATION_THRESHOLD_MULTIPLIER".
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 0
+    record_pull_duration 0
+    record_pull_duration 0
+    run pull_duration_exceeds_baseline 1
+    [ "${status}" -ne 0 ]
+}
+
+# --- notify_discord_slow_pull (#1400) ------------------------------------------
+
+@test "notify_discord_slow_pull does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_slow_pull sends embed with duration and baseline" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "owner" "${curl_log}"
+}
+
+@test "notify_discord_slow_pull suppresses duplicate notification within 1 hour, per owner" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.slow_pull_owner.state"
+
+    run notify_discord_slow_pull "owner" 600 100
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+# --- notify_discord_pull_failed (#1400) ----------------------------------------
+
+@test "notify_discord_pull_failed does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_pull_failed "Issue" "42" "pull failed"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_pull_failed sends an embed titled Image Pull Failed, not Claude Error, linking to the item" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    REPO_FULL="owner/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pull_failed "Issue" "42" "no cached local image is available"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "Image Pull Failed" "${curl_log}"
+    grep -q "owner/repo/issues/42" "${curl_log}"
+    [ "$(grep -c "Claude Error" "${curl_log}")" -eq 0 ]
+}
+
+@test "notify_discord_pull_failed fires again immediately on a second call (no suppression)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    notify_discord_pull_failed "Issue" "42" "first failure"
+    notify_discord_pull_failed "Issue" "42" "second failure"
+    [ "$(wc -l < "${curl_log}")" -eq 2 ]
 }
 
 # --- notify_discord_self_update_stale (#1298) ---------------------------------

@@ -342,6 +342,70 @@ owner_rate_limit_file() {
     printf '%s/.orchestrator/%s/rate-limit' "${HOME}" "${OWNER}"
 }
 
+# State file path for the current owner's rolling podman-pull-duration history (#1400): one
+# duration (seconds) per line, oldest first.
+pull_duration_state_file_path() {
+    printf '%s/.orchestrator/%s/pull-durations' "${HOME}" "${OWNER}"
+}
+
+# Internal: prints the current owner's recorded pull durations (one per line, oldest first),
+# filtering out anything not a bare non-negative integer. Single point of truth for "what counts
+# as a valid recorded duration", shared by record_pull_duration and pull_duration_baseline below
+# so the state file is only ever read/filtered once per call rather than each reimplementing the
+# same grep. Empty output (not an error) when the state file doesn't exist yet.
+_pull_duration_samples() {
+    local state_file
+    state_file=$(pull_duration_state_file_path)
+    [ -f "${state_file}" ] || return 0
+    grep -E '^[0-9]+$' "${state_file}"
+}
+
+# Appends a successful pull's duration (seconds) to the current owner's rolling history,
+# keeping only the most recent PULL_DURATION_HISTORY_SIZE entries.
+record_pull_duration() {
+    local duration_secs="$1"
+    local state_file existing
+    state_file=$(pull_duration_state_file_path)
+    mkdir -p "$(dirname "${state_file}")" \
+        || die "Failed to create pull-duration directory for owner ${OWNER}"
+    existing=$(_pull_duration_samples)
+    { printf '%s\n' "${existing}"; printf '%s\n' "${duration_secs}"; } \
+        | grep -E '^[0-9]+$' \
+        | tail -n "${PULL_DURATION_HISTORY_SIZE}" > "${state_file}.tmp" \
+        && mv "${state_file}.tmp" "${state_file}" \
+        || die "Failed to write pull-duration file: ${state_file}"
+}
+
+# Returns the median of the current owner's recorded pull durations on stdout, or nothing (and
+# a non-zero exit) when fewer than PULL_DURATION_MIN_SAMPLES samples are recorded yet - the
+# caller must skip the slow-pull check entirely in that case rather than compare against a
+# baseline built from too little history to be meaningful.
+pull_duration_baseline() {
+    local samples count
+    samples=$(_pull_duration_samples)
+    [ -n "${samples}" ] || return 1
+    count=$(printf '%s\n' "${samples}" | wc -l)
+    [ "${count}" -ge "${PULL_DURATION_MIN_SAMPLES}" ] || return 1
+    printf '%s\n' "${samples}" | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}'
+}
+
+# Policy decision (#1400 review): is this pull disproportionately slower than the owner's own
+# rolling baseline? Kept alongside pull_duration_baseline itself, mirroring check_disk_space in
+# lib/core (the named predicate the call site branches on, rather than the call site doing the
+# threshold arithmetic inline) - PULL_DURATION_THRESHOLD_MULTIPLIER stays a state/policy concern,
+# not something lib/podman needs to know about. On success, echoes the baseline on stdout (the
+# caller needs it for the notification); on failure (no trusted baseline yet, not slow enough, or
+# a zero-second baseline - date +%s's 1-second resolution means an owner whose recent pulls all
+# rounded to 0s would otherwise see every single nonzero-duration pull flagged as "disproportion-
+# ately slower than 0", which is not a meaningful signal - #1400 review) nothing is echoed.
+pull_duration_exceeds_baseline() {
+    local duration_secs="$1" baseline_secs
+    baseline_secs=$(pull_duration_baseline) || return 1
+    [ "${baseline_secs}" -gt 0 ] || return 1
+    [ "${duration_secs}" -gt "$(( baseline_secs * PULL_DURATION_THRESHOLD_MULTIPLIER ))" ] || return 1
+    printf '%s\n' "${baseline_secs}"
+}
+
 # Saves a rate-limit reset unix timestamp for the current owner.
 save_rate_limit() {
     local reset_unix="$1"
