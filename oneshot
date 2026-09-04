@@ -112,7 +112,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # run_claude_fresh, handle_claude_is_error, handle_claude_permission_denials,
 # setup_cgroup_leaf, cleanup_dangling_images, stop_ssh_agent, preload_ssh_keys,
-# verify_gpg_signing_ready, add_gpg_podman_args, validate_bind_mounts,
+# verify_gpg_signing_ready, add_gpg_podman_args, validate_bind_mounts, ensure_agent_container_ready,
+# prepare_claude_container_args, invoke_claude_interactive,
 # cleanup_claude_invocation_tmpfiles, invoke_claude, and current_agent_image_sha (plus the
 # invocation-scoped globals CLAUDE_MD_TMPFILE, CLAUDE_PROMPT, GPG_PUBKEY_TMPDIR,
 # PODMAN_SECRET_NAME, GH_ENTERPRISE_SECRET_NAME) are declared in lib/podman.

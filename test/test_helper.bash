@@ -125,6 +125,18 @@ source_setup_owner() {
     source "${REPO_ROOT}/setup-owner"
 }
 
+# Sources the interactive script so its functions are defined without running main, then
+# seeds the same canonical repo context and isolated state dirs source_oneshot does, since
+# interactive's container helpers (lib/podman) read the same globals.
+source_interactive() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/interactive"
+    set_repo_context "credfeto/credfeto-orchestrator"
+    SESSION_BASE_DIR="${TEST_TMP}/sessions"
+    export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
+    export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
+}
+
 # Sources the create-project script so its functions are defined without running main.
 source_create_project() {
     # shellcheck source=/dev/null

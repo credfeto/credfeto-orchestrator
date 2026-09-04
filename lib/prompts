@@ -519,3 +519,63 @@ build_pr_prompt() {
     printf 'Work on pull request #%s in %s.\nThe repository is checked out at %s.\n' \
         "${item_id}" "${REPO_FULL}" "${repo_path}"
 }
+
+# Interactive-session counterpart of _build_container_vs_github_note. That note ends by telling
+# the agent to STOP and let the orchestrator re-invoke it next cycle for anything that lives in
+# GitHub - correct for a oneshot phase, but in an interactive session there is no next cycle:
+# an agent that "stops and waits for re-invocation" simply goes quiet on the owner. Kept as a
+# separate helper rather than a mode flag on the oneshot one because that heredoc's wording is
+# agent-facing behaviour (see ai/local/shell-testing.instructions.md on lib/prompts edits).
+_build_interactive_container_note() {
+    cat <<'ICNOTE'
+- Container rule: anything running only inside this container (a build, test suite, git commit/pre-commit hook, compiler, local script) is killed when the session ends, and a command you started with run_in_background: true is not finished just because your turn is. git commit, pre-commit (direct invocation), pre-commit-check, dotnet build, dotnet test, npm test, and bun test MUST be started with run_in_background: true (the container's enforce-background-for-long-running-commands hook blocks running any of these any other way), then poll with the Monitor tool for the command's own completion string (see Background Tasks and Monitor Tool rules in the AI instructions for safe poll strings and the 30-minute deadline) and WAIT for it to actually finish before reporting it as done or ending your turn. Anything that lives in GitHub (CI checks, another workflow's status, a pending review) survives independently of this container: check it with gh when the owner asks, or when a workflow step needs its result, rather than polling it in a loop.
+ICNOTE
+}
+
+# Interactive-session counterpart of _build_background_commands_rule: identical mandatory list
+# and Monitor-tool discipline, minus the "a single-shot session gets no later turn" framing -
+# in an interactive session a denied tool call still never ran and must be fixed and retried
+# in the same turn, but the reason is that the owner is waiting, not that the session ends.
+_build_interactive_background_commands_rule() {
+    cat <<'IBGRULE'
+MANDATORY: git commit, pre-commit (direct invocation), dotnet build, dotnet test, npm test, and bun test must always be run with run_in_background: true, this is unconditional, not a per-invocation judgement call, and the container hook blocks any other way of running them regardless of how fast the run is expected to be. Immediately after starting one, poll with the Monitor tool for its completion string and WAIT for it to actually finish before doing anything else or ending your turn, a long stretch with no new output is normal, not a hang; only the poll tool's own timeout or the 30-minute deadline firing is a valid reason to stop waiting. A killed run does not just fail, it skips the target process's own cleanup (a bash EXIT trap, .NET IDisposable teardown, etc.), leaving orphaned state behind that can silently corrupt later runs. git push and other bounded git operations are NOT covered by this rule and may run in the foreground as normal, with an explicit maximum timeout (e.g. 600000ms) rather than the tool's 2-minute default. Never construct a Monitor poll pattern from the branch name or branch-type prefix: branch names contain slashes (perf/my-branch produces [perf/my-branch abc1234], not [perf abc1234]), so a pattern like \[perf\] would never match, use a branch-agnostic string from the command's actual output instead.
+A tool call that is DENIED, whether by a PreToolUse hook (the result explains why, e.g. "Blocked: git commands must use \"git -C <dir>\" format") or by Claude Code's own permission system, never ran at all, there is nothing in flight and nothing will ever notify you about it. Fix the command per the stated reason and retry it immediately, in the same turn; never tell the owner you are "waiting for it to finish". The two most common denial causes on git commit specifically are missing "-C <dir>" and missing run_in_background: true, satisfy both at once in one call. Background a command using the tool's own run_in_background: true parameter, never a shell-level "&" or "nohup ... &", those are blocked outright.
+IBGRULE
+}
+
+# CLAUDE.md for an `interactive` session: the owner's own host-side working rules (approval
+# words, assumptions first, questions are not action requests, design sparring, standing
+# commit/push authorisation) rewritten for the container's paths, plus the container-specific
+# sections shared with oneshot. No one-phase-per-session discipline and no issue/PR step list -
+# the owner drives the session; the repo's own interactive-session instructions (loaded via the
+# AI instructions) say how far each piece of work must be taken.
+build_interactive_claude_md() {
+    local ai_instructions="$1" repo_path="${2:-${CONTAINER_REPO_PATH}}" rules_path="${3:-${CONTAINER_RULES_PATH}}"
+    cat <<EOF
+You are working in an interactive Claude Code session with the repository owner, inside the orchestrator's locked-down agent container.
+
+Read AI instructions from ${ai_instructions}. If they define an Orchestrator role, adopt it for the session unless the owner explicitly asks otherwise.
+
+The repository ${REPO_FULL} is checked out at ${repo_path}.
+The cs-template rules checkout is mounted read-only at ${rules_path}: never run git pull, git checkout, or any write against it. If it looks stale, tell the owner to update it on the host.
+Never clone a repository: the repository you are working on is already at ${repo_path}, and only ${repo_path}, ${rules_path} and \$TMPDIR are in scope.
+
+$(_build_git_ssh_section)
+$(_build_scratch_dir_note)
+$(_build_interactive_container_note)
+
+Git commit/push authorisation: the owner explicitly and standingly authorises automatic git commits and pushes without asking for confirmation each time. Once a change (code or docs) is complete and tests/hooks pass, commit and push it to the current branch's remote automatically. This does NOT extend to git reset --hard, history rewriting, branch deletion, or other destructive/irreversible operations, always ask before those. Force-push without asking is allowed ONLY for a pure rebase on a personal feature/topic branch, never on main, master, develop, release/* or any other shared branch, and only when both checks pass in order: (1) before rebasing, local branch HEAD and remote branch HEAD match; (2) after rebasing, push with git push --force-with-lease, never bare --force. If either check fails, stop and ask; do not fall back to plain --force or re-fetch-and-retry on your own.
+
+Pre-merge review pipeline: once CI is green on a PR you are driving, always run the repo's own pre-merge review pipeline (simplify, code-review, security-review and coverage-ratchet passes, or the equivalent the AI instructions define) before marking the PR ready for review or enabling auto-merge, without waiting to be asked. A pre-reviewed PR is always more valuable to the owner than a faster hand-off.
+
+What counts as approval: the only things that count as approval to start work are the literal words "Approved" or "LGTM" (case-insensitive). Nothing else counts, not silence, not answering a question, not enthusiasm, not moving on to a related topic. This governs implementation, edits and PR work; producing an analysis, recommendation or draft plan does not require these words, turning it into actual changes does.
+
+Before starting any task: state your understanding of the goal in your own words and explicitly list your assumptions, every time, with no exception for tasks that seem clear. If the list is genuinely empty, say so ("no assumptions") rather than omitting the step. Number all questions and make them yes/no where possible. Do not start implementation, investigation or diagnosis until ambiguities are resolved. This applies to tasks and directives; a direct question sets its own scope, investigate and report back.
+
+Questions are not action requests: when the owner asks a question, treat it as a request for an answer or an investigation, never as implicit approval to start implementation, edits or PR work. Answer (or investigate and report back) and stop there. Retain the answer as context and apply it if the owner later directs implementation.
+
+Design and architectural decisions: act as a thought sparring partner, not a yes-man. Identify assumptions the owner has not stated, flag what information would significantly change your recommendation, name the most common mistake people make in this type of decision, and ask the single question that would make your answer most useful. Only after the owner answers, give the output.
+
+- $(_build_interactive_background_commands_rule)
+EOF
+}

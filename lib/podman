@@ -569,6 +569,54 @@ invoke_claude() {
     cleanup_dangling_images
 }
 
+# True when both stdin and stdout are terminals — what podman run --tty needs. Its own
+# function so tests can override it (bats never runs a test body on a TTY).
+interactive_terminal_available() {
+    [ -t 0 ] && [ -t 1 ]
+}
+
+# Runs claude inside the agent container as a live, attached terminal session (the
+# `interactive` script) instead of a single --print phase: the same image, mounts, resource
+# limits, secrets and GPG/SSH wiring as invoke_claude, but with a TTY attached, no launch
+# prompt, no JSON result parsing, and no --permission-mode override — the image's own baked
+# claude-settings.json (containers/base/development-full) governs permissions exactly as it
+# would for oneshot. Uses a distinct container name from oneshot's orchestrator-<OWNER> so an
+# interactive session can never trip (or be clobbered by) a co-located oneshot run's
+# "already running"/--replace handling. Returns podman's own exit status.
+invoke_claude_interactive() {
+    local claude_md_content="$1"
+    local owner_token container_name
+
+    interactive_terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
+
+    owner_token=$(load_token_for_owner "${OWNER}")
+    [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER} — run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
+    container_name="interactive-${OWNER}-${REPO}"
+
+    ensure_agent_container_ready "${container_name}"
+
+    # Only the tmpfile cleanup — deliberately NOT stop_ssh_agent (see invoke_claude): that
+    # pkills any "ssh-agent -a ${SSH_AUTH_SOCK}" process, which on a desktop is the user's own
+    # long-lived agent, not one this script started.
+    trap 'cleanup_claude_invocation_tmpfiles' EXIT
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}"
+    PODMAN_RUN_ARGS+=( --tty )
+
+    PODMAN_CLAUDE_ARGS=(
+        --model opusplan
+        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
+    )
+
+    validate_bind_mounts
+    info "Starting interactive Claude session in container ${container_name} (image ${ORCHESTRATOR_IMAGE})..." >&2
+    local podman_exit=0
+    podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" || podman_exit=$?
+
+    cleanup_claude_invocation_tmpfiles
+    cleanup_dangling_images
+    return "${podman_exit}"
+}
+
 # Pre-flight for any agent container launch (invoke_claude / invoke_claude_interactive):
 # removes a leftover non-running container holding container_name, dies if a running one
 # holds it, prunes dangling images, and pulls ORCHESTRATOR_IMAGE (once per process). item_type
