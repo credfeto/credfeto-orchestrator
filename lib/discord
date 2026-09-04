@@ -413,39 +413,42 @@ notify_discord_slow_pull() {
     _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
-# Sends a Discord embed notification when a podman pull of ORCHESTRATOR_IMAGE fails outright
-# with no cached local image to fall back to (#1400) - distinct from notify_discord_claude_error,
-# whose "Claude Error" title is misleading for a registry/pull failure that has nothing to do
-# with Claude erroring. Same url/item-linking shape as notify_discord_claude_error otherwise
-# (item_type/item_id may be empty, matching build_item_url's own fallback to the bare repo URL),
-# so this alert still clicks straight through to the Issue/PR whose run just died. No
-# suppression, matching notify_discord_claude_error's own rationale: a hard pull failure is
-# already rare and self-limiting (the caller dies immediately after).
-# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
-notify_discord_pull_failed() {
-    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local item_type="${1:-}" item_id="${2:-}" error_message="$3"
-    local url
+# Internal: shared body for the no-suppression "post an error embed for this item" alerts -
+# only the title differs between notify_discord_claude_error and notify_discord_pull_failed
+# (#1400 review). item_type/item_id may be empty, matching build_item_url's own fallback to the
+# bare repo URL. Truncates to stay within Discord's 1024-character field limit.
+_discord_send_item_error() {
+    local title="$1" item_type="${2:-}" item_id="${3:-}" error_message="$4"
+    local url truncated_error payload
     url="$(build_item_url "${item_type}" "${item_id}")"
+    truncated_error="${error_message:0:900}"
 
-    local truncated_error="${error_message:0:900}"
-
-    local payload
     payload=$(jq --null-input \
         --argjson color 15158332 \
-        --arg title "Image Pull Failed: ${REPO_FULL}" \
+        --arg title "${title}" \
         --arg url "${url}" \
         --arg error "${truncated_error}" \
         '{embeds:[{title:$title,url:$url,color:$color,fields:[
             {name:"Error",value:$error,inline:false}
         ]}]}') \
-        || { warn "Discord: failed to build pull-failed payload"; return 0; }
+        || { warn "Discord: failed to build error payload"; return 0; }
 
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
+}
+
+# Sends a Discord embed notification when a podman pull of ORCHESTRATOR_IMAGE fails outright
+# with no cached local image to fall back to (#1400) - distinct from notify_discord_claude_error,
+# whose "Claude Error" title is misleading for a registry/pull failure that has nothing to do
+# with Claude erroring. No suppression, matching notify_discord_claude_error's own rationale: a
+# hard pull failure is already rare and self-limiting (the caller dies immediately after).
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_pull_failed() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    _discord_send_item_error "Image Pull Failed: ${REPO_FULL}" "${1:-}" "${2:-}" "$3"
 }
 
 # Sends a Discord embed notification when oneshot detects its OWN checkout is behind
@@ -654,29 +657,7 @@ notify_discord_pr_needs_approval() {
 # Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
 notify_discord_claude_error() {
     [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
-    local item_type="${1:-}" item_id="${2:-}" error_message="$3"
-    local url payload
-
-    url="$(build_item_url "${item_type}" "${item_id}")"
-
-    # Truncate to stay within Discord's 1024-character field limit.
-    local truncated_error="${error_message:0:900}"
-
-    payload=$(jq --null-input \
-        --argjson color 15158332 \
-        --arg title "Claude Error: ${REPO_FULL}" \
-        --arg url "${url}" \
-        --arg error "${truncated_error}" \
-        '{embeds:[{title:$title,url:$url,color:$color,fields:[
-            {name:"Error",value:$error,inline:false}
-        ]}]}') \
-        || { warn "Discord: failed to build claude error payload"; return 0; }
-
-    curl --silent --fail --max-time 5 \
-        -H "Content-Type: application/json" \
-        -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
-        || warn "Discord webhook notification failed"
+    _discord_send_item_error "Claude Error: ${REPO_FULL}" "${1:-}" "${2:-}" "$3"
 }
 
 # Sends a Discord embed notification listing tool calls Claude Code denied during a run

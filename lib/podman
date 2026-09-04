@@ -512,14 +512,13 @@ invoke_claude() {
             pull_duration_secs=$(( pull_end_unix - pull_start_unix ))
             # #1400: alert when this pull took disproportionately longer than the owner's own
             # recent history — a pathologically slow pull otherwise just looks like the
-            # orchestrator "not doing anything" from the outside. Skipped entirely until enough
-            # history exists (pull_duration_baseline returns non-zero) rather than comparing
-            # against a baseline built from too little history to be meaningful. Computed BEFORE
-            # record_pull_duration below, so this pull's own duration is judged against prior
-            # history only, never against a baseline that already absorbed it as a sample.
+            # orchestrator "not doing anything" from the outside. "Slow enough to alert on" is
+            # pull_duration_exceeds_baseline's own policy call (lib/state), not this call site's
+            # — mirrors check_disk_space, whose threshold likewise lives with the predicate.
+            # Computed BEFORE record_pull_duration below, so this pull's own duration is judged
+            # against prior history only, never against a baseline that already absorbed it.
             local pull_baseline_secs
-            if pull_baseline_secs=$(pull_duration_baseline) \
-                    && [ "${pull_duration_secs}" -gt "$(( pull_baseline_secs * PULL_DURATION_THRESHOLD_MULTIPLIER ))" ]; then
+            if pull_baseline_secs=$(pull_duration_exceeds_baseline "${pull_duration_secs}"); then
                 notify_discord_slow_pull "${OWNER}" "${pull_duration_secs}" "${pull_baseline_secs}"
             fi
             record_pull_duration "${pull_duration_secs}"
