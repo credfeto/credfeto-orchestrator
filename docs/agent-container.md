@@ -82,6 +82,10 @@ Only once every one of these passes does the entrypoint exec `claude` itself, ha
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
 
+## Interactive sessions
+
+The `interactive` script starts this same container, with the same mounts, limits, secrets and baked-in permission settings, but attached to your terminal instead of running a single `--print` phase: you type, the agent works in the checkout containing your current directory (mounted at `/workspace/repo`), your host `cs-template` checkout is the read-only `/workspace/rules`, and scratch space is a fresh directory under `$XDG_RUNTIME_DIR` mounted at `/workspace/tmp`. Persistent Claude state is shared with `oneshot` under `~/.orchestrator/<owner>/<repo>`, so sessions from either mode are visible to the other. Everything the entrypoint checks above still applies, so a repository whose origin is not an SSH `git@github.com:` URL, or a host without a running `gpg-agent`, is refused exactly as it would be for `oneshot`. The generated CLAUDE.md is different: instead of the one-phase-per-session issue/PR steps it carries the owner's own working rules (approval words, assumptions first, standing commit/push authorisation), rewritten for the container's paths.
+
 ## Assumptions
 
 - The host has already loaded a usable SSH key (via `ssh-agent`) and GPG signing key before
