@@ -150,7 +150,10 @@ GIT_SUBCOMMANDS_NO_REPO=(clone)
 #     check_config_call) instead of the generic -C requirement.
 GIT_SUBCOMMANDS_BESPOKE_POLICY=(config)
 #   - GIT_SUBCOMMANDS_REQUIRE_C: the default case - must be preceded by -C.
-GIT_SUBCOMMANDS_REQUIRE_C=(add branch checkout commit diff fetch log ls-remote merge pull push rebase reset rev-list rev-parse show stash status switch worktree)
+#     cherry-pick added back (#1411) after a confirmed live need; the other subcommands #1394
+#     dropped as having no confirmed use (am, mv, remote, restore, revert, rm, tag) stay blocked -
+#     see test/enforce-git-dash-c.bats's pinned-blocked cases for those.
+GIT_SUBCOMMANDS_REQUIRE_C=(add branch checkout cherry-pick commit diff fetch log ls-remote merge pull push rebase reset rev-list rev-parse show stash status switch worktree)
 
 # Combined allowlist derived from the three lists above - single source of
 # truth for is_allowed_subcommand(), so the lists above and the "is this
