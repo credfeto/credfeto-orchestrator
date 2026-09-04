@@ -1,0 +1,92 @@
+---
+name: "Bump pinned tool versions"
+
+# containers/base/development-tools/Dockerfile curl-installs six standalone CLI tools (hadolint,
+# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy), each pinned to an exact release and
+# verified against a hand-recorded SHA256 checksum for supply-chain integrity (#140). Dependabot's
+# `docker` ecosystem only parses `FROM` image references, so it never sees or bumps these ARGs -
+# they only ever moved reactively, when a stale pin's own CVE started failing a Trivy scan
+# (#1240, #1412). This workflow closes that gap (#1413): daily, it checks each tool's latest
+# GitHub release, and where the pin is behind, downloads the new release asset(s), recomputes
+# their SHA256, rewrites the three ARGs together, and opens a PR - the same shape of update
+# Dependabot itself would open, so it flows through the existing dependency-update review path.
+
+on:
+  schedule:
+    # Ahead of both Dependabot's own daily 03:00 Europe/London run and
+    # build-development-tools.yml's 04:00 UTC rebuild cron, so a same-day bump PR (once reviewed
+    # and merged) is picked up by that night's scheduled image rebuild rather than waiting a
+    # further day.
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "bump-pinned-tool-versions-${{github.ref}}"
+  cancel-in-progress: false
+
+permissions:
+  contents: "read"
+
+jobs:
+  bump:
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 15
+    permissions:
+      contents: "write"
+      pull-requests: "write"
+    strategy:
+      fail-fast: false
+      matrix:
+        tool:
+          - "hadolint"
+          - "dotenv-linter"
+          - "sqlcmd"
+          - "actionlint"
+          - "trufflehog"
+          - "trivy"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: "Check latest release and rewrite Dockerfile pins"
+        id: bump
+        uses: ./.github/actions/bump-pinned-tool-version
+        with:
+          tool: "${{matrix.tool}}"
+          github-token: "${{secrets.GITHUB_TOKEN}}"
+
+      - name: "Commit changes to new branch"
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        with:
+          commit_message: "[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
+          branch: "deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
+          file_pattern: "containers/base/development-tools/Dockerfile"
+          commit_user_name: "credfeto-tool-bump[bot]"
+          commit_user_email: "credfeto@users.noreply.github.com"
+          commit_author: "credfeto-tool-bump[bot] <credfeto@users.noreply.github.com>"
+          skip_dirty_check: false
+          create_branch: true
+
+      - name: "Open pull request"
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        uses: ./.github/actions/create-pull-request
+        with:
+          github-token: "${{secrets.GITHUB_TOKEN}}"
+          source-branch: "deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
+          destination-branch: "main"
+          title: "[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
+          body: |
+            Bumps the pinned `${{matrix.tool}}` release in
+            `containers/base/development-tools/Dockerfile` from
+            `${{steps.bump.outputs.old-version}}` to `${{steps.bump.outputs.new-version}}`, along
+            with its recomputed amd64/arm64 SHA256 checksums.
+
+            Opened automatically by `.github/workflows/bump-pinned-tool-versions.yml` (#1413) -
+            the checksums are recomputed from the new release's own published assets, not carried
+            over. The existing `build-development-tools` CI check (image build + each tool's own
+            version sanity check + Trivy scan) validates the new pin before merge.
+          assignee: "credfeto"
+          labels: "docker,dependencies,Changelog Not Required"
