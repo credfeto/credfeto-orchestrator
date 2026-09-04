@@ -9090,7 +9090,72 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     grep -q "no cached local image is available" "${notify_log}"
-    run ! grep -q "WRONG_FUNCTION_CALLED" "${notify_log}"
+    [ "$(grep -c "WRONG_FUNCTION_CALLED" "${notify_log}")" -eq 0 ]
+}
+
+@test "invoke_claude records the pull duration on a successful pull (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
+}
+
+@test "invoke_claude fires notify_discord_slow_pull when pull_duration_exceeds_baseline trips (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    # Stubs the predicate itself rather than controlling real wall-clock timing - this test is
+    # about invoke_claude's wiring (does it call notify_discord_slow_pull with the right
+    # arguments when told the pull was slow?), not about pull_duration_exceeds_baseline's own
+    # threshold arithmetic, which has its own direct tests above.
+    pull_duration_exceeds_baseline() { printf '10\n'; }
+    notify_discord_slow_pull() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ -f "${notify_log}" ]
+    grep -q "^owner " "${notify_log}"
+    grep -q " 10$" "${notify_log}"
+}
+
+@test "invoke_claude does not fire notify_discord_slow_pull when pull_duration_exceeds_baseline says the pull wasn't slow (#1400)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    OWNER="owner"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "pull" ] && exit 0
+[ "$1" = "image" ] && exit 0
+[ "$1" = "inspect" ] && exit 1
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    local notify_log="${TEST_TMP}/notify.log"
+    pull_duration_exceeds_baseline() { return 1; }
+    notify_discord_slow_pull() { printf '%s\n' "$*" >> "${notify_log}"; }
+
+    invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
+
+    [ ! -f "${notify_log}" ]
 }
 
 @test "invoke_claude pulls the image only once across multiple invocations in the same run (#1401)" {
@@ -9779,6 +9844,52 @@ STUBEOF
     [ "${output}" = "20" ]
 }
 
+# --- pull_duration_exceeds_baseline (#1400 review) -----------------------------
+
+@test "pull_duration_exceeds_baseline fails when there is no trusted baseline yet" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 600
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_exceeds_baseline fails when the pull is not disproportionately slower" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 10
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 20
+    [ "${status}" -ne 0 ]
+}
+
+@test "pull_duration_exceeds_baseline succeeds and echoes the baseline when the pull is disproportionately slower" {
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 10
+    record_pull_duration 10
+    record_pull_duration 10
+    run pull_duration_exceeds_baseline 40
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "10" ]
+}
+
+@test "pull_duration_exceeds_baseline fails on a zero-second baseline rather than flagging every nonzero pull (#1400 review)" {
+    # date +%s has 1-second resolution: an owner whose last few pulls all rounded to 0s would
+    # otherwise see any nonzero-duration pull satisfy "> 0 * PULL_DURATION_THRESHOLD_MULTIPLIER".
+    OWNER="owner"
+    PULL_DURATION_MIN_SAMPLES=3
+    PULL_DURATION_THRESHOLD_MULTIPLIER=3
+    record_pull_duration 0
+    record_pull_duration 0
+    record_pull_duration 0
+    run pull_duration_exceeds_baseline 1
+    [ "${status}" -ne 0 ]
+}
+
 # --- notify_discord_slow_pull (#1400) ------------------------------------------
 
 @test "notify_discord_slow_pull does nothing when DISCORD_WEBHOOK_URL is unset" {
@@ -9839,7 +9950,7 @@ STUBEOF
     [ -f "${curl_log}" ]
     grep -q "Image Pull Failed" "${curl_log}"
     grep -q "owner/repo/issues/42" "${curl_log}"
-    run ! grep -q "Claude Error" "${curl_log}"
+    [ "$(grep -c "Claude Error" "${curl_log}")" -eq 0 ]
 }
 
 @test "notify_discord_pull_failed fires again immediately on a second call (no suppression)" {

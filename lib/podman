@@ -511,10 +511,10 @@ invoke_claude() {
             pull_end_unix=$(date +%s)
             pull_duration_secs=$(( pull_end_unix - pull_start_unix ))
             # #1400: alert when this pull took disproportionately longer than the owner's own
-            # recent history — a pathologically slow pull otherwise just looks like the
+            # recent history - a pathologically slow pull otherwise just looks like the
             # orchestrator "not doing anything" from the outside. "Slow enough to alert on" is
             # pull_duration_exceeds_baseline's own policy call (lib/state), not this call site's
-            # — mirrors check_disk_space, whose threshold likewise lives with the predicate.
+            # - mirrors check_disk_space, whose threshold likewise lives with the predicate.
             # Computed BEFORE record_pull_duration below, so this pull's own duration is judged
             # against prior history only, never against a baseline that already absorbed it.
             local pull_baseline_secs

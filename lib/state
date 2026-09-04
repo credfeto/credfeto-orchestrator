@@ -394,11 +394,14 @@ pull_duration_baseline() {
 # lib/core (the named predicate the call site branches on, rather than the call site doing the
 # threshold arithmetic inline) - PULL_DURATION_THRESHOLD_MULTIPLIER stays a state/policy concern,
 # not something lib/podman needs to know about. On success, echoes the baseline on stdout (the
-# caller needs it for the notification); on failure (no trusted baseline yet, or not slow enough)
-# nothing is echoed.
+# caller needs it for the notification); on failure (no trusted baseline yet, not slow enough, or
+# a zero-second baseline - date +%s's 1-second resolution means an owner whose recent pulls all
+# rounded to 0s would otherwise see every single nonzero-duration pull flagged as "disproportion-
+# ately slower than 0", which is not a meaningful signal - #1400 review) nothing is echoed.
 pull_duration_exceeds_baseline() {
     local duration_secs="$1" baseline_secs
     baseline_secs=$(pull_duration_baseline) || return 1
+    [ "${baseline_secs}" -gt 0 ] || return 1
     [ "${duration_secs}" -gt "$(( baseline_secs * PULL_DURATION_THRESHOLD_MULTIPLIER ))" ] || return 1
     printf '%s\n' "${baseline_secs}"
 }
