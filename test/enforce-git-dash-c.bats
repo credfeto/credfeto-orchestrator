@@ -67,6 +67,11 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
+@test "git cherry-pick is allowed by the subcommand allowlist (#1411: confirmed live need, added back after #1394 dropped it)" {
+    run_hook_in_dir "git -C . cherry-pick abc123"
+    [ "${status}" -eq 0 ]
+}
+
 @test "git filter-branch is blocked by the subcommand allowlist even with -C present" {
     run_hook_in_dir "git -C . filter-branch --tag-name-filter cat -- --all"
     [ "${status}" -eq 2 ]
@@ -99,11 +104,6 @@ make_writable_repo() {
 # widen the list back to them without a deliberate, reviewed change.
 @test "git am is blocked - no confirmed use in this repo" {
     run_hook_in_dir "git -C . am some.patch"
-    [ "${status}" -eq 2 ]
-}
-
-@test "git cherry-pick is blocked - no confirmed use in this repo" {
-    run_hook_in_dir "git -C . cherry-pick abc123"
     [ "${status}" -eq 2 ]
 }
 
