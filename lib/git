@@ -274,3 +274,21 @@ git_commits_behind() {
     [[ "${count}" =~ ^[0-9]+$ ]] || return 1
     printf '%s' "${count}"
 }
+
+# Outputs "<owner>/<repo>" for a GitHub remote URL in any of the forms git itself accepts
+# (git@github.com:o/r.git, ssh://git@github.com/o/r.git, https://github.com/o/r, with or
+# without a trailing .git or slash). Returns 1, printing nothing, for anything else - a
+# non-GitHub remote has no owner to bill a Claude token to or to scope state directories by.
+github_repo_full_from_url() {
+    local url="$1" path
+    case "${url}" in
+        git@github.com:*)          path="${url#git@github.com:}" ;;
+        ssh://git@github.com/*)    path="${url#ssh://git@github.com/}" ;;
+        https://github.com/*)      path="${url#https://github.com/}" ;;
+        *) return 1 ;;
+    esac
+    path="${path%/}"
+    path="${path%.git}"
+    [[ "${path}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+    printf '%s' "${path}"
+}

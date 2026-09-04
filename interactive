@@ -1,0 +1,156 @@
+#!/bin/bash
+
+# Runs a live, attached Claude Code session inside the orchestrator's agent container against
+# the git repository containing the current directory — the same image, mounts, resource
+# limits, secrets, GPG/SSH wiring and baked-in permission settings oneshot uses for its
+# unattended --print phases, but with a terminal attached and the owner driving the session.
+#
+# Compared with oneshot's per-item invocation:
+#   - the repository is the checkout containing $PWD (mounted read-write at /workspace/repo),
+#     not a per-owner clone under $WORK;
+#   - the cs-template rules checkout comes from INTERACTIVE_RULES_DIR (default
+#     $HOME/work/personal/cs-template), mounted read-only at /workspace/rules;
+#   - scratch space is a fresh directory under $XDG_RUNTIME_DIR, mounted at /workspace/tmp;
+#   - persistent Claude state (sessions, plans, cache, ...) is shared with oneshot under
+#     $HOME/.orchestrator/<owner>/<repo>;
+#   - on first run, $XDG_CONFIG_HOME/orchestrator is bootstrapped from the host's git config and
+#     a `claude setup-token` long-lived token (see lib/core bootstrap_orchestrator_config).
+#
+# Usage: interactive            (from anywhere inside a GitHub-hosted git checkout)
+#        interactive --help
+#
+# Resolved via BASH_SOURCE (not $0) so this works both when run directly and when a test
+# harness `source`s it. lib/globals must be sourced first (see oneshot for why); each source
+# has a dependency-free fallback because `die` only exists once lib/core has loaded.
+INTERACTIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/globals disable=SC1091
+source "${INTERACTIVE_DIR}/lib/globals" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/globals\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/core disable=SC1091
+source "${INTERACTIVE_DIR}/lib/core" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/core\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/git disable=SC1091
+source "${INTERACTIVE_DIR}/lib/git" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/git\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/github disable=SC1091
+source "${INTERACTIVE_DIR}/lib/github" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/github\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/github-status disable=SC1091
+source "${INTERACTIVE_DIR}/lib/github-status" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/github-status\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/fingerprints disable=SC1091
+source "${INTERACTIVE_DIR}/lib/fingerprints" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/fingerprints\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/state disable=SC1091
+source "${INTERACTIVE_DIR}/lib/state" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/state\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/prompts disable=SC1091
+source "${INTERACTIVE_DIR}/lib/prompts" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/prompts\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/workflow-board disable=SC1091
+source "${INTERACTIVE_DIR}/lib/workflow-board" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/workflow-board\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/discord disable=SC1091
+source "${INTERACTIVE_DIR}/lib/discord" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/discord\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/podman disable=SC1091
+source "${INTERACTIVE_DIR}/lib/podman" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/podman\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+
+# Where the cs-template rules checkout lives on this host. Mounted read-only at
+# CONTAINER_RULES_PATH; never cloned or updated by this script.
+INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${HOME}/work/personal/cs-template}"
+
+usage() {
+    cat <<'USAGE'
+Usage: interactive [--help]
+
+Runs an interactive Claude Code session inside the orchestrator agent container against the
+git repository containing the current directory. On first run, creates
+$XDG_CONFIG_HOME/orchestrator/.env from the host's global git config and prompts for a
+long-lived Claude OAuth token via `claude setup-token`.
+
+Environment:
+  INTERACTIVE_RULES_DIR  cs-template checkout to mount at /workspace/rules
+                         (default: $HOME/work/personal/cs-template)
+  ORCHESTRATOR_IMAGE     agent image (default: ghcr.io/credfeto/development-agent:latest)
+USAGE
+}
+
+# A smaller list than oneshot's check_required_tools: no curl/flock/timeout/awk — nothing
+# here polls a feed, takes a lock, or bounds a container's runtime.
+check_interactive_tools() {
+    local tool
+    for tool in git jq podman gh claude; do
+        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
+    done
+}
+
+# Outputs the top-level directory of the git checkout containing dir, or dies.
+resolve_repo_dir() {
+    local dir="$1" top
+    top=$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null) \
+        || die "${dir} is not inside a git repository — run interactive from within a checkout"
+    printf '%s' "${top}"
+}
+
+# Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
+resolve_repo_full() {
+    local repo_dir="$1" origin repo_full
+    origin=$(git -C "${repo_dir}" config --get remote.origin.url 2>/dev/null) \
+        || die "${repo_dir} has no origin remote — interactive needs a GitHub-hosted repository"
+    repo_full=$(github_repo_full_from_url "${origin}") \
+        || die "origin remote ${origin} is not a GitHub repository URL"
+    printf '%s' "${repo_full}"
+}
+
+# The rules checkout is mounted read-only, so anything wrong with it can only be fixed on the
+# host. The entrypoint's own hooks-freshness check (verify_hooks_fresh in
+# containers/agent/entrypoint.sh) dies inside the container if /workspace/rules/.env carries a
+# stale SHA — so a not-on-main or behind checkout is called out here, where the fix is a
+# single git command, rather than surfacing as a confusing in-container death later.
+check_rules_checkout() {
+    local rules_dir="$1" branch
+    [ -d "${rules_dir}/.git" ] \
+        || die "cs-template checkout not found at ${rules_dir} — clone git@github.com:credfeto/cs-template.git there, or set INTERACTIVE_RULES_DIR"
+    branch=$(git -C "${rules_dir}" branch --show-current 2>/dev/null) || branch=""
+    if [ "${branch}" != "main" ]; then
+        warn "${rules_dir} is on branch '${branch:-<detached>}', not main — the agent will read those rules, and the container may refuse to start if its .env SHA is stale (git -C ${rules_dir} switch main && git -C ${rules_dir} pull --ff-only)"
+    fi
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help) usage; return 0 ;;
+        "") ;;
+        *) usage >&2; die "Unknown argument: $1" ;;
+    esac
+
+    check_interactive_tools
+
+    local repo_dir repo_full owner ai_instructions container_ai_instructions claude_md
+    repo_dir=$(resolve_repo_dir "${PWD}") || exit 1
+    repo_full=$(resolve_repo_full "${repo_dir}") || exit 1
+    owner="${repo_full%%/*}"
+
+    bootstrap_orchestrator_config "${owner}"
+    load_env_config
+    validate_config "${owner}"
+
+    set_repo_context "${repo_full}"
+    REPO_WORK_DIR="${repo_dir}"
+    RULES_DIR="${INTERACTIVE_RULES_DIR}"
+    check_rules_checkout "${RULES_DIR}"
+
+    ai_instructions=$(find_ai_instructions) || die "No .ai-instructions in ${REPO_WORK_DIR} or ${RULES_DIR}"
+    container_ai_instructions=$(host_to_container_path "${ai_instructions}")
+    claude_md=$(build_interactive_claude_md "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}")
+
+    info "Repository: ${repo_full} at ${REPO_WORK_DIR}"
+    info "Rules: ${RULES_DIR}"
+    invoke_claude_interactive "${claude_md}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
