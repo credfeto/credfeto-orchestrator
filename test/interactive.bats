@@ -81,8 +81,9 @@ make_owner_token() {
     [[ "${output}" == *"Unknown argument: --bogus"* ]]
 }
 
-@test "INTERACTIVE_RULES_DIR defaults to HOME/work/personal/cs-template" {
-    [ "${INTERACTIVE_RULES_DIR}" = "${HOME}/work/personal/cs-template" ]
+@test "INTERACTIVE_RULES_DIR defaults to WORK/personal/cs-template" {
+    [ "${INTERACTIVE_RULES_DIR}" = "${WORK}/personal/cs-template" ]
+    [ "${WORK}" = "${XDG_PROJECTS_DIR}" ]
 }
 
 # --- github_repo_full_from_url --------------------------------------------------------------
@@ -160,6 +161,135 @@ make_owner_token() {
     run resolve_repo_full "${dir}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"is not a GitHub repository URL"* ]]
+}
+
+@test "resolve_repo_full dies when origin is a GitHub https URL (container accepts SSH form only)" {
+    local dir
+    dir=$(make_git_checkout "https://github.com/credfeto/example.git")
+    run resolve_repo_full "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"must use the git@github.com: SSH form"* ]]
+    [[ "${output}" == *"remote set-url origin git@github.com:credfeto/example.git"* ]]
+}
+
+@test "resolve_repo_dir refuses a checkout that is HOME or contains it" {
+    git -C "${HOME}" init -q -b main
+    mkdir -p "${HOME}/sub"
+    run resolve_repo_dir "${HOME}/sub"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"is your home directory or contains it"* ]]
+}
+
+@test "resolve_repo_dir refuses a linked worktree (.git is a file)" {
+    local main_dir="${TEST_TMP}/main" wt="${TEST_TMP}/wt"
+    mkdir -p "${main_dir}" "${TEST_TMP}/no-hooks"
+    git -C "${main_dir}" init -q -b main
+    fixture_commit "${main_dir}" init
+    git -C "${main_dir}" worktree add -q "${wt}" -b wip
+    [ -f "${wt}/.git" ]
+    run resolve_repo_dir "${wt}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"linked worktree or submodule"* ]]
+}
+
+@test "github_repo_full_from_url rejects dot segments and a dotted owner" {
+    run github_repo_full_from_url "git@github.com:credfeto/.."
+    [ "${status}" -eq 1 ]
+    run github_repo_full_from_url "git@github.com:credfeto/.git"
+    [ "${status}" -eq 1 ]
+    run github_repo_full_from_url "git@github.com:foo.bar/example.git"
+    [ "${status}" -eq 1 ]
+    run github_repo_full_from_url "git@github.com:credfeto/example.js.git"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "credfeto/example.js" ]
+}
+
+# --- project-level Claude config guard ------------------------------------------------------
+
+# Commits everything staged plus a marker file in dir, with the host's global hooks
+# (core.hooksPath) and signing switched off so the fixture never trips a real pre-commit hook.
+fixture_commit() {
+    local dir="$1" message="$2"
+    printf '%s\n' "${message}" > "${dir}/.fixture-${message}"
+    git -C "${dir}" add -A
+    git -C "${dir}" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false \
+        -c core.hooksPath="${TEST_TMP}/no-hooks" commit -q -m "${message}"
+}
+
+# A checkout with one commit on main that origin/main also points at.
+make_committed_checkout() {
+    local dir="${TEST_TMP}/checkout"
+    mkdir -p "${dir}" "${TEST_TMP}/no-hooks"
+    git -C "${dir}" init -q -b main
+    fixture_commit "${dir}" init
+    git -C "${dir}" update-ref refs/remotes/origin/main HEAD
+    printf '%s' "${dir}"
+}
+
+@test "check_repo_claude_config passes with no project-level Claude config" {
+    local dir
+    dir=$(make_committed_checkout)
+    run check_repo_claude_config "${dir}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "check_repo_claude_config dies on an untracked .claude/settings.local.json" {
+    local dir
+    dir=$(make_committed_checkout)
+    mkdir -p "${dir}/.claude"
+    printf '{}' > "${dir}/.claude/settings.local.json"
+    run check_repo_claude_config "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"${dir}/.claude/settings.local.json differs from origin/main"* ]]
+}
+
+@test "check_repo_claude_config passes when the file is byte-identical to origin/main" {
+    local dir
+    dir=$(make_committed_checkout)
+    mkdir -p "${dir}/.claude"
+    printf '{"a":1}' > "${dir}/.claude/settings.json"
+    fixture_commit "${dir}" settings
+    git -C "${dir}" update-ref refs/remotes/origin/main HEAD
+    run check_repo_claude_config "${dir}"
+    [ "${status}" -eq 0 ]
+    printf '{"a":2}' > "${dir}/.claude/settings.json"
+    run check_repo_claude_config "${dir}"
+    [ "${status}" -eq 1 ]
+}
+
+# --- host_to_container_path boundary ----------------------------------------------------------
+
+@test "host_to_container_path maps on a directory boundary, not a string prefix" {
+    set_repo_context "credfeto/cs" "${TEST_TMP}/personal/cs" "${TEST_TMP}/personal/cs-template"
+    [ "$(host_to_container_path "${TEST_TMP}/personal/cs-template/.ai-instructions")" = "${CONTAINER_RULES_PATH}/.ai-instructions" ]
+    [ "$(host_to_container_path "${TEST_TMP}/personal/cs/.ai-instructions")" = "${CONTAINER_REPO_PATH}/.ai-instructions" ]
+    [ "$(host_to_container_path "${TEST_TMP}/personal/cs")" = "${CONTAINER_REPO_PATH}" ]
+    [ "$(host_to_container_path "${TEST_TMP}/elsewhere/x")" = "${TEST_TMP}/elsewhere/x" ]
+}
+
+# --- git metadata change warning -------------------------------------------------------------
+
+@test "warn_if_git_metadata_changed is silent when .git/config and hooks are unchanged" {
+    local dir before
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    before=$(git_metadata_digest "${dir}")
+    run warn_if_git_metadata_changed "${dir}" "${before}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "warn_if_git_metadata_changed warns when a hook or .git/config changes" {
+    local dir before
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    before=$(git_metadata_digest "${dir}")
+    printf '#!/bin/sh\n' > "${dir}/.git/hooks/post-checkout"
+    run warn_if_git_metadata_changed "${dir}" "${before}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *".git/config or .git/hooks changed during the session"* ]]
+    rm "${dir}/.git/hooks/post-checkout"
+    git -C "${dir}" config core.sshCommand "ssh -i /evil"
+    run warn_if_git_metadata_changed "${dir}" "${before}"
+    [[ "${output}" == *"changed during the session"* ]]
 }
 
 # --- rules checkout -------------------------------------------------------------------------

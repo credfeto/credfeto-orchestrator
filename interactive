@@ -59,7 +59,7 @@ source "${INTERACTIVE_DIR}/lib/podman" \
 
 # Where the cs-template rules checkout lives on this host. Mounted read-only at
 # CONTAINER_RULES_PATH; never cloned or updated by this script.
-INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${HOME}/work/personal/cs-template}"
+INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${WORK}/personal/cs-template}"
 
 usage() {
     cat <<'USAGE'
@@ -75,7 +75,8 @@ is unreachable), exactly as oneshot does.
 
 Environment:
   INTERACTIVE_RULES_DIR  cs-template checkout to mount at /workspace/rules
-                         (default: $HOME/work/personal/cs-template)
+                         (default: $XDG_PROJECTS_DIR/personal/cs-template, i.e.
+                         $HOME/work/personal/cs-template)
   ORCHESTRATOR_IMAGE     agent image (default: ghcr.io/credfeto/development-agent:latest)
 USAGE
 }
@@ -83,7 +84,7 @@ USAGE
 # A smaller list than oneshot's check_required_tools: no curl/flock/timeout/awk, nothing
 # here polls a feed, takes a lock, or bounds a container's runtime.
 check_interactive_tools() {
-    require_tools git jq podman gh claude
+    require_tools git jq podman gh claude ssh-add
 }
 
 # resolve_repo_dir, resolve_repo_full, check_rules_checkout and github_repo_full_from_url are
@@ -104,11 +105,17 @@ main() {
     repo_dir=$(resolve_repo_dir "${PWD}") || exit 1
     repo_full=$(resolve_repo_full "${repo_dir}") || exit 1
     set_repo_context "${repo_full}" "${repo_dir}" "${INTERACTIVE_RULES_DIR}"
+    # Host-side versions of the entrypoint's own refusals, so they fire before the image pull
+    # and name host paths.
+    check_repo_claude_config "${REPO_WORK_DIR}"
+    check_rules_checkout "${RULES_DIR}"
 
     bootstrap_orchestrator_config "${OWNER}"
     load_env_config
     validate_config "${OWNER}"
-    check_rules_checkout "${RULES_DIR}"
+    # Same as oneshot: load the default SSH keys into an empty agent now, or die on a stale
+    # socket, rather than inside the container after the pull.
+    preload_ssh_keys
 
     ai_instructions=$(find_ai_instructions) || die "No .ai-instructions in ${REPO_WORK_DIR} or ${RULES_DIR}"
     container_ai_instructions=$(host_to_container_path "${ai_instructions}")
@@ -116,7 +123,11 @@ main() {
 
     info "Repository: ${repo_full} at ${REPO_WORK_DIR}"
     info "Rules: ${RULES_DIR}"
-    invoke_claude_interactive "${claude_md}"
+    local git_metadata_before session_exit=0
+    git_metadata_before=$(git_metadata_digest "${REPO_WORK_DIR}")
+    invoke_claude_interactive "${claude_md}" || session_exit=$?
+    warn_if_git_metadata_changed "${REPO_WORK_DIR}" "${git_metadata_before}"
+    return "${session_exit}"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
