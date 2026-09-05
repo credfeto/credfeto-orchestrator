@@ -103,10 +103,25 @@ load_token_for_owner() {
     fi
 }
 
+# Outputs host lower-cased, with GitHub's own API host folded to github.com: gh normalises
+# both the same way, and everything that decides "proxy or direct" (load_env_config,
+# prepare_claude_container_args, bootstrap_orchestrator_env_file) compares against the literal
+# github.com, so a GitHub.com or api.github.com value must not read as a proxy.
+normalize_gh_host() {
+    local host="${1,,}"
+    case "${host}" in
+        api.github.com) host="github.com" ;;
+    esac
+    printf '%s' "${host}"
+}
+
 # Reads DISCORD_WEBHOOK, GH_TOKEN, GH_HOST, GIT_USER_NAME, GIT_USER_EMAIL, and
 # GIT_SIGNING_KEY from orchestrator/.env.
-# Sets DISCORD_WEBHOOK_URL; exports GH_HOST and GH_ENTERPRISE_TOKEN when both are
-# present so host-side gh CLI calls use the same proxy as the agent container.
+# Sets DISCORD_WEBHOOK_URL; exports GH_HOST (normalised) and GH_ENTERPRISE_TOKEN when both are
+# present so host-side gh CLI calls use the same proxy as the agent container. For a direct
+# github.com host gh ignores GH_ENTERPRISE_TOKEN, so GH_TOKEN is exported as well: the
+# container plumbing keys off GH_ENTERPRISE_TOKEN (prepare_claude_container_args renames it at
+# the container boundary) while host-side gh reads GH_TOKEN.
 # GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
 # Silent when the file is absent or a key is missing.
 load_env_config() {
@@ -141,8 +156,12 @@ load_env_config() {
         esac
     done < "${env_file}"
     if [ -n "${gh_host}" ] && [ -n "${gh_token}" ]; then
+        gh_host=$(normalize_gh_host "${gh_host}")
         export GH_HOST="${gh_host}"
         export GH_ENTERPRISE_TOKEN="${gh_token}"
+        if [ "${gh_host}" = "github.com" ]; then
+            export GH_TOKEN="${gh_token}"
+        fi
     fi
 }
 
@@ -282,7 +301,8 @@ bootstrap_orchestrator_env_file() {
 
     load_checkout_git_identity "${repo_dir}"
 
-    local gh_host="${GH_HOST:-github.com}" gh_token
+    local gh_host gh_token
+    gh_host=$(normalize_gh_host "${GH_HOST:-github.com}")
     gh_token=$(gh auth token 2>/dev/null) || gh_token=""
     [ -n "${gh_token}" ] \
         || die "'gh auth token' returned no token for ${gh_host}, run 'gh auth login' first (nothing was written to ${env_file})"

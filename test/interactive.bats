@@ -499,6 +499,15 @@ make_committed_checkout() {
     [[ "${output}" == *"gh token for github-api.example.com"* ]]
 }
 
+@test "bootstrap_orchestrator_env_file normalises an exported GH_HOST before writing it" {
+    make_git_config_stub
+    export GH_HOST="API.GitHub.com"
+    make_stub gh 'printf "ghp_stubtoken\n"'
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
+    [ "${status}" -eq 0 ]
+    grep -qx 'GH_HOST=github.com' "${CONFIG_DIR}/.env"
+}
+
 @test "bootstrap_orchestrator_env_file dies and writes nothing when gh auth token fails" {
     make_git_config_stub
     make_stub gh 'exit 1'
