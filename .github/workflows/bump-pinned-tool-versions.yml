@@ -1,0 +1,158 @@
+---
+name: "Bump pinned tool versions"
+
+# containers/base/development-tools/Dockerfile curl-installs six standalone CLI tools (hadolint,
+# dotenv-linter, sqlcmd, actionlint, trufflehog, trivy), each pinned to an exact release and
+# verified against a hand-recorded SHA256 checksum for supply-chain integrity (#140). Dependabot's
+# `docker` ecosystem only parses `FROM` image references, so it never sees or bumps these ARGs -
+# they only ever moved reactively, when a stale pin's own CVE started failing a Trivy scan
+# (#1240, #1412). This workflow closes that gap (#1413): daily, it checks each tool's latest
+# GitHub release, and where the pin is behind, downloads the new release asset(s), recomputes
+# their SHA256, rewrites the three ARGs together, and opens a PR - the same shape of update
+# Dependabot itself would open, so it flows through the existing dependency-update review path.
+#
+# Pushes the bump branch with the default GITHUB_TOKEN, but opens the PR itself with
+# PR_CREATE_TOKEN: GitHub never triggers a downstream workflow run from an event authored by
+# GITHUB_TOKEN, so a GITHUB_TOKEN-authored push here deliberately does NOT trigger
+# pull-request.yml's own push-triggered PR auto-creation (avoiding a race between that generic
+# path and this workflow's own PR-open step below, each of which would otherwise try to create a
+# PR for the same branch with different content). The PR-open event itself, however, is
+# PR_CREATE_TOKEN-authored (a real PAT, not GITHUB_TOKEN) - required so build-development-tools's
+# pull_request-triggered checks actually run on the resulting PR, which a GITHUB_TOKEN-authored
+# PR would not have gotten either.
+
+on:
+  schedule:
+    # Ahead of both Dependabot's own daily 03:00 Europe/London run and
+    # build-development-tools.yml's 04:00 UTC rebuild cron, so a same-day bump PR (once reviewed
+    # and merged) is picked up by that night's scheduled image rebuild rather than waiting a
+    # further day.
+    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "bump-pinned-tool-versions-${{github.ref}}"
+  cancel-in-progress: false
+
+permissions:
+  contents: "read"
+
+jobs:
+  bump:
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 15
+    permissions:
+      # No pull-requests: write here - the one PR-touching step ("Open pull request") explicitly
+      # authenticates with PR_CREATE_TOKEN instead of the ambient GITHUB_TOKEN (see the file
+      # header comment for why), so the default token never needs pull-request scope.
+      contents: "write"
+    strategy:
+      fail-fast: false
+      matrix:
+        tool:
+          - "hadolint"
+          - "dotenv-linter"
+          - "sqlcmd"
+          - "actionlint"
+          - "trufflehog"
+          - "trivy"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: "Check latest release and rewrite Dockerfile pins"
+        id: bump
+        uses: ./.github/actions/bump-pinned-tool-version
+        with:
+          tool: "${{matrix.tool}}"
+          github-token: "${{secrets.GITHUB_TOKEN}}"
+
+      - name: "Compute branch name and PR/commit subject"
+        id: plan
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        shell: bash
+        env:
+          TOOL: "${{matrix.tool}}"
+          NEW_VERSION: "${{steps.bump.outputs.new-version}}"
+        run: |
+          {
+            echo "branch=deps/${TOOL}/${NEW_VERSION}"
+            echo "subject=[Dependencies] Bump ${TOOL} to ${NEW_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+      # A tool's pin only moves once a scheduled/dispatched run actually finds a newer release;
+      # while that PR sits open and unmerged, every following run would otherwise recompute the
+      # identical branch name and try to recommit onto it from a fresh main checkout - not a
+      # fast-forward of the already-pushed branch, so the push is rejected daily until the PR
+      # merges or closes. Converge silently instead, the same way Dependabot skips re-proposing
+      # an update it has already opened a PR for.
+      - name: "Check for an existing bump branch"
+        id: check-branch
+        if: ${{steps.bump.outputs.changed == 'true'}}
+        shell: bash
+        env:
+          BRANCH: "${{steps.plan.outputs.branch}}"
+        run: |
+          output=$(git ls-remote --exit-code --heads origin "$BRANCH" 2>&1)
+          rc=$?
+          case "$rc" in
+            0)
+              echo "ℹ️ Branch $BRANCH already exists on origin - a bump PR for this version is presumably already open, skipping"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              ;;
+            2)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Anything other than "no matching ref" (2) is a real failure talking to origin
+              # (network, auth, ...), not evidence the branch is absent - fail loudly instead of
+              # silently falling through to exists=false, which would reproduce the exact
+              # non-fast-forward push failure this check exists to prevent.
+              echo "$output" >&2
+              echo "::error::git ls-remote failed with exit code $rc while checking for branch $BRANCH - not safe to assume it doesn't exist"
+              exit 1
+              ;;
+          esac
+
+      - name: "Commit changes to new branch"
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        with:
+          commit_message: "${{steps.plan.outputs.subject}}"
+          branch: "${{steps.plan.outputs.branch}}"
+          file_pattern: "${{steps.bump.outputs.dockerfile-path}}"
+          commit_user_name: "credfeto-tool-bump[bot]"
+          commit_user_email: "credfeto@users.noreply.github.com"
+          commit_author: "credfeto-tool-bump[bot] <credfeto@users.noreply.github.com>"
+          skip_dirty_check: false
+          create_branch: true
+
+      - name: "Check Required Secrets"
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
+        uses: ./.github/actions/check-required-secret
+        with:
+          secret-name: "PR_CREATE_TOKEN"
+          secret-value: "${{secrets.PR_CREATE_TOKEN}}"
+
+      - name: "Open pull request"
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
+        uses: ./.github/actions/create-pull-request
+        with:
+          github-token: "${{secrets.PR_CREATE_TOKEN}}"
+          source-branch: "${{steps.plan.outputs.branch}}"
+          destination-branch: "main"
+          title: "${{steps.plan.outputs.subject}}"
+          body: |
+            Bumps the pinned `${{matrix.tool}}` release in
+            `${{steps.bump.outputs.dockerfile-path}}` from
+            `${{steps.bump.outputs.old-version}}` to `${{steps.bump.outputs.new-version}}`, along
+            with its recomputed amd64/arm64 SHA256 checksums.
+
+            Opened automatically by `.github/workflows/bump-pinned-tool-versions.yml` (#1413) -
+            the checksums are recomputed from the new release's own published assets, not carried
+            over. The existing `build-development-tools` CI check (image build + each tool's own
+            version sanity check + Trivy scan) validates the new pin before merge.
+          assignee: "credfeto"
+          labels: "docker,dependencies,Changelog Not Required"
