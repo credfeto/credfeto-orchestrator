@@ -114,9 +114,12 @@ runs:
           const prefix = toolKey.toUpperCase().replace(/-/g, "_");
           const versionArg = `${prefix}_VERSION`;
           const shaArgs = { amd64: `${prefix}_SHA256_AMD64`, arm64: `${prefix}_SHA256_ARM64` };
+          // Single source of truth for the "ARG <name>=<value>" line grammar, read and write
+          // sides alike - a write-side mismatch would otherwise be a silent String.replace()
+          // no-op (a SHA256 ARG left stale while the version ARG bumps), not a thrown error.
+          const argLineRe = (name) => new RegExp(`^ARG ${name}=(\\S+)$`, "m");
 
-          const versionLineRe = new RegExp(`^ARG ${versionArg}=(\\S+)$`, "m");
-          const currentMatch = dockerfile.match(versionLineRe);
+          const currentMatch = dockerfile.match(argLineRe(versionArg));
           if (!currentMatch) {
             core.setFailed(`❌ Could not find "ARG ${versionArg}=" in ${dockerfilePath}`);
             return;
@@ -129,7 +132,26 @@ runs:
 
           core.info(`ℹ️ ${toolKey}: pinned ${currentVersion}, latest release ${newVersion}`);
 
-          if (newVersion === currentVersion) {
+          // Plain numeric semver compare, not just !==: all six tools publish bare X.Y[.Z] tags
+          // (verified against each one's actual release history), so this never needs to handle
+          // pre-release suffixes. A <= 0 comparison (not just ===) also guards the case
+          // getLatestRelease ever returns something that isn't actually newer - e.g. a point
+          // release published on an older line after the currently-pinned tag - so this can
+          // never silently downgrade the pin (mirrors dotnet-version.yml's own sort -V guard for
+          // the same class of workflow).
+          function compareVersions(a, b) {
+            const partsA = a.replace(/^v/, "").split(".").map(Number);
+            const partsB = b.replace(/^v/, "").split(".").map(Number);
+            for (let i = 0; i < Math.max(partsA.length, partsB.length); i += 1) {
+              const diff = (partsA[i] || 0) - (partsB[i] || 0);
+              if (diff !== 0) {
+                return diff;
+              }
+            }
+            return 0;
+          }
+
+          if (compareVersions(newVersion, currentVersion) <= 0) {
             core.info(`✅ ${toolKey} is already on the latest release (${currentVersion})`);
             core.setOutput("changed", "false");
             return;
@@ -159,10 +181,15 @@ runs:
             [shaArgs.amd64, shaAmd64],
             [shaArgs.arm64, shaArm64],
           ];
-          const updated = replacements.reduce(
-            (text, [name, value]) => text.replace(new RegExp(`^ARG ${name}=\\S+$`, "m"), `ARG ${name}=${value}`),
-            dockerfile
-          );
+          let updated = dockerfile;
+          for (const [name, value] of replacements) {
+            const re = argLineRe(name);
+            if (!re.test(updated)) {
+              core.setFailed(`❌ Could not find "ARG ${name}=" in ${dockerfilePath} while rewriting - refusing to leave a stale ARG`);
+              return;
+            }
+            updated = updated.replace(re, `ARG ${name}=${value}`);
+          }
           fs.writeFileSync(dockerfilePath, updated);
 
           core.info(`✅ Bumped ${toolKey}: ${currentVersion} -> ${newVersion}`);
