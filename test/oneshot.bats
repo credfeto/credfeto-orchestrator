@@ -3320,6 +3320,10 @@ STUBEOF
     [ "${status}" -ne 0 ]
     # --secret flag IS present in the podman run args
     grep -qx 'claude-oauth-orchestrator-credfeto,type=env,target=CLAUDE_CODE_OAUTH_TOKEN' "${args_log}"
+    # Secrets left under the pre-rename names by a crashed earlier run are swept too
+    local legacy_rm
+    legacy_rm=$(printf '%s\n' secret rm claude-oauth-credfeto gh-enterprise-token)
+    [ "$(grep -A3 -x 'secret' "${secret_log}" | grep -B1 -A2 -x 'rm' | head -4)" = "${legacy_rm}" ]
 }
 
 @test "invoke_claude notifies Discord before dying when creating the Claude OAuth Podman secret fails (#1103)" {
@@ -3623,13 +3627,15 @@ STUBEOF
 
     run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
     [ "${status}" -eq 2 ]
-    # The stub logs one argument per line, so "podman secret rm X" appears as three lines.
-    # "rm" must appear twice: once as the pre-create cleanup of any stale secret from a prior
-    # run, once as THIS invocation's own post-failure cleanup (#1133 review) — previously only
-    # the first (pre-create) rm happened; the post-failure one was missing entirely.
-    local rm_count
-    rm_count=$(grep -c '^rm$' "${secret_log}" || true)
-    [ "${rm_count}" -eq 2 ]
+    # The stub logs one argument per line. The container-scoped secret name must appear three
+    # times: the pre-create cleanup of any stale secret from a prior run, the create, and THIS
+    # invocation's own post-failure cleanup (#1133 review) — previously only the pre-create rm
+    # happened; the post-failure one was missing entirely. (The legacy-name sweep is a separate
+    # rm and is not counted here.)
+    local name_count
+    name_count=$(grep -c '^claude-oauth-orchestrator-credfeto$' "${secret_log}" || true)
+    [ "${name_count}" -eq 3 ]
+    [ "$(grep -c '^create$' "${secret_log}")" -eq 1 ]
 }
 
 @test "invoke_claude cleans up CLAUDE_MD_TMPFILE when the container fails before Claude produces any result" {

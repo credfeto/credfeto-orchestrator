@@ -801,6 +801,10 @@ prepare_claude_container_args() {
     # removes and recreates its secrets on entry and removes them on every exit path, so a
     # shared name would let one launch delete the secret the other is between creating and
     # consuming.
+    # Secrets created under the pre-rename names (claude-oauth-<owner>, gh-enterprise-token)
+    # by a run that crashed between create and its EXIT trap would otherwise never be swept
+    # again after the self-update, leaving a live token in the store. Best-effort, every launch.
+    podman secret rm "claude-oauth-${OWNER}" "gh-enterprise-token" >/dev/null 2>&1 || true
     if [ -n "${owner_token}" ]; then
         PODMAN_SECRET_NAME="claude-oauth-${container_name}"
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
