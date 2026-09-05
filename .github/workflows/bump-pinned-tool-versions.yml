@@ -42,8 +42,10 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 15
     permissions:
+      # No pull-requests: write here - the one PR-touching step ("Open pull request") explicitly
+      # authenticates with PR_CREATE_TOKEN instead of the ambient GITHUB_TOKEN (see the file
+      # header comment for why), so the default token never needs pull-request scope.
       contents: "write"
-      pull-requests: "write"
     strategy:
       fail-fast: false
       matrix:
@@ -93,12 +95,26 @@ jobs:
         env:
           BRANCH: "${{steps.plan.outputs.branch}}"
         run: |
-          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
-            echo "ℹ️ Branch $BRANCH already exists on origin - a bump PR for this version is presumably already open, skipping"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          output=$(git ls-remote --exit-code --heads origin "$BRANCH" 2>&1)
+          rc=$?
+          case "$rc" in
+            0)
+              echo "ℹ️ Branch $BRANCH already exists on origin - a bump PR for this version is presumably already open, skipping"
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              ;;
+            2)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Anything other than "no matching ref" (2) is a real failure talking to origin
+              # (network, auth, ...), not evidence the branch is absent - fail loudly instead of
+              # silently falling through to exists=false, which would reproduce the exact
+              # non-fast-forward push failure this check exists to prevent.
+              echo "$output" >&2
+              echo "::error::git ls-remote failed with exit code $rc while checking for branch $BRANCH - not safe to assume it doesn't exist"
+              exit 1
+              ;;
+          esac
 
       - name: "Commit changes to new branch"
         if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
