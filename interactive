@@ -98,10 +98,27 @@ Environment:
 USAGE
 }
 
-# A smaller list than oneshot's check_required_tools: no curl/flock/timeout/awk, nothing
-# here polls a feed, takes a lock, or bounds a container's runtime.
+# A smaller list than oneshot's check_required_tools: no curl/flock/timeout, nothing here
+# polls a feed, takes a lock, or bounds a container's runtime. awk and a sha256 tool are what
+# hash_sha256 (the .git/config and hooks digest) needs; the gpg tools are what the signing
+# pre-flight and add_gpg_podman_args need.
 check_interactive_tools() {
-    require_tools git jq podman gh claude ssh-add
+    require_tools git jq podman gh claude ssh-add awk gpg gpg-connect-agent gpgconf
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+        || die "Required tool not found: sha256sum (or shasum)"
+}
+
+# Dies when the SSH agent or the GPG signing key the container will use is not usable on the
+# host, so the refusal comes before the image pull. The entrypoint dies for both anyway, but
+# after the pull and naming container paths: preload_ssh_keys returns 0 for an unset
+# SSH_AUTH_SOCK, and the gpg keyring check is what oneshot's main does before any pull.
+check_signing_agents() {
+    gpg-connect-agent /bye >/dev/null 2>&1 \
+        || die "gpg-agent is not running, run 'gpgconf --launch gpg-agent' to start it"
+    gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+        || die "Signing key ${GIT_SIGNING_KEY} (git config user.signingkey for ${REPO_WORK_DIR}) is not in the GPG keyring, import it with 'gpg --import <key-file>'"
+    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] \
+        || die "SSH_AUTH_SOCK is not set or is not a socket, the agent container pushes through your ssh-agent: start one and 'ssh-add' your GitHub key"
 }
 
 # resolve_repo_dir, resolve_repo_full, check_repo_remotes, check_repo_claude_config,
@@ -115,7 +132,14 @@ main() {
         *) usage >&2; die "Unknown argument: $1" ;;
     esac
 
+    # First, so a non-TTY launch is refused outright rather than by ssh-add or podman later
+    # with a misleading message.
+    terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
     check_interactive_tools
+    case "${INTERACTIVE_RULES_DIR}" in
+        /*) ;;
+        *) die "INTERACTIVE_RULES_DIR must be an absolute path (podman would treat '${INTERACTIVE_RULES_DIR}' as a named volume): got '${INTERACTIVE_RULES_DIR}'" ;;
+    esac
 
     local repo_dir repo_full ai_instructions container_ai_instructions claude_md
     # die() inside a command substitution only exits that subshell, hence the explicit exits.
@@ -139,6 +163,7 @@ main() {
     # what the container gets, and a .env holding only GH_HOST/GH_TOKEN is accepted.
     load_checkout_git_identity "${REPO_WORK_DIR}"
     validate_config "${OWNER}"
+    check_signing_agents
     # Same as oneshot: load the default SSH keys into an empty agent now, or die on a stale
     # socket, rather than inside the container after the pull.
     preload_ssh_keys
@@ -150,7 +175,9 @@ main() {
     info "Repository: ${repo_full} at ${REPO_WORK_DIR}"
     info "Rules: ${RULES_DIR}"
     local git_metadata_before session_exit=0
-    git_metadata_before=$(git_metadata_digest "${REPO_WORK_DIR}")
+    # An empty digest would make the post-session comparison pass vacuously.
+    git_metadata_before=$(git_metadata_digest "${REPO_WORK_DIR}") \
+        || die "Failed to digest ${REPO_WORK_DIR}/.git/config and hooks before the session"
     invoke_claude_interactive "${claude_md}" || session_exit=$?
     warn_if_git_metadata_changed "${REPO_WORK_DIR}" "${git_metadata_before}"
     return "${session_exit}"

