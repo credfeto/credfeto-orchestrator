@@ -93,7 +93,11 @@ GH_HOST=github-api.example.com
 GH_TOKEN=ghp_<your-proxy-token>
 ```
 
-If either key is absent, `gh` falls back to its own `~/.config/gh/hosts.yml` configuration.
+If either key is absent, `gh` on the host falls back to its own `~/.config/gh/hosts.yml`.
+Inside the agent container there is no `hosts.yml`: the image bakes the proxy `GH_HOST` with a
+placeholder token, so without both keys `gh` in the container is unauthenticated. For direct,
+unproxied access set `GH_HOST=github.com` with a real token; it then reaches the container as
+`GH_TOKEN` rather than `GH_ENTERPRISE_TOKEN`, which `gh` ignores for github.com.
 
 ### Discord notifications (`DISCORD_WEBHOOK`)
 
@@ -136,25 +140,63 @@ cd ~/work/personal/some-repo
 ~/work/personal/credfeto-orchestrator/interactive
 ```
 
-The repository must have a GitHub `origin` remote (its owner picks the Claude token and the
-state directory). Your `cs-template` checkout is mounted read-only at `/workspace/rules`; it is
-read from `$HOME/work/personal/cs-template` unless `INTERACTIVE_RULES_DIR` says otherwise, and
-should be on `main`. Scratch space is a fresh directory under `$XDG_RUNTIME_DIR`, mounted at
-`/workspace/tmp` and removed when the session ends. Persistent Claude state (sessions, plans,
-cache) is shared with `oneshot` under `$HOME/.orchestrator/<owner>/<repo>`.
+The checkout must satisfy what the container entrypoint checks, and `interactive` refuses on
+the host, before pulling the image, when it does not:
+
+- it is a main checkout, not a linked worktree or a submodule (`.git` must be a directory:
+  only the checkout is mounted, so a `.git` file pointing elsewhere would leave the container
+  with no repository at all);
+- its `origin` remote uses the `git@github.com:<owner>/<repo>.git` SSH form (the owner picks
+  the Claude token and the state directory; `oneshot` rewrites its own clones' remotes,
+  `interactive` never rewrites yours);
+- it is not your home directory or a parent of it (a dotfiles repo rooted at `~` would mount
+  `~/.ssh`, `~/.gnupg` and every token file read-write into the container);
+- any `.claude/settings.json`, `.claude/settings.local.json` or `.mcp.json` in it is
+  byte-identical to the copy on `origin/main` (the container pre-trusts the project, so an
+  unreviewed hooks/MCP config would run the moment it starts; a gitignored
+  `settings.local.json` written by host Claude Code's `/permissions` is the usual trigger).
+
+Your `cs-template` checkout is mounted read-only at `/workspace/rules`; it is read from
+`$HOME/work/personal/cs-template` unless `INTERACTIVE_RULES_DIR` says otherwise, and should be
+on `main`. Scratch space is a fresh directory under `$XDG_RUNTIME_DIR`, mounted at
+`/workspace/tmp` and removed when the session ends.
+
+Commits are made under the identity git itself would use in that checkout (`git -C <checkout>
+config user.name`, `user.email`, `user.signingkey`, so `includeIf` stanzas and the checkout's
+own `.git/config` are honoured), not the identity stored in `~/.config/orchestrator/.env`.
 
 Like `oneshot`, every launch pulls `ORCHESTRATOR_IMAGE` first so the session runs the current
-agent image; when the registry is unreachable the cached local image is used instead.
+agent image; when the registry is unreachable the cached local image is used instead. Unlike
+`oneshot`, it never runs `podman image prune`: your own image store is left alone.
+
+Sessions are not resumable across launches. The Claude state directories `oneshot` mounts
+(`sessions`, `session-env`, `plans`, `cache`, `backups` under
+`$HOME/.orchestrator/<owner>/<repo>/claude`) are shared, but the conversation transcripts
+Claude Code resumes from live under `~/.claude/projects`, which is neither mounted nor writable
+inside the container, so `/resume` and `claude --continue` find nothing next time.
+
+### What the container can reach
+
+`oneshot` runs under a dedicated service account; `interactive` runs as you. The container
+gets the checkout read-write (including `.git/config` and `.git/hooks`, which git on the host
+executes the next time you run it there; `interactive` digests both before the session and
+warns afterwards if either changed), your SSH agent socket and every key loaded into it, your
+GPG agent's extra socket (signing only), your Claude OAuth token for the owner, and the `gh`
+token from `.env`. The baked permission settings and hooks are the same ones `oneshot` runs
+under, but the credentials behind them are yours, not an orchestrator account's.
 
 ### First run
 
 On the first run, `interactive` creates `$XDG_CONFIG_HOME/orchestrator/` (default
 `~/.config/orchestrator/`, mode `700`) for you:
 
-- `.env` is written from `git config --global user.name`, `user.email` and `user.signingkey`
-  (the agent container GPG-signs every commit, so an SSH-format signing key is rejected). When
-  `GH_HOST` points at a `gh` proxy, `GH_HOST` and the host's `gh auth token` are written too so
-  `gh` inside the container is authenticated the same way it is on the host.
+- `.env` is written once, complete, from the checkout's git identity (`user.name`,
+  `user.email`, `user.signingkey`; the agent container GPG-signs every commit, so an SSH-format
+  signing key is rejected) plus `GH_HOST` and the host's `gh auth token` for it: the proxy host
+  when your shell exports `GH_HOST`, otherwise `github.com`. The container has no `gh` config of
+  its own, so when `gh auth token` fails nothing is written and `interactive` asks you to run
+  `gh auth login` first. This stores your personal `gh` token on disk (mode `600`); remove the
+  `GH_TOKEN` line afterwards if you would rather supply one by hand.
 - `tokens/<owner>` (mode `600`) is created by running `claude setup-token`, which walks you
   through a browser sign-in and prints a long-lived token; paste it when prompted. The token
   from `~/.claude/.credentials.json` is deliberately not used: it expires within hours and
@@ -165,9 +207,10 @@ Existing files are never rewritten; edit them by hand.
 ### What the host needs
 
 - `podman`
-- `git`, `jq`, `gh` (authenticated)
+- `git`, `jq`, `gh` (authenticated), `ssh-add`
 - `claude` (Claude Code CLI) on the host, for `claude setup-token`
 - a running `gpg-agent` holding the signing key, and an `ssh-agent` with a GitHub key loaded
+  (`interactive` runs `ssh-add` into an empty agent first, as `oneshot` does)
 
 ## Build Status
 
