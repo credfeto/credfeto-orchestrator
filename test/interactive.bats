@@ -309,11 +309,26 @@ make_committed_checkout() {
     printf '#!/bin/sh\n' > "${dir}/.git/hooks/post-checkout"
     run warn_if_git_metadata_changed "${dir}" "${before}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *".git/config or .git/hooks changed during the session"* ]]
+    [[ "${output}" == *".git/hooks changed during the session"* ]]
     rm "${dir}/.git/hooks/post-checkout"
     git -C "${dir}" config core.sshCommand "ssh -i /evil"
     run warn_if_git_metadata_changed "${dir}" "${before}"
     [[ "${output}" == *"changed during the session"* ]]
+}
+
+@test "git_metadata_digest ignores branch.* tracking entries but not other .git/config keys" {
+    local dir before
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    before=$(git_metadata_digest "${dir}")
+    # What push -u / push.autoSetupRemote write after a productive session.
+    git -C "${dir}" config branch.feature.remote origin
+    git -C "${dir}" config branch.feature.merge refs/heads/feature
+    [ "$(git_metadata_digest "${dir}")" = "${before}" ]
+    git -C "${dir}" config core.hooksPath /somewhere/else
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+    git -C "${dir}" config --unset core.hooksPath
+    git -C "${dir}" config url.https://evil.example/.insteadOf git@github.com:
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
 }
 
 @test "git_metadata_digest sees a symlinked hook, a symlinked hooks dir and reordered hook lines" {
