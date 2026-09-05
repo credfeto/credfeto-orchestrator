@@ -11,11 +11,15 @@ name: "Bump pinned tool versions"
 # their SHA256, rewrites the three ARGs together, and opens a PR - the same shape of update
 # Dependabot itself would open, so it flows through the existing dependency-update review path.
 #
-# Pushes with SOURCE_PUSH_TOKEN (not the default GITHUB_TOKEN) and opens the PR with
-# PR_CREATE_TOKEN, matching dotnet-version.yml/pull-request.yml's own convention for this exact
-# class of workflow: GitHub does not trigger downstream workflow runs (including required status
-# checks) from a push or PR authored by the default GITHUB_TOKEN, which would silently leave
-# build-development-tools.yml's required check permanently pending on every bump PR.
+# Pushes the bump branch with the default GITHUB_TOKEN, but opens the PR itself with
+# PR_CREATE_TOKEN: GitHub never triggers a downstream workflow run from an event authored by
+# GITHUB_TOKEN, so a GITHUB_TOKEN-authored push here deliberately does NOT trigger
+# pull-request.yml's own push-triggered PR auto-creation (avoiding a race between that generic
+# path and this workflow's own PR-open step below, each of which would otherwise try to create a
+# PR for the same branch with different content). The PR-open event itself, however, is
+# PR_CREATE_TOKEN-authored (a real PAT, not GITHUB_TOKEN) - required so build-development-tools's
+# pull_request-triggered checks actually run on the resulting PR, which a GITHUB_TOKEN-authored
+# PR would not have gotten either.
 
 on:
   schedule:
@@ -55,8 +59,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-          token: "${{secrets.SOURCE_PUSH_TOKEN}}"
-          persist-credentials: true
 
       - name: "Check latest release and rewrite Dockerfile pins"
         id: bump
@@ -69,21 +71,37 @@ jobs:
         id: plan
         if: ${{steps.bump.outputs.changed == 'true'}}
         shell: bash
+        env:
+          TOOL: "${{matrix.tool}}"
+          NEW_VERSION: "${{steps.bump.outputs.new-version}}"
         run: |
           {
-            echo "branch=deps/${{matrix.tool}}/${{steps.bump.outputs.new-version}}"
-            echo "subject=[Dependencies] Bump ${{matrix.tool}} to ${{steps.bump.outputs.new-version}}"
+            echo "branch=deps/${TOOL}/${NEW_VERSION}"
+            echo "subject=[Dependencies] Bump ${TOOL} to ${NEW_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: "Check Required Secrets"
+      # A tool's pin only moves once a scheduled/dispatched run actually finds a newer release;
+      # while that PR sits open and unmerged, every following run would otherwise recompute the
+      # identical branch name and try to recommit onto it from a fresh main checkout - not a
+      # fast-forward of the already-pushed branch, so the push is rejected daily until the PR
+      # merges or closes. Converge silently instead, the same way Dependabot skips re-proposing
+      # an update it has already opened a PR for.
+      - name: "Check for an existing bump branch"
+        id: check-branch
         if: ${{steps.bump.outputs.changed == 'true'}}
-        uses: ./.github/actions/check-required-secret
-        with:
-          secret-name: "SOURCE_PUSH_TOKEN"
-          secret-value: "${{secrets.SOURCE_PUSH_TOKEN}}"
+        shell: bash
+        env:
+          BRANCH: "${{steps.plan.outputs.branch}}"
+        run: |
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null 2>&1; then
+            echo "ℹ️ Branch $BRANCH already exists on origin - a bump PR for this version is presumably already open, skipping"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: "Commit changes to new branch"
-        if: ${{steps.bump.outputs.changed == 'true'}}
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
         uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
         with:
           commit_message: "${{steps.plan.outputs.subject}}"
@@ -96,14 +114,14 @@ jobs:
           create_branch: true
 
       - name: "Check Required Secrets"
-        if: ${{steps.bump.outputs.changed == 'true'}}
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
         uses: ./.github/actions/check-required-secret
         with:
           secret-name: "PR_CREATE_TOKEN"
           secret-value: "${{secrets.PR_CREATE_TOKEN}}"
 
       - name: "Open pull request"
-        if: ${{steps.bump.outputs.changed == 'true'}}
+        if: ${{steps.bump.outputs.changed == 'true' && steps.check-branch.outputs.exists == 'false'}}
         uses: ./.github/actions/create-pull-request
         with:
           github-token: "${{secrets.PR_CREATE_TOKEN}}"
