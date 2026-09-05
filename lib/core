@@ -335,6 +335,20 @@ bootstrap_owner_token() {
     success "Stored Claude OAuth token for ${owner} at ${token_file} (mode 600)"
 }
 
+# `interactive` only: dies when load_env_config found no GH_HOST/GH_TOKEN pair in .env. The
+# agent container has no gh config of its own (the image bakes a proxy host and a placeholder
+# token, and no hosts.yml is mounted), so unlike oneshot's host, where validate_config accepts
+# the host's own hosts.yml instead, a .env without the pair means every gh call inside the
+# session fails. A .env predating the bootstrap (GIT_* and DISCORD_WEBHOOK only) is the usual
+# case; bootstrap never rewrites an existing file, so the keys have to be added by hand.
+require_container_gh_token() {
+    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+    if [ -n "${GH_HOST:-}" ] && [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        return 0
+    fi
+    die "${env_file} has no GH_HOST/GH_TOKEN pair, and the agent container has no gh config of its own: add GH_HOST=<your gh proxy host, or github.com> and GH_TOKEN=<output of 'gh auth token'> to it"
+}
+
 # First-run bootstrap for `interactive`: both of the above, in the order validate_config
 # checks them. Idempotent, a fully configured host is a no-op.
 bootstrap_orchestrator_config() {

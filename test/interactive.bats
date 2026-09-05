@@ -547,6 +547,25 @@ make_committed_checkout() {
     [[ "${output}" == *"user.signingkey is not set for ${dir}"* ]]
 }
 
+@test "require_container_gh_token dies when .env carries no GH_HOST/GH_TOKEN pair" {
+    mkdir -p "${CONFIG_DIR}"
+    printf 'GIT_USER_NAME=Existing\nDISCORD_WEBHOOK=https://discord.example/hook\n' > "${CONFIG_DIR}/.env"
+    load_env_config
+    run require_container_gh_token
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"${CONFIG_DIR}/.env has no GH_HOST/GH_TOKEN pair"* ]]
+    [[ "${output}" == *"gh auth token"* ]]
+}
+
+@test "require_container_gh_token passes once load_env_config has exported the pair" {
+    mkdir -p "${CONFIG_DIR}"
+    printf 'GH_HOST=github-api.example.com\nGH_TOKEN=ghp_x\n' > "${CONFIG_DIR}/.env"
+    load_env_config
+    run require_container_gh_token
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 # --- bootstrap: owner token -----------------------------------------------------------------
 
 @test "bootstrap_owner_token is a no-op when the token file already exists" {
