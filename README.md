@@ -209,7 +209,8 @@ Existing files are never rewritten; edit them by hand.
 ### What the host needs
 
 - `podman`
-- `git`, `jq`, `gh` (authenticated), `ssh-add`
+- `git`, `jq`, `gh` (authenticated), `ssh-add`, `awk`, `sha256sum` (or `shasum`), `gpg`,
+  `gpg-connect-agent`, `gpgconf`
 - `claude` (Claude Code CLI) on the host, for `claude setup-token`
 - a running `gpg-agent` holding the signing key, and an `ssh-agent` with a GitHub key loaded
   (`interactive` runs `ssh-add` into an empty agent first, as `oneshot` does)
