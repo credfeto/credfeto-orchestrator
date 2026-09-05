@@ -72,6 +72,11 @@ INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${WORK}/personal/cs-template}"
 # containers/ build, a pull the owner meant to re-tag). Never prune from here.
 # shellcheck disable=SC2034  # read by cleanup_dangling_images in lib/podman
 PRUNE_DANGLING_IMAGES=0
+# No per-owner flock here (oneshot's guards its --replace): a second launch for the same
+# checkout that slips past ensure_agent_container_ready during the image pull must fail on
+# the container name, not --replace the first owner's live session.
+# shellcheck disable=SC2034  # read by prepare_claude_container_args in lib/podman
+PODMAN_REPLACE_CONTAINER=0
 
 usage() {
     cat <<'USAGE'

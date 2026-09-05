@@ -720,18 +720,6 @@ prepare_claude_container_args() {
     PODMAN_RUN_ARGS=(
         run
         --name "${container_name}"
-        # Takes over the name if something still holds it, instead of refusing to start (#1361).
-        # ensure_agent_container_ready already handles a leftover container podman inspect can SEE
-        # (removing it when stopped, dying when genuinely running), and that guard is what keeps
-        # --replace from silently destroying another invocation's in-flight work. This covers the
-        # case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
-        # container mid-teardown) can leave the name reserved in the lower containers/storage
-        # layer while libpod's own metadata record is gone, so podman ps -a and podman inspect
-        # both report nothing while podman run still fails with "already in use by an external
-        # entity". That wedged the credfeto service for 19.5 hours across ~3,000 cycles until a
-        # human intervened. Verified on the live orphan: --replace both starts successfully AND
-        # purges the stale storage reservation, so it is the cure as well as the prevention.
-        --replace
         --rm
         --interactive
         # keep-id:uid=1000,gid=1000 maps container developer (UID/GID 1000) to the
@@ -747,6 +735,20 @@ prepare_claude_container_args() {
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
         --volume "${CLAUDE_SCRATCH_TMPDIR}:${CONTAINER_SCRATCH_PATH}:rw"
     )
+    # --replace takes over the name if something still holds it, instead of refusing to start
+    # (#1361). ensure_agent_container_ready already handles a leftover container podman inspect
+    # can SEE (removing it when stopped, dying when genuinely running), and that guard is what
+    # keeps --replace from silently destroying another invocation's in-flight work. This covers
+    # the case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
+    # container mid-teardown) can leave the name reserved in the lower containers/storage layer
+    # while libpod's own metadata record is gone, so podman ps -a and podman inspect both report
+    # nothing while podman run still fails with "already in use by an external entity". That
+    # wedged the credfeto service for 19.5 hours across ~3,000 cycles until a human intervened.
+    # Verified on the live orphan: --replace both starts successfully AND purges the stale
+    # storage reservation, so it is the cure as well as the prevention. Only safe under oneshot's
+    # per-owner flock; interactive sets PODMAN_REPLACE_CONTAINER=0 (lib/globals) because a
+    # second unlocked launch racing the first through the pull window would otherwise kill it.
+    [ "${PODMAN_REPLACE_CONTAINER}" = "1" ] && PODMAN_RUN_ARGS+=( --replace )
     [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
     if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
         PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
