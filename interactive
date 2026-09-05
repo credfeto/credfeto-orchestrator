@@ -11,10 +11,16 @@
 #   - the cs-template rules checkout comes from INTERACTIVE_RULES_DIR (default
 #     $HOME/work/personal/cs-template), mounted read-only at /workspace/rules;
 #   - scratch space is a fresh directory under $XDG_RUNTIME_DIR, mounted at /workspace/tmp;
-#   - persistent Claude state (sessions, plans, cache, ...) is shared with oneshot under
-#     $HOME/.orchestrator/<owner>/<repo>;
-#   - on first run, $XDG_CONFIG_HOME/orchestrator is bootstrapped from the host's git config and
-#     a `claude setup-token` long-lived token (see lib/core bootstrap_orchestrator_config).
+#   - the persistent Claude state directories (sessions, session-env, plans, cache, backups)
+#     are shared with oneshot under $HOME/.orchestrator/<owner>/<repo>; conversation
+#     transcripts (~/.claude/projects) are not mounted, so a session cannot be resumed later;
+#   - the git identity is the one git itself would use in that checkout (includeIf and
+#     .git/config honoured), not the shared .env's, so each owner's repository commits as the
+#     host would;
+#   - on first run, $XDG_CONFIG_HOME/orchestrator is bootstrapped from that identity, the
+#     host's `gh auth token` and a `claude setup-token` long-lived token (see lib/core
+#     bootstrap_orchestrator_config);
+#   - dangling images in the developer's podman store are never pruned (PRUNE_DANGLING_IMAGES=0).
 #
 # Usage: interactive            (from anywhere inside a GitHub-hosted git checkout)
 #        interactive --help
@@ -61,17 +67,23 @@ source "${INTERACTIVE_DIR}/lib/podman" \
 # CONTAINER_RULES_PATH; never cloned or updated by this script.
 INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${WORK}/personal/cs-template}"
 
+# oneshot's `podman image prune` is housekeeping on a dedicated service account; on a
+# developer's own podman store it would silently delete every untagged image (a local
+# containers/ build, a pull the owner meant to re-tag). Never prune from here.
+# shellcheck disable=SC2034  # read by cleanup_dangling_images in lib/podman
+PRUNE_DANGLING_IMAGES=0
+
 usage() {
     cat <<'USAGE'
 Usage: interactive [--help]
 
 Runs an interactive Claude Code session inside the orchestrator agent container against the
 git repository containing the current directory. On first run, creates
-$XDG_CONFIG_HOME/orchestrator/.env from the host's global git config and prompts for a
-long-lived Claude OAuth token via `claude setup-token`.
+$XDG_CONFIG_HOME/orchestrator/.env from that checkout's git identity and the host's
+`gh auth token`, and prompts for a long-lived Claude OAuth token via `claude setup-token`.
 
 Every launch pulls the agent image first (falling back to the cached copy if the registry
-is unreachable), exactly as oneshot does.
+is unreachable), exactly as oneshot does. Unlike oneshot, dangling images are never pruned.
 
 Environment:
   INTERACTIVE_RULES_DIR  cs-template checkout to mount at /workspace/rules
@@ -110,9 +122,12 @@ main() {
     check_repo_claude_config "${REPO_WORK_DIR}"
     check_rules_checkout "${RULES_DIR}"
 
-    bootstrap_orchestrator_config "${OWNER}"
+    bootstrap_orchestrator_config "${OWNER}" "${REPO_WORK_DIR}"
     load_env_config
     validate_config "${OWNER}"
+    # The shared .env carries one identity for every owner; the container should commit as the
+    # host would in THIS checkout (includeIf stanzas, .git/config), so override the .env values.
+    load_checkout_git_identity "${REPO_WORK_DIR}"
     # Same as oneshot: load the default SSH keys into an empty agent now, or die on a stale
     # socket, rather than inside the container after the pull.
     preload_ssh_keys

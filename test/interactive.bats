@@ -17,27 +17,44 @@ teardown() {
     cleanup_stubs
 }
 
-# Writes a git stub that answers `git config --global --get <key>` from GITSTUB_<KEY> env
+# Writes a git stub that answers `git -C <dir> config --get <key>` from GITSTUB_<KEY> env
 # vars (dots and dashes mapped to underscores, upper-cased) and exits 1 for unset keys, the
 # way real git does. Every other git invocation is a no-op. Seeds a complete GPG identity
 # (name, email, signing key) so a test only exports what it wants to differ; unset a
-# GITSTUB_* variable to make the stub report that key as missing.
+# GITSTUB_* variable to make the stub report that key as missing. Records the -C directory
+# of every config lookup in gitstub_dirs.
 make_git_config_stub() {
     export GITSTUB_USER_NAME="${GITSTUB_USER_NAME-Test User}"
     export GITSTUB_USER_EMAIL="${GITSTUB_USER_EMAIL-test@example.com}"
     export GITSTUB_USER_SIGNINGKEY="${GITSTUB_USER_SIGNINGKEY-ABCDEF1234567890}"
-    cat > "${STUB_BIN}/git" << 'GITEOF'
+    cat > "${STUB_BIN}/git" << GITEOF
 #!/usr/bin/env bash
-if [ "$1" = "config" ] && [ "$2" = "--global" ] && [ "$3" = "--get" ]; then
-    key=$(printf '%s' "$4" | tr '.-' '__' | tr '[:lower:]' '[:upper:]')
-    var="GITSTUB_${key}"
-    [ -n "${!var:-}" ] || exit 1
-    printf '%s\n' "${!var}"
+if [ "\$1" = "-C" ] && [ "\$3" = "config" ] && [ "\$4" = "--get" ]; then
+    printf '%s\n' "\$2" >> "${TEST_TMP}/gitstub_dirs"
+    key=\$(printf '%s' "\$5" | tr '.-' '__' | tr '[:lower:]' '[:upper:]')
+    var="GITSTUB_\${key}"
+    [ -n "\${!var:-}" ] || exit 1
+    printf '%s\n' "\${!var}"
     exit 0
 fi
 exit 0
 GITEOF
     chmod +x "${STUB_BIN}/git"
+}
+
+# Creates a real checkout whose local config carries one identity while the (isolated) global
+# config carries another, and outputs its path: the way an includeIf or per-repo identity
+# differs from `git config --global`.
+make_split_identity_checkout() {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    git config --global user.name "Global Name"
+    git config --global user.email "global@example.com"
+    git config --global user.signingkey "GLOBALKEY0000000"
+    git -C "${dir}" config user.name "Repo Name"
+    git -C "${dir}" config user.email "repo@example.com"
+    git -C "${dir}" config user.signingkey "REPOKEY000000000"
+    printf '%s' "${dir}"
 }
 
 # Creates a real (offline) git checkout under TEST_TMP with the given origin URL and
@@ -84,6 +101,13 @@ make_owner_token() {
 @test "INTERACTIVE_RULES_DIR defaults to WORK/personal/cs-template" {
     [ "${INTERACTIVE_RULES_DIR}" = "${WORK}/personal/cs-template" ]
     [ "${WORK}" = "${XDG_PROJECTS_DIR}" ]
+}
+
+@test "interactive disables dangling-image pruning on the developer's podman store" {
+    [ "${PRUNE_DANGLING_IMAGES}" = "0" ]
+    make_stub podman "printf '%s\n' \"\$@\" >> '${TEST_TMP}/podman_args'; exit 0"
+    cleanup_dangling_images
+    [ ! -e "${TEST_TMP}/podman_args" ]
 }
 
 # --- github_repo_full_from_url --------------------------------------------------------------
@@ -322,9 +346,10 @@ make_committed_checkout() {
 
 # --- bootstrap: .env ------------------------------------------------------------------------
 
-@test "bootstrap_orchestrator_env_file writes .env from host git config with 700/600 permissions" {
+@test "bootstrap_orchestrator_env_file writes .env from the checkout's git identity and the host gh token with 700/600 permissions" {
     make_git_config_stub
-    run bootstrap_orchestrator_env_file
+    make_stub gh 'printf "ghp_stubtoken\n"'
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 0 ]
     [ -f "${CONFIG_DIR}/.env" ]
     [ "$(stat -c '%a' "${CONFIG_DIR}")" = "700" ]
@@ -332,7 +357,11 @@ make_committed_checkout() {
     grep -qx 'GIT_USER_NAME=Test User' "${CONFIG_DIR}/.env"
     grep -qx 'GIT_USER_EMAIL=test@example.com' "${CONFIG_DIR}/.env"
     grep -qx 'GIT_SIGNING_KEY=ABCDEF1234567890' "${CONFIG_DIR}/.env"
-    [ "$(grep -c '^GH_' "${CONFIG_DIR}/.env")" -eq 0 ]
+    # Unproxied host: the token is for github.com itself.
+    grep -qx 'GH_HOST=github.com' "${CONFIG_DIR}/.env"
+    grep -qx 'GH_TOKEN=ghp_stubtoken' "${CONFIG_DIR}/.env"
+    # Every identity lookup was made against the checkout, never --global.
+    [ "$(sort -u "${TEST_TMP}/gitstub_dirs")" = "${TEST_TMP}/checkout" ]
     [[ "${output}" == *"Created ${CONFIG_DIR}/.env"* ]]
 }
 
@@ -340,7 +369,8 @@ make_committed_checkout() {
     mkdir -p "${CONFIG_DIR}"
     printf 'GIT_USER_NAME=Existing\n' > "${CONFIG_DIR}/.env"
     make_git_config_stub
-    run bootstrap_orchestrator_env_file
+    make_stub gh 'printf "ghp_stubtoken\n"'
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 0 ]
     [ "$(cat "${CONFIG_DIR}/.env")" = "GIT_USER_NAME=Existing" ]
     [ -z "${output}" ]
@@ -348,8 +378,9 @@ make_committed_checkout() {
 
 @test "bootstrap_orchestrator_env_file dies when user.signingkey is not set" {
     make_git_config_stub
+    make_stub gh 'printf "ghp_stubtoken\n"'
     unset GITSTUB_USER_SIGNINGKEY
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"user.signingkey is not set"* ]]
     [ ! -e "${CONFIG_DIR}/.env" ]
@@ -357,12 +388,13 @@ make_committed_checkout() {
 
 @test "bootstrap_orchestrator_env_file dies when user.name or user.email is not set" {
     make_git_config_stub
+    make_stub gh 'printf "ghp_stubtoken\n"'
     unset GITSTUB_USER_NAME GITSTUB_USER_EMAIL
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"user.name is not set"* ]]
     export GITSTUB_USER_NAME="Test User"
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"user.email is not set"* ]]
 }
@@ -370,41 +402,71 @@ make_committed_checkout() {
 @test "bootstrap_orchestrator_env_file rejects an SSH-format signing key" {
     export GITSTUB_USER_SIGNINGKEY="/home/test/.ssh/id_ed25519.pub"
     make_git_config_stub
+    make_stub gh 'printf "ghp_stubtoken\n"'
     export GITSTUB_GPG_FORMAT="ssh"
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"gpg.format is ssh"* ]]
     [ ! -e "${CONFIG_DIR}/.env" ]
 }
 
-@test "bootstrap_orchestrator_env_file writes GH_HOST and GH_TOKEN when gh is proxied and a token is available" {
+@test "bootstrap_orchestrator_env_file writes the proxy GH_HOST and its token when gh is proxied" {
     make_git_config_stub
     export GH_HOST="github-api.example.com"
     make_stub gh 'printf "ghp_stubtoken\n"'
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
     [ "${status}" -eq 0 ]
     grep -qx 'GH_HOST=github-api.example.com' "${CONFIG_DIR}/.env"
     grep -qx 'GH_TOKEN=ghp_stubtoken' "${CONFIG_DIR}/.env"
-    [[ "${output}" == *"Wrote GH_HOST/GH_TOKEN"* ]]
+    [[ "${output}" == *"gh token for github-api.example.com"* ]]
 }
 
-@test "bootstrap_orchestrator_env_file warns and omits GH_* when gh auth token fails under a proxy" {
+@test "bootstrap_orchestrator_env_file dies and writes nothing when gh auth token fails" {
     make_git_config_stub
-    export GH_HOST="github-api.example.com"
     make_stub gh 'exit 1'
-    run bootstrap_orchestrator_env_file
-    [ "${status}" -eq 0 ]
-    [ "$(grep -c '^GH_' "${CONFIG_DIR}/.env")" -eq 0 ]
-    [[ "${output}" == *"gh inside the container will be unauthenticated"* ]]
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"'gh auth token' returned no token for github.com"* ]]
+    [ ! -e "${CONFIG_DIR}/.env" ]
+    export GH_HOST="github-api.example.com"
+    run bootstrap_orchestrator_env_file "${TEST_TMP}/checkout"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"returned no token for github-api.example.com"* ]]
+    [ ! -e "${CONFIG_DIR}/.env" ]
 }
 
-@test "bootstrap_orchestrator_env_file ignores GH_HOST=github.com (no proxy)" {
-    make_git_config_stub
-    export GH_HOST="github.com"
+@test "bootstrap_orchestrator_env_file uses the checkout's effective identity, not git config --global" {
+    local dir
+    dir=$(make_split_identity_checkout)
     make_stub gh 'printf "ghp_stubtoken\n"'
-    run bootstrap_orchestrator_env_file
+    run bootstrap_orchestrator_env_file "${dir}"
     [ "${status}" -eq 0 ]
-    [ "$(grep -c '^GH_' "${CONFIG_DIR}/.env")" -eq 0 ]
+    grep -qx 'GIT_USER_NAME=Repo Name' "${CONFIG_DIR}/.env"
+    grep -qx 'GIT_USER_EMAIL=repo@example.com' "${CONFIG_DIR}/.env"
+    grep -qx 'GIT_SIGNING_KEY=REPOKEY000000000' "${CONFIG_DIR}/.env"
+    [ "$(grep -c 'Global\|global@' "${CONFIG_DIR}/.env")" -eq 0 ]
+}
+
+@test "load_checkout_git_identity overrides the GIT_* variables with the checkout's identity" {
+    local dir
+    dir=$(make_split_identity_checkout)
+    GIT_USER_NAME="From .env"
+    GIT_USER_EMAIL="env@example.com"
+    GIT_SIGNING_KEY="ENVKEY0000000000"
+    load_checkout_git_identity "${dir}"
+    [ "${GIT_USER_NAME}" = "Repo Name" ]
+    [ "${GIT_USER_EMAIL}" = "repo@example.com" ]
+    [ "${GIT_SIGNING_KEY}" = "REPOKEY000000000" ]
+}
+
+@test "load_checkout_git_identity dies when the checkout has no signing key" {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    git -C "${dir}" config user.name "Repo Name"
+    git -C "${dir}" config user.email "repo@example.com"
+    run load_checkout_git_identity "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"user.signingkey is not set for ${dir}"* ]]
 }
 
 # --- bootstrap: owner token -----------------------------------------------------------------
@@ -471,7 +533,8 @@ CLAUDEEOF
     make_owner_token
     make_stub claude "touch '${TEST_TMP}/claude-ran'; exit 0"
     make_stub git 'exit 1'
-    run bootstrap_orchestrator_config credfeto
+    make_stub gh 'exit 1'
+    run bootstrap_orchestrator_config credfeto "${TEST_TMP}/checkout"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
     [ ! -e "${TEST_TMP}/claude-ran" ]
@@ -525,8 +588,14 @@ make_interactive_podman_stub() {
 #!/usr/bin/env bash
 [ "\$1" = "pull" ] && exit 0
 [ "\$1" = "inspect" ] && exit 1
-[ "\$1" = "secret" ] && exit 0
-[ "\$1" = "image" ] && exit 0
+if [ "\$1" = "secret" ]; then
+    printf "%s\n" "\$@" >> "${TEST_TMP}/podman_secret"
+    exit 0
+fi
+if [ "\$1" = "image" ]; then
+    printf "%s\n" "\$@" >> "${TEST_TMP}/podman_image"
+    exit 0
+fi
 printf "%s\n" "\$@" >> "${TEST_TMP}/podman_args"
 exit "\${PODMAN_STUB_EXIT:-0}"
 STUBEOF
@@ -607,11 +676,34 @@ setup_interactive_run() {
     grep -q ':/home/developer/.claude/CLAUDE.md:ro$' "${TEST_TMP}/podman_args"
 }
 
-@test "invoke_claude_interactive passes the owner token as a Podman secret, never --env" {
+@test "invoke_claude_interactive passes the owner token as a Podman secret named after its own container, never --env" {
     setup_interactive_run
     invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
-    grep -qx 'claude-oauth-credfeto,type=env,target=CLAUDE_CODE_OAUTH_TOKEN' "${TEST_TMP}/podman_args"
+    grep -qx 'claude-oauth-interactive-credfeto-credfeto-orchestrator,type=env,target=CLAUDE_CODE_OAUTH_TOKEN' "${TEST_TMP}/podman_args"
+    grep -qx 'claude-oauth-interactive-credfeto-credfeto-orchestrator' "${TEST_TMP}/podman_secret"
+    # Never oneshot's secret name: a co-located oneshot run must not see its secret removed.
+    [ "$(grep -c -- '-orchestrator-credfeto$' "${TEST_TMP}/podman_secret")" -eq 0 ]
     [ "$(grep -c 'sk-ant-oat01-test-token' "${TEST_TMP}/podman_args")" -eq 0 ]
+}
+
+@test "invoke_claude_interactive passes the gh token as GH_TOKEN for github.com and GH_ENTERPRISE_TOKEN for a proxy" {
+    setup_interactive_run
+    export GH_HOST="github.com" GH_ENTERPRISE_TOKEN="ghp_direct"
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    grep -qx 'gh-enterprise-token-interactive-credfeto-credfeto-orchestrator,type=env,target=GH_TOKEN' "${TEST_TMP}/podman_args"
+    grep -qx 'GH_HOST=github.com' "${TEST_TMP}/podman_args"
+    [ "$(grep -c 'ghp_direct' "${TEST_TMP}/podman_args")" -eq 0 ]
+    rm "${TEST_TMP}/podman_args"
+    export GH_HOST="github-api.example.com"
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    grep -qx 'gh-enterprise-token-interactive-credfeto-credfeto-orchestrator,type=env,target=GH_ENTERPRISE_TOKEN' "${TEST_TMP}/podman_args"
+    [ "$(grep -c -- 'target=GH_TOKEN$' "${TEST_TMP}/podman_args")" -eq 0 ]
+}
+
+@test "invoke_claude_interactive never prunes the developer's images" {
+    setup_interactive_run
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    [ ! -e "${TEST_TMP}/podman_image" ] || [ "$(grep -c '^prune$' "${TEST_TMP}/podman_image")" -eq 0 ]
 }
 
 @test "invoke_claude_interactive creates the scratch dir under XDG_RUNTIME_DIR and removes it afterwards" {
