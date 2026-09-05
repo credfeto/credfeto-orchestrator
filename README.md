@@ -183,9 +183,11 @@ inside the container, so `/resume` and `claude --continue` find nothing next tim
 gets the checkout read-write (including `.git/config` and `.git/hooks`, which git on the host
 executes the next time you run it there; `interactive` digests both before the session and
 warns afterwards if either changed), your SSH agent socket and every key loaded into it, your
-GPG agent's extra socket (signing only), your Claude OAuth token for the owner, and the `gh`
-token from `.env`. The baked permission settings and hooks are the same ones `oneshot` runs
-under, but the credentials behind them are yours, not an orchestrator account's.
+GPG agent's extra socket (signing only), your Claude OAuth token for the owner, the `gh`
+token from `.env`, and your `~/.database` credentials file read-only when it exists (for
+`querydb` inside the container, exactly as for `oneshot`). The baked permission settings and
+hooks are the same ones `oneshot` runs under, but the credentials behind them are yours, not
+an orchestrator account's.
 
 ### First run
 
