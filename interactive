@@ -154,6 +154,12 @@ main() {
 
     bootstrap_orchestrator_config "${OWNER}" "${REPO_WORK_DIR}"
     load_env_config
+    # The shared launch code (ensure_agent_container_ready, prepare_claude_container_args)
+    # posts an oneshot-style "Claude Error" embed on its die paths, gated only on this URL. A
+    # developer .env that shares an oneshot webhook would put an interactive launch failure in
+    # the team channel; the person to tell is at this terminal.
+    # shellcheck disable=SC2034  # read by lib/discord's notify_* functions
+    DISCORD_WEBHOOK_URL=""
     # A .env written before the bootstrap existed carries no gh token; the container cannot
     # fall back to the host's hosts.yml the way validate_config lets oneshot's host do.
     require_container_gh_token

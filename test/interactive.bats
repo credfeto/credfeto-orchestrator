@@ -985,6 +985,23 @@ HOOKEOF
     [[ "${output}" == *".git/hooks changed during the session"* ]]
 }
 
+@test "main never posts a launch failure to a Discord webhook found in .env" {
+    setup_main_run
+    # A running container under the interactive name makes ensure_agent_container_ready die
+    # through notify_discord_claude_error.
+    # shellcheck disable=SC2016  # the $1/$2 lines are the stub's own script text
+    make_stub_multiline podman \
+        '[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf "true\n"; exit 0; }' \
+        '[ "$1" = "inspect" ] && exit 0' \
+        'exit 0'
+    make_stub curl "touch '${TEST_TMP}/discord-posted'; exit 0"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"already exists and is running"* ]]
+    [ ! -e "${TEST_TMP}/discord-posted" ]
+    [ -z "${DISCORD_WEBHOOK_URL}" ]
+}
+
 @test "main refuses a non-TTY launch before touching anything" {
     setup_main_run
     terminal_available() { return 1; }
