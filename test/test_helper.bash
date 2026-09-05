@@ -66,6 +66,11 @@ setup_isolated_env() {
     # Unset host-level env vars that leak from the container/agent environment
     # and change script behaviour in ways the tests do not expect.
     unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY
+    # When the suite runs from a git pre-commit hook, git exports GIT_INDEX_FILE (as the
+    # RELATIVE path .git/index) and GIT_DIR/GIT_WORK_TREE for the real repository; any real git
+    # command inside a fixture then resolves them against the fixture and fails (a linked
+    # worktree fixture, whose .git is a file, dies with ".git/index: Not a directory").
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
     unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL

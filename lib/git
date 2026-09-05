@@ -8,17 +8,28 @@
 host_to_container_path() {
     local host_path="$1"
     local rel
+    # Matched on a directory boundary ("<dir>/" or exactly "<dir>"), not as a bare string
+    # prefix: with interactive's user-chosen directories a checkout at ~/work/personal/cs would
+    # otherwise swallow the default rules dir ~/work/personal/cs-template.
     if [ -n "${REPO_WORK_DIR}" ]; then
-        rel="${host_path#"${REPO_WORK_DIR}"}"
+        if [ "${host_path}" = "${REPO_WORK_DIR}" ]; then
+            printf '%s' "${CONTAINER_REPO_PATH}"
+            return
+        fi
+        rel="${host_path#"${REPO_WORK_DIR}/"}"
         if [ "${rel}" != "${host_path}" ]; then
-            printf '%s%s' "${CONTAINER_REPO_PATH}" "${rel}"
+            printf '%s/%s' "${CONTAINER_REPO_PATH}" "${rel}"
             return
         fi
     fi
     if [ -n "${RULES_DIR}" ]; then
-        rel="${host_path#"${RULES_DIR}"}"
+        if [ "${host_path}" = "${RULES_DIR}" ]; then
+            printf '%s' "${CONTAINER_RULES_PATH}"
+            return
+        fi
+        rel="${host_path#"${RULES_DIR}/"}"
         if [ "${rel}" != "${host_path}" ]; then
-            printf '%s%s' "${CONTAINER_RULES_PATH}" "${rel}"
+            printf '%s/%s' "${CONTAINER_RULES_PATH}" "${rel}"
             return
         fi
     fi
@@ -291,16 +302,72 @@ github_repo_full_from_url() {
     esac
     path="${path%/}"
     path="${path%.git}"
-    [[ "${path}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+    # Owner charset matches load_token_for_owner's (lib/core), so an owner this accepts always
+    # has a loadable token file; the repo segment additionally rejects "." and "..", which
+    # would otherwise resolve ~/.orchestrator/<owner>/<repo> outside the owner's tree.
+    [[ "${path}" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+    case "${path#*/}" in .|..) return 1 ;; esac
     printf '%s' "${path}"
 }
 
-# Outputs the top-level directory of the git checkout containing dir, or dies.
+# Outputs the top-level directory of the git checkout containing dir, or dies. Refuses a
+# checkout that is $HOME or contains it (a dotfiles repo rooted at ~): interactive mounts the
+# whole checkout read-write into the container, and that would hand it ~/.ssh, ~/.gnupg,
+# ~/.config/gh and every token file.
 resolve_repo_dir() {
-    local dir="$1" top
+    local dir="$1" top home
     top=$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null) \
         || die "${dir} is not inside a git repository, run interactive from within a checkout"
+    # A linked worktree or submodule has a .git FILE pointing outside the checkout; only the
+    # checkout is mounted, so git inside the container could not find its repository at all.
+    [ -d "${top}/.git" ] \
+        || die "${top} is a linked worktree or submodule (.git is a file, not a directory), run interactive from the main checkout"
+    home=$(cd "${HOME}" 2>/dev/null && pwd -P) || home="${HOME}"
+    case "${home}/" in
+        "${top}/"*) die "${top} is your home directory or contains it, refusing to mount it into the agent container" ;;
+    esac
     printf '%s' "${top}"
+}
+
+# Dies when the checkout carries a project-level Claude/MCP config that differs from the
+# reviewed origin/main copy: the same three-file check the container entrypoint runs
+# (verify_no_repo_claude_config), performed here so the refusal names host paths and happens
+# before the image pull. A gitignored .claude/settings.local.json written by host Claude Code
+# (project-scoped /permissions) is the usual trigger.
+check_repo_claude_config() {
+    local repo_dir="$1" rel local_sha main_sha
+    for rel in .claude/settings.json .claude/settings.local.json .mcp.json; do
+        [ -e "${repo_dir}/${rel}" ] || continue
+        local_sha=$(git -C "${repo_dir}" hash-object "${rel}" 2>/dev/null) || local_sha=""
+        main_sha=$(git -C "${repo_dir}" rev-parse "origin/main:${rel}" 2>/dev/null) || main_sha=""
+        if [ -n "${local_sha}" ] && [ -n "${main_sha}" ] && [ "${local_sha}" = "${main_sha}" ]; then
+            continue
+        fi
+        die "${repo_dir}/${rel} differs from origin/main (or is untracked), and the agent container refuses workspace trust for it: remove it, or commit it to main first"
+    done
+}
+
+# Records a digest of the checkout's .git/config and .git/hooks (names, modes and contents)
+# on stdout, for comparison after a session. Both are executed by git on the HOST the next
+# time the developer runs git in that checkout, and the container mounts them read-write, so
+# a change made from inside the session must be surfaced rather than silently trusted.
+git_metadata_digest() {
+    local repo_dir="$1" git_dir
+    git_dir=$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null) || git_dir="${repo_dir}/.git"
+    {
+        [ -f "${git_dir}/config" ] && cat "${git_dir}/config"
+        if [ -d "${git_dir}/hooks" ]; then
+            find "${git_dir}/hooks" -type f ! -name '*.sample' -printf '%p %m\n' -exec cat {} + 2>/dev/null | sort
+        fi
+    } | hash_sha256
+}
+
+# Warns loudly when git_metadata_digest differs from before_digest, naming what to inspect.
+warn_if_git_metadata_changed() {
+    local repo_dir="$1" before_digest="$2" after_digest
+    after_digest=$(git_metadata_digest "${repo_dir}")
+    [ "${after_digest}" = "${before_digest}" ] && return 0
+    warn "${repo_dir}/.git/config or .git/hooks changed during the session: review them before running git in that checkout on this host (git -C ${repo_dir} config --local --list; ls -la ${repo_dir}/.git/hooks)"
 }
 
 # Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
@@ -310,6 +377,12 @@ resolve_repo_full() {
         || die "${repo_dir} has no origin remote, interactive needs a GitHub-hosted repository"
     repo_full=$(github_repo_full_from_url "${origin}") \
         || die "origin remote ${origin} is not a GitHub repository URL"
+    # The container entrypoint (verify_repo_ssh_remotes) accepts only the scp-style SSH form;
+    # unlike oneshot's own clones, a developer's remote is never rewritten silently.
+    case "${origin}" in
+        git@github.com:*) ;;
+        *) die "origin remote ${origin} must use the git@github.com: SSH form for the agent container: git -C ${repo_dir} remote set-url origin git@github.com:${repo_full}.git" ;;
+    esac
     printf '%s' "${repo_full}"
 }
 
@@ -321,7 +394,7 @@ resolve_repo_full() {
 # command, rather than surfacing as a confusing in-container death later.
 check_rules_checkout() {
     local rules_dir="$1" branch
-    [ -d "${rules_dir}/.git" ] \
+    git -C "${rules_dir}" rev-parse --git-dir >/dev/null 2>&1 \
         || die "cs-template checkout not found at ${rules_dir}, clone git@github.com:credfeto/cs-template.git there, or set INTERACTIVE_RULES_DIR"
     branch=$(git -C "${rules_dir}" branch --show-current 2>/dev/null) || branch=""
     if [ "${branch}" != "main" ]; then
