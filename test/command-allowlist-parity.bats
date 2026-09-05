@@ -157,3 +157,25 @@ EXPECTED_NON_BASH_TOOLS=(
         return 1
     fi
 }
+
+# A Read/Edit deny with a ** glob makes the permission checker escalate every Bash command
+# that names a directory (grep -r, find, cd) to the user, since it cannot prove no matching
+# file is under that directory: dozens of prompts per session (#1419). Known secret files are
+# denied by their real path instead, and the Bash text-match denies for them must require a
+# slash before the name so the cs-template search-exclusion form (--exclude='.database') does
+# not trip them.
+@test "claude-settings.json permissions.deny has no Read/Edit ** globs and keeps the ~/.database rules (#1419)" {
+    local deny_entries
+    deny_entries=$(jq -r '.permissions.deny[]' "${SETTINGS}")
+    run grep -E '^(Read|Edit)\(\*\*/' <<< "${deny_entries}"
+    [ "${status}" -ne 0 ]
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Read(~/.database)'
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Edit(~/.database)'
+    printf '%s\n' "${deny_entries}" | grep -qxF 'Bash(sqlcmd *)'
+    local cmd
+    for cmd in cat grep find; do
+        printf '%s\n' "${deny_entries}" | grep -qxF "Bash(${cmd} */.database*)"
+        run grep -xF "Bash(${cmd} *.database*)" <<< "${deny_entries}"
+        [ "${status}" -ne 0 ]
+    done
+}
