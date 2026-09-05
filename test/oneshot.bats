@@ -3311,14 +3311,15 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    # Secret was created with the owner-scoped name
+    # Secret was created with the container-scoped name (orchestrator-<owner>), so a
+    # co-located interactive session (interactive-<owner>-<repo>) can never remove it
     grep -q "create" "${secret_log}"
-    grep -q "claude-oauth-credfeto" "${secret_log}"
+    grep -qx "claude-oauth-orchestrator-credfeto" "${secret_log}"
     # Token is NOT passed via --env
     run grep -q 'CLAUDE_CODE_OAUTH_TOKEN=' "${args_log}"
     [ "${status}" -ne 0 ]
     # --secret flag IS present in the podman run args
-    grep -q 'claude-oauth-credfeto' "${args_log}"
+    grep -qx 'claude-oauth-orchestrator-credfeto,type=env,target=CLAUDE_CODE_OAUTH_TOKEN' "${args_log}"
 }
 
 @test "invoke_claude notifies Discord before dying when creating the Claude OAuth Podman secret fails (#1103)" {
@@ -3365,14 +3366,36 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    # Secret was created with the enterprise token secret name
+    # Secret was created with the container-scoped enterprise token secret name
     grep -q "create" "${secret_log}"
-    grep -q "gh-enterprise-token" "${secret_log}"
+    grep -qx "gh-enterprise-token-orchestrator-credfeto" "${secret_log}"
     # Token is NOT passed via --env
     run grep -q 'GH_ENTERPRISE_TOKEN=my-gh-token' "${args_log}"
     [ "${status}" -ne 0 ]
     # --secret flag IS present in the podman run args
-    grep -q 'gh-enterprise-token' "${args_log}"
+    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=env,target=GH_ENTERPRISE_TOKEN' "${args_log}"
+}
+
+@test "invoke_claude passes the gh token as GH_TOKEN when GH_HOST is github.com (unproxied .env)" {
+    local args_log="${TEST_TMP}/podman_args"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    # shellcheck disable=SC2030
+    GH_ENTERPRISE_TOKEN="my-gh-token"
+    export GH_HOST="github.com"
+    cat > "${STUB_BIN}/podman" << STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "secret" ] && exit 0
+[ "\$1" = "pull" ] && exit 0
+[ "\$1" = "inspect" ] && exit 1
+printf "%s\n" "\$@" >> "${args_log}"
+printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=env,target=GH_TOKEN' "${args_log}"
+    grep -qx 'GH_HOST=github.com' "${args_log}"
+    [ "$(grep -c 'target=GH_ENTERPRISE_TOKEN' "${args_log}")" -eq 0 ]
 }
 
 @test "invoke_claude notifies Discord before dying when creating the GH_ENTERPRISE_TOKEN Podman secret fails (#1103)" {
@@ -9032,6 +9055,16 @@ STUBEOF
     make_stub podman 'exit 1'
     run cleanup_dangling_images
     [ "${status}" -eq 0 ]
+}
+
+@test "cleanup_dangling_images is a no-op when PRUNE_DANGLING_IMAGES is 0" {
+    local args_log="${TEST_TMP}/podman_args"
+    make_stub podman "printf '%s\n' \"\$@\" >> '${args_log}'; exit 0"
+    [ "${PRUNE_DANGLING_IMAGES}" = "1" ]
+    PRUNE_DANGLING_IMAGES=0
+    run cleanup_dangling_images
+    [ "${status}" -eq 0 ]
+    [ ! -e "${args_log}" ]
 }
 
 @test "invoke_claude falls back to the cached image when podman pull fails but the image exists locally (#1090)" {

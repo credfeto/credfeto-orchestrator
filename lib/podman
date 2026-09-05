@@ -304,7 +304,10 @@ setup_cgroup_leaf() {
 # Only untagged images are pruned — the current ORCHESTRATOR_IMAGE is always
 # tagged and is never removed.  Suppresses errors so that a failure to prune
 # (e.g. no images to prune, podman storage not initialised) is never fatal.
+# A no-op unless PRUNE_DANGLING_IMAGES=1 (lib/globals): `interactive` runs against the
+# developer's own image store, where an unannounced prune is a destructive side effect.
 cleanup_dangling_images() {
+    [ "${PRUNE_DANGLING_IMAGES}" = "1" ] || return 0
     podman image prune --force > /dev/null 2>&1 || true
 }
 
@@ -491,8 +494,8 @@ invoke_claude() {
     # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
     # stop_ssh_agent rides on the EXIT trap prepare_claude_container_args installs: it tears
-    # down the agent oneshot itself started (start_ssh_agent), which is why the interactive
-    # path does not pass it.
+    # down the agent the service unit's ExecStartPre started for this run (install-timer),
+    # which is why the interactive path, running under the user's own agent, does not pass it.
     prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}" stop_ssh_agent
 
     PODMAN_CLAUDE_ARGS=(
@@ -564,7 +567,7 @@ invoke_claude() {
 # Runs claude inside the agent container as a live, attached terminal session (the
 # `interactive` script) instead of a single --print phase: the same image, mounts, resource
 # limits, secrets and GPG/SSH wiring as invoke_claude, but with a TTY attached, no launch
-# prompt, no JSON result parsing, and no --permission-mode override — the image's own baked
+# prompt, no JSON result parsing, and no --permission-mode override: the image's own baked
 # claude-settings.json (containers/base/development-full) governs permissions exactly as it
 # would for oneshot. Uses a distinct container name from oneshot's orchestrator-<OWNER> so an
 # interactive session can never trip (or be clobbered by) a co-located oneshot run's
@@ -576,7 +579,7 @@ invoke_claude_interactive() {
     terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
 
     owner_token=$(load_token_for_owner "${OWNER}")
-    [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER} — run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
+    [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER}, run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
     container_name="interactive-${OWNER}-${REPO}"
 
     ensure_agent_container_ready "${container_name}"
@@ -598,7 +601,6 @@ invoke_claude_interactive() {
     podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" || podman_exit=$?
 
     cleanup_claude_invocation_tmpfiles
-    cleanup_dangling_images
     return "${podman_exit}"
 }
 
@@ -778,19 +780,29 @@ prepare_claude_container_args() {
         PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
     fi
 
+    # Secrets are named after the container, not the owner: oneshot (orchestrator-<owner>) and
+    # interactive (interactive-<owner>-<repo>) can run side by side on one host, and each
+    # removes and recreates its secrets on entry and removes them on every exit path, so a
+    # shared name would let one launch delete the secret the other is between creating and
+    # consuming.
     if [ -n "${owner_token}" ]; then
-        PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
+        PODMAN_SECRET_NAME="claude-oauth-${container_name}"
         podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
         printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
             || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
         PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
     fi
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
-        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token"
+        # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
+        # github.com login (an unproxied developer's .env, see bootstrap_orchestrator_env_file)
+        # the same token has to arrive as GH_TOKEN or every gh call in the container fails.
+        local gh_token_target="GH_ENTERPRISE_TOKEN"
+        [ "${GH_HOST:-}" = "github.com" ] && gh_token_target="GH_TOKEN"
+        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
         podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
         printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
             || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
-        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
+        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=${gh_token_target}" )
     fi
     [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
