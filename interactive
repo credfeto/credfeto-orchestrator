@@ -125,6 +125,9 @@ main() {
 
     bootstrap_orchestrator_config "${OWNER}" "${REPO_WORK_DIR}"
     load_env_config
+    # A .env written before the bootstrap existed carries no gh token; the container cannot
+    # fall back to the host's hosts.yml the way validate_config lets oneshot's host do.
+    require_container_gh_token
     validate_config "${OWNER}"
     # The shared .env carries one identity for every owner; the container should commit as the
     # host would in THIS checkout (includeIf stanzas, .git/config), so override the .env values.
