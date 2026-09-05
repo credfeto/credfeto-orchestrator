@@ -95,8 +95,15 @@ jobs:
         env:
           BRANCH: "${{steps.plan.outputs.branch}}"
         run: |
-          output=$(git ls-remote --exit-code --heads origin "$BRANCH" 2>&1)
-          rc=$?
+          # GitHub Actions runs `run:` steps as `bash -e`: a bare `output=$(cmd); rc=$?` would
+          # abort the script at the assignment itself the instant cmd exits non-zero (exit 2,
+          # "no matching ref", is the everyday case here), so rc=$? and the case below would
+          # never run - the if/else absorbs the exit status instead, which is errexit-safe.
+          if output=$(git ls-remote --exit-code --heads origin "$BRANCH" 2>&1); then
+            rc=0
+          else
+            rc=$?
+          fi
           case "$rc" in
             0)
               echo "ℹ️ Branch $BRANCH already exists on origin - a bump PR for this version is presumably already open, skipping"
