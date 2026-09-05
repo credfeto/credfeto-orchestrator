@@ -537,6 +537,24 @@ make_committed_checkout() {
     [ "${GIT_SIGNING_KEY}" = "REPOKEY000000000" ]
 }
 
+@test "validate_config accepts a .env without GIT_* once the checkout identity is loaded (interactive's order)" {
+    local dir
+    dir=$(make_split_identity_checkout)
+    mkdir -p "${CONFIG_DIR}"
+    printf 'GH_HOST=github-api.example.com\nGH_TOKEN=ghp_x\n' > "${CONFIG_DIR}/.env"
+    make_owner_token
+    load_env_config
+    require_container_gh_token
+    load_checkout_git_identity "${dir}"
+    run validate_config credfeto
+    [ "${status}" -eq 0 ]
+    # The same .env fails validation in oneshot's order, which is why interactive loads first.
+    load_env_config
+    run validate_config credfeto
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"GIT_SIGNING_KEY is not set"* ]]
+}
+
 @test "load_checkout_git_identity dies when the checkout has no signing key" {
     local dir
     dir=$(make_git_checkout "git@github.com:credfeto/example.git")

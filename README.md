@@ -163,7 +163,9 @@ on `main`. Scratch space is a fresh directory under `$XDG_RUNTIME_DIR`, mounted 
 
 Commits are made under the identity git itself would use in that checkout (`git -C <checkout>
 config user.name`, `user.email`, `user.signingkey`, so `includeIf` stanzas and the checkout's
-own `.git/config` are honoured), not the identity stored in `~/.config/orchestrator/.env`.
+own `.git/config` are honoured). The `GIT_*` lines in `~/.config/orchestrator/.env` are never
+used by `interactive`; they exist for `oneshot` and `setup-owner` on the same host, and a
+`.env` holding only `GH_HOST`, `GH_TOKEN` and `DISCORD_WEBHOOK` is accepted.
 
 Like `oneshot`, every launch pulls `ORCHESTRATOR_IMAGE` first so the session runs the current
 agent image; when the registry is unreachable the cached local image is used instead. Unlike

@@ -133,10 +133,12 @@ main() {
     # A .env written before the bootstrap existed carries no gh token; the container cannot
     # fall back to the host's hosts.yml the way validate_config lets oneshot's host do.
     require_container_gh_token
-    validate_config "${OWNER}"
-    # The shared .env carries one identity for every owner; the container should commit as the
-    # host would in THIS checkout (includeIf stanzas, .git/config), so override the .env values.
+    # The shared .env carries one identity for every owner (oneshot's); the container should
+    # commit as the host would in THIS checkout (includeIf stanzas, .git/config), so the .env
+    # GIT_* values are replaced before validate_config looks at them: what gets validated is
+    # what the container gets, and a .env holding only GH_HOST/GH_TOKEN is accepted.
     load_checkout_git_identity "${REPO_WORK_DIR}"
+    validate_config "${OWNER}"
     # Same as oneshot: load the default SSH keys into an empty agent now, or die on a stale
     # socket, rather than inside the container after the pull.
     preload_ssh_keys
