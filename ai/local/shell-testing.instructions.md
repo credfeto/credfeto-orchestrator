@@ -2,7 +2,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-> Load when: writing or modifying the `oneshot` or `loop` shell scripts, or any `*.bats` test under `test/`.
+> Load when: writing or modifying the `oneshot`, `loop`, or `interactive` shell scripts, any `lib/*` file, or any `*.bats` test under `test/`.
 
 ## Framework
 
@@ -10,7 +10,7 @@
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
 - Run the whole suite with `bats test/` from the repository root.
 - Every behaviour added to a shell script must have a corresponding bats test before committing.
-- The suite covers `oneshot`, `loop`, `create-project`, `setup-owner`, and `install-timer`; the same conventions apply to all of them.
+- The suite covers `oneshot`, `loop`, `create-project`, `setup-owner`, `install-timer`, and `interactive`; the same conventions apply to all of them.
 
 ## `lib/` Layout (oneshot's function libraries)
 
@@ -21,16 +21,16 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 | File | Covers |
 | --- | --- |
 | `lib/globals` | Config env-var defaults and every `declare -gA` array / mutable counter. **Sourced first** — every other file reads or writes globals declared here, and bash requires an associative array to be `declare -A`'d before any assignment into it. |
-| `lib/core` | `die`/`success`/`info`/`warn`/`is_ai_agent`/`hash_sha256`/`check_required_tools`, token loading, config load/validate, disk-space checks. |
-| `lib/git` | Repo context (`set_repo_context`) and git plumbing. |
+| `lib/core` | `die`/`success`/`info`/`warn`/`is_ai_agent`/`hash_sha256`/`check_required_tools`, token loading, config load/validate, disk-space checks, and `interactive`'s first-run bootstrap of `$XDG_CONFIG_HOME/orchestrator` (`bootstrap_orchestrator_config`). |
+| `lib/git` | Repo context (`set_repo_context`, with optional work/rules dir overrides used by `interactive`) and git plumbing, including `interactive`'s checkout resolution (`resolve_repo_dir`, `resolve_repo_full`, `github_repo_full_from_url`, `check_rules_checkout`). |
 | `lib/github` | Trust/collaborators, the priorities feed, PR/issue discovery and authorship predicates. |
 | `lib/github-status` | Pure PR/issue JSON status predicates and Blocked-label application/escalation. |
 | `lib/fingerprints` | PR/issue fingerprinting and the CI pending-timeout clock. |
 | `lib/state` | Invocation/guard-file counters, rate limiting, blocked/closed-issue markers. |
-| `lib/prompts` | CLAUDE.md/prompt building — heredoc bodies the agent reads directly; treat any edit to their wording as a behaviour change, not a refactor. |
+| `lib/prompts` | CLAUDE.md/prompt building (`build_issue_claude_md`/`build_pr_claude_md` for oneshot, `build_interactive_claude_md` for `interactive`) — heredoc bodies the agent reads directly; treat any edit to their wording as a behaviour change, not a refactor. The interactive builder has its own copies of the container-vs-GitHub and background-commands notes rather than sharing oneshot's, because oneshot's tell the agent to stop and wait for re-invocation, which never comes in an interactive session. |
 | `lib/workflow-board` | GitHub Projects v2 "Workflow" board GraphQL management + its disk cache. |
 | `lib/discord` | Discord webhook notifications. |
-| `lib/podman` | Container/Podman invocation (`invoke_claude` and everything around it) — the largest, most side-effectful file. |
+| `lib/podman` | Container/Podman invocation — the largest, most side-effectful file. `invoke_claude` (oneshot's `--print` phase runs) and `invoke_claude_interactive` (`interactive`'s attached TTY session) share `ensure_agent_container_ready` and `prepare_claude_container_args`, so the two can never drift in what they mount or expose; only the claude command line, the result handling, and the EXIT trap differ. |
 
 Add new functions to the right `lib/*` file by what they do, not to `oneshot` itself — `oneshot`
 should only ever contain `main()`, its arg parsing, and the source block. When a function
@@ -47,7 +47,7 @@ is likewise never deduped — same function name, intentionally different bodies
 
 ## Source-Guard Convention
 
-`oneshot`, `loop`, and `create-project` define all of their logic in functions and end with a
+`oneshot`, `loop`, `create-project`, and `interactive` define all of their logic in functions and end with a
 source-guard:
 
 ```sh
@@ -67,8 +67,8 @@ Every top-level script resolves its own directory via `${BASH_SOURCE[0]}`, not `
 does `source "${REPO_ROOT}/oneshot"` (or `source_loop`/`source_create_project`/
 `source_setup_owner` in `test_helper.bash`), `$0` is the bats runner, not the script itself, so a
 `$0`-based `source "${SCRIPT_DIR}/lib/core"` would resolve to the wrong directory and fail under
-test. This applies to all four scripts that source a `lib/*` file — `oneshot`, `loop`,
-`create-project`, `setup-owner` — including `loop`, even though most of its own tests
+test. This applies to all five scripts that source a `lib/*` file — `oneshot`, `loop`,
+`create-project`, `setup-owner`, `interactive` — including `loop`, even though most of its own tests
 (`run_loop_in`) exercise it as a real subprocess rather than sourcing it: `test_helper.bash`'s
 `source_loop` still sources it directly for the handful of tests that unit-test `update_scripts`/
 `is_ai_agent` in isolation, so `$0`-based resolution silently breaks under that path too — do not
@@ -148,7 +148,7 @@ path.
 ## Static Analysis
 
 - `shellcheck` must pass for the top-level bash scripts (`shellcheck oneshot loop create-project
-  setup-owner install-timer`) and for any `*.bash` test helper. Lint the top-level scripts, not
+  setup-owner install-timer interactive`) and for any `*.bash` test helper. Lint the top-level scripts, not
   the `lib/*` files directly — shellcheck follows a `source` line whose target has a
   `# shellcheck source=lib/x` directive automatically, so checking `oneshot` alone already
   covers every `lib/*` file it sources. Running shellcheck on a `lib/*` file standalone produces
@@ -166,7 +166,7 @@ path.
 - `checkbashisms` does not apply because the scripts use `#!/bin/bash`.
 - The commit-time pre-commit hook lints staged `*.bats` files with `shellcheck` too, separately
   from the top-level-scripts invocation above — a plain `shellcheck oneshot loop create-project
-  setup-owner install-timer` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
+  setup-owner install-timer interactive` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
   SC2314, "In Bats, `!` will not fail the test if it is not the last command") can pass local
   verification and only surface at commit time. Run `shellcheck test/*.bats` alongside the
   top-level-scripts check before committing a test change. Prefer the repo's existing bare

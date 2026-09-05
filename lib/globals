@@ -14,6 +14,20 @@ ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:lat
 # seeded from the environment (no ${VAR:-0} indirection) — an inherited value would let a stray
 # export permanently suppress image pulls for a whole run.
 ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=0
+# Whether cleanup_dangling_images (lib/podman) runs `podman image prune` around each container
+# launch. 1 for oneshot: housekeeping on a dedicated service account's store. `interactive`
+# assigns 0 after sourcing this file: on a developer's own podman store the prune would
+# silently delete every untagged image, including local builds of this repository's
+# containers/. Like ORCHESTRATOR_IMAGE_PULLED_THIS_RUN above, deliberately not seeded from the
+# environment: a stray export must not be able to switch oneshot's housekeeping off.
+PRUNE_DANGLING_IMAGES=1
+# Whether prepare_claude_container_args (lib/podman) passes `podman run --replace`. 1 for
+# oneshot: it takes over a name left reserved by an unclean shutdown (#1361), and its per-owner
+# flock guarantees no other oneshot holds that name legitimately. `interactive` assigns 0: it
+# takes no lock, so two launches for the same checkout could both pass the pre-flight during
+# the image pull, and --replace would then remove the first owner's live, attached session;
+# without it the second launch fails on the name instead.
+PODMAN_REPLACE_CONTAINER=1
 CONTAINER_REPO_PATH="/workspace/repo"
 CONTAINER_RULES_PATH="/workspace/rules"
 # A second registered --add-dir, distinct from CONTAINER_REPO_PATH: throwaway per-invocation

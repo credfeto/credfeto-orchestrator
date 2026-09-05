@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Runs a live, attached Claude Code session inside the orchestrator's agent container against
+# the git repository containing the current directory: the same image, mounts, resource
+# limits, secrets, GPG/SSH wiring and baked-in permission settings oneshot uses for its
+# unattended --print phases, but with a terminal attached and the owner driving the session.
+#
+# Compared with oneshot's per-item invocation:
+#   - the repository is the checkout containing $PWD (mounted read-write at /workspace/repo),
+#     not a per-owner clone under $WORK;
+#   - the cs-template rules checkout comes from INTERACTIVE_RULES_DIR (default
+#     $HOME/work/personal/cs-template), mounted read-only at /workspace/rules;
+#   - scratch space is a fresh directory under $XDG_RUNTIME_DIR, mounted at /workspace/tmp;
+#   - the persistent Claude state directories (sessions, session-env, plans, cache, backups)
+#     are shared with oneshot under $HOME/.orchestrator/<owner>/<repo>; conversation
+#     transcripts (~/.claude/projects) are not mounted, so a session cannot be resumed later;
+#   - the git identity is the one git itself would use in that checkout (includeIf and
+#     .git/config honoured), not the shared .env's, so each owner's repository commits as the
+#     host would;
+#   - on first run, $XDG_CONFIG_HOME/orchestrator is bootstrapped from that identity, the
+#     host's `gh auth token` and a `claude setup-token` long-lived token (see lib/core
+#     bootstrap_orchestrator_config);
+#   - dangling images in the developer's podman store are never pruned (PRUNE_DANGLING_IMAGES=0).
+#
+# Usage: interactive            (from anywhere inside a GitHub-hosted git checkout)
+#        interactive --help
+#
+# Resolved via BASH_SOURCE (not $0) so this works both when run directly and when a test
+# harness `source`s it. lib/globals must be sourced first (see oneshot for why); each source
+# has a dependency-free fallback because `die` only exists once lib/core has loaded.
+INTERACTIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/globals disable=SC1091
+source "${INTERACTIVE_DIR}/lib/globals" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/globals\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/core disable=SC1091
+source "${INTERACTIVE_DIR}/lib/core" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/core\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/git disable=SC1091
+source "${INTERACTIVE_DIR}/lib/git" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/git\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/github disable=SC1091
+source "${INTERACTIVE_DIR}/lib/github" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/github\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/github-status disable=SC1091
+source "${INTERACTIVE_DIR}/lib/github-status" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/github-status\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/fingerprints disable=SC1091
+source "${INTERACTIVE_DIR}/lib/fingerprints" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/fingerprints\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/state disable=SC1091
+source "${INTERACTIVE_DIR}/lib/state" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/state\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/prompts disable=SC1091
+source "${INTERACTIVE_DIR}/lib/prompts" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/prompts\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/workflow-board disable=SC1091
+source "${INTERACTIVE_DIR}/lib/workflow-board" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/workflow-board\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/discord disable=SC1091
+source "${INTERACTIVE_DIR}/lib/discord" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/discord\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/podman disable=SC1091
+source "${INTERACTIVE_DIR}/lib/podman" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/podman\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+
+# Where the cs-template rules checkout lives on this host. Mounted read-only at
+# CONTAINER_RULES_PATH; never cloned or updated by this script.
+INTERACTIVE_RULES_DIR="${INTERACTIVE_RULES_DIR:-${WORK}/personal/cs-template}"
+
+# oneshot's `podman image prune` is housekeeping on a dedicated service account; on a
+# developer's own podman store it would silently delete every untagged image (a local
+# containers/ build, a pull the owner meant to re-tag). Never prune from here.
+# shellcheck disable=SC2034  # read by cleanup_dangling_images in lib/podman
+PRUNE_DANGLING_IMAGES=0
+# No per-owner flock here (oneshot's guards its --replace): a second launch for the same
+# checkout that slips past ensure_agent_container_ready during the image pull must fail on
+# the container name, not --replace the first owner's live session.
+# shellcheck disable=SC2034  # read by prepare_claude_container_args in lib/podman
+PODMAN_REPLACE_CONTAINER=0
+
+usage() {
+    cat <<'USAGE'
+Usage: interactive [--help]
+
+Runs an interactive Claude Code session inside the orchestrator agent container against the
+git repository containing the current directory. On first run, creates
+$XDG_CONFIG_HOME/orchestrator/.env from that checkout's git identity and the host's
+`gh auth token`, and prompts for a long-lived Claude OAuth token via `claude setup-token`.
+
+Every launch pulls the agent image first (falling back to the cached copy if the registry
+is unreachable), exactly as oneshot does. Unlike oneshot, dangling images are never pruned.
+
+Environment:
+  INTERACTIVE_RULES_DIR  cs-template checkout to mount at /workspace/rules
+                         (default: $XDG_PROJECTS_DIR/personal/cs-template, i.e.
+                         $HOME/work/personal/cs-template)
+  ORCHESTRATOR_IMAGE     agent image (default: ghcr.io/credfeto/development-agent:latest)
+USAGE
+}
+
+# A smaller list than oneshot's check_required_tools: no curl/flock/timeout, nothing here
+# polls a feed, takes a lock, or bounds a container's runtime. awk and a sha256 tool are what
+# hash_sha256 (the .git/config and hooks digest) needs; the gpg tools are what the signing
+# pre-flight and add_gpg_podman_args need.
+check_interactive_tools() {
+    require_tools git jq podman gh claude ssh-add awk gpg gpg-connect-agent gpgconf
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+        || die "Required tool not found: sha256sum (or shasum)"
+}
+
+# Dies when the SSH agent or the GPG signing key the container will use is not usable on the
+# host, so the refusal comes before the image pull. The entrypoint dies for both anyway, but
+# after the pull and naming container paths: preload_ssh_keys returns 0 for an unset
+# SSH_AUTH_SOCK, and the gpg keyring check is what oneshot's main does before any pull.
+check_signing_agents() {
+    gpg-connect-agent /bye >/dev/null 2>&1 \
+        || die "gpg-agent is not running, run 'gpgconf --launch gpg-agent' to start it"
+    gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
+        || die "Signing key ${GIT_SIGNING_KEY} (git config user.signingkey for ${REPO_WORK_DIR}) is not in the GPG keyring, import it with 'gpg --import <key-file>'"
+    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] \
+        || die "SSH_AUTH_SOCK is not set or is not a socket, the agent container pushes through your ssh-agent: start one and 'ssh-add' your GitHub key"
+}
+
+# resolve_repo_dir, resolve_repo_full, check_repo_remotes, check_repo_claude_config,
+# check_rules_checkout and github_repo_full_from_url are declared in lib/git; bootstrap_orchestrator_config in lib/core; invoke_claude_interactive in
+# lib/podman; build_interactive_claude_md in lib/prompts.
+
+main() {
+    case "${1:-}" in
+        -h|--help) usage; return 0 ;;
+        "") ;;
+        *) usage >&2; die "Unknown argument: $1" ;;
+    esac
+
+    # First, so a non-TTY launch is refused outright rather than by ssh-add or podman later
+    # with a misleading message.
+    terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
+    check_interactive_tools
+    case "${INTERACTIVE_RULES_DIR}" in
+        /*) ;;
+        *) die "INTERACTIVE_RULES_DIR must be an absolute path (podman would treat '${INTERACTIVE_RULES_DIR}' as a named volume): got '${INTERACTIVE_RULES_DIR}'" ;;
+    esac
+
+    local repo_dir repo_full ai_instructions container_ai_instructions claude_md
+    # die() inside a command substitution only exits that subshell, hence the explicit exits.
+    repo_dir=$(resolve_repo_dir "${PWD}") || exit 1
+    repo_full=$(resolve_repo_full "${repo_dir}") || exit 1
+    set_repo_context "${repo_full}" "${repo_dir}" "${INTERACTIVE_RULES_DIR}"
+    # Host-side versions of the entrypoint's own refusals, so they fire before the image pull
+    # and name host paths.
+    check_repo_remotes "${REPO_WORK_DIR}"
+    check_repo_claude_config "${REPO_WORK_DIR}"
+    check_rules_checkout "${RULES_DIR}"
+
+    bootstrap_orchestrator_config "${OWNER}" "${REPO_WORK_DIR}"
+    load_env_config
+    # The shared launch code (ensure_agent_container_ready, prepare_claude_container_args)
+    # posts an oneshot-style "Claude Error" embed on its die paths, gated only on this URL. A
+    # developer .env that shares an oneshot webhook would put an interactive launch failure in
+    # the team channel; the person to tell is at this terminal.
+    # shellcheck disable=SC2034  # read by lib/discord's notify_* functions
+    DISCORD_WEBHOOK_URL=""
+    # A .env written before the bootstrap existed carries no gh token; the container cannot
+    # fall back to the host's hosts.yml the way validate_config lets oneshot's host do.
+    require_container_gh_token
+    # The shared .env carries one identity for every owner (oneshot's); the container should
+    # commit as the host would in THIS checkout (includeIf stanzas, .git/config), so the .env
+    # GIT_* values are replaced before validate_config looks at them: what gets validated is
+    # what the container gets, and a .env holding only GH_HOST/GH_TOKEN is accepted.
+    load_checkout_git_identity "${REPO_WORK_DIR}"
+    validate_config "${OWNER}"
+    check_signing_agents
+    # Same as oneshot: load the default SSH keys into an empty agent now, or die on a stale
+    # socket, rather than inside the container after the pull.
+    preload_ssh_keys
+
+    ai_instructions=$(find_ai_instructions) || die "No .ai-instructions in ${REPO_WORK_DIR} or ${RULES_DIR}"
+    container_ai_instructions=$(host_to_container_path "${ai_instructions}")
+    claude_md=$(build_interactive_claude_md "${container_ai_instructions}")
+
+    info "Repository: ${repo_full} at ${REPO_WORK_DIR}"
+    info "Rules: ${RULES_DIR}"
+    local git_metadata_before session_exit=0
+    # An empty digest would make the post-session comparison pass vacuously.
+    git_metadata_before=$(git_metadata_digest "${REPO_WORK_DIR}") \
+        || die "Failed to digest ${REPO_WORK_DIR}/.git/config and hooks before the session"
+    invoke_claude_interactive "${claude_md}" || session_exit=$?
+    warn_if_git_metadata_changed "${REPO_WORK_DIR}" "${git_metadata_before}"
+    return "${session_exit}"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

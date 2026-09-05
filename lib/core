@@ -43,11 +43,16 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
-check_required_tools() {
+# Dies naming the first of the given commands that is not on PATH.
+require_tools() {
     local tool
-    for tool in curl jq podman gh git awk grep flock timeout; do
+    for tool in "$@"; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
+}
+
+check_required_tools() {
+    require_tools curl jq podman gh git awk grep flock timeout
 
     if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
         die "Required tool not found: sha256sum or shasum"
@@ -98,10 +103,25 @@ load_token_for_owner() {
     fi
 }
 
+# Outputs host lower-cased, with GitHub's own API host folded to github.com: gh normalises
+# both the same way, and everything that decides "proxy or direct" (load_env_config,
+# prepare_claude_container_args, bootstrap_orchestrator_env_file) compares against the literal
+# github.com, so a GitHub.com or api.github.com value must not read as a proxy.
+normalize_gh_host() {
+    local host="${1,,}"
+    case "${host}" in
+        api.github.com) host="github.com" ;;
+    esac
+    printf '%s' "${host}"
+}
+
 # Reads DISCORD_WEBHOOK, GH_TOKEN, GH_HOST, GIT_USER_NAME, GIT_USER_EMAIL, and
 # GIT_SIGNING_KEY from orchestrator/.env.
-# Sets DISCORD_WEBHOOK_URL; exports GH_HOST and GH_ENTERPRISE_TOKEN when both are
-# present so host-side gh CLI calls use the same proxy as the agent container.
+# Sets DISCORD_WEBHOOK_URL; exports GH_HOST (normalised) and GH_ENTERPRISE_TOKEN when both are
+# present so host-side gh CLI calls use the same proxy as the agent container. For a direct
+# github.com host gh ignores GH_ENTERPRISE_TOKEN, so GH_TOKEN is exported as well: the
+# container plumbing keys off GH_ENTERPRISE_TOKEN (prepare_claude_container_args renames it at
+# the container boundary) while host-side gh reads GH_TOKEN.
 # GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
 # Silent when the file is absent or a key is missing.
 load_env_config() {
@@ -136,8 +156,12 @@ load_env_config() {
         esac
     done < "${env_file}"
     if [ -n "${gh_host}" ] && [ -n "${gh_token}" ]; then
+        gh_host=$(normalize_gh_host "${gh_host}")
         export GH_HOST="${gh_host}"
         export GH_ENTERPRISE_TOKEN="${gh_token}"
+        if [ "${gh_host}" = "github.com" ]; then
+            export GH_TOKEN="${gh_token}"
+        fi
     fi
 }
 
@@ -214,4 +238,141 @@ check_disk_space() {
         return 0
     fi
     [ "${available_kb}" -ge "${MIN_DISK_SPACE_KB}" ]
+}
+
+# --- first-run bootstrap of $XDG_CONFIG_HOME/orchestrator (the `interactive` script) -------------
+
+# True when stdin and stdout are both terminals: what `claude setup-token` and
+# `podman run --tty` each need. Its own function (rather than inline [ -t ] tests) so bats
+# tests can override it, since a test body never runs on a TTY.
+terminal_available() {
+    [ -t 0 ] && [ -t 1 ]
+}
+
+# Creates dir (and any parents) owner-only (0700). Dies on failure.
+_ensure_private_dir() {
+    local dir="$1"
+    mkdir -p "${dir}" || die "Failed to create ${dir}"
+    chmod 700 "${dir}" || die "Failed to set permissions on ${dir}"
+}
+
+# Sets GIT_USER_NAME/GIT_USER_EMAIL/GIT_SIGNING_KEY to the identity git itself would commit
+# with in the checkout at repo_dir (`git -C <dir> config --get`, so includeIf stanzas and the
+# checkout's own .git/config are honoured, unlike `git config --global --get`, which reads only
+# the top-level ~/.gitconfig). The agent container hard-requires all three
+# (containers/agent/entrypoint.sh) and signs commits with GPG, so an SSH-format signing key
+# (gpg.format=ssh) is rejected here rather than failing inside the container. Used by
+# bootstrap_orchestrator_env_file to seed .env, and by `interactive` on every launch so the
+# container commits under the identity the host would use in that checkout, whichever owner's
+# repository it is.
+load_checkout_git_identity() {
+    local repo_dir="$1"
+    local git_name git_email git_key gpg_format
+    git_name=$(git -C "${repo_dir}" config --get user.name 2>/dev/null) || git_name=""
+    git_email=$(git -C "${repo_dir}" config --get user.email 2>/dev/null) || git_email=""
+    git_key=$(git -C "${repo_dir}" config --get user.signingkey 2>/dev/null) || git_key=""
+    gpg_format=$(git -C "${repo_dir}" config --get gpg.format 2>/dev/null) || gpg_format=""
+    [ -n "${git_name}" ]  || die "git config user.name is not set for ${repo_dir}, the agent container needs it (GIT_USER_NAME)"
+    [ -n "${git_email}" ] || die "git config user.email is not set for ${repo_dir}, the agent container needs it (GIT_USER_EMAIL)"
+    [ -n "${git_key}" ]   || die "git config user.signingkey is not set for ${repo_dir}, the agent container GPG-signs every commit (GIT_SIGNING_KEY)"
+    [ "${gpg_format}" != "ssh" ] || die "git config gpg.format is ssh for ${repo_dir}, the agent container signs with GPG, so user.signingkey must be a GPG key id"
+    GIT_USER_NAME="${git_name}"
+    GIT_USER_EMAIL="${git_email}"
+    GIT_SIGNING_KEY="${git_key}"
+}
+
+# Writes $XDG_CONFIG_HOME/orchestrator/.env when no .env exists yet, so a first `interactive`
+# run on a developer machine needs no hand-staged config (setup-owner's onboarding flow,
+# docs/deployment-and-setup.md, expects an admin to write this file by hand). The git identity
+# comes from the checkout at repo_dir (load_checkout_git_identity). GH_HOST and GH_TOKEN come
+# from the host's own gh login: the image bakes a proxy GH_HOST and a placeholder token and no
+# gh config is mounted, so without a real token every gh call inside the container fails. The
+# host's token (`gh auth token`, normally keyring-held and so invisible to the container) is
+# obtained BEFORE anything is written and the file is written once, complete: a half-written
+# .env would never be revisited (existing files are never rewritten, edit them by hand) and
+# would leave the container's gh unauthenticated on every later run. GH_HOST is the host
+# shell's proxy when it exports one, otherwise github.com, which prepare_claude_container_args
+# (lib/podman) turns into a plain GH_TOKEN rather than GH_ENTERPRISE_TOKEN.
+bootstrap_orchestrator_env_file() {
+    local repo_dir="$1"
+    local config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator"
+    local env_file="${config_dir}/.env"
+    [ -f "${env_file}" ] && return 0
+
+    load_checkout_git_identity "${repo_dir}"
+
+    local gh_host gh_token
+    gh_host=$(normalize_gh_host "${GH_HOST:-github.com}")
+    gh_token=$(gh auth token 2>/dev/null) || gh_token=""
+    [ -n "${gh_token}" ] \
+        || die "'gh auth token' returned no token for ${gh_host}, run 'gh auth login' first (nothing was written to ${env_file})"
+
+    _ensure_private_dir "${config_dir}"
+    # umask 077 in a subshell, with the redirect inside it so the file is created 0600 and is
+    # never world-readable, not even briefly.
+    (
+        umask 077
+        {
+            printf 'GIT_USER_NAME=%s\n' "${GIT_USER_NAME}"
+            printf 'GIT_USER_EMAIL=%s\n' "${GIT_USER_EMAIL}"
+            printf 'GIT_SIGNING_KEY=%s\n' "${GIT_SIGNING_KEY}"
+            printf 'GH_HOST=%s\n' "${gh_host}"
+            printf 'GH_TOKEN=%s\n' "${gh_token}"
+        } > "${env_file}"
+    ) || die "Failed to write ${env_file}"
+    info "Created ${env_file} from the git identity of ${repo_dir} and the host's gh token for ${gh_host}"
+}
+
+# Ensures $XDG_CONFIG_HOME/orchestrator/tokens/<owner> exists (mode 600). When it is missing,
+# runs `claude setup-token` attached to the terminal, a browser OAuth flow that prints a
+# long-lived token at the end, then reads the pasted token from stdin (silently) and stores
+# it. The token is read back from the terminal rather than captured from setup-token's stdout
+# because that command is interactive: it drives the terminal itself and its output is not a
+# clean single-line value. Dies without a terminal, since neither step can run unattended.
+bootstrap_owner_token() {
+    local owner="$1"
+    local config_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator"
+    local tokens_dir="${config_dir}/tokens"
+    local token_file="${tokens_dir}/${owner}"
+    [ -f "${token_file}" ] && return 0
+
+    terminal_available || die "No Claude OAuth token file at ${token_file} and no terminal to run 'claude setup-token', create it by hand (see README.md, Per-owner OAuth token)"
+    info "No Claude OAuth token for owner ${owner} yet, running 'claude setup-token'. Complete the browser flow, then paste the token it prints when asked."
+    claude setup-token || die "claude setup-token failed, no token stored"
+
+    local token
+    printf '\nPaste the token for %s (input is hidden): ' "${owner}" >&2
+    IFS= read -r -s token || true
+    printf '\n' >&2
+    token="${token//[[:space:]]/}"
+    [ -n "${token}" ] || die "No token entered, nothing stored at ${token_file}"
+
+    _ensure_private_dir "${config_dir}"
+    _ensure_private_dir "${tokens_dir}"
+    # umask 077 in a subshell: the file is created 0600 (read_token_if_safe refuses anything
+    # other than 600/400) and is never world-readable, not even briefly.
+    ( umask 077 && printf '%s' "${token}" > "${token_file}" ) || die "Failed to write ${token_file}"
+    success "Stored Claude OAuth token for ${owner} at ${token_file} (mode 600)"
+}
+
+# `interactive` only: dies when load_env_config found no GH_HOST/GH_TOKEN pair in .env. The
+# agent container has no gh config of its own (the image bakes a proxy host and a placeholder
+# token, and no hosts.yml is mounted), so unlike oneshot's host, where validate_config accepts
+# the host's own hosts.yml instead, a .env without the pair means every gh call inside the
+# session fails. A .env predating the bootstrap (GIT_* and DISCORD_WEBHOOK only) is the usual
+# case; bootstrap never rewrites an existing file, so the keys have to be added by hand.
+require_container_gh_token() {
+    local env_file="${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env"
+    if [ -n "${GH_HOST:-}" ] && [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        return 0
+    fi
+    die "${env_file} has no GH_HOST/GH_TOKEN pair, and the agent container has no gh config of its own: add GH_HOST=<your gh proxy host, or github.com> and GH_TOKEN=<output of 'gh auth token'> to it"
+}
+
+# First-run bootstrap for `interactive`: both of the above, in the order validate_config
+# checks them. Idempotent, a fully configured host is a no-op.
+bootstrap_orchestrator_config() {
+    local owner="$1" repo_dir="$2"
+    bootstrap_orchestrator_env_file "${repo_dir}"
+    bootstrap_owner_token "${owner}"
 }

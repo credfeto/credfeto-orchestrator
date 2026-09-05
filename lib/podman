@@ -304,7 +304,10 @@ setup_cgroup_leaf() {
 # Only untagged images are pruned — the current ORCHESTRATOR_IMAGE is always
 # tagged and is never removed.  Suppresses errors so that a failure to prune
 # (e.g. no images to prune, podman storage not initialised) is never fatal.
+# A no-op unless PRUNE_DANGLING_IMAGES=1 (lib/globals): `interactive` runs against the
+# developer's own image store, where an unannounced prune is a destructive side effect.
 cleanup_dangling_images() {
+    [ "${PRUNE_DANGLING_IMAGES}" = "1" ] || return 0
     podman image prune --force > /dev/null 2>&1 || true
 }
 
@@ -482,201 +485,18 @@ invoke_claude() {
     owner_token=$(load_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
-    if podman inspect "${container_name}" >/dev/null 2>&1; then
-        # A container left behind by a hard host crash (despite --rm) previously made every
-        # subsequent run die permanently until a human removed it manually (#1090). If it is not
-        # actively running, it is safe to assume it is such a leftover and remove it ourselves;
-        # only die if it is genuinely running, which means something else is actively using it.
-        if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
-            notify_discord_claude_error "${item_type}" "${item_id}" \
-                "Container ${container_name} already exists and is running — remove it manually before running"
-            die "Container ${container_name} already exists and is running — remove it manually before running"
-        fi
-        warn "Removing leftover (non-running) container ${container_name} from a previous run"
-        podman rm -f "${container_name}" >&2 \
-            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to remove leftover container ${container_name}"; die "Failed to remove leftover container ${container_name}"; }
-    fi
+    ensure_agent_container_ready "${container_name}" "${item_type}" "${item_id}"
 
-    cleanup_dangling_images
-    # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
-    # and a tick with several actionable items would otherwise pay that cost once per item.
-    if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
-        info "Image ${ORCHESTRATOR_IMAGE} already pulled this run — not re-pulling" >&2
-    else
-        info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
-        local pull_start_unix pull_end_unix pull_duration_secs
-        pull_start_unix=$(date +%s)
-        if podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
-            ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1
-            pull_end_unix=$(date +%s)
-            pull_duration_secs=$(( pull_end_unix - pull_start_unix ))
-            # #1400: alert when this pull took disproportionately longer than the owner's own
-            # recent history - a pathologically slow pull otherwise just looks like the
-            # orchestrator "not doing anything" from the outside. "Slow enough to alert on" is
-            # pull_duration_exceeds_baseline's own policy call (lib/state), not this call site's
-            # - mirrors check_disk_space, whose threshold likewise lives with the predicate.
-            # Computed BEFORE record_pull_duration below, so this pull's own duration is judged
-            # against prior history only, never against a baseline that already absorbed it.
-            local pull_baseline_secs
-            if pull_baseline_secs=$(pull_duration_exceeds_baseline "${pull_duration_secs}"); then
-                notify_discord_slow_pull "${OWNER}" "${pull_duration_secs}" "${pull_baseline_secs}"
-            fi
-            record_pull_duration "${pull_duration_secs}"
-        elif podman image exists "${ORCHESTRATOR_IMAGE}"; then
-            # A registry hiccup should not fail the run when a usable cached image already exists
-            # locally — fall back to it instead of dying outright (#1090). Deliberately leaves the
-            # flag at 0 so the next item in this run retries the pull rather than being stuck on
-            # the fallback for the whole tick.
-            warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
-        else
-            notify_discord_pull_failed "${item_type}" "${item_id}" \
-                "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
-            die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
-        fi
-    fi
-
-    # CLAUDE.md content is mandatory — every invocation must supply it.
-    if [ -z "${claude_md_content}" ]; then
-        notify_discord_claude_error "${item_type}" "${item_id}" "claude_md_content is required but was not provided"
-        die "claude_md_content is required but was not provided"
-    fi
-
-    # Bake settings.json/policy-limits.json/hooks/skills into the image (see
-    # containers/base/development-full/Dockerfile) and mount only the pieces of
-    # ~/.claude that must vary per invocation or persist across invocations:
-    #   - CLAUDE.md: single read-only file mount. Safe now that the image already
-    #     creates /home/developer/.claude with correct ownership — the old
-    #     whole-directory mount trick existed only to work around Podman creating
-    #     an unmounted parent directory with wrong ownership when bind-mounting a
-    #     single file into a path whose parent didn't exist yet in the image.
-    #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
-    #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
-    #     they persist across invocations instead of being wiped every run.
-    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
-    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
-    CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
-    PODMAN_SECRET_NAME=""
-    GH_ENTERPRISE_SECRET_NAME=""
-    # Registered immediately after CLAUDE_MD_TMPFILE is populated — not after the mkdir loop
-    # below — so a die() from that loop (or anything else between here and the container run)
-    # cannot leak the tmpfile before anything is tracking it (#1103). Backstop only: every
-    # normal exit path below now calls cleanup_claude_invocation_tmpfiles itself (#1133
-    # review), so by the time this trap fires those globals are usually already empty and its
-    # cleanup calls are no-ops — it only does real work if invoke_claude is interrupted
-    # somewhere that skips its own cleanup (a signal, an unexpected die() elsewhere).
-    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
     # The prompt travels as a trailing positional argument to claude (see
-    # PODMAN_CLAUDE_ARGS below), not via stdin — passing it as an argv element
+    # PODMAN_CLAUDE_ARGS below), not via stdin: passing it as an argv element
     # sidesteps the host<->container stdin-attach race entirely (#281, #288, #1062
     # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
     # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
-    for d in sessions session-env plans cache backups; do
-        mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
-    done
-    # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
-    # persistent host directory; "local" is created by entrypoint.sh itself and stays
-    # container-ephemeral.
-    mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
-
-    # Export invocation-scoped globals so helper functions can read them.
-    CLAUDE_PROMPT="${prompt}"
-    PODMAN_CONTAINER_NAME="${container_name}"
-    PODMAN_RUN_ARGS=(
-        run
-        --name "${container_name}"
-        # Takes over the name if something still holds it, instead of refusing to start (#1361).
-        # The pre-flight check above already handles a leftover container podman inspect can SEE
-        # (removing it when stopped, dying when genuinely running), and that guard is what keeps
-        # --replace from silently destroying another invocation's in-flight work. This covers the
-        # case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
-        # container mid-teardown) can leave the name reserved in the lower containers/storage
-        # layer while libpod's own metadata record is gone, so podman ps -a and podman inspect
-        # both report nothing while podman run still fails with "already in use by an external
-        # entity". That wedged the credfeto service for 19.5 hours across ~3,000 cycles until a
-        # human intervened. Verified on the live orphan: --replace both starts successfully AND
-        # purges the stale storage reservation, so it is the cure as well as the prevention.
-        --replace
-        --rm
-        --interactive
-        # keep-id:uid=1000,gid=1000 maps container developer (UID/GID 1000) to the
-        # host user running this service so that bind-mounted sockets and directories
-        # owned by the host user appear as owned by the container's developer user,
-        # giving it full owner-level access without world-writable permissions.
-        "--userns=keep-id:uid=1000,gid=1000"
-        --cpus="4"
-        --memory="12g"
-        --memory-swap="12g"
-        --pids-limit=4096
-        --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
-        --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
-        --volume "${CLAUDE_SCRATCH_TMPDIR}:${CONTAINER_SCRATCH_PATH}:rw"
-    )
-    [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
-    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
-        PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
-        PODMAN_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
-    else
-        warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
-    fi
-    verify_gpg_signing_ready "${item_type}" "${item_id}"
-    add_gpg_podman_args
-    if [ -f "${HOME}/.database" ]; then
-        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
-    else
-        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
-    fi
-    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
-    for d in sessions session-env plans cache backups; do
-        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
-    done
-    # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
-    # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
-    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
-    # directory (test/entrypoint-cache-path-parity.bats asserts the two literal copies of
-    # that expression match). Deliberately not pinned via an image-wide ENV XDG_CACHE_HOME:
-    # that would also redirect every other XDG-aware tool's cache in the container (npm, pip,
-    # eslint/stylelint wrappers, ...) onto this same path for no benefit to them, and some
-    # tools resolve their own default differently once XDG_CACHE_HOME is explicitly set versus
-    # left unset. containers/agent/Dockerfile instead pre-creates
-    # /home/developer/.cache/orchestrator/{local,global} with correct ownership directly, so
-    # this mount target already exists rather than depending on this assumption at all.
-    PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
-
-    [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
-    [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
-    [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
-    # #1351 experiment: CONTAINER_SCRATCH_PATH is a fixed, known-in-advance container path
-    # (like CONTAINER_REPO_PATH/CONTAINER_RULES_PATH above) - unlike those two, though, its
-    # host-side backing directory is created fresh per invocation (below) and only its
-    # --add-dir/--volume wiring needs doing from here. TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR are
-    # exported by entrypoint.sh itself against this same hardcoded path, the same way it
-    # already hardcodes /workspace/repo as WORKSPACE_REPO_DIR's default - no need to inject
-    # them via --env from a fixed value the container already knows.
-
-    # Lets the agent container announce what it's working on at startup. Only
-    # set when both are known — most callers (tests, ad-hoc invocations) pass
-    # empty item_type/item_id and simply won't get this env var.
-    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
-        PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
-    fi
-
-    if [ -n "${owner_token}" ]; then
-        PODMAN_SECRET_NAME="claude-oauth-${OWNER}"
-        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
-        printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
-            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
-        PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
-    fi
-    if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
-        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token"
-        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
-        printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
-            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
-        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=GH_ENTERPRISE_TOKEN" )
-    fi
-    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
-    PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
+    # stop_ssh_agent rides on the EXIT trap prepare_claude_container_args installs: it tears
+    # down the agent the service unit's ExecStartPre started for this run (install-timer),
+    # which is why the interactive path, running under the user's own agent, does not pass it.
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}" stop_ssh_agent
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
@@ -742,6 +562,272 @@ invoke_claude() {
 
     cleanup_claude_invocation_tmpfiles
     cleanup_dangling_images
+}
+
+# Runs claude inside the agent container as a live, attached terminal session (the
+# `interactive` script) instead of a single --print phase: the same image, mounts, resource
+# limits, secrets and GPG/SSH wiring as invoke_claude, but with a TTY attached, no launch
+# prompt, no JSON result parsing, and no --permission-mode override: the image's own baked
+# claude-settings.json (containers/base/development-full) governs permissions exactly as it
+# would for oneshot. Uses a distinct container name from oneshot's orchestrator-<OWNER> so an
+# interactive session can never trip (or be clobbered by) a co-located oneshot run's
+# "already running"/--replace handling. Returns podman's own exit status.
+invoke_claude_interactive() {
+    local claude_md_content="$1"
+    local owner_token container_name
+
+    terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
+
+    owner_token=$(load_token_for_owner "${OWNER}")
+    [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER}, run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
+    container_name="interactive-${OWNER}-${REPO}"
+
+    ensure_agent_container_ready "${container_name}"
+
+    # No extra EXIT-trap command: oneshot passes stop_ssh_agent here, which pkills any
+    # "ssh-agent -a ${SSH_AUTH_SOCK}" process, and on a desktop that is the user's own
+    # long-lived agent, not one this script started.
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}"
+    PODMAN_RUN_ARGS+=( --tty )
+
+    PODMAN_CLAUDE_ARGS=(
+        --model opusplan
+        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
+    )
+
+    validate_bind_mounts
+    info "Starting interactive Claude session in container ${container_name} (image ${ORCHESTRATOR_IMAGE})..." >&2
+    local podman_exit=0
+    podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" || podman_exit=$?
+
+    cleanup_claude_invocation_tmpfiles
+    return "${podman_exit}"
+}
+
+# Pre-flight for any agent container launch (invoke_claude / invoke_claude_interactive):
+# removes a leftover non-running container holding container_name, dies if a running one
+# holds it, prunes dangling images, and pulls ORCHESTRATOR_IMAGE (once per process). item_type
+# and item_id are optional and only feed the Discord error notifications.
+ensure_agent_container_ready() {
+    local container_name="$1" item_type="${2:-}" item_id="${3:-}"
+
+    if podman inspect "${container_name}" >/dev/null 2>&1; then
+        # A container left behind by a hard host crash (despite --rm) previously made every
+        # subsequent run die permanently until a human removed it manually (#1090). If it is not
+        # actively running, it is safe to assume it is such a leftover and remove it ourselves;
+        # only die if it is genuinely running, which means something else is actively using it.
+        if [ "$(podman inspect --format '{{.State.Running}}' "${container_name}" 2>/dev/null)" = "true" ]; then
+            notify_discord_claude_error "${item_type}" "${item_id}" \
+                "Container ${container_name} already exists and is running — remove it manually before running"
+            die "Container ${container_name} already exists and is running — remove it manually before running"
+        fi
+        warn "Removing leftover (non-running) container ${container_name} from a previous run"
+        podman rm -f "${container_name}" >&2 \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to remove leftover container ${container_name}"; die "Failed to remove leftover container ${container_name}"; }
+    fi
+
+    cleanup_dangling_images
+    # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
+    # and a tick with several actionable items would otherwise pay that cost once per item.
+    if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
+        info "Image ${ORCHESTRATOR_IMAGE} already pulled this run — not re-pulling" >&2
+    else
+        info "Pulling latest image ${ORCHESTRATOR_IMAGE}..." >&2
+        local pull_start_unix pull_end_unix pull_duration_secs
+        pull_start_unix=$(date +%s)
+        if podman pull "${ORCHESTRATOR_IMAGE}" >&2; then
+            ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=1
+            pull_end_unix=$(date +%s)
+            pull_duration_secs=$(( pull_end_unix - pull_start_unix ))
+            # #1400: alert when this pull took disproportionately longer than the owner's own
+            # recent history - a pathologically slow pull otherwise just looks like the
+            # orchestrator "not doing anything" from the outside. "Slow enough to alert on" is
+            # pull_duration_exceeds_baseline's own policy call (lib/state), not this call site's
+            # - mirrors check_disk_space, whose threshold likewise lives with the predicate.
+            # Computed BEFORE record_pull_duration below, so this pull's own duration is judged
+            # against prior history only, never against a baseline that already absorbed it.
+            local pull_baseline_secs
+            if pull_baseline_secs=$(pull_duration_exceeds_baseline "${pull_duration_secs}"); then
+                notify_discord_slow_pull "${OWNER}" "${pull_duration_secs}" "${pull_baseline_secs}"
+            fi
+            record_pull_duration "${pull_duration_secs}"
+        elif podman image exists "${ORCHESTRATOR_IMAGE}"; then
+            # A registry hiccup should not fail the run when a usable cached image already exists
+            # locally — fall back to it instead of dying outright (#1090). Deliberately leaves the
+            # flag at 0 so the next item in this run retries the pull rather than being stuck on
+            # the fallback for the whole tick.
+            warn "Failed to pull ${ORCHESTRATOR_IMAGE} — falling back to the cached local image"
+        else
+            notify_discord_pull_failed "${item_type}" "${item_id}" \
+                "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
+            die "Failed to pull ${ORCHESTRATOR_IMAGE} and no cached local image is available"
+        fi
+    fi
+}
+
+# Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
+# container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
+# (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
+# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, and the Podman secrets for
+# the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
+# phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
+# or expose. Installs the EXIT trap that removes everything it creates
+# (cleanup_claude_invocation_tmpfiles) before the first mktemp, so a die() from inside here
+# cannot leak a tmpfile or a secret (#1103); bash traps replace rather than append, so a
+# caller that needs more on EXIT passes it as extra_exit_cmd (oneshot: stop_ssh_agent). The
+# trap is a backstop only: every normal exit path in the callers runs the cleanup itself.
+# item_type and item_id are optional: when both are set they feed the WORK_ITEM_URL banner
+# and the Discord error notifications.
+prepare_claude_container_args() {
+    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}" extra_exit_cmd="${6:-}"
+    local d
+
+    # shellcheck disable=SC2064  # expanded now on purpose: the command is fixed at install time
+    trap "cleanup_claude_invocation_tmpfiles${extra_exit_cmd:+; ${extra_exit_cmd}}" EXIT
+
+    # CLAUDE.md content is mandatory — every invocation must supply it.
+    if [ -z "${claude_md_content}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" "claude_md_content is required but was not provided"
+        die "claude_md_content is required but was not provided"
+    fi
+
+    # Bake settings.json/policy-limits.json/hooks/skills into the image (see
+    # containers/base/development-full/Dockerfile) and mount only the pieces of
+    # ~/.claude that must vary per invocation or persist across invocations:
+    #   - CLAUDE.md: single read-only file mount. Safe now that the image already
+    #     creates /home/developer/.claude with correct ownership — the old
+    #     whole-directory mount trick existed only to work around Podman creating
+    #     an unmounted parent directory with wrong ownership when bind-mounting a
+    #     single file into a path whose parent didn't exist yet in the image.
+    #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
+    #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
+    #     they persist across invocations instead of being wiped every run.
+    CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
+    printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
+    CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
+    PODMAN_SECRET_NAME=""
+    GH_ENTERPRISE_SECRET_NAME=""
+    for d in sessions session-env plans cache backups; do
+        mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
+    done
+    # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
+    # persistent host directory; "local" is created by entrypoint.sh itself and stays
+    # container-ephemeral.
+    mkdir -p "${ORCHESTRATOR_CACHE_DIR}/global" || die "Failed to create persistent orchestrator cache directory: ${ORCHESTRATOR_CACHE_DIR}/global"
+
+    # Export invocation-scoped globals so helper functions can read them.
+    PODMAN_CONTAINER_NAME="${container_name}"
+    PODMAN_RUN_ARGS=(
+        run
+        --name "${container_name}"
+        --rm
+        --interactive
+        # keep-id:uid=1000,gid=1000 maps container developer (UID/GID 1000) to the
+        # host user running this service so that bind-mounted sockets and directories
+        # owned by the host user appear as owned by the container's developer user,
+        # giving it full owner-level access without world-writable permissions.
+        "--userns=keep-id:uid=1000,gid=1000"
+        --cpus="4"
+        --memory="12g"
+        --memory-swap="12g"
+        --pids-limit=4096
+        --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
+        --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
+        --volume "${CLAUDE_SCRATCH_TMPDIR}:${CONTAINER_SCRATCH_PATH}:rw"
+    )
+    # --replace takes over the name if something still holds it, instead of refusing to start
+    # (#1361). ensure_agent_container_ready already handles a leftover container podman inspect
+    # can SEE (removing it when stopped, dying when genuinely running), and that guard is what
+    # keeps --replace from silently destroying another invocation's in-flight work. This covers
+    # the case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
+    # container mid-teardown) can leave the name reserved in the lower containers/storage layer
+    # while libpod's own metadata record is gone, so podman ps -a and podman inspect both report
+    # nothing while podman run still fails with "already in use by an external entity". That
+    # wedged the credfeto service for 19.5 hours across ~3,000 cycles until a human intervened.
+    # Verified on the live orphan: --replace both starts successfully AND purges the stale
+    # storage reservation, so it is the cure as well as the prevention. Only safe under oneshot's
+    # per-owner flock; interactive sets PODMAN_REPLACE_CONTAINER=0 (lib/globals) because a
+    # second unlocked launch racing the first through the pull window would otherwise kill it.
+    [ "${PODMAN_REPLACE_CONTAINER}" = "1" ] && PODMAN_RUN_ARGS+=( --replace )
+    [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
+    if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
+        PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
+        PODMAN_RUN_ARGS+=( --env "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" )
+    else
+        warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
+    fi
+    verify_gpg_signing_ready "${item_type}" "${item_id}"
+    add_gpg_podman_args
+    if [ -f "${HOME}/.database" ]; then
+        PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )
+    else
+        warn "\$HOME/.database not found — database credentials will not be available in the agent container"
+    fi
+    PODMAN_RUN_ARGS+=( --volume "${CLAUDE_MD_TMPFILE}:/home/developer/.claude/CLAUDE.md:ro" )
+    for d in sessions session-env plans cache backups; do
+        PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
+    done
+    # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
+    # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
+    # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
+    # directory (test/entrypoint-cache-path-parity.bats asserts the two literal copies of
+    # that expression match). Deliberately not pinned via an image-wide ENV XDG_CACHE_HOME:
+    # that would also redirect every other XDG-aware tool's cache in the container (npm, pip,
+    # eslint/stylelint wrappers, ...) onto this same path for no benefit to them, and some
+    # tools resolve their own default differently once XDG_CACHE_HOME is explicitly set versus
+    # left unset. containers/agent/Dockerfile instead pre-creates
+    # /home/developer/.cache/orchestrator/{local,global} with correct ownership directly, so
+    # this mount target already exists rather than depending on this assumption at all.
+    PODMAN_RUN_ARGS+=( --volume "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" )
+
+    [ -n "${GIT_USER_NAME}" ]  && PODMAN_RUN_ARGS+=( --env "GIT_USER_NAME=${GIT_USER_NAME}" )
+    [ -n "${GIT_USER_EMAIL}" ] && PODMAN_RUN_ARGS+=( --env "GIT_USER_EMAIL=${GIT_USER_EMAIL}" )
+    [ -n "${GIT_SIGNING_KEY}" ] && PODMAN_RUN_ARGS+=( --env "GIT_SIGNING_KEY=${GIT_SIGNING_KEY}" )
+    # #1351 experiment: CONTAINER_SCRATCH_PATH is a fixed, known-in-advance container path
+    # (like CONTAINER_REPO_PATH/CONTAINER_RULES_PATH above) - unlike those two, though, its
+    # host-side backing directory is created fresh per invocation (below) and only its
+    # --add-dir/--volume wiring needs doing from here. TMPDIR/TMP/TEMP/XDG_RUNTIME_DIR are
+    # exported by entrypoint.sh itself against this same hardcoded path, the same way it
+    # already hardcodes /workspace/repo as WORKSPACE_REPO_DIR's default - no need to inject
+    # them via --env from a fixed value the container already knows.
+
+    # Lets the agent container announce what it's working on at startup. Only
+    # set when both are known — most callers (tests, ad-hoc invocations) pass
+    # empty item_type/item_id and simply won't get this env var.
+    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
+        PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
+    fi
+
+    # Secrets are named after the container, not the owner: oneshot (orchestrator-<owner>) and
+    # interactive (interactive-<owner>-<repo>) can run side by side on one host, and each
+    # removes and recreates its secrets on entry and removes them on every exit path, so a
+    # shared name would let one launch delete the secret the other is between creating and
+    # consuming.
+    # Secrets created under the pre-rename names (claude-oauth-<owner>, gh-enterprise-token)
+    # by a run that crashed between create and its EXIT trap would otherwise never be swept
+    # again after the self-update, leaving a live token in the store. Best-effort, every launch.
+    podman secret rm "claude-oauth-${OWNER}" "gh-enterprise-token" >/dev/null 2>&1 || true
+    if [ -n "${owner_token}" ]; then
+        PODMAN_SECRET_NAME="claude-oauth-${container_name}"
+        podman secret rm "${PODMAN_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${owner_token}" | podman secret create "${PODMAN_SECRET_NAME}" - \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for Claude OAuth token"; die "Failed to create Podman secret for Claude OAuth token"; }
+        PODMAN_RUN_ARGS+=( --secret "${PODMAN_SECRET_NAME},type=env,target=CLAUDE_CODE_OAUTH_TOKEN" )
+    fi
+    if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+        # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
+        # github.com login (an unproxied developer's .env, see bootstrap_orchestrator_env_file)
+        # the same token has to arrive as GH_TOKEN or every gh call in the container fails.
+        local gh_token_target="GH_ENTERPRISE_TOKEN"
+        [ "$(normalize_gh_host "${GH_HOST:-}")" = "github.com" ] && gh_token_target="GH_TOKEN"
+        GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
+        podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
+        printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
+            || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
+        PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=${gh_token_target}" )
+    fi
+    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=$(normalize_gh_host "${GH_HOST}")" )
+    PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
 }
 
 # owner_rate_limit_file, save_rate_limit, is_owner_rate_limited, report_unparseable_rate_limit,

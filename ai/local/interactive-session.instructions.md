@@ -40,7 +40,7 @@ Update the board status at every stage transition (Not Started → Development �
 
 ## Quality gates (mandatory before any commit)
 
-- `shellcheck oneshot loop` — must pass with no findings.
+- `shellcheck oneshot loop create-project setup-owner install-timer interactive test/*.bats` — must pass with no findings.
 - `bats test/` — full suite must pass, including new tests for any new behaviour.
 - `dotnet changelog` — add or correct the changelog entry (placeholder or correction mode, per the lifecycle above) before each relevant commit, unless the repo hits the template-repo skip condition.
 - All pre-commit hooks must pass; never use `--no-verify`.

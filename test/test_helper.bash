@@ -66,6 +66,15 @@ setup_isolated_env() {
     # Unset host-level env vars that leak from the container/agent environment
     # and change script behaviour in ways the tests do not expect.
     unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY
+    # When the suite runs from a git pre-commit hook, git exports GIT_INDEX_FILE (as the
+    # RELATIVE path .git/index) and GIT_DIR/GIT_WORK_TREE for the real repository; any real git
+    # command inside a fixture then resolves them against the fixture and fails (a linked
+    # worktree fixture, whose .git is a file, dies with ".git/index: Not a directory").
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+    # HOME above isolates the global gitconfig, but /etc/gitconfig still applies: on this host
+    # it sets core.hooksPath, which git_hooks_dir (lib/git) honours, so every fixture would
+    # otherwise digest the host's shared hooks checkout instead of its own .git/hooks.
+    export GIT_CONFIG_NOSYSTEM=1
     unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL
@@ -90,9 +99,16 @@ setup_isolated_env() {
 source_oneshot() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/oneshot"
+    seed_test_repo_context
+}
+
+# Seeds the canonical test repo context after a script that sources lib/git has been loaded,
+# then points every derived state directory into the isolated test directory.
+seed_test_repo_context() {
     set_repo_context "credfeto/credfeto-orchestrator"
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
     export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
+    export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
 }
 
 # Sources the loop script so its functions are defined without running main.
@@ -123,6 +139,15 @@ source_install_claude_hooks() {
 source_setup_owner() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/setup-owner"
+}
+
+# Sources the interactive script so its functions are defined without running main, then
+# seeds the same canonical repo context and isolated state dirs source_oneshot does, since
+# interactive's container helpers (lib/podman) read the same globals.
+source_interactive() {
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/interactive"
+    seed_test_repo_context
 }
 
 # Sources the create-project script so its functions are defined without running main.
