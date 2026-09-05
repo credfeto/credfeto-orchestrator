@@ -329,6 +329,25 @@ resolve_repo_dir() {
     printf '%s' "${top}"
 }
 
+# Dies when the checkout's stored remote URLs or url.* rewrite rules are ones the container
+# entrypoint refuses (verify_repo_ssh_remotes, verify_no_user_insteadof), so the refusal
+# happens before the image pull and names host paths. Reads the raw --local values, not the
+# insteadOf-resolved ones `git remote -v` shows, exactly as the entrypoint does; only the
+# checkout's own .git/config matters because the container never sees the host's global
+# gitconfig (the entrypoint builds a minimal one).
+check_repo_remotes() {
+    local repo_dir="$1" non_ssh violations
+    non_ssh=$({
+        git -C "${repo_dir}" config --local --get-all remote.origin.url 2>/dev/null
+        git -C "${repo_dir}" config --local --get-all remote.origin.pushurl 2>/dev/null
+    } | sort -u | grep -v '^git@github\.com:' || true)
+    [ -z "${non_ssh}" ] \
+        || die "origin URL(s) in ${repo_dir}/.git/config not in git@github.com: SSH form, which the agent container refuses: ${non_ssh//$'\n'/, } (fix with git -C ${repo_dir} remote set-url [--push] origin git@github.com:<owner>/<repo>.git, or drop the pushurl)"
+    violations=$(git -C "${repo_dir}" config --local --list 2>/dev/null | grep -iE '\.(insteadof|pushinsteadof)=' || true)
+    [ -z "${violations}" ] \
+        || die "url.*.insteadOf/pushInsteadOf rules in ${repo_dir}/.git/config, which the agent container refuses: ${violations//$'\n'/, } (remove them with git -C ${repo_dir} config --local --unset-all <key>)"
+}
+
 # Dies when the checkout carries a project-level Claude/MCP config that differs from the
 # reviewed origin/main copy: the same three-file check the container entrypoint runs
 # (verify_no_repo_claude_config), performed here so the refusal names host paths and happens

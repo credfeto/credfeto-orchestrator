@@ -250,6 +250,38 @@ make_committed_checkout() {
     printf '%s' "${dir}"
 }
 
+@test "check_repo_remotes passes a plain git@github.com: origin" {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    run check_repo_remotes "${dir}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "check_repo_remotes dies on a non-SSH pushurl even when the fetch URL is SSH" {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    git -C "${dir}" remote set-url --push origin https://github.com/credfeto/example.git
+    run check_repo_remotes "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"https://github.com/credfeto/example.git"* ]]
+    [[ "${output}" == *"remote set-url [--push]"* ]]
+}
+
+@test "check_repo_remotes dies on a local insteadOf or pushInsteadOf rule" {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    git -C "${dir}" config url.https://evil.example/.insteadOf git@github.com:
+    run check_repo_remotes "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"insteadOf/pushInsteadOf rules in ${dir}/.git/config"* ]]
+    git -C "${dir}" config --unset url.https://evil.example/.insteadOf
+    git -C "${dir}" config url.https://evil.example/.pushInsteadOf git@github.com:
+    run check_repo_remotes "${dir}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"pushinsteadof=git@github.com:"* ]]
+}
+
 @test "check_repo_claude_config passes with no project-level Claude config" {
     local dir
     dir=$(make_committed_checkout)

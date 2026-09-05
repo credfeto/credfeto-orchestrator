@@ -99,8 +99,8 @@ check_interactive_tools() {
     require_tools git jq podman gh claude ssh-add
 }
 
-# resolve_repo_dir, resolve_repo_full, check_rules_checkout and github_repo_full_from_url are
-# declared in lib/git; bootstrap_orchestrator_config in lib/core; invoke_claude_interactive in
+# resolve_repo_dir, resolve_repo_full, check_repo_remotes, check_repo_claude_config,
+# check_rules_checkout and github_repo_full_from_url are declared in lib/git; bootstrap_orchestrator_config in lib/core; invoke_claude_interactive in
 # lib/podman; build_interactive_claude_md in lib/prompts.
 
 main() {
@@ -119,6 +119,7 @@ main() {
     set_repo_context "${repo_full}" "${repo_dir}" "${INTERACTIVE_RULES_DIR}"
     # Host-side versions of the entrypoint's own refusals, so they fire before the image pull
     # and name host paths.
+    check_repo_remotes "${REPO_WORK_DIR}"
     check_repo_claude_config "${REPO_WORK_DIR}"
     check_rules_checkout "${RULES_DIR}"
 
