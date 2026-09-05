@@ -352,14 +352,23 @@ check_repo_claude_config() {
 # time the developer runs git in that checkout, and the container mounts them read-write, so
 # a change made from inside the session must be surfaced rather than silently trusted.
 git_metadata_digest() {
-    local repo_dir="$1" git_dir
+    local repo_dir="$1" git_dir digest
     git_dir=$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null) || git_dir="${repo_dir}/.git"
-    {
+    digest=$({
         [ -f "${git_dir}/config" ] && cat "${git_dir}/config"
-        if [ -d "${git_dir}/hooks" ]; then
-            find "${git_dir}/hooks" -type f ! -name '*.sample' -printf '%p %m\n' -exec cat {} + 2>/dev/null | sort
+        # Two passes over hooks/: a sorted listing of every entry (path, mode, type and symlink
+        # target, so a hook added as a symlink, or hooks/ itself replaced by a symlink, changes
+        # the digest), then the contents of every regular file in that same fixed order (-L
+        # follows symlinks to the real script). Contents are deliberately NOT sorted: a
+        # reordered hook, with a payload moved above an early exit, must change the digest too.
+        if [ -e "${git_dir}/hooks" ]; then
+            find "${git_dir}/hooks" -mindepth 0 ! -name '*.sample' -printf '%p %m %y %l\n' 2>/dev/null | sort
+            find -L "${git_dir}/hooks" -mindepth 1 -type f ! -name '*.sample' -print0 2>/dev/null \
+                | sort -z | xargs -0 -r cat --
         fi
-    } | hash_sha256
+    } | hash_sha256)
+    [ -n "${digest}" ] || return 1
+    printf '%s' "${digest}"
 }
 
 # Warns loudly when git_metadata_digest differs from before_digest, naming what to inspect.

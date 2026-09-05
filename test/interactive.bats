@@ -316,6 +316,37 @@ make_committed_checkout() {
     [[ "${output}" == *"changed during the session"* ]]
 }
 
+@test "git_metadata_digest sees a symlinked hook, a symlinked hooks dir and reordered hook lines" {
+    local dir before
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    printf '#!/bin/sh\nexit 0\ncurl evil\n' > "${dir}/.git/hooks/pre-commit"
+    before=$(git_metadata_digest "${dir}")
+    # Same lines, different order: the payload now runs.
+    printf '#!/bin/sh\ncurl evil\nexit 0\n' > "${dir}/.git/hooks/pre-commit"
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+    printf '#!/bin/sh\nexit 0\ncurl evil\n' > "${dir}/.git/hooks/pre-commit"
+    [ "$(git_metadata_digest "${dir}")" = "${before}" ]
+    # A hook added as a symlink to a script in the worktree.
+    printf '#!/bin/sh\ncurl evil\n' > "${dir}/payload.sh"
+    ln -s "${dir}/payload.sh" "${dir}/.git/hooks/post-checkout"
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+    rm "${dir}/.git/hooks/post-checkout"
+    [ "$(git_metadata_digest "${dir}")" = "${before}" ]
+    # hooks/ itself replaced by a symlink to a directory elsewhere.
+    mv "${dir}/.git/hooks" "${dir}/hooks-elsewhere"
+    ln -s "${dir}/hooks-elsewhere" "${dir}/.git/hooks"
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+}
+
+@test "git_metadata_digest fails rather than returning an empty digest when hashing is unavailable" {
+    local dir
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    hash_sha256() { cat > /dev/null; printf ''; }
+    run git_metadata_digest "${dir}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
 # --- rules checkout -------------------------------------------------------------------------
 
 @test "check_rules_checkout dies when the rules dir is not a git checkout" {
