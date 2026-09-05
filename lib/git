@@ -355,7 +355,13 @@ git_metadata_digest() {
     local repo_dir="$1" git_dir digest
     git_dir=$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null) || git_dir="${repo_dir}/.git"
     digest=$({
-        [ -f "${git_dir}/config" ] && cat "${git_dir}/config"
+        # The effective local config (includes followed, so an include.path pointing at a
+        # worktree file contributes its content) minus branch.* keys: push -u and
+        # push.autoSetupRemote write a [branch] stanza after nearly every productive session,
+        # and a warning that fires every time is one that gets ignored. Everything that can make
+        # git execute something (core.hooksPath, core.sshCommand, core.fsmonitor, url.*.insteadOf,
+        # remote URLs, credential helpers, aliases, filters) stays in.
+        git -C "${repo_dir}" config --local --list 2>/dev/null | grep -v '^branch\.' | sort
         # Two passes over hooks/: a sorted listing of every entry (path, mode, type and symlink
         # target, so a hook added as a symlink, or hooks/ itself replaced by a symlink, changes
         # the digest), then the contents of every regular file in that same fixed order (-L
@@ -376,7 +382,7 @@ warn_if_git_metadata_changed() {
     local repo_dir="$1" before_digest="$2" after_digest
     after_digest=$(git_metadata_digest "${repo_dir}")
     [ "${after_digest}" = "${before_digest}" ] && return 0
-    warn "${repo_dir}/.git/config or .git/hooks changed during the session: review them before running git in that checkout on this host (git -C ${repo_dir} config --local --list; ls -la ${repo_dir}/.git/hooks)"
+    warn "${repo_dir}/.git/config (other than branch.* tracking entries) or .git/hooks changed during the session: review them before running git in that checkout on this host (git -C ${repo_dir} config --local --list; ls -la ${repo_dir}/.git/hooks)"
 }
 
 # Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
