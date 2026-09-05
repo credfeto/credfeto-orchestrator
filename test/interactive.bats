@@ -731,7 +731,6 @@ setup_interactive_run() {
     grep -qx -- '--tty' "${TEST_TMP}/podman_args"
     grep -qx -- '--interactive' "${TEST_TMP}/podman_args"
     grep -qx -- '--rm' "${TEST_TMP}/podman_args"
-    grep -qx -- '--replace' "${TEST_TMP}/podman_args"
     grep -qx 'interactive-credfeto-credfeto-orchestrator' "${TEST_TMP}/podman_args"
     [ "$(grep -c 'orchestrator-credfeto$' "${TEST_TMP}/podman_args")" -eq 0 ]
 }
@@ -795,6 +794,14 @@ setup_interactive_run() {
     invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
     grep -qx 'gh-enterprise-token-interactive-credfeto-credfeto-orchestrator,type=env,target=GH_ENTERPRISE_TOKEN' "${TEST_TMP}/podman_args"
     [ "$(grep -c -- 'target=GH_TOKEN$' "${TEST_TMP}/podman_args")" -eq 0 ]
+}
+
+@test "invoke_claude_interactive never passes --replace, so a racing second launch cannot kill a live session" {
+    [ "${PODMAN_REPLACE_CONTAINER}" = "0" ]
+    setup_interactive_run
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    [ "$(grep -c -x -- '--replace' "${TEST_TMP}/podman_args")" -eq 0 ]
+    grep -qx -- '--rm' "${TEST_TMP}/podman_args"
 }
 
 @test "invoke_claude_interactive never prunes the developer's images" {

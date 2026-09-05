@@ -9063,6 +9063,13 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+@test "PRUNE_DANGLING_IMAGES and PODMAN_REPLACE_CONTAINER are not seeded from the environment" {
+    export PRUNE_DANGLING_IMAGES=0 PODMAN_REPLACE_CONTAINER=0
+    source_oneshot
+    [ "${PRUNE_DANGLING_IMAGES}" = "1" ]
+    [ "${PODMAN_REPLACE_CONTAINER}" = "1" ]
+}
+
 @test "cleanup_dangling_images is a no-op when PRUNE_DANGLING_IMAGES is 0" {
     local args_log="${TEST_TMP}/podman_args"
     make_stub podman "printf '%s\n' \"\$@\" >> '${args_log}'; exit 0"
