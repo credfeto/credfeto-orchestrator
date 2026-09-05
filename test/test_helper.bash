@@ -71,6 +71,10 @@ setup_isolated_env() {
     # command inside a fixture then resolves them against the fixture and fails (a linked
     # worktree fixture, whose .git is a file, dies with ".git/index: Not a directory").
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+    # HOME above isolates the global gitconfig, but /etc/gitconfig still applies: on this host
+    # it sets core.hooksPath, which git_hooks_dir (lib/git) honours, so every fixture would
+    # otherwise digest the host's shared hooks checkout instead of its own .git/hooks.
+    export GIT_CONFIG_NOSYSTEM=1
     unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
     unset DISCORD_WEBHOOK_URL

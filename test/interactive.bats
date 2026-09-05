@@ -341,7 +341,7 @@ make_committed_checkout() {
     printf '#!/bin/sh\n' > "${dir}/.git/hooks/post-checkout"
     run warn_if_git_metadata_changed "${dir}" "${before}"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *".git/hooks changed during the session"* ]]
+    [[ "${output}" == *"hooks directory ${dir}/.git/hooks changed during the session"* ]]
     rm "${dir}/.git/hooks/post-checkout"
     git -C "${dir}" config core.sshCommand "ssh -i /evil"
     run warn_if_git_metadata_changed "${dir}" "${before}"
@@ -383,6 +383,31 @@ make_committed_checkout() {
     mv "${dir}/.git/hooks" "${dir}/hooks-elsewhere"
     ln -s "${dir}/hooks-elsewhere" "${dir}/.git/hooks"
     [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+}
+
+@test "git_metadata_digest follows core.hooksPath set outside .git/config, relative or absolute" {
+    local dir before
+    dir=$(make_git_checkout "git@github.com:credfeto/example.git")
+    # A global (not local) relative hooksPath: invisible to --local --list, resolves inside
+    # the mounted checkout.
+    git config --global core.hooksPath .githooks
+    mkdir -p "${dir}/.githooks"
+    [ "$(git_hooks_dir "${dir}")" = "${dir}/.githooks" ]
+    before=$(git_metadata_digest "${dir}")
+    printf '#!/bin/sh\ncurl evil\n' > "${dir}/.githooks/pre-commit"
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+    run warn_if_git_metadata_changed "${dir}" "${before}"
+    [[ "${output}" == *"hooks directory ${dir}/.githooks changed during the session"* ]]
+    # An absolute path elsewhere (a hooks checkout shared by every repo on the host).
+    mkdir -p "${TEST_TMP}/shared-hooks"
+    git config --global core.hooksPath "${TEST_TMP}/shared-hooks"
+    [ "$(git_hooks_dir "${dir}")" = "${TEST_TMP}/shared-hooks" ]
+    before=$(git_metadata_digest "${dir}")
+    printf '#!/bin/sh\ncurl evil\n' > "${TEST_TMP}/shared-hooks/pre-commit"
+    [ "$(git_metadata_digest "${dir}")" != "${before}" ]
+    # Unset: back to .git/hooks.
+    git config --global --unset core.hooksPath
+    [ "$(git_hooks_dir "${dir}")" = "${dir}/.git/hooks" ]
 }
 
 @test "git_metadata_digest fails rather than returning an empty digest when hashing is unavailable" {
@@ -982,7 +1007,7 @@ HOOKEOF
         'exit 0'
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *".git/hooks changed during the session"* ]]
+    [[ "${output}" == *"hooks directory ${TEST_TMP}/checkout/.git/hooks changed during the session"* ]]
 }
 
 @test "main never posts a launch failure to a Discord webhook found in .env" {

@@ -366,13 +366,31 @@ check_repo_claude_config() {
     done
 }
 
-# Records a digest of the checkout's .git/config and .git/hooks (names, modes and contents)
-# on stdout, for comparison after a session. Both are executed by git on the HOST the next
-# time the developer runs git in that checkout, and the container mounts them read-write, so
-# a change made from inside the session must be surfaced rather than silently trusted.
+# Outputs the absolute directory git will actually run hooks from for the checkout: honours
+# core.hooksPath from every scope (a system or global value is common and, when it is a
+# relative path such as .githooks or a path inside a sibling checkout, lands in a directory
+# the container can write), falling back to <git-dir>/hooks. --path-format=absolute matters:
+# a bare --git-path returns a relative core.hooksPath verbatim, which would then be resolved
+# against the caller's cwd rather than the checkout.
+git_hooks_dir() {
+    local repo_dir="$1" hooks_dir
+    hooks_dir=$(git -C "${repo_dir}" rev-parse --path-format=absolute --git-path hooks 2>/dev/null) || hooks_dir=""
+    case "${hooks_dir}" in
+        /*) ;;
+        "") hooks_dir="${repo_dir}/.git/hooks" ;;
+        *) hooks_dir="${repo_dir}/${hooks_dir}" ;;
+    esac
+    printf '%s' "${hooks_dir}"
+}
+
+# Records a digest of the checkout's .git/config and its effective hooks directory (names,
+# modes and contents) on stdout, for comparison after a session. Both are executed by git on
+# the HOST the next time the developer runs git in that checkout, and the container mounts
+# the checkout read-write, so a change made from inside the session must be surfaced rather
+# than silently trusted.
 git_metadata_digest() {
-    local repo_dir="$1" git_dir digest
-    git_dir=$(git -C "${repo_dir}" rev-parse --absolute-git-dir 2>/dev/null) || git_dir="${repo_dir}/.git"
+    local repo_dir="$1" hooks_dir digest
+    hooks_dir=$(git_hooks_dir "${repo_dir}")
     digest=$({
         # The effective local config (includes followed, so an include.path pointing at a
         # worktree file contributes its content) minus branch.* keys: push -u and
@@ -381,14 +399,17 @@ git_metadata_digest() {
         # git execute something (core.hooksPath, core.sshCommand, core.fsmonitor, url.*.insteadOf,
         # remote URLs, credential helpers, aliases, filters) stays in.
         git -C "${repo_dir}" config --local --list 2>/dev/null | grep -v '^branch\.' | sort
-        # Two passes over hooks/: a sorted listing of every entry (path, mode, type and symlink
-        # target, so a hook added as a symlink, or hooks/ itself replaced by a symlink, changes
-        # the digest), then the contents of every regular file in that same fixed order (-L
-        # follows symlinks to the real script). Contents are deliberately NOT sorted: a
+        # The effective hooks path from any scope, so a change of value or scope is visible even
+        # when it did not come from .git/config.
+        printf 'hooks-dir %s\n' "${hooks_dir}"
+        # Two passes over the hooks dir: a sorted listing of every entry (path, mode, type and
+        # symlink target, so a hook added as a symlink, or the dir itself replaced by a symlink,
+        # changes the digest), then the contents of every regular file in that same fixed order
+        # (-L follows symlinks to the real script). Contents are deliberately NOT sorted: a
         # reordered hook, with a payload moved above an early exit, must change the digest too.
-        if [ -e "${git_dir}/hooks" ]; then
-            find "${git_dir}/hooks" -mindepth 0 ! -name '*.sample' -printf '%p %m %y %l\n' 2>/dev/null | sort
-            find -L "${git_dir}/hooks" -mindepth 1 -type f ! -name '*.sample' -print0 2>/dev/null \
+        if [ -e "${hooks_dir}" ]; then
+            find "${hooks_dir}" -mindepth 0 ! -name '*.sample' -printf '%p %m %y %l\n' 2>/dev/null | sort
+            find -L "${hooks_dir}" -mindepth 1 -type f ! -name '*.sample' -print0 2>/dev/null \
                 | sort -z | xargs -0 -r cat --
         fi
     } | hash_sha256)
@@ -398,10 +419,11 @@ git_metadata_digest() {
 
 # Warns loudly when git_metadata_digest differs from before_digest, naming what to inspect.
 warn_if_git_metadata_changed() {
-    local repo_dir="$1" before_digest="$2" after_digest
+    local repo_dir="$1" before_digest="$2" after_digest hooks_dir
     after_digest=$(git_metadata_digest "${repo_dir}")
     [ "${after_digest}" = "${before_digest}" ] && return 0
-    warn "${repo_dir}/.git/config (other than branch.* tracking entries) or .git/hooks changed during the session: review them before running git in that checkout on this host (git -C ${repo_dir} config --local --list; ls -la ${repo_dir}/.git/hooks)"
+    hooks_dir=$(git_hooks_dir "${repo_dir}")
+    warn "${repo_dir}/.git/config (other than branch.* tracking entries) or the hooks directory ${hooks_dir} changed during the session: review them before running git in that checkout on this host (git -C ${repo_dir} config --local --list; ls -la ${hooks_dir})"
 }
 
 # Outputs "<owner>/<repo>" for the checkout's origin remote, or dies.
