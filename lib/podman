@@ -819,14 +819,14 @@ prepare_claude_container_args() {
         # github.com login (an unproxied developer's .env, see bootstrap_orchestrator_env_file)
         # the same token has to arrive as GH_TOKEN or every gh call in the container fails.
         local gh_token_target="GH_ENTERPRISE_TOKEN"
-        [ "${GH_HOST:-}" = "github.com" ] && gh_token_target="GH_TOKEN"
+        [ "$(normalize_gh_host "${GH_HOST:-}")" = "github.com" ] && gh_token_target="GH_TOKEN"
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
         podman secret rm "${GH_ENTERPRISE_SECRET_NAME}" >/dev/null 2>&1 || true
         printf '%s' "${GH_ENTERPRISE_TOKEN}" | podman secret create "${GH_ENTERPRISE_SECRET_NAME}" - \
             || { notify_discord_claude_error "${item_type}" "${item_id}" "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; die "Failed to create Podman secret for GH_ENTERPRISE_TOKEN"; }
         PODMAN_RUN_ARGS+=( --secret "${GH_ENTERPRISE_SECRET_NAME},type=env,target=${gh_token_target}" )
     fi
-    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=${GH_HOST}" )
+    [ -n "${GH_HOST:-}" ]                && PODMAN_RUN_ARGS+=( --env "GH_HOST=$(normalize_gh_host "${GH_HOST}")" )
     PODMAN_RUN_ARGS+=( --env "CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" )
 }
 

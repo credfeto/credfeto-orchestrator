@@ -3385,7 +3385,8 @@ STUBEOF
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     # shellcheck disable=SC2030
     GH_ENTERPRISE_TOKEN="my-gh-token"
-    export GH_HOST="github.com"
+    # Verbatim from a shell or .env; gh treats it as github.com and so must we.
+    export GH_HOST="GitHub.com"
     cat > "${STUB_BIN}/podman" << STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "secret" ] && exit 0
@@ -5532,6 +5533,30 @@ STUBEOF
     [ "${GH_HOST}" = "github-api.example.com" ]
     # shellcheck disable=SC2031
     [ "${GH_ENTERPRISE_TOKEN}" = "ghp_testtoken" ]
+}
+
+@test "load_env_config normalises GH_HOST and also exports GH_TOKEN for a direct github.com host" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'GH_TOKEN=ghp_direct\nGH_HOST=GitHub.com\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    load_env_config
+    [ "${GH_HOST}" = "github.com" ]
+    # shellcheck disable=SC2031
+    [ "${GH_ENTERPRISE_TOKEN}" = "ghp_direct" ]
+    # shellcheck disable=SC2031
+    [ "${GH_TOKEN}" = "ghp_direct" ]
+    printf 'GH_TOKEN=ghp_direct\nGH_HOST=api.github.com\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset GH_TOKEN
+    load_env_config
+    [ "${GH_HOST}" = "github.com" ]
+    # shellcheck disable=SC2031
+    [ "${GH_TOKEN}" = "ghp_direct" ]
+    # A proxy host never gets GH_TOKEN: gh would send it to the proxy as a real PAT.
+    printf 'GH_TOKEN=ghp_proxy\nGH_HOST=GitHub-API.example.com\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    unset GH_TOKEN
+    load_env_config
+    [ "${GH_HOST}" = "github-api.example.com" ]
+    # shellcheck disable=SC2031
+    [ -z "${GH_TOKEN:-}" ]
 }
 
 @test "load_env_config does not export GH vars when GH_HOST is absent" {
