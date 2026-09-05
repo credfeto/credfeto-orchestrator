@@ -48,9 +48,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ---- Build-time arguments ----------------------------------------------------
 # Pin CLI versions for reproducibility. Bump deliberately — unpinned installs
 # silently pick up the latest and can break in lockstep across all users.
-ARG HADOLINT_VERSION=v2.14.0
-ARG HADOLINT_SHA256_AMD64=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
-ARG HADOLINT_SHA256_ARM64=331f1d3511b84a4f1e3d18d52fec284723e4019552f4f47b19322a53ce9a40ed
+ARG HADOLINT_VERSION=v2.15.1
+ARG HADOLINT_SHA256_AMD64=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+ARG HADOLINT_SHA256_ARM64=f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d
 ARG DOTENV_LINTER_VERSION=v4.0.0
 ARG DOTENV_LINTER_SHA256_AMD64=9e2f1f6eb88a71ac15ef209f78f5a68644db82f132d2677112b4f80ec2bd2127
 ARG DOTENV_LINTER_SHA256_ARM64=c4113aafd35e5f9095b2f757061d07cc8eb5cc0bcd755249877af08b7ffafb9a
