@@ -137,26 +137,12 @@ jobs:
         # from the tools-root chain (dotnet-tools at hop 3, native trigger blocked)
         # without walking the workflow_run API chain, so the node/python-root case can
         # still double-fire and self-heal the same way; only the common direct-trigger
-        # case is fully covered.
+        # case is fully covered. See #1424.
         if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: ./.github/actions/dispatch-workflow
         with:
+          workflow-id: "build-development-credfeto-tools.yml"
           github-token: "${{ secrets.GITHUB_TOKEN }}"
-          script: |
-            // workflow_run chains stop after 3 hops (tools -> node -> python ->
-            // dotnet-tools is already 3), so development-credfeto-tools never
-            // fires from here via workflow_run alone. A workflow_dispatch call
-            // is a fresh root, giving its own downstream chain (full, agent) a
-            // full 3-hop budget again. See #1424.
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "build-development-credfeto-tools.yml",
-              ref: "main",
-            });
-
-            core.info("✅ Dispatched build-development-credfeto-tools.yml");
-            core.notice("Dispatched development-credfeto-tools build");
 
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
