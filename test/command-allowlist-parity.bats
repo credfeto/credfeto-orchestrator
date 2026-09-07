@@ -164,7 +164,9 @@ EXPECTED_NON_BASH_TOOLS=(
 # denied by their real path instead, and the Bash text-match denies for them must require a
 # slash before the name so the cs-template search-exclusion form (--exclude='.database') does
 # not trip them.
-@test "claude-settings.json permissions.deny has no Read/Edit ** globs and keeps the ~/.database rules (#1419)" {
+@test "claude-settings.json permissions.deny has no Read/Edit entry beginning with **/ and keeps the ~/.database rules (#1419)" {
+    [ -s "${SETTINGS}" ] || { echo "SETTINGS not found or empty: ${SETTINGS}" >&2; return 1; }
+
     local deny_entries
     deny_entries=$(jq -r '.permissions.deny[]' "${SETTINGS}")
     run grep -E '^(Read|Edit)\(\*\*/' <<< "${deny_entries}"
