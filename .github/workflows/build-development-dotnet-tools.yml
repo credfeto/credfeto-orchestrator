@@ -51,11 +51,11 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
+      actions: "write"
       contents: "read"
       packages: "write"
       pull-requests: "read"
       security-events: "write"
-      actions: "write"
     steps:
       - name: "Checkout source"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
