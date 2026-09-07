@@ -140,6 +140,13 @@ jobs:
         # case is fully covered. See #1424.
         if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
         uses: ./.github/actions/dispatch-workflow
+        # Fire-and-forget: the real build/push/scan above already succeeded by this
+        # point, so a transient API failure here must not fail the job - that would
+        # flip this run's conclusion to failure and, since credfeto-tools' native
+        # workflow_run trigger itself gates on conclusion == 'success', also block
+        # the still-working native path for this same run. Same precedent as the
+        # sarif upload action's fire-and-forget steps.
+        continue-on-error: true
         with:
           workflow-id: "build-development-credfeto-tools.yml"
           github-token: "${{ secrets.GITHUB_TOKEN }}"
