@@ -221,6 +221,7 @@
       "Bash(find * -ok *)",
       "Bash(find * -okdir *)",
       "Bash(gh auth setup-git*)",
+      "WebFetch(domain:api.github.com)",
       "Bash(git -C * config --add *)",
       "Bash(git -C * config --global commit.gpgsign *)",
       "Bash(git -C * config --global user.email *)",
