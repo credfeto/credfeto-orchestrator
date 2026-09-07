@@ -1,0 +1,41 @@
+--- # Explicitly dispatch another workflow in this repo via workflow_dispatch.
+# A workflow_dispatch call is a fresh trigger root, so this resets the
+# workflow_run chain-depth budget for anything downstream of the dispatched
+# workflow (GitHub does not chain workflow_run more than 3 hops from the
+# triggering event). Used where a chain of workflow_run-linked image builds
+# has grown past that budget. See #1424.
+name: "Dispatch workflow"
+description: "Dispatches another workflow in this repository via workflow_dispatch"
+
+inputs:
+  workflow-id:
+    description: "Filename of the workflow to dispatch (e.g. build-development-credfeto-tools.yml)"
+    required: true
+  ref:
+    description: "Git ref to run the dispatched workflow on"
+    required: false
+    default: "main"
+  github-token:
+    description: "GitHub token with actions:write permission"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Dispatch"
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        WORKFLOW_ID: "${{inputs.workflow-id}}"
+        DISPATCH_REF: "${{inputs.ref}}"
+      with:
+        github-token: "${{inputs.github-token}}"
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: process.env.WORKFLOW_ID,
+            ref: process.env.DISPATCH_REF,
+          });
+
+          core.info(`✅ Dispatched ${process.env.WORKFLOW_ID}`);
+          core.notice(`Dispatched ${process.env.WORKFLOW_ID}`);

@@ -51,6 +51,7 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
+      actions: "write"
       contents: "read"
       packages: "write"
       pull-requests: "read"
@@ -123,6 +124,32 @@ jobs:
         uses: ./.github/actions/trivy-scan
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+      - name: "Dispatch development-credfeto-tools build"
+        # Only for the workflow_run-chained case: development-credfeto-tools already
+        # has its own native workflow_run trigger on this workflow, which fires fine
+        # when dotnet-tools itself is a fresh root (direct push or workflow_dispatch),
+        # since that puts credfeto-tools at hop 1. Gating on event_name == 'workflow_run'
+        # skips the explicit dispatch there, avoiding a redundant second trigger racing
+        # the native one (both land in credfeto-tools' concurrency group, so one gets
+        # cancelled - harmless but wasted). It doesn't fully distinguish a node/python-root
+        # chain (dotnet-tools at hop 1 or 2, native trigger still reaches credfeto-tools)
+        # from the tools-root chain (dotnet-tools at hop 3, native trigger blocked)
+        # without walking the workflow_run API chain, so the node/python-root case can
+        # still double-fire and self-heal the same way; only the common direct-trigger
+        # case is fully covered. See #1424.
+        if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
+        uses: ./.github/actions/dispatch-workflow
+        # Fire-and-forget: the real build/push/scan above already succeeded by this
+        # point, so a transient API failure here must not fail the job - that would
+        # flip this run's conclusion to failure and, since credfeto-tools' native
+        # workflow_run trigger itself gates on conclusion == 'success', also block
+        # the still-working native path for this same run. Same precedent as the
+        # sarif upload action's fire-and-forget steps.
+        continue-on-error: true
+        with:
+          workflow-id: "build-development-credfeto-tools.yml"
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
 
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}
