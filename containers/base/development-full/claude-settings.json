@@ -99,6 +99,7 @@
       "Bash(gh pr *)",
       "Bash(gh project *)",
       "Bash(gh run *)",
+      "Bash(gh search *)",
       "Bash(git -C *)",
       "Bash(git config --get user.email)",
       "Bash(git config --get user.name)",
