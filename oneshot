@@ -87,8 +87,9 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
-# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged, and
-# block_issue_for_idle_exhausted_no_progress are declared in lib/github-status.
+# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged,
+# block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
+# declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
@@ -282,6 +283,7 @@ main() {
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
     local issue_json issue_state issue_fp saved_issue_fp plan_approved plan_approved_or_later
+    local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local pr_has_unaddressed_comment post_comment_seen
@@ -698,6 +700,12 @@ main() {
                 # Blocked drift episode is fully resolved, so clear it now rather than risk it
                 # wrongly suppressing self-heal on a LATER, unrelated plan revision (#1321 review).
                 [ "${plan_approved_or_later}" = "true" ] && clear_issue_plan_block_marker "${item_id}"
+                # Eagerly computed for the same reason as plan_approved_or_later above: needed by
+                # issue_should_advance_unchanged below, that branch's own log line, AND the
+                # idle-exhausted-with-no-plan escalation further down (#1427) — one read of
+                # issue_json rather than three.
+                has_plan_comment=false
+                issue_json_has_plan_comment "${issue_json}" && has_plan_comment=true
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
@@ -712,13 +720,21 @@ main() {
                         # name threaded into the generated CLAUDE.md is recomputed later, after
                         # ensure_repo_current's fetch, in case origin/main has moved since.
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
-                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved_or_later}"; then
+                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved_or_later}" "${has_plan_comment}"; then
                         # A plan-approved Issue whose last invocation produced no durable change at
                         # all (no new comment, no branch, no PR — e.g. only a status-update
-                        # comment). Neither of the two checks above found anything to resume from,
-                        # so this is a generic re-poke up to the idle budget rather than a resume
-                        # (#1264).
-                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
+                        # comment), OR an Issue that never had a plan posted at all (e.g. Blocked by
+                        # an environment failure before planning started, then unblocked — #1427).
+                        # Neither of the two checks above found anything to resume from, so this is
+                        # a generic re-poke up to the idle budget rather than a resume (#1264).
+                        # Logged distinctly per state so a human reading these logs can tell "still
+                        # checking on approved work" from "still trying to get a plan posted" —
+                        # collapsing the two hid #1427 behind a misleading "plan approved" line.
+                        if [ "${plan_approved_or_later}" = "true" ]; then
+                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
+                        else
+                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged with no plan ever posted — re-invoking to plan"
+                        fi
                         issue_idle_advance=1
                     else
                         if [ "${plan_approved_or_later}" = "true" ]; then
@@ -759,6 +775,18 @@ main() {
                             block_issue_for_unapplied_plan_approval "${item_id}" "${item_repo}" \
                                 && mark_issue_plan_block "${item_id}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "plan posted but never marked Blocked - self-healing")")
+                        elif [ "${has_plan_comment}" != "true" ]; then
+                            # The sibling gap to the plan-approved branch above and the
+                            # plan-awaiting-approval self-heal above that (#1427): an Issue that
+                            # never had a plan posted at all has exhausted its idle re-poke budget
+                            # (just granted by the issue_should_advance_unchanged change above)
+                            # without ever producing one. Deliberately does NOT check for an
+                            # occupying PR the way the plan-approved branch does above — posting a
+                            # plan is comment-only and needs no branch/PR slot, so slot occupancy is
+                            # not a reason for a pre-plan Issue to make no progress.
+                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with no plan ever posted — blocking"
+                            block_issue_for_idle_exhausted_no_plan "${item_id}" "${item_repo}"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with no plan ever posted - blocking")")
                         else
                             info "Issue #${item_id} in ${item_repo} unchanged — skipping"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "unchanged - skipping")")

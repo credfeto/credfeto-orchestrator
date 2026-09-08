@@ -1792,6 +1792,60 @@ teardown() {
     grep -q "notified Issue #99 reason=This issue.s plan is approved" "${TEST_TMP}/discord_calls"
 }
 
+# --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
+
+@test "issue_should_advance_unchanged is false when a plan is posted but not approved, regardless of idle count or has_plan_comment" {
+    run issue_should_advance_unchanged 99 "false" "true"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_should_advance_unchanged is true when no plan was ever posted and idle count is below budget" {
+    save_issue_invocation_counts 99 4 2
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_should_advance_unchanged is false when no plan was ever posted but the idle budget is exhausted" {
+    save_issue_invocation_counts 99 10 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) with no plan posted" {
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_should_advance_unchanged defaults has_plan_comment to true, preserving pre-#1427 two-argument behaviour" {
+    run issue_should_advance_unchanged 99 "false"
+    [ "${status}" -ne 0 ]
+}
+
+@test "block_issue_for_idle_exhausted_no_plan does not post a comment when the label cannot be verified" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'issue comment 99' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified Issue #99 reason=This issue was re-invoked' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_plan posts the reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 99 --repo org/repo --body This issue was re-invoked ${MAX_ISSUE_IDLE_INVOCATIONS} times" "${call_log}"
+    grep -q "notified Issue #99 reason=This issue was re-invoked" "${TEST_TMP}/discord_calls"
+}
+
 # --- fingerprinting --------------------------------------------------------
 
 @test "hash_sha256 is deterministic and matches the known SHA-256 of 'hello'" {
@@ -6299,11 +6353,15 @@ STUBEOF
 
 @test "main passes unchanged count of 1 to no-work notification when a single issue fingerprint is unchanged" {
     setup_main_mocks
+    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
+    # fingerprint-unchanged Issue state that still counts as "unchanged" post-#1427, since a
+    # plan-less Issue now re-pokes (a real invocation) instead of contributing to this count.
+    issue_plan_block_marked() { return 0; }
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()    { printf 'fp-same\n'; }
     load_issue_fingerprint()    { printf 'fp-same\n'; }
@@ -7666,13 +7724,18 @@ STUBEOF
 @test "main still skips issue with matching fingerprint when branch is not orphaned" {
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
+    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
+    # fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback
+    # post-#1427, since a plan-less Issue now re-pokes instead (see the #1427 tests further down).
+    # This isolates the orphaned-branch check under test from the #1427 no-plan-yet path.
+    issue_plan_block_marked() { return 0; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() {
-        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'
     }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()      { printf 'same-fp\n'; }
@@ -7712,6 +7775,35 @@ STUBEOF
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
+    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
+    # fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback
+    # post-#1427, since a plan-less Issue now re-pokes instead (see the #1427 tests below). This
+    # isolates the #1262 resumable-branch check under test from the #1427 no-plan-yet path.
+    issue_plan_block_marked() { return 0; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
+    [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+# --- main() integration: pre-plan Issue idle-retry (#1427) --------------------
+
+@test "main re-invokes an Issue with no plan ever posted and matching fingerprint, within the idle budget (#1427)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -7723,11 +7815,44 @@ STUBEOF
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()      { printf 'same-fp\n'; }
     load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
-    [[ "${output}" != *"Found actionable Issue #42"* ]]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"fingerprint unchanged with no plan ever posted — re-invoking to plan"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    # Idle counter bumped from 0 to 1 for this re-poke.
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_42.invocations")" = "1 1" ]
+}
+
+@test "main blocks an Issue once the idle budget is exhausted with no plan ever posted (#1427)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; *"--json number"*) printf "[]\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"idle budget exhausted with no plan ever posted — blocking"* ]]
+    grep -q "issue comment 42 --repo org/repo --body This issue was re-invoked" "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 # --- main() integration: plan-approved Issue idle-retry (#1264) ---------------
