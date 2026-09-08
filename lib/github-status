@@ -317,10 +317,21 @@ human_plan_approval_jq_literal() {
 # Returns 0 (true) if the Issue has a plan comment with no genuine human approval following it —
 # the drift oneshot self-heals by applying Blocked (#1286). Operates on already-fetched issue JSON,
 # no extra API call. See issue_json_has_plan_comment / issue_json_has_human_plan_approval for what
-# "plan" and "approved" mean.
+# "plan" and "approved" mean. Optional fourth argument has_plan_comment ("true"/"false"): when the
+# caller already knows this (oneshot computes it once per Issue for issue_should_advance_unchanged
+# — #1427), pass it here too to skip re-deriving it via a second jq pass over the same JSON; left
+# empty (the default), this derives it itself exactly as before, which is what every direct unit
+# test of this function's own plan-comment detection still wants. Kept as the single call this
+# predicate has, rather than letting a caller duplicate its body inline, so the definition of
+# "awaiting approval" can never drift between two copies (the same #1286 concern that centralised
+# issue_json_has_human_plan_approval in the first place).
 issue_plan_awaiting_human_approval() {
-    local issue_json="$1" me_login="$2" trusted_logins_json="$3"
-    issue_json_has_plan_comment "${issue_json}" || return 1
+    local issue_json="$1" me_login="$2" trusted_logins_json="$3" has_plan_comment="${4:-}"
+    if [ -n "${has_plan_comment}" ]; then
+        [ "${has_plan_comment}" = "true" ] || return 1
+    else
+        issue_json_has_plan_comment "${issue_json}" || return 1
+    fi
     ! issue_json_has_human_plan_approval "${issue_json}" "${me_login}" "${trusted_logins_json}"
 }
 
@@ -375,7 +386,7 @@ pr_should_advance_unchanged() {
 # default would exist only to justify its own existence, not serve a real caller.
 issue_should_advance_unchanged() {
     local item_id="$1" plan_approved="$2" has_plan_comment="$3"
-    { [ "${plan_approved}" = "true" ] || [ "${has_plan_comment}" != "true" ]; } || return 1
+    [ "${plan_approved}" = "true" ] || [ "${has_plan_comment}" != "true" ] || return 1
     load_issue_invocation_counts "${item_id}"
     [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ]
 }

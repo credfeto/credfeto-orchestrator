@@ -1797,11 +1797,9 @@ teardown() {
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
-
-@test "issue_should_advance_unchanged is false when a plan is posted but not approved, regardless of idle count or has_plan_comment" {
-    run issue_should_advance_unchanged 99 "false" "true"
-    [ "${status}" -ne 0 ]
-}
+# The plan-posted-not-approved case is already covered above ("... is false when the plan is not
+# approved, regardless of idle count") with the same has_plan_comment="true" — that pre-#1427 test
+# already exercises exactly this combination, so it is not repeated here.
 
 @test "issue_should_advance_unchanged is true when no plan was ever posted and idle count is below budget" {
     save_issue_invocation_counts 99 4 2
@@ -4647,11 +4645,14 @@ setup_main_mocks() {
 # fallback post-#1427, since a plan-less Issue now re-pokes (a real invocation) instead. Call this
 # in any test whose own subject is unrelated to plan/idle state (an orphaned/resumable-branch check,
 # a no-work notification count) so it keeps landing on "unchanged" without being confused by the
-# #1427 no-plan-yet path; pair with a fetch_issue_json fixture whose comments include one
-# "## Implementation Plan" entry, e.g.
-# '{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}'.
+# #1427 no-plan-yet path. Stubs issue_json_has_plan_comment directly rather than requiring every
+# caller to also hand-craft a fetch_issue_json fixture with a real "## Implementation Plan" comment
+# (#1427 simplify review) — safe because issue_plan_block_marked's stubbed "already marked" short-
+# circuits oneshot's self-heal elif before issue_plan_awaiting_human_approval (which is what would
+# otherwise care about the comment body) is ever called.
 stub_plan_already_self_heal_marked() {
     issue_plan_block_marked() { return 0; }
+    issue_json_has_plan_comment() { return 0; }
 }
 
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
@@ -6369,7 +6370,7 @@ STUBEOF
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()    { printf 'fp-same\n'; }
     load_issue_fingerprint()    { printf 'fp-same\n'; }
@@ -7739,7 +7740,7 @@ STUBEOF
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() {
-        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
     }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()      { printf 'same-fp\n'; }
@@ -7786,7 +7787,7 @@ STUBEOF
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
     fetch_issue_json() {
-        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}],"assignees":[],"milestone":null}\n'
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
     }
     issue_json_has_blocked_label() { return 1; }
     fingerprint_issue_json()      { printf 'same-fp\n'; }

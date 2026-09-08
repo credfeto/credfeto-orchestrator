@@ -707,9 +707,15 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
                     # Computed here, not eagerly above, so a fingerprint-CHANGED Issue (about to
                     # get a fresh invocation anyway) never pays for a jq pass whose result nothing
-                    # on that path reads (#1427 simplify review). Needed by
-                    # issue_should_advance_unchanged below, that branch's own log line, and the
-                    # idle-exhausted-with-no-plan escalation further down.
+                    # on that path reads (#1427 simplify review). Read by issue_should_advance_unchanged
+                    # below and the two elif branches further down (plan-awaiting-approval self-heal,
+                    # idle-exhausted-with-no-plan escalation). Unconditional even though it is a
+                    # no-op whenever plan_approved_or_later is already "true" (nothing below then
+                    # reads it): matches this loop's "freshly recomputed every iteration, no
+                    # conditional skips" convention for exactly this class of per-item local (see
+                    # plan_approved_or_later's own header comment above and the stale-local bugs it
+                    # cites) rather than trade one cheap jq call for a fragile shortcut a later
+                    # change could silently start relying on.
                     has_plan_comment=false
                     issue_json_has_plan_comment "${issue_json}" && has_plan_comment=true
                     if recover_orphaned_branch; then
@@ -762,13 +768,19 @@ main() {
                                 block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
                             fi
-                        elif [ "${has_plan_comment}" = "true" ] \
-                            && ! issue_json_has_human_plan_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
-                            && ! issue_plan_block_marked "${item_id}"; then
-                            # Inlines issue_plan_awaiting_human_approval's own has-plan-comment
-                            # check against the already-computed has_plan_comment above instead of
-                            # re-deriving it via a second jq pass (#1427 simplify review) — the two
-                            # conditions are exactly that function's body.
+                        elif ! issue_plan_block_marked "${item_id}" \
+                            && issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" "${has_plan_comment}"; then
+                            # Cheap local-file check first, so the jq-backed approval check inside
+                            # issue_plan_awaiting_human_approval never runs once this drift episode
+                            # is already marked (#1427 simplify review) — same boolean result either
+                            # order, since both sides are pure reads with no side effect to order.
+                            # has_plan_comment is passed through (rather than let the function
+                            # re-derive it) since oneshot already computed it above for
+                            # issue_should_advance_unchanged; going through the shared function
+                            # itself, instead of inlining its two-line body here, is what keeps this
+                            # the only definition of "awaiting approval" — a duplicate copy is
+                            # exactly the drift #1286 centralised issue_json_has_human_plan_approval
+                            # to prevent.
                             # The agent posted a plan and ended its session without applying
                             # Blocked, and no human has approved it since. The fingerprint never
                             # changes from here, so Claude is never re-invoked to notice its own
