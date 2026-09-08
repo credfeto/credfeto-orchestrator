@@ -1744,26 +1744,30 @@ teardown() {
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_progress (#1264) ---
+# has_plan_comment is "true" throughout this block: #1264 predates the third (never-planned)
+# state, so every one of its scenarios is a plan that was posted (approved or not) — the
+# not-approved case (#1748) is "posted but not approved," never "posted at all" (#1427 simplify
+# review: the argument became mandatory, so these now say what they always meant explicitly).
 
 @test "issue_should_advance_unchanged is false when the plan is not approved, regardless of idle count" {
-    run issue_should_advance_unchanged 99 "false"
+    run issue_should_advance_unchanged 99 "false" "true"
     [ "${status}" -ne 0 ]
 }
 
 @test "issue_should_advance_unchanged is true when the plan is approved and idle count is below budget" {
     save_issue_invocation_counts 99 4 2
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -eq 0 ]
 }
 
 @test "issue_should_advance_unchanged is false when the plan is approved but the idle budget is exhausted" {
     save_issue_invocation_counts 99 10 "${MAX_ISSUE_IDLE_INVOCATIONS}"
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -ne 0 ]
 }
 
 @test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) that is plan-approved" {
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -eq 0 ]
 }
 
@@ -1814,11 +1818,6 @@ teardown() {
 @test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) with no plan posted" {
     run issue_should_advance_unchanged 99 "false" "false"
     [ "${status}" -eq 0 ]
-}
-
-@test "issue_should_advance_unchanged defaults has_plan_comment to true, preserving pre-#1427 two-argument behaviour" {
-    run issue_should_advance_unchanged 99 "false"
-    [ "${status}" -ne 0 ]
 }
 
 @test "block_issue_for_idle_exhausted_no_plan does not post a comment when the label cannot be verified" {
@@ -4643,6 +4642,18 @@ setup_main_mocks() {
     sync_pr_labels_from_linked_issues() { return 0; }
 }
 
+# Stubs an Issue's plan-comment state as "posted, awaiting approval, but already self-heal-marked
+# (#1286)" — the ONLY fingerprint-unchanged Issue state that still reaches the terminal "unchanged"
+# fallback post-#1427, since a plan-less Issue now re-pokes (a real invocation) instead. Call this
+# in any test whose own subject is unrelated to plan/idle state (an orphaned/resumable-branch check,
+# a no-work notification count) so it keeps landing on "unchanged" without being confused by the
+# #1427 no-plan-yet path; pair with a fetch_issue_json fixture whose comments include one
+# "## Implementation Plan" entry, e.g.
+# '{"author":{"login":"credfeto-orchestrator"},"body":"## Implementation Plan","createdAt":"2026-01-01T00:00:00Z"}'.
+stub_plan_already_self_heal_marked() {
+    issue_plan_block_marked() { return 0; }
+}
+
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
     # Three-item scenario that exercises the is_skipped reset:
     # Item 1 (PR #5, org/repo): non-blocked, unchanged → skip_repos += org/repo (is_skipped stays false)
@@ -6353,10 +6364,7 @@ STUBEOF
 
 @test "main passes unchanged count of 1 to no-work notification when a single issue fingerprint is unchanged" {
     setup_main_mocks
-    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
-    # fingerprint-unchanged Issue state that still counts as "unchanged" post-#1427, since a
-    # plan-less Issue now re-pokes (a real invocation) instead of contributing to this count.
-    issue_plan_block_marked() { return 0; }
+    stub_plan_already_self_heal_marked
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
@@ -7724,11 +7732,7 @@ STUBEOF
 @test "main still skips issue with matching fingerprint when branch is not orphaned" {
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
-    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
-    # fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback
-    # post-#1427, since a plan-less Issue now re-pokes instead (see the #1427 tests further down).
-    # This isolates the orphaned-branch check under test from the #1427 no-plan-yet path.
-    issue_plan_block_marked() { return 0; }
+    stub_plan_already_self_heal_marked
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -7775,11 +7779,7 @@ STUBEOF
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
-    # A plan comment already exists but was already self-heal-marked (#1286) — the ONLY
-    # fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback
-    # post-#1427, since a plan-less Issue now re-pokes instead (see the #1427 tests below). This
-    # isolates the #1262 resumable-branch check under test from the #1427 no-plan-yet path.
-    issue_plan_block_marked() { return 0; }
+    stub_plan_already_self_heal_marked
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'

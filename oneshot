@@ -700,17 +700,18 @@ main() {
                 # Blocked drift episode is fully resolved, so clear it now rather than risk it
                 # wrongly suppressing self-heal on a LATER, unrelated plan revision (#1321 review).
                 [ "${plan_approved_or_later}" = "true" ] && clear_issue_plan_block_marker "${item_id}"
-                # Eagerly computed for the same reason as plan_approved_or_later above: needed by
-                # issue_should_advance_unchanged below, that branch's own log line, AND the
-                # idle-exhausted-with-no-plan escalation further down (#1427) — one read of
-                # issue_json rather than three.
-                has_plan_comment=false
-                issue_json_has_plan_comment "${issue_json}" && has_plan_comment=true
                 issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "${plan_approved}") \
                     || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
+                    # Computed here, not eagerly above, so a fingerprint-CHANGED Issue (about to
+                    # get a fresh invocation anyway) never pays for a jq pass whose result nothing
+                    # on that path reads (#1427 simplify review). Needed by
+                    # issue_should_advance_unchanged below, that branch's own log line, and the
+                    # idle-exhausted-with-no-plan escalation further down.
+                    has_plan_comment=false
+                    issue_json_has_plan_comment "${issue_json}" && has_plan_comment=true
                     if recover_orphaned_branch; then
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
                     elif resumable_branch=$(resolve_resumable_issue_branch "${item_id}"); then
@@ -761,8 +762,13 @@ main() {
                                 block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
                             fi
-                        elif issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
+                        elif [ "${has_plan_comment}" = "true" ] \
+                            && ! issue_json_has_human_plan_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
                             && ! issue_plan_block_marked "${item_id}"; then
+                            # Inlines issue_plan_awaiting_human_approval's own has-plan-comment
+                            # check against the already-computed has_plan_comment above instead of
+                            # re-deriving it via a second jq pass (#1427 simplify review) — the two
+                            # conditions are exactly that function's body.
                             # The agent posted a plan and ended its session without applying
                             # Blocked, and no human has approved it since. The fingerprint never
                             # changes from here, so Claude is never re-invoked to notice its own

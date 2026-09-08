@@ -366,14 +366,15 @@ pr_should_advance_unchanged() {
 # state got missed originally (#1427): an Issue that never had a plan posted (e.g. blocked by an
 # environment failure before planning started, then unblocked) has no forcing function anywhere
 # else in oneshot's decision tree, so it parked at "unchanged — skipping" forever with no idle
-# counter, no escalation, nothing. has_plan_comment (optional, default "true" so existing callers
-# are unaffected) lets a caller pass "false" for that third state, which is then treated the same
-# as plan_approved for the idle-budget purpose below — re-invoked periodically, up to the idle
-# budget, to actually produce a plan. A plan-approved Issue whose last invocation produced no
-# durable change (e.g. only a status-update comment, no PR opened) gets periodically re-poked the
-# same way.
+# counter, no escalation, nothing. has_plan_comment lets the caller report that third state, which
+# is then treated the same as plan_approved for the idle-budget purpose below — re-invoked
+# periodically, up to the idle budget, to actually produce a plan. A plan-approved Issue whose last
+# invocation produced no durable change (e.g. only a status-update comment, no PR opened) gets
+# periodically re-poked the same way. Both arguments are mandatory: oneshot's single call site
+# always has both already computed and passes them explicitly (#1427 simplify review) — a
+# default would exist only to justify its own existence, not serve a real caller.
 issue_should_advance_unchanged() {
-    local item_id="$1" plan_approved="$2" has_plan_comment="${3:-true}"
+    local item_id="$1" plan_approved="$2" has_plan_comment="$3"
     { [ "${plan_approved}" = "true" ] || [ "${has_plan_comment}" != "true" ]; } || return 1
     load_issue_invocation_counts "${item_id}"
     [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ]
