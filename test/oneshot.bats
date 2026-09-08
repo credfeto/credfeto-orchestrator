@@ -12742,7 +12742,7 @@ STUBEOF
 }
 
 @test "pr_json_has_pending_ci_checks returns false for a CheckRun with a stale non-COMPLETED status but a terminal conclusion already set" {
-    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"no-merge-commits","status":"IN_PROGRESS","conclusion":"SUCCESS","completedAt":"2026-09-04T14:53:34Z","isRequired":true}]}'
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"no-merge-commits","status":"IN_PROGRESS","conclusion":"SUCCESS","isRequired":true}]}'
     [ "${status}" -ne 0 ]
 }
 
