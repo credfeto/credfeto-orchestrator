@@ -137,7 +137,9 @@ runaway_blocked_marker_file_path() {
 # much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
 # after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
 # failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
-# now.
+# now. block_issue_for_idle_exhausted_no_plan (lib/github-status) is the one exception: it calls
+# this itself right after applying Blocked, since waiting for a later "observed carrying Blocked"
+# tick would miss a human who unblocks before any such tick ever runs.
 mark_capped_block_for_forgiveness() {
     local item_type="$1" item_id="$2" total total_cap idle idle_cap
     case "${item_type}" in
