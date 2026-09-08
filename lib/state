@@ -281,7 +281,7 @@ COMMENT
 #           opens a PR) re-fires every tick forever, since PullRequest_*.invocations only starts
 #           counting once a PR exists.
 #   idle  — consecutive re-invocations of a fingerprint-unchanged Issue whose plan is either
-#           approved (the last invocation produced no durable change — e.g. only a status-update
+#           approved (the last invocation produced no durable change, e.g. only a status-update
 #           comment, no new PR) or never posted at all. At MAX_ISSUE_IDLE_INVOCATIONS the Issue is
 #           marked Blocked for a human (#1264) instead of silently sitting at "unchanged -
 #           skipping" forever; an Issue whose plan was posted and is awaiting a human decision
