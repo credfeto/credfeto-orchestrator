@@ -67,7 +67,7 @@ jobs:
         uses: ./.github/actions/bump-pinned-tool-version
         with:
           tool: "${{matrix.tool}}"
-          github-token: "${{secrets.GITHUB_TOKEN}}"
+          github-token: "${{github.token}}"
 
       - name: "Compute branch name and PR/commit subject"
         id: plan
