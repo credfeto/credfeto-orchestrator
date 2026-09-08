@@ -137,7 +137,9 @@ runaway_blocked_marker_file_path() {
 # much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
 # after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
 # failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
-# now.
+# now. block_issue_for_idle_exhausted_no_plan (lib/github-status) is the one exception: it calls
+# this itself right after applying Blocked, since waiting for a later "observed carrying Blocked"
+# tick would miss a human who unblocks before any such tick ever runs.
 mark_capped_block_for_forgiveness() {
     local item_type="$1" item_id="$2" total total_cap idle idle_cap
     case "${item_type}" in
@@ -278,11 +280,12 @@ COMMENT
 #           closes the gap where a non-converging Issue (agent keeps planning/erroring, never
 #           opens a PR) re-fires every tick forever, since PullRequest_*.invocations only starts
 #           counting once a PR exists.
-#   idle  — consecutive re-invocations of a plan-approved Issue whose fingerprint had not changed
-#           (the last invocation produced no durable change — e.g. only a status-update comment,
-#           no new PR). At MAX_ISSUE_IDLE_INVOCATIONS the Issue is marked Blocked for a human
-#           (#1264) instead of silently sitting at "unchanged — skipping" forever; an Issue whose
-#           plan is not (yet) approved never touches this counter at all.
+#   idle  — consecutive re-invocations of a fingerprint-unchanged Issue whose plan is either
+#           approved (the last invocation produced no durable change, e.g. only a status-update
+#           comment, no new PR) or never posted at all. At MAX_ISSUE_IDLE_INVOCATIONS the Issue is
+#           marked Blocked for a human (#1264) instead of silently sitting at "unchanged -
+#           skipping" forever; an Issue whose plan was posted and is awaiting a human decision
+#           never touches this counter at all.
 # A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts falls
 # back to parsing just that token when parse_two_token_counters doesn't match, defaulting idle to
 # 0, so no migration is needed.

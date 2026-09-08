@@ -1744,26 +1744,30 @@ teardown() {
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_progress (#1264) ---
+# has_plan_comment is "true" throughout this block: this predates the third (never-planned) state,
+# so every one of its scenarios is a plan that was posted (approved or not); the not-approved case
+# is "posted but not approved," never "posted at all." The argument became mandatory, so these now
+# say what they always meant explicitly.
 
 @test "issue_should_advance_unchanged is false when the plan is not approved, regardless of idle count" {
-    run issue_should_advance_unchanged 99 "false"
+    run issue_should_advance_unchanged 99 "false" "true"
     [ "${status}" -ne 0 ]
 }
 
 @test "issue_should_advance_unchanged is true when the plan is approved and idle count is below budget" {
     save_issue_invocation_counts 99 4 2
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -eq 0 ]
 }
 
 @test "issue_should_advance_unchanged is false when the plan is approved but the idle budget is exhausted" {
     save_issue_invocation_counts 99 10 "${MAX_ISSUE_IDLE_INVOCATIONS}"
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -ne 0 ]
 }
 
 @test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) that is plan-approved" {
-    run issue_should_advance_unchanged 99 "true"
+    run issue_should_advance_unchanged 99 "true" "true"
     [ "${status}" -eq 0 ]
 }
 
@@ -1790,6 +1794,75 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q "issue comment 99 --repo org/repo --body This issue's plan is approved" "${call_log}"
     grep -q "notified Issue #99 reason=This issue.s plan is approved" "${TEST_TMP}/discord_calls"
+}
+
+# --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
+# The plan-posted-not-approved case is already covered above ("... is false when the plan is not
+# approved, regardless of idle count") with the same has_plan_comment="true": that test already
+# exercises exactly this combination, so it is not repeated here.
+
+@test "issue_should_advance_unchanged is true when no plan was ever posted and idle count is below budget" {
+    save_issue_invocation_counts 99 4 2
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue_should_advance_unchanged is false when no plan was ever posted but the idle budget is exhausted" {
+    save_issue_invocation_counts 99 10 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -ne 0 ]
+}
+
+@test "issue_should_advance_unchanged is true for a fresh Issue (no guard file) with no plan posted" {
+    run issue_should_advance_unchanged 99 "false" "false"
+    [ "${status}" -eq 0 ]
+}
+
+@test "block_issue_for_idle_exhausted_no_plan does not post a comment when the label cannot be verified" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'issue comment 99' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified Issue #99 reason=This issue was re-invoked' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_plan posts the reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 99 --repo org/repo --body This issue was re-invoked ${MAX_ISSUE_IDLE_INVOCATIONS} times" "${call_log}"
+    grep -q "notified Issue #99 reason=This issue was re-invoked" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_plan marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "block_issue_for_idle_exhausted_no_plan does not mark forgiveness when the label cannot be verified" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- fingerprinting --------------------------------------------------------
@@ -4589,6 +4662,21 @@ setup_main_mocks() {
     sync_pr_labels_from_linked_issues() { return 0; }
 }
 
+# Stubs an Issue's plan-comment state as "posted, awaiting approval, but already self-heal-marked":
+# the ONLY fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback,
+# since a plan-less Issue now re-pokes (a real invocation) instead. Call this in any test whose own
+# subject is unrelated to plan/idle state (an orphaned/resumable-branch check, a no-work
+# notification count) so it keeps landing on "unchanged" without being confused by the no-plan-yet
+# path. Stubs issue_json_has_plan_comment directly rather than requiring every caller to also
+# hand-craft a fetch_issue_json fixture with a real "## Implementation Plan" comment: safe because
+# issue_plan_block_marked's stubbed "already marked" short-circuits oneshot's self-heal elif before
+# issue_plan_awaiting_human_approval (which is what would otherwise care about the comment body) is
+# ever called.
+stub_plan_already_self_heal_marked() {
+    issue_plan_block_marked() { return 0; }
+    issue_json_has_plan_comment() { return 0; }
+}
+
 @test "main is_skipped resets between iterations so different-repo items are not incorrectly skipped" {
     # Three-item scenario that exercises the is_skipped reset:
     # Item 1 (PR #5, org/repo): non-blocked, unchanged → skip_repos += org/repo (is_skipped stays false)
@@ -6299,6 +6387,7 @@ STUBEOF
 
 @test "main passes unchanged count of 1 to no-work notification when a single issue fingerprint is unchanged" {
     setup_main_mocks
+    stub_plan_already_self_heal_marked
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
@@ -7666,6 +7755,7 @@ STUBEOF
 @test "main still skips issue with matching fingerprint when branch is not orphaned" {
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
+    stub_plan_already_self_heal_marked
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -7712,6 +7802,7 @@ STUBEOF
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
+    stub_plan_already_self_heal_marked
 
     fetch_all_priorities() {
         printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
@@ -7728,6 +7819,63 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Issue #42 in org/repo unchanged — skipping"* ]]
     [[ "${output}" != *"Found actionable Issue #42"* ]]
+}
+
+# --- main() integration: pre-plan Issue idle-retry (#1427) --------------------
+
+@test "main re-invokes an Issue with no plan ever posted and matching fingerprint, within the idle budget (#1427)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"fingerprint unchanged with no plan ever posted, re-invoking to plan"* ]]
+    [[ "${output}" == *"Found actionable Issue #42"* ]]
+    # Idle counter bumped from 0 to 1 for this re-poke.
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_42.invocations")" = "1 1" ]
+}
+
+@test "main blocks an Issue once the idle budget is exhausted with no plan ever posted (#1427)" {
+    setup_main_mocks
+    recover_orphaned_branch() { return 1; }
+    resolve_resumable_issue_branch() { return 1; }
+
+    fetch_all_priorities() {
+        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    fingerprint_issue_json()      { printf 'same-fp\n'; }
+    load_issue_fingerprint()      { printf 'same-fp\n'; }
+    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; *"--json number"*) printf "[]\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"idle budget exhausted with no plan ever posted, blocking"* ]]
+    grep -q "issue comment 42 --repo org/repo --body This issue was re-invoked" "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 # --- main() integration: plan-approved Issue idle-retry (#1264) ---------------

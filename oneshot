@@ -87,8 +87,9 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
-# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged, and
-# block_issue_for_idle_exhausted_no_progress are declared in lib/github-status.
+# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged,
+# block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
+# declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
@@ -282,6 +283,7 @@ main() {
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
     local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
     local issue_json issue_state issue_fp saved_issue_fp plan_approved plan_approved_or_later
+    local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local pr_has_unaddressed_comment post_comment_seen
@@ -331,8 +333,9 @@ main() {
         # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
         # (no external change); consumed when persisting the PR idle counter before invocation.
         pr_idle_advance=0
-        # Same idea as pr_idle_advance, for a plan-approved Issue re-invoked only because its idle
-        # budget allows another try, not because anything actually changed (#1264).
+        # Same idea as pr_idle_advance, for an Issue (plan-approved, or never planned at all)
+        # re-invoked only because its idle budget allows another try, not because anything
+        # actually changed (#1264).
         issue_idle_advance=0
         if [ "${item_type}" = "Issue" ]; then
             for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
@@ -703,6 +706,19 @@ main() {
                 saved_fp=$(load_issue_fingerprint "${item_id}")
 
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
+                    # Computed here, not eagerly above, so a fingerprint-CHANGED Issue (about to
+                    # get a fresh invocation anyway) never pays for a jq pass whose result nothing
+                    # on that path reads. Read by issue_should_advance_unchanged below and the two
+                    # elif branches further down (plan-awaiting-approval self-heal,
+                    # idle-exhausted-with-no-plan escalation). Unconditional even though it is a
+                    # no-op whenever plan_approved_or_later is already "true" (nothing below then
+                    # reads it): matches this loop's "freshly recomputed every iteration, no
+                    # conditional skips" convention for exactly this class of per-item local (see
+                    # plan_approved_or_later's own header comment above and the stale-local bugs it
+                    # cites) rather than trade one cheap jq call for a fragile shortcut a later
+                    # change could silently start relying on.
+                    has_plan_comment=false
+                    issue_json_has_plan_comment "${issue_json}" && has_plan_comment=true
                     if recover_orphaned_branch; then
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but repo was on an orphaned branch — re-running"
                     elif resumable_branch=$(resolve_resumable_issue_branch "${item_id}"); then
@@ -712,13 +728,22 @@ main() {
                         # name threaded into the generated CLAUDE.md is recomputed later, after
                         # ensure_repo_current's fetch, in case origin/main has moved since.
                         info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but branch '${resumable_branch}' has commits ahead of main and no open PR — resuming stalled work"
-                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved_or_later}"; then
+                    elif issue_should_advance_unchanged "${item_id}" "${plan_approved_or_later}" "${has_plan_comment}"; then
                         # A plan-approved Issue whose last invocation produced no durable change at
                         # all (no new comment, no branch, no PR — e.g. only a status-update
-                        # comment). Neither of the two checks above found anything to resume from,
-                        # so this is a generic re-poke up to the idle budget rather than a resume
-                        # (#1264).
-                        info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
+                        # comment), OR an Issue that never had a plan posted at all (e.g. Blocked by
+                        # an environment failure before planning started, then unblocked).
+                        # Neither of the two checks above found anything to resume from, so this is
+                        # a generic re-poke up to the idle budget rather than a resume (#1264).
+                        # Logged distinctly per state so a human reading these logs can tell "still
+                        # checking on approved work" from "still trying to get a plan posted":
+                        # collapsing the two would hide a never-planned Issue behind a misleading
+                        # "plan approved" line.
+                        if [ "${plan_approved_or_later}" = "true" ]; then
+                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
+                        else
+                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged with no plan ever posted, re-invoking to plan"
+                        fi
                         issue_idle_advance=1
                     else
                         if [ "${plan_approved_or_later}" = "true" ]; then
@@ -745,8 +770,18 @@ main() {
                                 block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
                             fi
-                        elif issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" \
-                            && ! issue_plan_block_marked "${item_id}"; then
+                        elif ! issue_plan_block_marked "${item_id}" \
+                            && issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" "${has_plan_comment}"; then
+                            # Cheap local-file check first, so the jq-backed approval check inside
+                            # issue_plan_awaiting_human_approval never runs once this drift episode
+                            # is already marked. Same boolean result either order, since both sides
+                            # are pure reads with no side effect to order.
+                            # has_plan_comment is passed through (rather than let the function
+                            # re-derive it) since oneshot already computed it above for
+                            # issue_should_advance_unchanged; going through the shared function
+                            # itself, instead of inlining its two-line body here, is what keeps this
+                            # the only definition of "awaiting approval": a duplicate copy is exactly
+                            # the drift issue_json_has_human_plan_approval was centralised to prevent.
                             # The agent posted a plan and ended its session without applying
                             # Blocked, and no human has approved it since. The fingerprint never
                             # changes from here, so Claude is never re-invoked to notice its own
@@ -759,6 +794,18 @@ main() {
                             block_issue_for_unapplied_plan_approval "${item_id}" "${item_repo}" \
                                 && mark_issue_plan_block "${item_id}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "plan posted but never marked Blocked - self-healing")")
+                        elif [ "${has_plan_comment}" != "true" ]; then
+                            # The sibling gap to the plan-approved branch above and the
+                            # plan-awaiting-approval self-heal above that: an Issue that never had a
+                            # plan posted at all has exhausted its idle re-poke budget (just granted
+                            # by the issue_should_advance_unchanged change above) without ever
+                            # producing one. Deliberately does NOT check for an occupying PR the way
+                            # the plan-approved branch does above: posting a plan is comment-only and
+                            # needs no branch/PR slot, so slot occupancy is not a reason for a
+                            # pre-plan Issue to make no progress.
+                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with no plan ever posted, blocking"
+                            block_issue_for_idle_exhausted_no_plan "${item_id}" "${item_repo}"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with no plan ever posted - blocking")")
                         else
                             info "Issue #${item_id} in ${item_repo} unchanged — skipping"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "unchanged - skipping")")

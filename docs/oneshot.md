@@ -97,8 +97,10 @@ time and money with nothing to show for it. Two independent budgets catch this:
   a Pull Request). A PR or a plan-approved Issue that keeps getting re-invoked with nothing
   changing, tick after tick, is parked once it hits this smaller cap, rather than treated as
   broken outright — it might genuinely be done and just waiting on something (auto-merge to
-  catch up, a human review). An Issue whose plan is not (yet) approved never touches this cap at
-  all — that's the ordinary "waiting on a human" case, not idle churn.
+  catch up, a human review). An Issue that never had a plan posted at all is treated the same way,
+  re-invoked up to this cap to actually produce one; only an Issue whose plan *was* posted and is
+  awaiting a human decision skips this cap entirely, since that's the ordinary "waiting on a
+  human" case, not idle churn.
 
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated
