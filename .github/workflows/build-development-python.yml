@@ -64,7 +64,7 @@ jobs:
         id: "relevance"
         uses: ./.github/actions/pr-touches-paths
         with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          github-token: "${{ github.token }}"
           path-prefixes: |
             containers/base/development-python/
             .github/workflows/build-development-python.yml
@@ -78,7 +78,7 @@ jobs:
         with:
           registry: "${{ env.REGISTRY }}"
           username: "${{ github.actor }}"
-          password: "${{ secrets.GITHUB_TOKEN }}"
+          password: "${{ github.token }}"
 
       - name: "Set up Docker Buildx"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
