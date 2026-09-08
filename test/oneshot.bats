@@ -12741,6 +12741,21 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_pending_ci_checks returns false for a CheckRun with a stale non-COMPLETED status but a terminal conclusion already set" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"no-merge-commits","status":"IN_PROGRESS","conclusion":"SUCCESS","completedAt":"2026-09-04T14:53:34Z","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false for a stale-status CheckRun mixed with a genuinely completed one" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"name":"no-merge-commits","status":"IN_PROGRESS","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks still returns true for a genuine in-flight re-run whose conclusion is null" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"no-merge-commits","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "clear_pr_ci_pending_state removes the state file when it exists" {
     save_pr_head_oid 42 "deadbeef" "1700000000"
     local state_file
