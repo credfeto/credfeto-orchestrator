@@ -412,9 +412,10 @@ notify_github_blocked() {
     esac
 }
 
-# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that is not yet COMPLETED.
-# Returns 1 (false) when statusCheckRollup is absent, null, or every required entry has status "COMPLETED".
-# Non-required (optional) checks are ignored so they cannot gate agent invocation.
+# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that has not yet
+# reached a terminal result. Returns 1 (false) when statusCheckRollup is absent, empty, or every
+# required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent
+# invocation.
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
@@ -429,7 +430,7 @@ pr_json_has_pending_ci_checks() {
     # this predicate fully in line with pr_json_is_terminal and pr_json_has_failed_required_check
     # above, which already trust .conclusion alone once a node is known to be a CheckRun: GitHub
     # never populates .conclusion until a CheckRun is actually done, so "conclusion is set" is
-    # already the strictly stronger, sufficient condition — a completed-with-null-conclusion
+    # already the strictly stronger, sufficient condition: a completed-with-null-conclusion
     # node is not a real GitHub shape, so status never needs to be consulted a second time here.
     # A genuine re-run still reads as pending, since it surfaces as a new CheckRun node whose own
     # conclusion starts out null.
