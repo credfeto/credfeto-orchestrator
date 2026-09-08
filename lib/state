@@ -278,11 +278,12 @@ COMMENT
 #           closes the gap where a non-converging Issue (agent keeps planning/erroring, never
 #           opens a PR) re-fires every tick forever, since PullRequest_*.invocations only starts
 #           counting once a PR exists.
-#   idle  — consecutive re-invocations of a plan-approved Issue whose fingerprint had not changed
-#           (the last invocation produced no durable change — e.g. only a status-update comment,
-#           no new PR). At MAX_ISSUE_IDLE_INVOCATIONS the Issue is marked Blocked for a human
-#           (#1264) instead of silently sitting at "unchanged — skipping" forever; an Issue whose
-#           plan is not (yet) approved never touches this counter at all.
+#   idle  — consecutive re-invocations of a fingerprint-unchanged Issue whose plan is either
+#           approved (the last invocation produced no durable change — e.g. only a status-update
+#           comment, no new PR) or never posted at all. At MAX_ISSUE_IDLE_INVOCATIONS the Issue is
+#           marked Blocked for a human (#1264) instead of silently sitting at "unchanged -
+#           skipping" forever; an Issue whose plan was posted and is awaiting a human decision
+#           never touches this counter at all.
 # A legacy guard file predating #1264 holds only "<total>" — load_issue_invocation_counts falls
 # back to parsing just that token when parse_two_token_counters doesn't match, defaulting idle to
 # 0, so no migration is needed.

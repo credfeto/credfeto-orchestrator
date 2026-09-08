@@ -1843,6 +1843,28 @@ teardown() {
     grep -q "notified Issue #99 reason=This issue was re-invoked" "${TEST_TMP}/discord_calls"
 }
 
+@test "block_issue_for_idle_exhausted_no_plan marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "block_issue_for_idle_exhausted_no_plan does not mark forgiveness when the label cannot be verified" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
 # --- fingerprinting --------------------------------------------------------
 
 @test "hash_sha256 is deterministic and matches the known SHA-256 of 'hello'" {

@@ -333,8 +333,9 @@ main() {
         # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
         # (no external change); consumed when persisting the PR idle counter before invocation.
         pr_idle_advance=0
-        # Same idea as pr_idle_advance, for a plan-approved Issue re-invoked only because its idle
-        # budget allows another try, not because anything actually changed (#1264).
+        # Same idea as pr_idle_advance, for an Issue (plan-approved, or never planned at all)
+        # re-invoked only because its idle budget allows another try, not because anything
+        # actually changed (#1264).
         issue_idle_advance=0
         if [ "${item_type}" = "Issue" ]; then
             for skip_repo in "${skip_repos[@]+"${skip_repos[@]}"}"; do
