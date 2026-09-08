@@ -12746,6 +12746,11 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_has_pending_ci_checks returns false when status is COMPLETED even if conclusion has not propagated yet" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
 @test "clear_pr_ci_pending_state removes the state file when it exists" {
     save_pr_head_oid 42 "deadbeef" "1700000000"
     local state_file

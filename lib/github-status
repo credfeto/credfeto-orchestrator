@@ -425,22 +425,25 @@ pr_json_has_pending_ci_checks() {
     # SUCCESS/FAILURE/ERROR, so each entry is classified by which field it actually has.
     # A CheckRun's .status can be stale relative to its own terminal .conclusion: GitHub can
     # serve a node with status still IN_PROGRESS but conclusion already SUCCESS (and
-    # completedAt set), a persistent inconsistency observed live, not a transient blip. Keying
-    # purely off conclusion == null (rather than also checking status != "COMPLETED") brings
-    # this predicate fully in line with pr_json_is_terminal and pr_json_has_failed_required_check
-    # above, which already trust .conclusion alone once a node is known to be a CheckRun: GitHub
-    # never populates .conclusion until a CheckRun is actually done, so "conclusion is set" is
-    # already the strictly stronger, sufficient condition: a completed-with-null-conclusion
-    # node is not a real GitHub shape, so status never needs to be consulted a second time here.
-    # A genuine re-run still reads as pending, since it surfaces as a new CheckRun node whose own
-    # conclusion starts out null.
+    # completedAt set), a persistent inconsistency observed live, not a transient blip. An
+    # earlier version of this fix trusted .conclusion alone (matching pr_json_is_terminal and
+    # pr_json_has_failed_required_check above, which do so safely for their own yes/no
+    # questions) - but code review caught that this repo's own live evidence already disproves
+    # the assumption that would make that safe here: since GitHub can desynchronise these two
+    # fields in one direction (conclusion ahead of status), nothing rules out the same kind of
+    # inconsistency the other way (status ahead of conclusion) for a "pending" question
+    # specifically, where trusting either field alone is a one-directional bet. Requiring BOTH
+    # fields to agree nothing has concluded yet, rather than trusting either one alone, is
+    # symmetric: whichever field reaches a terminal value first is enough to call the check
+    # done. A genuine re-run still reads as pending, since it surfaces as a new CheckRun node
+    # whose own conclusion starts out null.
     printf '%s' "${pr_json}" | jq -e '
         (.statusCheckRollup // [])
         | (length > 0) and any(.[];
             .isRequired != false
             and (
                 if (.status != null)
-                then .conclusion == null
+                then .status != "COMPLETED" and .conclusion == null
                 else ((.state // "") | . == "PENDING" or . == "EXPECTED")
                 end
             )
