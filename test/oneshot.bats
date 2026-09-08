@@ -1744,10 +1744,10 @@ teardown() {
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_progress (#1264) ---
-# has_plan_comment is "true" throughout this block: #1264 predates the third (never-planned)
-# state, so every one of its scenarios is a plan that was posted (approved or not) — the
-# not-approved case (#1748) is "posted but not approved," never "posted at all" (#1427 simplify
-# review: the argument became mandatory, so these now say what they always meant explicitly).
+# has_plan_comment is "true" throughout this block: this predates the third (never-planned) state,
+# so every one of its scenarios is a plan that was posted (approved or not); the not-approved case
+# is "posted but not approved," never "posted at all." The argument became mandatory, so these now
+# say what they always meant explicitly.
 
 @test "issue_should_advance_unchanged is false when the plan is not approved, regardless of idle count" {
     run issue_should_advance_unchanged 99 "false" "true"
@@ -1798,8 +1798,8 @@ teardown() {
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
 # The plan-posted-not-approved case is already covered above ("... is false when the plan is not
-# approved, regardless of idle count") with the same has_plan_comment="true" — that pre-#1427 test
-# already exercises exactly this combination, so it is not repeated here.
+# approved, regardless of idle count") with the same has_plan_comment="true": that test already
+# exercises exactly this combination, so it is not repeated here.
 
 @test "issue_should_advance_unchanged is true when no plan was ever posted and idle count is below budget" {
     save_issue_invocation_counts 99 4 2
@@ -4640,16 +4640,16 @@ setup_main_mocks() {
     sync_pr_labels_from_linked_issues() { return 0; }
 }
 
-# Stubs an Issue's plan-comment state as "posted, awaiting approval, but already self-heal-marked
-# (#1286)" — the ONLY fingerprint-unchanged Issue state that still reaches the terminal "unchanged"
-# fallback post-#1427, since a plan-less Issue now re-pokes (a real invocation) instead. Call this
-# in any test whose own subject is unrelated to plan/idle state (an orphaned/resumable-branch check,
-# a no-work notification count) so it keeps landing on "unchanged" without being confused by the
-# #1427 no-plan-yet path. Stubs issue_json_has_plan_comment directly rather than requiring every
-# caller to also hand-craft a fetch_issue_json fixture with a real "## Implementation Plan" comment
-# (#1427 simplify review) — safe because issue_plan_block_marked's stubbed "already marked" short-
-# circuits oneshot's self-heal elif before issue_plan_awaiting_human_approval (which is what would
-# otherwise care about the comment body) is ever called.
+# Stubs an Issue's plan-comment state as "posted, awaiting approval, but already self-heal-marked":
+# the ONLY fingerprint-unchanged Issue state that still reaches the terminal "unchanged" fallback,
+# since a plan-less Issue now re-pokes (a real invocation) instead. Call this in any test whose own
+# subject is unrelated to plan/idle state (an orphaned/resumable-branch check, a no-work
+# notification count) so it keeps landing on "unchanged" without being confused by the no-plan-yet
+# path. Stubs issue_json_has_plan_comment directly rather than requiring every caller to also
+# hand-craft a fetch_issue_json fixture with a real "## Implementation Plan" comment: safe because
+# issue_plan_block_marked's stubbed "already marked" short-circuits oneshot's self-heal elif before
+# issue_plan_awaiting_human_approval (which is what would otherwise care about the comment body) is
+# ever called.
 stub_plan_already_self_heal_marked() {
     issue_plan_block_marked() { return 0; }
     issue_json_has_plan_comment() { return 0; }
@@ -7821,7 +7821,7 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"fingerprint unchanged with no plan ever posted — re-invoking to plan"* ]]
+    [[ "${output}" == *"fingerprint unchanged with no plan ever posted, re-invoking to plan"* ]]
     [[ "${output}" == *"Found actionable Issue #42"* ]]
     # Idle counter bumped from 0 to 1 for this re-poke.
     [ "$(cat "${SESSION_BASE_DIR}/Issue_42.invocations")" = "1 1" ]
@@ -7851,7 +7851,7 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"idle budget exhausted with no plan ever posted — blocking"* ]]
+    [[ "${output}" == *"idle budget exhausted with no plan ever posted, blocking"* ]]
     grep -q "issue comment 42 --repo org/repo --body This issue was re-invoked" "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }

@@ -707,8 +707,8 @@ main() {
                 if [ -n "${saved_fp}" ] && [ "${issue_fp}" = "${saved_fp}" ]; then
                     # Computed here, not eagerly above, so a fingerprint-CHANGED Issue (about to
                     # get a fresh invocation anyway) never pays for a jq pass whose result nothing
-                    # on that path reads (#1427 simplify review). Read by issue_should_advance_unchanged
-                    # below and the two elif branches further down (plan-awaiting-approval self-heal,
+                    # on that path reads. Read by issue_should_advance_unchanged below and the two
+                    # elif branches further down (plan-awaiting-approval self-heal,
                     # idle-exhausted-with-no-plan escalation). Unconditional even though it is a
                     # no-op whenever plan_approved_or_later is already "true" (nothing below then
                     # reads it): matches this loop's "freshly recomputed every iteration, no
@@ -731,16 +731,17 @@ main() {
                         # A plan-approved Issue whose last invocation produced no durable change at
                         # all (no new comment, no branch, no PR — e.g. only a status-update
                         # comment), OR an Issue that never had a plan posted at all (e.g. Blocked by
-                        # an environment failure before planning started, then unblocked — #1427).
+                        # an environment failure before planning started, then unblocked).
                         # Neither of the two checks above found anything to resume from, so this is
                         # a generic re-poke up to the idle budget rather than a resume (#1264).
                         # Logged distinctly per state so a human reading these logs can tell "still
-                        # checking on approved work" from "still trying to get a plan posted" —
-                        # collapsing the two hid #1427 behind a misleading "plan approved" line.
+                        # checking on approved work" from "still trying to get a plan posted":
+                        # collapsing the two would hide a never-planned Issue behind a misleading
+                        # "plan approved" line.
                         if [ "${plan_approved_or_later}" = "true" ]; then
                             info "Issue #${item_id} in ${item_repo}: fingerprint unchanged but plan approved — re-invoking to check progress"
                         else
-                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged with no plan ever posted — re-invoking to plan"
+                            info "Issue #${item_id} in ${item_repo}: fingerprint unchanged with no plan ever posted, re-invoking to plan"
                         fi
                         issue_idle_advance=1
                     else
@@ -772,15 +773,14 @@ main() {
                             && issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" "${has_plan_comment}"; then
                             # Cheap local-file check first, so the jq-backed approval check inside
                             # issue_plan_awaiting_human_approval never runs once this drift episode
-                            # is already marked (#1427 simplify review) — same boolean result either
-                            # order, since both sides are pure reads with no side effect to order.
+                            # is already marked. Same boolean result either order, since both sides
+                            # are pure reads with no side effect to order.
                             # has_plan_comment is passed through (rather than let the function
                             # re-derive it) since oneshot already computed it above for
                             # issue_should_advance_unchanged; going through the shared function
                             # itself, instead of inlining its two-line body here, is what keeps this
-                            # the only definition of "awaiting approval" — a duplicate copy is
-                            # exactly the drift #1286 centralised issue_json_has_human_plan_approval
-                            # to prevent.
+                            # the only definition of "awaiting approval": a duplicate copy is exactly
+                            # the drift issue_json_has_human_plan_approval was centralised to prevent.
                             # The agent posted a plan and ended its session without applying
                             # Blocked, and no human has approved it since. The fingerprint never
                             # changes from here, so Claude is never re-invoked to notice its own
@@ -795,14 +795,14 @@ main() {
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "plan posted but never marked Blocked - self-healing")")
                         elif [ "${has_plan_comment}" != "true" ]; then
                             # The sibling gap to the plan-approved branch above and the
-                            # plan-awaiting-approval self-heal above that (#1427): an Issue that
-                            # never had a plan posted at all has exhausted its idle re-poke budget
-                            # (just granted by the issue_should_advance_unchanged change above)
-                            # without ever producing one. Deliberately does NOT check for an
-                            # occupying PR the way the plan-approved branch does above — posting a
-                            # plan is comment-only and needs no branch/PR slot, so slot occupancy is
-                            # not a reason for a pre-plan Issue to make no progress.
-                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with no plan ever posted — blocking"
+                            # plan-awaiting-approval self-heal above that: an Issue that never had a
+                            # plan posted at all has exhausted its idle re-poke budget (just granted
+                            # by the issue_should_advance_unchanged change above) without ever
+                            # producing one. Deliberately does NOT check for an occupying PR the way
+                            # the plan-approved branch does above: posting a plan is comment-only and
+                            # needs no branch/PR slot, so slot occupancy is not a reason for a
+                            # pre-plan Issue to make no progress.
+                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with no plan ever posted, blocking"
                             block_issue_for_idle_exhausted_no_plan "${item_id}" "${item_repo}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with no plan ever posted - blocking")")
                         else

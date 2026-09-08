@@ -132,7 +132,7 @@ for the exact rule on when to bump it.
 ## When "unchanged" still isn't the end of the story
 
 An unchanged fingerprint means the Issue's own GitHub-visible state hasn't moved — but that's
-not quite the same as "nothing needs to happen." Three situations bypass the skip even when the
+not quite the same as "nothing needs to happen." Four situations bypass the skip even when the
 fingerprint matches, all checked immediately after the fingerprint comparison, before oneshot
 gives up on the Issue for this tick:
 
@@ -166,8 +166,16 @@ gives up on the Issue for this tick:
   (`lib/github-status`) re-invokes a plan-approved Issue up to `MAX_ISSUE_IDLE_INVOCATIONS` tries
   (mirroring the PR-side idle budget) instead of skipping forever; once that budget is exhausted
   with still no PR opened, the Issue is marked `Blocked` for a human rather than silently
-  re-attempted every tick indefinitely. An Issue whose plan is *not* approved never enters this
-  path at all — that is the correct, silent "waiting on a human" behaviour, unchanged.
+  re-attempted every tick indefinitely.
+- **An Issue with no plan ever posted at all ([#1427](https://github.com/credfeto/credfeto-orchestrator/issues/1427)).**
+  Distinct from the case above: here there is no plan to be approved or not, e.g. the agent was
+  Blocked by an environment failure before planning ever started, and a human later unblocked it.
+  `issue_should_advance_unchanged` treats this the same as a plan-approved Issue for the idle
+  budget, re-invoking it to actually produce a plan; once that budget is exhausted with still no
+  plan posted, it is marked `Blocked` via `block_issue_for_idle_exhausted_no_plan`. The one
+  remaining silent case is a plan that *was* posted and is awaiting a human decision: that is the
+  correct, silent "waiting on a human" behaviour, unchanged, and self-heals separately if the
+  agent forgot to apply `Blocked` for it.
 
 ### Version history
 
