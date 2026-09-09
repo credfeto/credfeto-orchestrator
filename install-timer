@@ -170,24 +170,17 @@ WorkingDirectory=${REPO_DIR}
 # root cause unconfirmed (ai/local/debugging.instructions.md). Placed as the very first
 # ExecStartPre, ahead of every other step below (including the REPO_DIR ownership-heal and
 # self-update steps), so a recurrence self-heals before anything else in the unit — including
-# oneshot's own podman invocation — can fail because of it. '+' runs as root regardless of
-# User=/CapabilityBoundingSet= (needed to chown a root-owned directory back; CAP_CHOWN is not in
-# this unit's bounding set), '-' tolerates failure the same way the REPO_DIR heal below does.
-# mkdir -p unconditionally (cheap, and succeeds as root even when .local is currently root-owned
-# or missing outright) then only chown -R when the top-level directory's own owner/group has
-# actually drifted from \${CURRENT_USER} — checked with -maxdepth 0 so this is a single stat, not
-# a walk of the whole tree: .local/share/containers can be many GB, and a full \`find\` there would
-# cost nearly as much I/O as the unconditional \`chown -R\` this guard exists to avoid. Repeats
-# '-print -quit' on each side of -o rather than grouping with \\( -o \\), matching the REPO_DIR
-# heal's own reasoning: that grouping needs backslash-escaped parentheses here, and systemd's own
-# Exec line parser applies its own escape-sequence handling before /bin/sh ever sees the string.
-# Deliberately does NOT use \`stat -c %U\`, the form suggested when this was originally planned:
-# %U is a systemd Exec-line specifier (the executing user's UID) that systemd itself would expand
-# before /bin/sh sees the line, silently turning the comparison into a numeric UID that can never
-# equal \${CURRENT_USER}'s name and degrading this guard into an unconditional chown -R every tick.
-# Prefixed '-+' rather than '+-': functionally identical to the REPO_DIR heal's '+-' below (order
-# of systemd Exec-line prefix characters is insignificant, systemd.service(5)) but textually
-# distinct, so a grep/marker keyed on the exact prefix string can never conflate the two lines.
+# oneshot's own podman invocation — can fail because of it. Same '+'/'-' prefix rationale,
+# detect-before-write '\`find\`' idiom, repeated '-print -quit' (instead of \\( -o \\)) to dodge
+# systemd's own Exec-line escape handling, and avoidance of the Exec-line \`%U\` specifier as the
+# REPO_DIR heal below — see that heal's comment for why. Two differences from it: mkdir -p runs
+# unconditionally first (cheap, and succeeds as root even when .local is currently root-owned or
+# missing outright, unlike REPO_DIR which always exists), and the find is bounded with -maxdepth 0
+# to a single stat rather than a full walk, since .local/share/containers can be many GB and a full
+# walk would cost nearly as much I/O as the unconditional chown -R this guard exists to avoid.
+# Prefixed '-+' rather than the REPO_DIR heal's '+-': functionally identical (systemd Exec-line
+# prefix order is insignificant, systemd.service(5)) but textually distinct, so a grep/marker keyed
+# on the exact prefix string can never conflate the two lines.
 ExecStartPre=-+/bin/sh -c '/usr/bin/mkdir -p \"${owner_home}/.local\" && { [ -z \"\$(/usr/bin/find \"${owner_home}/.local\" -maxdepth 0 -not -user ${CURRENT_USER} -print -quit -o -maxdepth 0 -not -group ${CURRENT_USER} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${CURRENT_USER}:${CURRENT_USER} \"${owner_home}/.local\"; }'
 # A root-run diagnostic command against REPO_DIR (e.g. a bare 'sudo git ... status', whose optional
 # index-refresh side effect reowns .git/index to root) can leave files under REPO_DIR owned by
