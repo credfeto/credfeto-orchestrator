@@ -262,6 +262,41 @@ verify_no_repo_claude_config() {
     done
 }
 
+# The target repo's src/global.json may pin a .NET SDK feature band via rollForward:
+# latestPatch, which cannot cross feature bands. This image's own SDK is unpinned
+# (dotnet-install.sh --channel STS) and floats to the newest feature band on every rebuild
+# with no retained history, so when the image outpaces a repo's global.json, `dotnet` refuses
+# to run any command from that repo's src/ at all - previously discovered late, deep inside
+# pre-commit's buildtest step, after a full Claude session had already spent minutes of
+# runtime and real API spend on unrelated work (#1371). Catching it here, before `exec claude`
+# runs, means the wasted session never happens: dying here is an infra/pre-flight failure
+# (see run_claude_fresh in lib/podman, #1133), which oneshot retries later without burning the
+# item's invocation budget, rather than a Claude-level one.
+# WORKSPACE_REPO_DIR overrides the repo path (used by tests).
+verify_dotnet_sdk_compatible() {
+    local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
+    local global_json="${repo_dir}/src/global.json"
+    [ -f "${global_json}" ] || return 0
+
+    local version_output version_status list_sdks
+    # Run from the repo's src/ directory: dotnet resolves global.json by walking up from the
+    # current directory, so src/global.json only takes effect when the cwd is at or below src/.
+    version_output=$(cd "${repo_dir}/src" && dotnet --version 2>&1) && version_status=0 || version_status=$?
+    [ "${version_status}" -eq 0 ] && return 0
+
+    # dotnet --list-sdks bypasses global.json's SDK-band resolution entirely and reports what
+    # is actually installed regardless of whether --version succeeded, so it is safe to call
+    # unconditionally here to show the installed alternative alongside the requested one.
+    list_sdks=$(dotnet --list-sdks 2>&1)
+    die "The .NET SDK requested by ${global_json} is not installed in this container.
+
+dotnet --version (run from ${repo_dir}/src):
+${version_output}
+
+dotnet --list-sdks:
+${list_sdks}"
+}
+
 # Seeds a small persistent cache under ~/.cache/orchestrator/ for values that are constant
 # for a given container/repo, currently just the container's own resolved GitHub login,
 # used by the cache-gh-lookups PreToolUse hook (containers/base/development-full/claude-hooks/
@@ -304,6 +339,7 @@ verify_ssh_signing
 verify_repo_ssh_remotes
 verify_no_user_insteadof
 verify_no_repo_claude_config
+verify_dotnet_sdk_compatible
 
 verify_hooks_fresh
 

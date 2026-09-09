@@ -1071,6 +1071,56 @@ GITEOF
     [ ! -f "${HOME}/.claude.json" ]
 }
 
+# --- verify_dotnet_sdk_compatible (#1371) -----------------------------------------
+
+@test "entrypoint succeeds when the repo checkout has no src/global.json" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint succeeds when the repo's pinned SDK is installed" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/src"
+    printf '{"sdk":{"version":"10.0.401","rollForward":"latestPatch"}}\n' > "${repo_dir}/src/global.json"
+    make_stub dotnet 'exit 0'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "entrypoint dies naming both the requested and installed SDK when the repo's pinned SDK is not installed" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/src"
+    printf '{"sdk":{"version":"10.0.401","rollForward":"latestPatch"}}\n' > "${repo_dir}/src/global.json"
+    # shellcheck disable=SC2016  # the $1/$(pwd) lines are the stub's own script text
+    make_stub_multiline dotnet \
+        'if [ "$1" = "--list-sdks" ]; then' \
+        '    printf "9.0.317 [/usr/share/dotnet/sdk]\n10.0.400 [/usr/share/dotnet/sdk]\n"' \
+        '    exit 0' \
+        'fi' \
+        'printf "Requested SDK version: 10.0.401\nglobal.json file: %s/global.json\n" "$(pwd)" >&2' \
+        'exit 155'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/src/global.json"* ]]
+    [[ "${output}" == *"Requested SDK version: 10.0.401"* ]]
+    [[ "${output}" == *"9.0.317 [/usr/share/dotnet/sdk]"* ]]
+    [[ "${output}" == *"10.0.400 [/usr/share/dotnet/sdk]"* ]]
+}
+
 # --- enforce_gh_git_protocol_ssh -------------------------------------------------
 
 @test "entrypoint passes without warning when gh git_protocol is already ssh" {
