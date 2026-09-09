@@ -66,6 +66,29 @@ it) rather than a symptom of anything broken.
   reasserts ownership under `REPO_DIR` immediately before its self-update fetch/merge, so the
   automatic self-update path self-heals the same drift on its own (#1302): a stuck `failed` timer
   no longer requires a human to notice and manually re-run `setup-owner`.
+- **`${owner_home}/.local` root-owned across a reboot (#1232, unconfirmed root cause).** After a
+  reboot of `nanoclaw` on 2026-07-22, `/home/credfeto/.local` and `/home/funfair-tech/.local`
+  (including `.local/share/containers`, rootless Podman's storage/layer directory) were found
+  owned by `root:root`, breaking both orchestrator instances identically on their first run after
+  boot (`mkdir .../containers/storage/libpod: permission denied`). What was ruled out: the
+  orchestrator's own systemd units (`User=` applies to every `ExecStartPre`/`ExecStart` line, so
+  nothing in the unit itself runs as root except the explicitly `+`-prefixed heal steps), and a
+  static `systemd-tmpfiles.d` rule (nothing under `/usr/lib/tmpfiles.d`/`/etc/tmpfiles.d` targets
+  `/home` or either owner). Suspected but never confirmed: an `ansible-pull` autoupdate
+  (`credfeto-setup-arch-vm`) firing at almost the same second as the drift, possibly via pacman's
+  `systemd-hook` PostTransaction `systemd-tmpfiles --create`; also worth checking is the
+  btrfs-subvolume-mount-ordering lead (`home-credfeto.mount: Directory ... to mount over is not
+  empty, mounting anyway` in the boot log). The box was fully remediated (fresh subvolume,
+  `setup-owner` re-run) before the mechanism could be isolated, so root cause remains open — a
+  clean-reboot repro on `nanoclaw` and an audit of `credfeto-setup-arch-vm`'s ansible roles are the
+  next steps if this recurs. `install-timer`'s generated unit now carries a second, independent
+  `-+`-prefixed (deliberately the reverse of the `+-` REPO_DIR heal's prefix order — functionally
+  identical, but textually distinct so the two lines are never conflated by a marker/grep keyed on
+  the exact prefix string) `ExecStartPre` as the very first step in the unit, ahead of the
+  REPO_DIR heal and self-update steps, that detects (`find -maxdepth 0 -not -user -o -maxdepth 0
+  -not -group`, a single stat rather than a walk of the whole tree — `.local/share/containers` can
+  be many GB) and reasserts ownership of `${owner_home}/.local` before every run, so a recurrence
+  self-heals regardless of whether the underlying mechanism is ever confirmed.
 
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
 
@@ -270,6 +293,7 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | `jq: Argument list too long` computing a PR fingerprint (`lib/fingerprints`) | A long-lived PR's inline review comments (`fetch_pr_review_comments`) serialised past Linux's per-argument `MAX_ARG_STRLEN` (128KiB — separate from, and much smaller than, total `ARG_MAX`) once passed to `jq` via `--argjson`; confirmed against `credfeto-docker-registry#8` (63 inline comments, 316KB). Fixed in #1254 by passing that argument via `--rawfile`+`fromjson` (a temp file) instead — pull the current code, this should not recur; if it does anyway, check whether some *other* field feeding fingerprinting has grown unbounded and is still being passed via `--argjson`/`--arg` | `lib/fingerprints` (`fingerprint_pr_json`); see `credfeto/cs-template#1012` for the generalised rule ("never pass unbounded data as a single argv value") |
 | Image pull fails with `creating a temporary directory: mkdir /var/tmp/container_images_storage…: no such file or directory` (often only when the image actually needs a fresh layer copy) | Service unit sets `PrivateTmp=yes`; rootless Podman's persistent pause process captured the empty private `/var/tmp`, so all later pulls in that pause namespace see a broken `/var/tmp` | Drop `PrivateTmp` from the unit (see `install-timer`); to recover a live host, clear the pause process (`pkill -u <owner> -f catatonit; pkill -u <owner> -f 'podman pause'`) and regenerate/override the unit so the next run does not re-leak |
 | Plan-approved Issue wrongly marked `Blocked` with "no further progress ... idle-invocation budget ... exhausted", even though its own comment thread shows the agent correctly deferring because another PR was open in the same repo | Before #1326: `find_open_nonblocked_pr_for_repo` (the pivot check) deliberately excludes Blocked/non-bot-authored PRs (#1131/#1134), so a repo whose only open PR was `Blocked` (or human-authored) looked PR-less to the shell — Claude got invoked anyway, correctly deferred itself, but the idle counter kept climbing regardless of *why* nothing changed, until it hit the cap. Confirmed live on `credfeto-orchestrator#1302` and `funfair-treasury-reporting#3447`: the occupying PR (#1319, #3622 respectively) was labelled `Blocked` for a window that overlapped the idle-budget accrual. Fixed by `find_any_open_pr_for_repo` (broad, any-author, any-label) gating `block_issue_for_idle_exhausted_no_progress` — only from the point that fix is deployed forward | Check the repo's other open/recently-open PRs' label timeline (`gh api repos/<owner>/<repo>/issues/<pr>/timeline`) for a `Blocked` window overlapping the Issue's idle-invocation accrual; `oneshot`/`lib/github` (`find_any_open_pr_for_repo`, `block_issue_for_idle_exhausted_no_progress` call site) |
+| First orchestrator run after a host reboot fails Podman with `mkdir .../containers/storage/libpod: permission denied` | `${owner_home}/.local` found root-owned (root cause unconfirmed — see "Real Deployment Layout" above, #1232) | `install-timer`'s generated unit now carries a `-+`-prefixed `ExecStartPre` (the very first step, ahead of the REPO_DIR heal) that detects and reasserts ownership of `${owner_home}/.local` before every run; re-run `install-timer` to regenerate an older unit, or `chown -R <owner>:<owner> /home/<owner>/.local` as interim recovery |
 
 ## After Reviewing State
 
