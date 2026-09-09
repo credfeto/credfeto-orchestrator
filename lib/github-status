@@ -412,23 +412,32 @@ notify_github_blocked() {
     esac
 }
 
-# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that is not yet COMPLETED.
-# Returns 1 (false) when statusCheckRollup is absent, null, or every required entry has status "COMPLETED".
-# Non-required (optional) checks are ignored so they cannot gate agent invocation.
+# Returns 0 (true) if the pre-fetched PR JSON has at least one required check that has not yet
+# reached a terminal result. Returns 1 (false) when statusCheckRollup is absent, empty, or every
+# required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent
+# invocation.
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
     # checks, has .status) and StatusContext (legacy commit statuses, has only .state
     # and no .status at all). Treating a StatusContext's absent .status as "not
     # COMPLETED" makes it look pending forever, even once its .state is a terminal
-    # SUCCESS/FAILURE/ERROR — so each entry is classified by which field it actually has.
+    # SUCCESS/FAILURE/ERROR, so each entry is classified by which field it actually has.
+    # A CheckRun's .status can be stale relative to its own terminal .conclusion: GitHub can
+    # serve a node with status still IN_PROGRESS but conclusion already SUCCESS (and
+    # completedAt set), a persistent inconsistency observed live, not a transient blip. Since
+    # GitHub can desynchronise these two fields in one direction, nothing rules out the same kind
+    # of inconsistency the other way, so pending requires BOTH fields to still say not-done
+    # instead of trusting either one alone: whichever field reaches a terminal value first is
+    # enough to call the check done. A genuine re-run still reads as pending, since it surfaces
+    # as a new CheckRun node whose own conclusion starts out null.
     printf '%s' "${pr_json}" | jq -e '
         (.statusCheckRollup // [])
         | (length > 0) and any(.[];
             .isRequired != false
             and (
                 if (.status != null)
-                then .status != "COMPLETED"
+                then .status != "COMPLETED" and .conclusion == null
                 else ((.state // "") | . == "PENDING" or . == "EXPECTED")
                 end
             )
