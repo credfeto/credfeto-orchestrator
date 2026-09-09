@@ -37,6 +37,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Remove the per-subcommand wildcard allow rules from claude-settings.json (find * -exec cat *, the ten git -C * config ... entries and the three npm --prefix * ... entries) that Claude Code warned about at every startup because the * in the directory position also matched injected options, now that enforce-allowed-dirs checks that position properly, and add permissions.deny entries for the same code-execution and destructive flags in both the first and a later argument position (a * only matches one-or-more characters, so a single later-position deny misses the flag-first form), plus the exact rm -rf / spellings, as a second layer (#1385)
 - Split the enforce-git-dash-c hook's hardcoded git subcommand allowlist into three named policy arrays, making it clear where a subcommand belongs when the list is next extended
 - Add git cherry-pick back to enforce-git-dash-c's subcommand allowlist (#1411), after a confirmed live need for it; the other subcommands #1394 dropped for having no confirmed use (am, mv, remote, restore, revert, rm, tag) stay blocked
+- SDK - Updated DotNet SDK to 10.0.401
 ### Deprecated
 ### Removed
 ### Deployment Changes
