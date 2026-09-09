@@ -1121,6 +1121,28 @@ GITEOF
     [[ "${output}" == *"10.0.400 [/usr/share/dotnet/sdk]"* ]]
 }
 
+@test "entrypoint still dies with a diagnostic message when dotnet --list-sdks also fails (#1434 review)" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/src"
+    printf '{"sdk":{"version":"10.0.401","rollForward":"latestPatch"}}\n' > "${repo_dir}/src/global.json"
+    # shellcheck disable=SC2016  # the $1 line is the stub's own script text
+    make_stub_multiline dotnet \
+        'if [ "$1" = "--list-sdks" ]; then' \
+        '    exit 1' \
+        'fi' \
+        'printf "A compatible .NET SDK was not found.\n" >&2' \
+        'exit 155'
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/src/global.json"* ]]
+    [[ "${output}" == *"A compatible .NET SDK was not found."* ]]
+    [[ "${output}" == *"Install the SDK requested by"* ]]
+}
+
 # --- enforce_gh_git_protocol_ssh -------------------------------------------------
 
 @test "entrypoint passes without warning when gh git_protocol is already ssh" {

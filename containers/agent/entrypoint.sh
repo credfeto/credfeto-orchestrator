@@ -286,7 +286,7 @@ verify_dotnet_sdk_compatible() {
     # dotnet --list-sdks bypasses global.json's SDK-band resolution entirely and reports what
     # is actually installed regardless of whether --version succeeded, so it is safe to call
     # unconditionally here to show the installed alternative alongside the requested one.
-    list_sdks=$(dotnet --list-sdks 2>&1)
+    list_sdks=$(dotnet --list-sdks 2>&1) || true
     printf '\n✗ The .NET SDK requested by %s is not installed in this container:\n' "${global_json}" >&2
     printf '\ndotnet --version (run from %s/src):\n%s\n' "${repo_dir}" "${version_output}" >&2
     printf '\ndotnet --list-sdks:\n%s\n' "${list_sdks}" >&2
