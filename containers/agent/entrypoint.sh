@@ -278,23 +278,19 @@ verify_dotnet_sdk_compatible() {
     local global_json="${repo_dir}/src/global.json"
     [ -f "${global_json}" ] || return 0
 
-    local version_output version_status list_sdks
+    local version_output list_sdks
     # Run from the repo's src/ directory: dotnet resolves global.json by walking up from the
     # current directory, so src/global.json only takes effect when the cwd is at or below src/.
-    version_output=$(cd "${repo_dir}/src" && dotnet --version 2>&1) && version_status=0 || version_status=$?
-    [ "${version_status}" -eq 0 ] && return 0
+    version_output=$(cd "${repo_dir}/src" && dotnet --version 2>&1) && return 0
 
     # dotnet --list-sdks bypasses global.json's SDK-band resolution entirely and reports what
     # is actually installed regardless of whether --version succeeded, so it is safe to call
     # unconditionally here to show the installed alternative alongside the requested one.
     list_sdks=$(dotnet --list-sdks 2>&1)
-    die "The .NET SDK requested by ${global_json} is not installed in this container.
-
-dotnet --version (run from ${repo_dir}/src):
-${version_output}
-
-dotnet --list-sdks:
-${list_sdks}"
+    printf '\n✗ The .NET SDK requested by %s is not installed in this container:\n' "${global_json}" >&2
+    printf '\ndotnet --version (run from %s/src):\n%s\n' "${repo_dir}" "${version_output}" >&2
+    printf '\ndotnet --list-sdks:\n%s\n' "${list_sdks}" >&2
+    die "Install the SDK requested by ${global_json}, or update it to match one of the installed SDKs listed above."
 }
 
 # Seeds a small persistent cache under ~/.cache/orchestrator/ for values that are constant
