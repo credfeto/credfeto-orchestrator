@@ -1119,6 +1119,10 @@ GITEOF
     [[ "${output}" == *"Requested SDK version: 10.0.401"* ]]
     [[ "${output}" == *"9.0.317 [/usr/share/dotnet/sdk]"* ]]
     [[ "${output}" == *"10.0.400 [/usr/share/dotnet/sdk]"* ]]
+    # The stub's own "global.json file: $(pwd)/global.json" line (not entrypoint.sh's die
+    # header, which happens to embed the same path) is the only thing that proves dotnet
+    # --version actually ran from repo_dir/src, not the entrypoint's own cwd (#1434 review).
+    [[ "${output}" == *"global.json file: ${repo_dir}/src/global.json"* ]]
 }
 
 @test "entrypoint still dies with a diagnostic message when dotnet --list-sdks also fails (#1434 review)" {
