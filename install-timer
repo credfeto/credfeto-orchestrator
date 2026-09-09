@@ -57,6 +57,13 @@ is_ai_agent() {
     [ "${CLAUDECODE}" = "1" ]
 }
 
+# Mirrors setup-owner's helper of the same name: resolves a user's home directory via
+# getent passwd rather than assuming ~/.local always means CURRENT_USER's own $HOME (a service
+# started via sudo/systemd can have a different $HOME than the account it runs as).
+get_owner_home() {
+    getent passwd "$1" | cut -d: -f6
+}
+
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 case "${REPO_DIR}" in
@@ -74,7 +81,7 @@ UNIT_DIR="/etc/systemd/system"
 
 check_required_tools() {
     local tool
-    for tool in id sudo systemctl git; do
+    for tool in id sudo systemctl git getent; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
 }
@@ -99,6 +106,9 @@ create_service_unit() {
     # D-Bus access that is denied for non-root users in system services.
     local runtime_dir="${SERVICE_NAME}"
     local ssh_socket="/run/${runtime_dir}/ssh-agent.socket"
+    local owner_home
+    owner_home=$(get_owner_home "${CURRENT_USER}") || die "Failed to look up home directory for ${CURRENT_USER}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${CURRENT_USER}"
     local owner_uid
     owner_uid=$(id -u) || die "Failed to get UID for ${CURRENT_USER}"
     # See the ExecStop comment in the unit body below for why this tracks OWNER (the GitHub
@@ -154,6 +164,31 @@ Environment=SSH_AUTH_SOCK=${ssh_socket}
 # unrelated systemd --user session, which would otherwise wrongly gate a manual/interactive run.
 Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1
 WorkingDirectory=${REPO_DIR}
+# Defense-in-depth self-heal (#1232): after a host reboot, \${owner_home}/.local (including
+# .local/share/containers, rootless Podman's storage/layer directory) was found root-owned,
+# breaking Podman's first pull with \"mkdir .../containers/storage/libpod: permission denied\" —
+# root cause unconfirmed (ai/local/debugging.instructions.md). Placed as the very first
+# ExecStartPre, ahead of every other step below (including the REPO_DIR ownership-heal and
+# self-update steps), so a recurrence self-heals before anything else in the unit — including
+# oneshot's own podman invocation — can fail because of it. '+' runs as root regardless of
+# User=/CapabilityBoundingSet= (needed to chown a root-owned directory back; CAP_CHOWN is not in
+# this unit's bounding set), '-' tolerates failure the same way the REPO_DIR heal below does.
+# mkdir -p unconditionally (cheap, and succeeds as root even when .local is currently root-owned
+# or missing outright) then only chown -R when the top-level directory's own owner/group has
+# actually drifted from \${CURRENT_USER} — checked with -maxdepth 0 so this is a single stat, not
+# a walk of the whole tree: .local/share/containers can be many GB, and a full \`find\` there would
+# cost nearly as much I/O as the unconditional \`chown -R\` this guard exists to avoid. Repeats
+# '-print -quit' on each side of -o rather than grouping with \\( -o \\), matching the REPO_DIR
+# heal's own reasoning: that grouping needs backslash-escaped parentheses here, and systemd's own
+# Exec line parser applies its own escape-sequence handling before /bin/sh ever sees the string.
+# Deliberately does NOT use \`stat -c %U\`, the form suggested when this was originally planned:
+# %U is a systemd Exec-line specifier (the executing user's UID) that systemd itself would expand
+# before /bin/sh sees the line, silently turning the comparison into a numeric UID that can never
+# equal \${CURRENT_USER}'s name and degrading this guard into an unconditional chown -R every tick.
+# Prefixed '-+' rather than '+-': functionally identical to the REPO_DIR heal's '+-' below (order
+# of systemd Exec-line prefix characters is insignificant, systemd.service(5)) but textually
+# distinct, so a grep/marker keyed on the exact prefix string can never conflate the two lines.
+ExecStartPre=-+/bin/sh -c '/usr/bin/mkdir -p \"${owner_home}/.local\" && { [ -z \"\$(/usr/bin/find \"${owner_home}/.local\" -maxdepth 0 -not -user ${CURRENT_USER} -print -quit -o -maxdepth 0 -not -group ${CURRENT_USER} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${CURRENT_USER}:${CURRENT_USER} \"${owner_home}/.local\"; }'
 # A root-run diagnostic command against REPO_DIR (e.g. a bare 'sudo git ... status', whose optional
 # index-refresh side effect reowns .git/index to root) can leave files under REPO_DIR owned by
 # someone other than ${CURRENT_USER}, which then makes the self-update merge below fail with

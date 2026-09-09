@@ -21,6 +21,16 @@ setup() {
     }
     export -f id
 
+    # Override getent so get_owner_home resolves to a deterministic, test-controlled home
+    # directory regardless of which user is looked up (some tests override CURRENT_USER directly
+    # to "root" or the real test-runner account to exercise the ownership-heal ExecStartPre lines
+    # — see ownership_heal_cmd_for/local_ownership_heal_cmd_for below).
+    # shellcheck disable=SC2329
+    getent() {
+        printf '%s:x:1001:1001:Test User:%s:/bin/bash\n' "$1" "${TEST_TMP}/home"
+    }
+    export -f getent
+
     unset CLAUDECODE
 
     source_install_timer
@@ -76,6 +86,28 @@ assert_ownership_heal_execstartpre() {
 assert_ownership_heal_before_selfupdate() {
     local svc="$1"
     grep -m1 -E 'ExecStartPre=\+-/bin/sh -c|ExecStartPre=-/usr/bin/timeout 60' "${svc}" | grep -q '+-/bin/sh -c'
+}
+
+# Asserts the /home/<owner>/.local ownership-heal ExecStartPre line (#1232): mkdir -p (handles a
+# missing directory the same way a drifted-owner one is handled) then detect-then-chown using an
+# absolute, -maxdepth 0 find (a single stat, not a walk of the whole tree - .local/share/containers
+# can be many GB) and absolute /usr/bin/chown, mirroring setup-owner's own pattern. Prefixed
+# '-+' rather than the REPO_DIR heal's '+-': functionally identical (systemd Exec-line prefix
+# order is insignificant) but textually distinct, so a marker/grep keyed on the exact prefix
+# string can never conflate the two lines - see assert_ownership_heal_execstartpre above for the
+# REPO_DIR line this must not be confused with.
+assert_local_ownership_heal_execstartpre() {
+    local svc="$1"
+    grep -qE 'ExecStartPre=-\+/bin/sh -c ./usr/bin/mkdir -p ".*\.local" && \{ \[ -z "\$\(/usr/bin/find ".*\.local" -maxdepth 0 -not -user .* -print -quit -o -maxdepth 0 -not -group .* -print -quit 2>/dev/null\)" \] \|\| /usr/bin/chown -R .*:.* ".*\.local"; \}.$' "${svc}"
+}
+
+# Asserts the .local heal (#1232) is the very first ExecStartPre in the unit, ahead of even the
+# REPO_DIR heal (#1300/#1302) and self-update steps: the plan requires this ordering so a
+# recurrence self-heals before anything else in the unit - including oneshot's own podman
+# invocation - can fail because of it.
+assert_local_ownership_heal_is_first_execstartpre() {
+    local svc="$1"
+    grep -m1 -E '^ExecStartPre=' "${svc}" | grep -qF -- '-+/bin/sh -c'
 }
 
 @test "sourcing install-timer defines main without executing it" {
@@ -278,6 +310,76 @@ make_fake_repo() {
     [ -z "${output}" ]
 }
 
+# Extracts the .local ownership-heal ExecStartPre command for owner_home_dir/current_user as a
+# plain string, ready for `run /bin/sh -c "$(...)"`. Unlike REPO_DIR (a plain global
+# ownership_heal_cmd_for above overrides directly), owner_home is resolved inside
+# create_service_unit via get_owner_home/getent, so this also redefines getent itself to return
+# owner_home_dir regardless of current_user - bypassing the file-level getent stub the same way
+# ownership_heal_cmd_for bypasses the file-level `id` stub.
+local_ownership_heal_cmd_for() {
+    local owner_home_dir="$1" current_user="$2"
+    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
+    CURRENT_USER="${current_user}"
+    # shellcheck disable=SC2329
+    getent() { printf '%s:x:1001:1001:Test User:%s:/bin/bash\n' "$1" "${owner_home_dir}"; }
+    export -f getent
+    generated_execstartpre_cmd "ExecStartPre=-+/bin/sh -c '"
+}
+
+@test "the .local ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1232, real repro)" {
+    # command bypasses the file-level `id` shell-function stub to get the real account running
+    # this test, so the extracted find/chown command's CURRENT_USER matches the temp home's actual
+    # on-disk owner and genuinely exercises the no-drift path, not a forced pass.
+    local real_user
+    real_user=$(command id -un)
+
+    local home="${TEST_TMP}/local-heal-no-drift-home"
+    mkdir -p "${home}/.local"
+
+    run_execstartpre_cmd "$(local_ownership_heal_cmd_for "${home}" "${real_user}")"
+    [ "${status}" -eq 0 ]
+}
+
+@test "the .local ownership-heal ExecStartPre creates .local when it does not exist yet (#1232)" {
+    local real_user
+    real_user=$(command id -un)
+
+    local home="${TEST_TMP}/local-heal-missing-home"
+    mkdir -p "${home}"
+    [ ! -e "${home}/.local" ]
+
+    run_execstartpre_cmd "$(local_ownership_heal_cmd_for "${home}" "${real_user}")"
+    [ "${status}" -eq 0 ]
+    [ -d "${home}/.local" ]
+}
+
+@test "the .local ownership-heal ExecStartPre detects drift and attempts to reassert ownership (#1232, real repro)" {
+    # Every file under .local is genuinely owned by the account running this test, not by root, so
+    # naming "root" as CURRENT_USER reproduces real drift (analogous to the #1232 incident) without
+    # needing privilege to actually chown a directory away from its real owner. The chown this
+    # triggers then genuinely fails with "Operation not permitted": this test is run unprivileged
+    # deliberately, so it proves the detect-then-chown branch was taken (the exact command the
+    # '-+' prefix lets systemd run as root in production) without asserting on privileged
+    # behaviour this suite cannot grant itself. If the suite itself is somehow run as root (e.g. a
+    # container-based CI runner), naming "root" as CURRENT_USER would never look like drift and
+    # the chown would genuinely succeed, so skip rather than fail.
+    if [ "$(command id -u)" -eq 0 ]; then
+        skip "requires an unprivileged test runner to reproduce ownership drift"
+    fi
+
+    local home="${TEST_TMP}/local-heal-drift-home"
+    mkdir -p "${home}/.local"
+
+    LC_ALL=C run_execstartpre_cmd "$(local_ownership_heal_cmd_for "${home}" "root")"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Operation not permitted"* ]]
+
+    # The failed, unprivileged chown must not have silently succeeded in any partial form: the
+    # home's actual owner (this test's own account) must be unchanged.
+    run find "${home}/.local" -not -user "$(command id -un)" -print -quit
+    [ -z "${output}" ]
+}
+
 @test "install-timer creates unit files and invokes systemctl correctly" {
     run main
     [ "${status}" -eq 0 ]
@@ -295,6 +397,8 @@ make_fake_repo() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_local_ownership_heal_execstartpre "${svc}"
+    assert_local_ownership_heal_is_first_execstartpre "${svc}"
     assert_ownership_heal_execstartpre "${svc}"
     assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
@@ -476,6 +580,8 @@ make_fake_repo() {
     grep -q "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus" "${svc}"
     grep -q "Environment=SSH_AUTH_SOCK=/run/credfeto-orchestrator-testuser-myorg/ssh-agent.socket" "${svc}"
     grep -q "Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1" "${svc}"
+    assert_local_ownership_heal_execstartpre "${svc}"
+    assert_local_ownership_heal_is_first_execstartpre "${svc}"
     assert_ownership_heal_execstartpre "${svc}"
     assert_ownership_heal_before_selfupdate "${svc}"
     assert_selfupdate_execstartpre "${svc}"
