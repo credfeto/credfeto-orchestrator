@@ -120,7 +120,7 @@ jobs:
           # highest channel-version for that release-type, excluding EOL channels and
           # prerelease/go-live SDKs, whose `latest-sdk` carries a `-rc.`/`-preview.` suffix).
           # The go-live channel/SDK are whichever release currently carries a Microsoft
-          # go-live license (installed alongside LTS/STS so it can be built/tested against
+          # go-live licence (installed alongside LTS/STS so it can be built/tested against
           # before GA, #1443), empty when none is current - there is normally at most one
           # go-live channel at a time.
           DOTNET_SDK_RESOLUTION=$(printf '%s' "$DOTNET_RELEASES_INDEX" | jq -rce '

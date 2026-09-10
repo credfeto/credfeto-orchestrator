@@ -84,7 +84,7 @@ ARG COMPOSITE_ACTION_LINT_CACHE_BUST
 # naturally rebuilds this layer instead of replaying a stale cache forever (#1441).
 ARG DOTNET_LTS_VERSION
 ARG DOTNET_STS_VERSION
-# Whichever SDK release currently carries a Microsoft go-live license (empty when
+# Whichever SDK release currently carries a Microsoft go-live licence (empty when
 # none is current - resolved dynamically since which release that is changes over
 # time) and the channel number it belongs to, kept only for the installed-versions
 # report and FATAL messages. See #1441.
@@ -366,7 +366,7 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # separate cache-bust ARG is needed: Docker already busts this layer whenever
 # one of the version ARGs below changes. The go-live install is conditional:
 # DOTNET_GOLIVE_VERSION is empty whenever no release currently carries a
-# Microsoft go-live license. See #1441, #1443.
+# Microsoft go-live licence. See #1441, #1443.
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --version "${DOTNET_LTS_VERSION}" --install-dir /usr/share/dotnet \
