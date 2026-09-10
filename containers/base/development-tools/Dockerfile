@@ -88,8 +88,8 @@ ARG DOTNET_STS_VERSION
 # none is current - resolved dynamically since which release that is changes over
 # time) and the channel number it belongs to, kept only for the installed-versions
 # report and FATAL messages. See #1441.
-ARG DOTNET_GOLIVE_VERSION
-ARG DOTNET_GOLIVE_CHANNEL
+ARG DOTNET_RELEASE_CANDIDATE_VERSION
+ARG DOTNET_RELEASE_CANDIDATE_CHANNEL
 
 # ---- Temporary directory -----------------------------------------------------
 # Explicitly set TMPDIR so anything that does literal `mktemp -p "$TMPDIR"` or
@@ -365,8 +365,8 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # the sdk/ listing before/after each install to find which one is new, and no
 # separate cache-bust ARG is needed: Docker already busts this layer whenever
 # one of the version ARGs below changes. The go-live install is conditional:
-# DOTNET_GOLIVE_VERSION is empty whenever no release currently carries a
-# Microsoft go-live licence. See #1441, #1443.
+# DOTNET_RELEASE_CANDIDATE_VERSION is empty whenever no release currently
+# carries a Microsoft go-live licence. See #1441, #1443.
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --version "${DOTNET_LTS_VERSION}" --install-dir /usr/share/dotnet \
@@ -375,13 +375,13 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --version "${DOTNET_STS_VERSION}" --install-dir /usr/share/dotnet \
     && test -d "/usr/share/dotnet/sdk/${DOTNET_STS_VERSION}" \
         || { echo "FATAL: STS SDK directory not found after install (expected '${DOTNET_STS_VERSION}')" >&2; exit 1; } \
-    && if [ -n "${DOTNET_GOLIVE_VERSION}" ]; then \
-         /tmp/dotnet-install.sh --version "${DOTNET_GOLIVE_VERSION}" --install-dir /usr/share/dotnet \
-         && test -d "/usr/share/dotnet/sdk/${DOTNET_GOLIVE_VERSION}" \
-             || { echo "FATAL: go-live SDK directory not found after install (channel '${DOTNET_GOLIVE_CHANNEL}', expected '${DOTNET_GOLIVE_VERSION}')" >&2; exit 1; }; \
+    && if [ -n "${DOTNET_RELEASE_CANDIDATE_VERSION}" ]; then \
+         /tmp/dotnet-install.sh --version "${DOTNET_RELEASE_CANDIDATE_VERSION}" --install-dir /usr/share/dotnet \
+         && test -d "/usr/share/dotnet/sdk/${DOTNET_RELEASE_CANDIDATE_VERSION}" \
+             || { echo "FATAL: go-live SDK directory not found after install (channel '${DOTNET_RELEASE_CANDIDATE_CHANNEL}', expected '${DOTNET_RELEASE_CANDIDATE_VERSION}')" >&2; exit 1; }; \
        fi \
     && printf 'dotnet SDK (LTS): %s\ndotnet SDK (STS): %s\ndotnet SDK (go-live, channel %s): %s\n' \
-        "${DOTNET_LTS_VERSION}" "${DOTNET_STS_VERSION}" "${DOTNET_GOLIVE_CHANNEL:-none}" "${DOTNET_GOLIVE_VERSION:-none}" > /opt/installed-versions.txt \
+        "${DOTNET_LTS_VERSION}" "${DOTNET_STS_VERSION}" "${DOTNET_RELEASE_CANDIDATE_CHANNEL:-none}" "${DOTNET_RELEASE_CANDIDATE_VERSION:-none}" > /opt/installed-versions.txt \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm /tmp/dotnet-install.sh
 

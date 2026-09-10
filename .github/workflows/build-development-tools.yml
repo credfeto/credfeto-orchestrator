@@ -134,8 +134,8 @@ jobs:
                   [."releases-index"[] | select(."support-phase" == "go-live")]
                   | sort_by(."channel-version" | split(".") | map(tonumber))
                   | last
-                ) as $golive
-              | [$lts, $sts, ($golive."channel-version" // ""), ($golive."latest-sdk" // "")]
+                ) as $releaseCandidate
+              | [$lts, $sts, ($releaseCandidate."channel-version" // ""), ($releaseCandidate."latest-sdk" // "")]
               | .[]
             ')
           # One value per line rather than `@tsv` + `IFS=$'\t' read`: tab is "IFS whitespace" in
@@ -146,8 +146,8 @@ jobs:
           mapfile -t DOTNET_SDK_FIELDS <<< "$DOTNET_SDK_RESOLUTION"
           DOTNET_LTS_VERSION="${DOTNET_SDK_FIELDS[0]}"
           DOTNET_STS_VERSION="${DOTNET_SDK_FIELDS[1]}"
-          DOTNET_GOLIVE_CHANNEL="${DOTNET_SDK_FIELDS[2]}"
-          DOTNET_GOLIVE_VERSION="${DOTNET_SDK_FIELDS[3]}"
+          DOTNET_RELEASE_CANDIDATE_CHANNEL="${DOTNET_SDK_FIELDS[2]}"
+          DOTNET_RELEASE_CANDIDATE_VERSION="${DOTNET_SDK_FIELDS[3]}"
 
           # LTS/STS should never legitimately be empty; fail loudly here rather than letting an
           # empty value flow into the Docker build-args and surface later as a confusing
@@ -161,8 +161,8 @@ jobs:
           {
             echo "lts_version=${DOTNET_LTS_VERSION}"
             echo "sts_version=${DOTNET_STS_VERSION}"
-            echo "golive_channel=${DOTNET_GOLIVE_CHANNEL}"
-            echo "golive_version=${DOTNET_GOLIVE_VERSION}"
+            echo "release_candidate_channel=${DOTNET_RELEASE_CANDIDATE_CHANNEL}"
+            echo "release_candidate_version=${DOTNET_RELEASE_CANDIDATE_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Build and push"
@@ -180,8 +180,8 @@ jobs:
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
             DOTNET_LTS_VERSION=${{ steps.dotnet-sdk.outputs.lts_version }}
             DOTNET_STS_VERSION=${{ steps.dotnet-sdk.outputs.sts_version }}
-            DOTNET_GOLIVE_CHANNEL=${{ steps.dotnet-sdk.outputs.golive_channel }}
-            DOTNET_GOLIVE_VERSION=${{ steps.dotnet-sdk.outputs.golive_version }}
+            DOTNET_RELEASE_CANDIDATE_CHANNEL=${{ steps.dotnet-sdk.outputs.release_candidate_channel }}
+            DOTNET_RELEASE_CANDIDATE_VERSION=${{ steps.dotnet-sdk.outputs.release_candidate_version }}
             BUILD_GIT_SHA=${{ github.sha }}
           cache-from: "type=gha,scope=development-tools"
           cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
