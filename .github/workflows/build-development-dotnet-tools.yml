@@ -124,6 +124,27 @@ jobs:
         with:
           image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
 
+      - name: "Check Required Secrets (dispatch)"
+        # Same pattern as the "Check Required Secrets" step in dotnet-version.yml,
+        # check-composite-action-versions.yml, approve-dependabot.yml etc. - checked
+        # in a run: step, not a step if: condition, since `secrets` isn't a valid
+        # context there. Unlike those workflows this must not fail the job: dispatch
+        # is best-effort chain-continuation (see the next step's own comment), not
+        # part of this job's own build/push/scan, so a missing/stale PAT gets a clear
+        # ::warning:: and the dispatch step below skips cleanly instead of either
+        # failing the job or silently 401ing into continue-on-error with no signal -
+        # the same "silently stops rebuilding" symptom #1444 itself was. See #1444.
+        id: "check-dispatch-secret"
+        if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
+        shell: "bash"
+        run: |
+          if [ -z "${{ secrets.SOURCE_PUSH_TOKEN }}" ]; then
+            echo "::warning::SOURCE_PUSH_TOKEN is not set - skipping the development-credfeto-tools dispatch (chain continuation for #1424/#1444)"
+            echo "has-token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-token=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: "Dispatch development-credfeto-tools build"
         # Only for the workflow_run-chained case: development-credfeto-tools already
         # has its own native workflow_run trigger on this workflow, which fires fine
@@ -144,17 +165,16 @@ jobs:
         # credfeto-tools run would build fine but its completion could never reach
         # development-full/development-agent's own workflow_run listeners downstream -
         # the whole point of this dispatch. See #1444.
-        if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
+        if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' && steps.check-dispatch-secret.outputs.has-token == 'true' }}
         uses: ./.github/actions/dispatch-workflow
         # Fire-and-forget: the real build/push/scan above already succeeded by this
         # point, so a transient API failure here must not fail the job - that would
         # flip this run's conclusion to failure and, since credfeto-tools' native
         # workflow_run trigger itself gates on conclusion == 'success', also block
         # the still-working native path for this same run. Same precedent as the
-        # sarif upload action's fire-and-forget steps. Also covers SOURCE_PUSH_TOKEN
-        # not being set (`secrets` isn't a valid context in step `if:` conditions, so
-        # this can't be gated the same way as the required-secret checks elsewhere in
-        # this repo) - the API call fails with an auth error and is swallowed here.
+        # sarif upload action's fire-and-forget steps. The required-secret check above
+        # handles the expected missing-token case with a clear warning; this only
+        # covers a genuinely transient API failure with a present token.
         continue-on-error: true
         with:
           workflow-id: "build-development-credfeto-tools.yml"
