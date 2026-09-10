@@ -224,6 +224,18 @@ Existing files are never rewritten; edit them by hand.
 | main    | [![Build: Pre-Release](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-and-publish-pre-release.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-and-publish-pre-release.yml) |
 | release | [![Build: Release](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-and-publish-release.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-and-publish-release.yml)             |
 
+### Development Container Builds
+
+| Image                      | Status                                                                                                                                                                                                                                                               |
+|----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| development-tools          | [![Build: development-tools](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-tools.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-tools.yml)                            |
+| development-node           | [![Build: development-node](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-node.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-node.yml)                               |
+| development-python         | [![Build: development-python](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-python.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-python.yml)                         |
+| development-dotnet-tools   | [![Build: development-dotnet-tools](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-dotnet-tools.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-dotnet-tools.yml)       |
+| development-credfeto-tools | [![Build: development-credfeto-tools](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-credfeto-tools.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-credfeto-tools.yml) |
+| development-full           | [![Build: development-full](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-full.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-full.yml)                               |
+| development-agent          | [![Build: development-agent](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-agent.yml/badge.svg)](https://github.com/credfeto/credfeto-orchestrator/actions/workflows/build-development-agent.yml)                            |
+
 ## Changelog
 
 View [changelog](CHANGELOG.md)
