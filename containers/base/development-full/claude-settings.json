@@ -206,6 +206,7 @@
       "Write"
     ],
     "deny": [
+      "Bash(GH_HOST=*)",
       "Bash(dotnet new tool-manifest*)",
       "Bash(dotnet tool install*)",
       "Bash(find -delete*)",
@@ -298,6 +299,7 @@
       "Read(*/.claude/.credentials.json)",
       "Read(*/.claude/history.jsonl)",
       "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
       "WebFetch(domain:registry.npmjs.org)"
     ]
   },
