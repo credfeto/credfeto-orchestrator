@@ -93,7 +93,7 @@ Rules:
 
 - **Overwrite, never append, across stages.** The *first* `RUN` in a stage that touches this file must create it fresh (`>`, not `>>`), so it ends up containing only that stage's own additions — a downstream image inherits the file via `FROM` but immediately replaces it with its own content, never carrying forward a previous stage's entries. A stage that genuinely adds no new tools (e.g. `development-agent`, which only removes package managers) still overwrites it with an explanatory line rather than leaving the inherited file in place. Within a single stage, if the tools it installs are spread across more than one `RUN` (e.g. `development-tools`' dotnet SDK install followed by its static-binary linters), the first such `RUN` uses `>` and any subsequent ones in that same stage use `>>` to append to what that stage itself already started — this is not the cross-stage case the rule forbids.
 - **Lock down like any other baked artefact**: `chown root:root /opt/installed-versions.txt && chmod 0444 /opt/installed-versions.txt`, per the Lock-Down Requirements above.
-- **Attribute at the point of installation, not afterwards.** Where two installs of the same kind land in the same location (e.g. the dotnet SDK's `--channel LTS` then `--channel STS` both extracting into `/usr/share/dotnet/sdk`), capture each one's resolved version immediately after that specific install call — before the next one runs — rather than trying to reconstruct which version came from which channel afterwards.
+- **Attribute at the point of installation, not afterwards.** Where two or more installs of the same kind land in the same location (e.g. the dotnet SDK's LTS, STS, and go-live installs all extracting into `/usr/share/dotnet/sdk`), attribute each one to its resolved version. Prefer installing by exact version (`dotnet-install.sh --version "$v"`) over a moving target (`--channel LTS`) wherever the caller already knows the exact version to install — the target directory name is then already known, so there is nothing to reconstruct afterwards and no need for a "find the newly-added directory" scan.
 - **Prefer values already known exactly** — a pinned `ARG` version, a `dotnet tool list -g` row, a captured commit SHA — over re-deriving them from a floating install. When only a `--version`/`-version`/`-h` probe is available, capture its actual output rather than assuming a single-line format (e.g. `sqlcmd --version` prints a multi-line banner; the real version is on the `Version:` line, not the first line).
 
 ## ARG Cache-Busting Pattern
@@ -107,6 +107,12 @@ RUN : "${SOME_CACHE_BUST}"; \
 ```
 
 Without this, changing the ARG in the workflow has no effect on the cached layer.
+
+This no-op trick is only needed when the ARG's *value* doesn't otherwise appear in the layer's
+command text (e.g. a cache-bust hash/SHA that exists purely to invalidate the cache). When the ARG
+already IS the value being installed — e.g. `dotnet-install.sh --version "${DOTNET_LTS_VERSION}"`
+— referencing it directly already busts the cache whenever it changes; don't add a redundant
+`: "${ARG}"` line on top of that.
 
 ## Pinned Upstream Repo Clones (MANDATORY)
 

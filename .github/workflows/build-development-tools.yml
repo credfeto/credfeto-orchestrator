@@ -136,9 +136,27 @@ jobs:
                   | last
                 ) as $golive
               | [$lts, $sts, ($golive."channel-version" // ""), ($golive."latest-sdk" // "")]
-              | @tsv
+              | .[]
             ')
-          IFS=$'\t' read -r DOTNET_LTS_VERSION DOTNET_STS_VERSION DOTNET_GOLIVE_CHANNEL DOTNET_GOLIVE_VERSION <<< "$DOTNET_SDK_RESOLUTION"
+          # One value per line rather than `@tsv` + `IFS=$'\t' read`: tab is "IFS whitespace" in
+          # bash, so a tab-delimited `read` silently collapses a run of adjacent tabs (an empty
+          # field, e.g. no currently-active STS release) and shifts every field after it left -
+          # `mapfile` has no such word-splitting behaviour and keeps a blank line as an empty
+          # element.
+          mapfile -t DOTNET_SDK_FIELDS <<< "$DOTNET_SDK_RESOLUTION"
+          DOTNET_LTS_VERSION="${DOTNET_SDK_FIELDS[0]}"
+          DOTNET_STS_VERSION="${DOTNET_SDK_FIELDS[1]}"
+          DOTNET_GOLIVE_CHANNEL="${DOTNET_SDK_FIELDS[2]}"
+          DOTNET_GOLIVE_VERSION="${DOTNET_SDK_FIELDS[3]}"
+
+          # LTS/STS should never legitimately be empty; fail loudly here rather than letting an
+          # empty value flow into the Docker build-args and surface later as a confusing
+          # dotnet-install.sh failure.
+          if [[ -z "$DOTNET_LTS_VERSION" || -z "$DOTNET_STS_VERSION" ]]; then
+            echo "::error::Failed to resolve a current LTS and/or STS .NET SDK version from" \
+                 "releases-index.json (lts='${DOTNET_LTS_VERSION}', sts='${DOTNET_STS_VERSION}')"
+            exit 1
+          fi
 
           {
             echo "lts_version=${DOTNET_LTS_VERSION}"
