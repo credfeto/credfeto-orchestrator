@@ -77,6 +77,13 @@ ARG TRIVY_SHA256_ARM64=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794
 # the .env provenance file alongside the HEAD SHA captured in the builder.
 ARG COMPOSITE_ACTION_LINT_UPSTREAM=https://github.com/bettermarks/composite-action-lint.git
 ARG COMPOSITE_ACTION_LINT_CACHE_BUST
+# .NET SDK: dotnet-install.sh --channel LTS/STS below has no version pin, so
+# without a cache-bust the RUN instruction's text never changes and Docker
+# replays the cached layer forever - the installed SDK silently freezes at
+# whatever LTS/STS resolved to the first time the layer was built, even
+# though the workflow rebuilds daily. Fed from a hash of the current LTS/STS
+# `latest-sdk` values (see build-development-tools.yml). See #1441.
+ARG DOTNET_SDK_CACHE_BUST
 
 # ---- Temporary directory -----------------------------------------------------
 # Explicitly set TMPDIR so anything that does literal `mktemp -p "$TMPDIR"` or
@@ -351,7 +358,8 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # the next install adds another folder under /usr/share/dotnet/sdk — so the
 # report in /opt/installed-versions.txt attributes each version to the
 # correct channel rather than guessing from a combined listing afterwards.
-RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+RUN : "${DOTNET_SDK_CACHE_BUST}"; \
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
     && /tmp/dotnet-install.sh --channel LTS --install-dir /usr/share/dotnet \
     && LTS_SDK_VERSION="" \
