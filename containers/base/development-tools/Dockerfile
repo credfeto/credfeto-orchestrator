@@ -77,6 +77,19 @@ ARG TRIVY_SHA256_ARM64=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794
 # the .env provenance file alongside the HEAD SHA captured in the builder.
 ARG COMPOSITE_ACTION_LINT_UPSTREAM=https://github.com/bettermarks/composite-action-lint.git
 ARG COMPOSITE_ACTION_LINT_CACHE_BUST
+# .NET SDK: installed by exact version (not --channel LTS/STS), resolved in
+# build-development-tools.yml from the same releases-index.json dotnet-version.yml
+# already queries. Passing the exact version means the ARG value itself - not a
+# separate cache-bust token - is what changes whenever a new SDK ships, so Docker
+# naturally rebuilds this layer instead of replaying a stale cache forever (#1441).
+ARG DOTNET_LTS_VERSION
+ARG DOTNET_STS_VERSION
+# Whichever SDK release currently carries a Microsoft go-live licence (empty when
+# none is current - resolved dynamically since which release that is changes over
+# time) and the channel number it belongs to, kept only for the installed-versions
+# report and FATAL messages. See #1441.
+ARG DOTNET_RELEASE_CANDIDATE_VERSION
+ARG DOTNET_RELEASE_CANDIDATE_CHANNEL
 
 # ---- Temporary directory -----------------------------------------------------
 # Explicitly set TMPDIR so anything that does literal `mktemp -p "$TMPDIR"` or
@@ -338,7 +351,7 @@ RUN install -d -m 0755 /etc/apt/keyrings \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main" \
         > /etc/apt/sources.list.d/claude-code.list
 
-# ---- .NET SDK (LTS + STS side-by-side) ---------------------------------------
+# ---- .NET SDK (LTS + STS [+ go-live] side-by-side) ----------------------------
 # Both channels installed because repos in this fork target multiple TFMs
 # (e.g. net9.0 + net10.0). Without the STS channel, builds against net9.0
 # fail with "framework not found" at restore/build time.
@@ -347,29 +360,28 @@ RUN install -d -m 0755 /etc/apt/keyrings \
 # invoke them without root. The PATH ENV below and the profile.d snippet
 # ensure the tools directory is visible to login shells and non-login shells
 # started by the entrypoint.
-# LTS/STS versions are captured right after each individual install — before
-# the next install adds another folder under /usr/share/dotnet/sdk — so the
-# report in /opt/installed-versions.txt attributes each version to the
-# correct channel rather than guessing from a combined listing afterwards.
+# Installed by exact version (`dotnet-install.sh --version`) rather than
+# `--channel`, so the target directory name is already known - no need to diff
+# the sdk/ listing before/after each install to find which one is new, and no
+# separate cache-bust ARG is needed: Docker already busts this layer whenever
+# one of the version ARGs below changes. The go-live install is conditional:
+# DOTNET_RELEASE_CANDIDATE_VERSION is empty whenever no release currently
+# carries a Microsoft go-live licence. See #1441, #1443.
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && chmod +x /tmp/dotnet-install.sh \
-    && /tmp/dotnet-install.sh --channel LTS --install-dir /usr/share/dotnet \
-    && LTS_SDK_VERSION="" \
-    && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
-         LTS_SDK_VERSION="$(basename "$sdk_dir")"; \
-       done \
-    && test -d "/usr/share/dotnet/sdk/${LTS_SDK_VERSION}" \
-        || { echo "FATAL: LTS SDK directory not found after install (got '${LTS_SDK_VERSION}')" >&2; exit 1; } \
-    && /tmp/dotnet-install.sh --channel STS --install-dir /usr/share/dotnet \
-    && STS_SDK_VERSION="" \
-    && for sdk_dir in /usr/share/dotnet/sdk/*/; do \
-         sdk_version="$(basename "$sdk_dir")"; \
-         [ "$sdk_version" = "${LTS_SDK_VERSION}" ] || STS_SDK_VERSION="$sdk_version"; \
-       done \
-    && test -d "/usr/share/dotnet/sdk/${STS_SDK_VERSION}" \
-        || { echo "FATAL: STS SDK directory not found after install (got '${STS_SDK_VERSION}')" >&2; exit 1; } \
-    && printf 'dotnet SDK (LTS): %s\ndotnet SDK (STS): %s\n' \
-        "${LTS_SDK_VERSION}" "${STS_SDK_VERSION}" > /opt/installed-versions.txt \
+    && /tmp/dotnet-install.sh --version "${DOTNET_LTS_VERSION}" --install-dir /usr/share/dotnet \
+    && test -d "/usr/share/dotnet/sdk/${DOTNET_LTS_VERSION}" \
+        || { echo "FATAL: LTS SDK directory not found after install (expected '${DOTNET_LTS_VERSION}')" >&2; exit 1; } \
+    && /tmp/dotnet-install.sh --version "${DOTNET_STS_VERSION}" --install-dir /usr/share/dotnet \
+    && test -d "/usr/share/dotnet/sdk/${DOTNET_STS_VERSION}" \
+        || { echo "FATAL: STS SDK directory not found after install (expected '${DOTNET_STS_VERSION}')" >&2; exit 1; } \
+    && if [ -n "${DOTNET_RELEASE_CANDIDATE_VERSION}" ]; then \
+         /tmp/dotnet-install.sh --version "${DOTNET_RELEASE_CANDIDATE_VERSION}" --install-dir /usr/share/dotnet \
+         && test -d "/usr/share/dotnet/sdk/${DOTNET_RELEASE_CANDIDATE_VERSION}" \
+             || { echo "FATAL: go-live SDK directory not found after install (channel '${DOTNET_RELEASE_CANDIDATE_CHANNEL}', expected '${DOTNET_RELEASE_CANDIDATE_VERSION}')" >&2; exit 1; }; \
+       fi \
+    && printf 'dotnet SDK (LTS): %s\ndotnet SDK (STS): %s\ndotnet SDK (go-live, channel %s): %s\n' \
+        "${DOTNET_LTS_VERSION}" "${DOTNET_STS_VERSION}" "${DOTNET_RELEASE_CANDIDATE_CHANNEL:-none}" "${DOTNET_RELEASE_CANDIDATE_VERSION:-none}" > /opt/installed-versions.txt \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm /tmp/dotnet-install.sh
 
