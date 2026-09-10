@@ -98,13 +98,10 @@ jobs:
           # dotnet-install.sh --channel LTS/STS in the Dockerfile has no version pin of its
           # own, so the RUN instruction's text never changes - Docker would otherwise replay
           # the cached layer forever and the installed SDK would silently freeze. Hash the
-          # current LTS/STS `latest-sdk` values (same releases-index.json source
-          # dotnet-version.yml already queries) so the layer only rebuilds when a new SDK is
-          # actually released. See #1441.
-          # Mirrors what `dotnet-install.sh --channel LTS`/`--channel STS` actually resolve to:
-          # the highest channel-version per release-type, excluding EOL channels and
-          # prerelease/go-live SDKs (whose `latest-sdk` carries a `-rc.`/`-preview.` suffix).
-          DOTNET_LTS_STS_VERSIONS=$(curl \
+          # current LTS/STS/go-live values (same releases-index.json source dotnet-version.yml
+          # already queries) so the layer only rebuilds when a new SDK is actually released.
+          # See #1441.
+          DOTNET_RELEASES_INDEX=$(curl \
             --max-time 120 \
             --retry 5 \
             --retry-delay 0 \
@@ -112,8 +109,12 @@ jobs:
             -sS \
             -L \
             -f \
-            https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/releases-index.json |
-            jq -rce '
+            https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/releases-index.json)
+
+          # Mirrors what `dotnet-install.sh --channel LTS`/`--channel STS` actually resolve to:
+          # the highest channel-version per release-type, excluding EOL channels and
+          # prerelease/go-live SDKs (whose `latest-sdk` carries a `-rc.`/`-preview.` suffix).
+          DOTNET_LTS_STS_VERSIONS=$(printf '%s' "$DOTNET_RELEASES_INDEX" | jq -rce '
               ."releases-index"
               | map(select(."support-phase" != "eol" and (."latest-sdk" | test("-") | not)))
               | group_by(."release-type")
@@ -122,9 +123,27 @@ jobs:
               | sort
               | join(",")
             ')
+
+          # Whichever release currently carries a Microsoft go-live license (installed
+          # in addition to LTS/STS so it can be built/tested against before GA) - empty
+          # when none is current. There is normally at most one go-live channel at a time.
+          DOTNET_GOLIVE_CHANNEL=$(printf '%s' "$DOTNET_RELEASES_INDEX" | jq -rce '
+              [."releases-index"[] | select(."support-phase" == "go-live")]
+              | sort_by(."channel-version" | split(".") | map(tonumber))
+              | last
+              | if . == null then "" else ."channel-version" end
+            ')
+          DOTNET_GOLIVE_SDK=$(printf '%s' "$DOTNET_RELEASES_INDEX" | jq -rce '
+              [."releases-index"[] | select(."support-phase" == "go-live")]
+              | sort_by(."channel-version" | split(".") | map(tonumber))
+              | last
+              | if . == null then "" else ."latest-sdk" end
+            ')
+
           {
             echo "dotnet_sdk_versions=${DOTNET_LTS_STS_VERSIONS}"
-            echo "dotnet_sdk_hash=$(printf '%s' "$DOTNET_LTS_STS_VERSIONS" | sha256sum | cut -d' ' -f1)"
+            echo "dotnet_golive_channel=${DOTNET_GOLIVE_CHANNEL}"
+            echo "dotnet_sdk_hash=$(printf '%s|%s|%s' "$DOTNET_LTS_STS_VERSIONS" "$DOTNET_GOLIVE_CHANNEL" "$DOTNET_GOLIVE_SDK" | sha256sum | cut -d' ' -f1)"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Build and push"
@@ -141,6 +160,7 @@ jobs:
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
             DOTNET_SDK_CACHE_BUST=${{ steps.cb.outputs.dotnet_sdk_hash }}
+            DOTNET_GOLIVE_CHANNEL=${{ steps.cb.outputs.dotnet_golive_channel }}
             BUILD_GIT_SHA=${{ github.sha }}
           cache-from: "type=gha,scope=development-tools"
           cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
@@ -165,6 +185,7 @@ jobs:
             echo "bettermarks/composite-action-lint @ \`${{ steps.cb.outputs.cal_sha }}\`"
             echo ""
             echo "Resolved .NET LTS/STS SDKs: \`${{ steps.cb.outputs.dotnet_sdk_versions }}\`"
+            echo "Resolved .NET go-live channel: \`${{ steps.cb.outputs.dotnet_golive_channel || 'none' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Summarise (build-only, not pushed)"
