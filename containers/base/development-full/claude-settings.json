@@ -100,6 +100,7 @@
       "Bash(gh label *)",
       "Bash(gh pr *)",
       "Bash(gh project *)",
+      "Bash(gh release list *)",
       "Bash(gh run *)",
       "Bash(gh search *)",
       "Bash(git -C *)",
@@ -300,6 +301,8 @@
       "Read(*/.claude/settings*.json*)",
       "Read(*/.claude/.credentials.json)",
       "Read(*/.claude/history.jsonl)",
+      "Read(//tmp/**)",
+      "Edit(//tmp/**)"
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:registry.npmjs.org)"
