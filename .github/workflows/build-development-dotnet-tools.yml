@@ -51,7 +51,6 @@ jobs:
     runs-on: "ubuntu-latest"
     timeout-minutes: 60
     permissions:
-      actions: "write"
       contents: "read"
       packages: "write"
       pull-requests: "read"
@@ -138,6 +137,13 @@ jobs:
         # without walking the workflow_run API chain, so the node/python-root case can
         # still double-fire and self-heal the same way; only the common direct-trigger
         # case is fully covered. See #1424.
+        #
+        # Requires SOURCE_PUSH_TOKEN (a PAT), not the default GITHUB_TOKEN: GitHub
+        # exempts events triggered by GITHUB_TOKEN from cascading to further
+        # workflow_run listeners (recursion guard), so a GITHUB_TOKEN-dispatched
+        # credfeto-tools run would build fine but its completion could never reach
+        # development-full/development-agent's own workflow_run listeners downstream -
+        # the whole point of this dispatch. See #1444.
         if: ${{ github.event_name == 'workflow_run' && steps.relevance.outputs.relevant == 'true' }}
         uses: ./.github/actions/dispatch-workflow
         # Fire-and-forget: the real build/push/scan above already succeeded by this
@@ -145,11 +151,14 @@ jobs:
         # flip this run's conclusion to failure and, since credfeto-tools' native
         # workflow_run trigger itself gates on conclusion == 'success', also block
         # the still-working native path for this same run. Same precedent as the
-        # sarif upload action's fire-and-forget steps.
+        # sarif upload action's fire-and-forget steps. Also covers SOURCE_PUSH_TOKEN
+        # not being set (`secrets` isn't a valid context in step `if:` conditions, so
+        # this can't be gated the same way as the required-secret checks elsewhere in
+        # this repo) - the API call fails with an auth error and is swallowed here.
         continue-on-error: true
         with:
           workflow-id: "build-development-credfeto-tools.yml"
-          github-token: "${{ github.token }}"
+          github-token: "${{ secrets.SOURCE_PUSH_TOKEN }}"
 
       - name: "Summarise"
         if: ${{ github.event_name != 'pull_request' && steps.relevance.outputs.relevant == 'true' }}

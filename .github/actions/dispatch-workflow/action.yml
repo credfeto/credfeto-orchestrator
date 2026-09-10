@@ -4,6 +4,13 @@
 # workflow (GitHub does not chain workflow_run more than 3 hops from the
 # triggering event). Used where a chain of workflow_run-linked image builds
 # has grown past that budget. See #1424.
+#
+# `github-token` MUST be a PAT (e.g. secrets.SOURCE_PUSH_TOKEN), never the
+# default GITHUB_TOKEN: GitHub exempts events triggered by GITHUB_TOKEN from
+# triggering further workflow runs (a recursion guard), so a workflow_dispatch
+# made with GITHUB_TOKEN creates the dispatched run fine, but that run's own
+# completion can never cascade to any downstream workflow_run listener -
+# silently defeating the whole point of this action. See #1444.
 name: "Dispatch workflow"
 description: "Dispatches another workflow in this repository via workflow_dispatch"
 
@@ -16,7 +23,7 @@ inputs:
     required: false
     default: "main"
   github-token:
-    description: "GitHub token with actions:write permission"
+    description: "A PAT with actions:write (e.g. secrets.SOURCE_PUSH_TOKEN) - NOT github.token, whose dispatched runs can't cascade further. See #1444."
     required: true
 
 runs:
