@@ -6,6 +6,8 @@
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [
+      "mcp__rider__*",
+      "mcp__webstorm__*",
       "Bash(actionlint *)",
       "Bash(ansible-lint *)",
       "Bash(awk *)",
