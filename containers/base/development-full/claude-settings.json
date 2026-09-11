@@ -305,7 +305,8 @@
       "Edit(//tmp/**)"
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:registry.npmjs.org)"
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   },
   "advisorModel": "fable",
