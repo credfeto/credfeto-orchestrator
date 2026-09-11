@@ -212,6 +212,7 @@
     ],
     "deny": [
       "Bash(GH_HOST=*)",
+      "Bash(dotnet csharpier *)",
       "Bash(dotnet new tool-manifest*)",
       "Bash(dotnet tool install*)",
       "Bash(find -delete*)",
