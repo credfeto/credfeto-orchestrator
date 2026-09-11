@@ -302,7 +302,7 @@
       "Read(*/.claude/.credentials.json)",
       "Read(*/.claude/history.jsonl)",
       "Read(//tmp/**)",
-      "Edit(//tmp/**)"
+      "Edit(//tmp/**)",
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:registry.npmjs.org)",
