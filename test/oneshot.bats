@@ -3838,8 +3838,7 @@ STUBEOF
 }
 
 @test "migrate_legacy_orchestrator_state moves the legacy directory to ORCHESTRATOR_STATE_DIR" {
-    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
-    printf 'session-data' > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
+    seed_legacy_orchestrator_dir
 
     run migrate_legacy_orchestrator_state
 
@@ -3850,8 +3849,7 @@ STUBEOF
 }
 
 @test "migrate_legacy_orchestrator_state is a no-op that leaves the legacy directory alone when ORCHESTRATOR_STATE_DIR already exists" {
-    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
-    printf 'legacy' > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
+    seed_legacy_orchestrator_dir "legacy"
     mkdir -p "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo"
     printf 'current' > "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint"
 
@@ -3863,8 +3861,7 @@ STUBEOF
 }
 
 @test "migrate_legacy_orchestrator_state warns and leaves the legacy directory in place when mv fails" {
-    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
-    printf 'session-data' > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
+    seed_legacy_orchestrator_dir
     make_stub mv "exit 1"
 
     run migrate_legacy_orchestrator_state

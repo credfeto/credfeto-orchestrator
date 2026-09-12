@@ -391,10 +391,10 @@ bootstrap_orchestrator_config() {
 # either entry point from running.
 migrate_legacy_orchestrator_state() {
     local legacy_dir="${HOME}/.orchestrator"
-    local parent_dir
-    parent_dir="$(dirname "${ORCHESTRATOR_STATE_DIR}")"
     [ -d "${legacy_dir}" ] || return 0
     [ -e "${ORCHESTRATOR_STATE_DIR}" ] && return 0
+    local parent_dir
+    parent_dir="$(dirname "${ORCHESTRATOR_STATE_DIR}")"
     mkdir -p "${parent_dir}" || die "Failed to create ${parent_dir}"
     if mv "${legacy_dir}" "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null; then
         info "Migrated legacy session state from ${legacy_dir} to ${ORCHESTRATOR_STATE_DIR}"

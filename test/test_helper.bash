@@ -118,6 +118,14 @@ seed_test_repo_context() {
     export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
 }
 
+# Creates a legacy ~/.orchestrator/myorg/myrepo directory with a single fingerprint file, for
+# migrate_legacy_orchestrator_state tests (#52).
+seed_legacy_orchestrator_dir() {
+    local content="${1:-session-data}"
+    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
+    printf '%s' "${content}" > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
+}
+
 # Sources the loop script so its functions are defined without running main.
 source_loop() {
     # shellcheck source=/dev/null
