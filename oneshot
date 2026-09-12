@@ -132,7 +132,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
 # notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
-# and notify_discord_rate_limited are declared in lib/discord.
+# notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
 # rearm_closed_issue_markers and tag_pr_closed_issue are declared in lib/state.
 

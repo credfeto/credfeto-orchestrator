@@ -395,23 +395,6 @@ issue_should_advance_unchanged() {
     [ "${ISSUE_INVOCATION_IDLE}" -lt "${MAX_ISSUE_IDLE_INVOCATIONS}" ]
 }
 
-# Posts a comment on the current GitHub work item and adds the Blocked label.
-# Silent when item_type or item_id is unset.
-notify_github_blocked() {
-    local item_type="$1" item_id="$2" message="$3"
-    [ -n "${item_type}" ] && [ -n "${item_id}" ] || return 0
-    case "${item_type}" in
-        Issue)
-            gh issue comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
-            gh issue edit   "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
-            ;;
-        PullRequest)
-            gh pr comment "${item_id}" --repo "${REPO_FULL}" --body "${message}" 2>/dev/null || true
-            gh pr edit    "${item_id}" --repo "${REPO_FULL}" --add-label "Blocked" 2>/dev/null || true
-            ;;
-    esac
-}
-
 # Returns 0 (true) if the pre-fetched PR JSON has at least one required check that has not yet
 # reached a terminal result. Returns 1 (false) when statusCheckRollup is absent, empty, or every
 # required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent

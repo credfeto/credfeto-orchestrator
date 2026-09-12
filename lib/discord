@@ -383,6 +383,34 @@ notify_discord_low_disk_space() {
     _discord_send_and_record "${payload}" "${state_file}" "${now}"
 }
 
+# Sends a Discord embed notification for a host-infrastructure failure (gpg-agent down, signing
+# key missing, ssh-agent unreachable, etc.) — conditions that belong to the host running the
+# orchestrator, not to whichever GitHub item happened to be selected this tick (#1101). Unlike
+# notify_github_blocked, this never touches GitHub: there is no "item" to blame, only the
+# operator to page. Deduplicates per failure_key (e.g. "gpg_agent_down", "ssh_agent_no_keys"), at
+# most one notification per hour per key, same shape as notify_discord_low_disk_space — a
+# persistent outage would otherwise page on every ~30s tick.
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_host_health() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local failure_key="$1" message="$2"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file "host_health_${failure_key}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Host Health: ${failure_key}" \
+        --arg message "${message}" \
+        '{embeds:[{title:$title,color:$color,description:$message}]}') \
+        || { warn "Discord: failed to build host health payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+}
+
 # Sends a Discord embed notification when a podman pull of ORCHESTRATOR_IMAGE takes longer than
 # PULL_DURATION_THRESHOLD_MULTIPLIER times the owner's rolling baseline (#1400) - see
 # pull_duration_baseline in lib/state. Deduplicates: at most one notification per hour per owner,

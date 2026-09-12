@@ -117,8 +117,9 @@ check_signing_agents() {
         || die "gpg-agent is not running, run 'gpgconf --launch gpg-agent' to start it"
     gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1 \
         || die "Signing key ${GIT_SIGNING_KEY} (git config user.signingkey for ${REPO_WORK_DIR}) is not in the GPG keyring, import it with 'gpg --import <key-file>'"
-    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] \
-        || die "SSH_AUTH_SOCK is not set or is not a socket, the agent container pushes through your ssh-agent: start one and 'ssh-add' your GitHub key"
+    if [ -z "${SSH_AUTH_SOCK:-}" ] || [ ! -S "${SSH_AUTH_SOCK}" ]; then
+        die "SSH_AUTH_SOCK is not set or is not a socket, the agent container pushes through your ssh-agent: start one and 'ssh-add' your GitHub key"
+    fi
 }
 
 # resolve_repo_dir, resolve_repo_full, check_repo_remotes, check_repo_claude_config,
