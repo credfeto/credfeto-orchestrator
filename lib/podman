@@ -337,29 +337,35 @@ preload_ssh_keys() {
     case "${ssh_keys_status}" in
         0) return 0 ;;  # already loaded
         1) ;;           # agent reachable but empty — fall through to load keys
-        2) die "ssh-add: cannot connect to the agent at ${SSH_AUTH_SOCK} — the socket exists but nothing is listening on it" ;;
+        2)
+            notify_discord_host_health ssh_agent_down \
+                "Cannot preload SSH keys: the agent at \`${SSH_AUTH_SOCK}\` is unreachable — the socket exists but nothing is listening on it."
+            die "ssh-add: cannot connect to the agent at ${SSH_AUTH_SOCK} — the socket exists but nothing is listening on it"
+            ;;
         *) return 0 ;;
     esac
-    ssh-add -q 2>/dev/null \
-        || die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
+    ssh-add -q 2>/dev/null || {
+        notify_discord_host_health ssh_agent_no_keys \
+            "Cannot preload SSH keys: no SSH keys could be loaded into the agent at \`${SSH_AUTH_SOCK}\` — import a key with 'ssh-add <key-file>' on the host."
+        die "ssh-add: no SSH keys could be loaded — import a key with 'ssh-add <key-file>'"
+    }
 }
 
-# notify_github_blocked is declared in lib/github-status.
-
-# Fast-fails if GIT_SIGNING_KEY is set but gpg-agent is not running or the key
-# is absent from the keyring.  Posts a GitHub comment and adds Blocked before dying.
+# Fast-fails if GIT_SIGNING_KEY is set but gpg-agent is not running or the key is absent from the
+# keyring. Notifies the operator via Discord (host-infrastructure failure, not item-specific)
+# before dying — never touches GitHub (#1101): a dead host gpg-agent is not a fault of whichever
+# issue/PR happened to be selected this tick.
 verify_gpg_signing_ready() {
-    local item_type="$1" item_id="$2"
     [ -n "${GIT_SIGNING_KEY}" ] || return 0
 
     if ! gpg-connect-agent /bye >/dev/null 2>&1; then
-        notify_github_blocked "${item_type}" "${item_id}" \
+        notify_discord_host_health gpg_agent_down \
             "Cannot start agent session: \`gpg-agent\` is not running on the host. Run \`gpgconf --launch gpg-agent\` and retry."
         die "gpg-agent is not running — run 'gpgconf --launch gpg-agent' to start it"
     fi
 
     if ! gpg --batch --no-tty --list-secret-keys "${GIT_SIGNING_KEY}" >/dev/null 2>&1; then
-        notify_github_blocked "${item_type}" "${item_id}" \
+        notify_discord_host_health gpg_key_missing \
             "Cannot start agent session: signing key \`${GIT_SIGNING_KEY}\` is not in the GPG keyring. Import it with \`gpg --import <key-file>\` on the host."
         die "Signing key ${GIT_SIGNING_KEY} not found in GPG keyring — import it with 'gpg --import'"
     fi
@@ -756,7 +762,7 @@ prepare_claude_container_args() {
     else
         warn "SSH_AUTH_SOCK is not set or socket is absent — SSH git operations will not be available in the agent container"
     fi
-    verify_gpg_signing_ready "${item_type}" "${item_id}"
+    verify_gpg_signing_ready
     add_gpg_podman_args
     if [ -f "${HOME}/.database" ]; then
         PODMAN_RUN_ARGS+=( --volume "${HOME}/.database:/home/developer/.database:ro" )

@@ -9149,9 +9149,12 @@ STUBEOF
 exit 1
 STUBEOF
     chmod +x "${STUB_BIN}/ssh-add"
+    local discord_log="${TEST_TMP}/discord.log"
+    notify_discord_host_health() { printf '%s\n' "$*" >> "${discord_log}"; }
     run preload_ssh_keys
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"no SSH keys could be loaded"* ]]
+    grep -q "ssh_agent_no_keys" "${discord_log}"
 }
 
 @test "preload_ssh_keys dies rather than silently passing when ssh-add cannot connect to the agent (exit 2, #1103)" {
@@ -9166,9 +9169,12 @@ STUBEOF
 exit 2
 STUBEOF
     chmod +x "${STUB_BIN}/ssh-add"
+    local discord_log="${TEST_TMP}/discord.log"
+    notify_discord_host_health() { printf '%s\n' "$*" >> "${discord_log}"; }
     run preload_ssh_keys
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"cannot connect to the agent"* ]]
+    grep -q "ssh_agent_down" "${discord_log}"
 }
 
 # --- stop_ssh_agent unit tests ------------------------------------------------
@@ -9618,65 +9624,27 @@ STUBEOF
     [ "${CLAUDE_PROMPT}" = "hello from prompt" ]
 }
 
-# --- notify_github_blocked unit tests -----------------------------------------
-
-@test "notify_github_blocked posts issue comment and adds Blocked label for Issue" {
-    cat > "${STUB_BIN}/gh" << 'GHEOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
-GHEOF
-    chmod +x "${STUB_BIN}/gh"
-    REPO_FULL="owner/repo"
-    notify_github_blocked "Issue" "42" "test message"
-    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
-    grep -q "issue edit 42 --repo owner/repo --add-label Blocked" "${TEST_TMP}/gh.log"
-}
-
-@test "notify_github_blocked posts pr comment and adds Blocked label for PullRequest" {
-    cat > "${STUB_BIN}/gh" << 'GHEOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
-GHEOF
-    chmod +x "${STUB_BIN}/gh"
-    REPO_FULL="owner/repo"
-    notify_github_blocked "PullRequest" "7" "test message"
-    grep -q "pr comment 7 --repo owner/repo" "${TEST_TMP}/gh.log"
-    grep -q "pr edit 7 --repo owner/repo --add-label Blocked" "${TEST_TMP}/gh.log"
-}
-
-@test "notify_github_blocked is silent when item_type is empty" {
-    cat > "${STUB_BIN}/gh" << 'GHEOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
-GHEOF
-    chmod +x "${STUB_BIN}/gh"
-    REPO_FULL="owner/repo"
-    notify_github_blocked "" "42" "test message"
-    [ ! -f "${TEST_TMP}/gh.log" ]
-}
-
 # --- verify_gpg_signing_ready unit tests --------------------------------------
 
 @test "verify_gpg_signing_ready passes when agent is running and key is present" {
     make_stub gpg-connect-agent 'exit 0'
     make_stub gpg 'exit 0'
     GIT_SIGNING_KEY="ABCD1234"
-    run verify_gpg_signing_ready "" ""
+    run verify_gpg_signing_ready
     [ "${status}" -eq 0 ]
 }
 
 @test "verify_gpg_signing_ready is a no-op when GIT_SIGNING_KEY is empty" {
     make_stub gpg-connect-agent 'exit 1'
     GIT_SIGNING_KEY=""
-    run verify_gpg_signing_ready "" ""
+    run verify_gpg_signing_ready
     [ "${status}" -eq 0 ]
 }
 
 @test "verify_gpg_signing_ready dies when gpg-agent is not running" {
     make_stub gpg-connect-agent 'exit 1'
-    make_stub gh 'exit 0'
     GIT_SIGNING_KEY="ABCD1234"
-    run verify_gpg_signing_ready "" ""
+    run verify_gpg_signing_ready
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"gpg-agent is not running"* ]]
 }
@@ -9689,29 +9657,31 @@ if [[ "$*" == *"--list-secret-keys"* ]]; then exit 1; fi
 exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/gpg"
-    make_stub gh 'exit 0'
     GIT_SIGNING_KEY="ABCD1234"
-    run verify_gpg_signing_ready "" ""
+    run verify_gpg_signing_ready
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"not found in GPG keyring"* ]]
 }
 
-@test "verify_gpg_signing_ready notifies GitHub when gpg-agent is not running" {
+@test "verify_gpg_signing_ready notifies Discord host health and never touches GitHub when gpg-agent is not running" {
     make_stub gpg-connect-agent 'exit 1'
     cat > "${STUB_BIN}/gh" << 'GHEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
 GHEOF
     chmod +x "${STUB_BIN}/gh"
+    local discord_log="${TEST_TMP}/discord.log"
+    notify_discord_host_health() { printf '%s\n' "$*" >> "${discord_log}"; }
     REPO_FULL="owner/repo"
     GIT_SIGNING_KEY="ABCD1234"
-    run verify_gpg_signing_ready "Issue" "42"
+    run verify_gpg_signing_ready
     [ "${status}" -ne 0 ]
-    [ -f "${TEST_TMP}/gh.log" ]
-    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
+    [ -f "${discord_log}" ]
+    grep -q "gpg_agent_down" "${discord_log}"
+    [ ! -f "${TEST_TMP}/gh.log" ]
 }
 
-@test "verify_gpg_signing_ready notifies GitHub when signing key is absent" {
+@test "verify_gpg_signing_ready notifies Discord host health and never touches GitHub when signing key is absent" {
     make_stub gpg-connect-agent 'exit 0'
     cat > "${STUB_BIN}/gpg" << 'STUBEOF'
 #!/usr/bin/env bash
@@ -9724,12 +9694,15 @@ STUBEOF
 printf '%s\n' "$*" >> "${TEST_TMP}/gh.log"
 GHEOF
     chmod +x "${STUB_BIN}/gh"
+    local discord_log="${TEST_TMP}/discord.log"
+    notify_discord_host_health() { printf '%s\n' "$*" >> "${discord_log}"; }
     REPO_FULL="owner/repo"
     GIT_SIGNING_KEY="ABCD1234"
-    run verify_gpg_signing_ready "Issue" "42"
+    run verify_gpg_signing_ready
     [ "${status}" -ne 0 ]
-    [ -f "${TEST_TMP}/gh.log" ]
-    grep -q "issue comment 42 --repo owner/repo" "${TEST_TMP}/gh.log"
+    [ -f "${discord_log}" ]
+    grep -q "gpg_key_missing" "${discord_log}"
+    [ ! -f "${TEST_TMP}/gh.log" ]
 }
 
 # --- ensure_repo_current: SSH URL enforcement ---------------------------------
@@ -10014,6 +9987,94 @@ STUBEOF
     printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space_other_owner.state"
 
     run notify_discord_low_disk_space "myowner"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+# --- notify_discord_host_health (#1101) ---------------------------------------
+
+@test "notify_discord_host_health does nothing when DISCORD_WEBHOOK_URL is unset" {
+    DISCORD_WEBHOOK_URL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_host_health sends embed when webhook is set" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf '%s\n' \"\$*\" >> ${curl_log}"
+    hash curl
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "discord.example.com" "${curl_log}"
+}
+
+@test "notify_discord_host_health includes the failure key and message in the payload" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running on the host"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+    grep -q "gpg_agent_down" "${curl_log}"
+    grep -q "gpg-agent is not running on the host" "${curl_log}"
+}
+
+@test "notify_discord_host_health suppresses duplicate notification for the same failure key within 1 hour" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state"
+
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_host_health resends after 1 hour has elapsed" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state"
+
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
+    [ "${status}" -eq 0 ]
+    [ -f "${curl_log}" ]
+}
+
+@test "notify_discord_host_health does not record dedup state when the curl POST fails" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    make_stub curl 'exit 1'
+    hash curl
+
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state" ]
+}
+
+@test "notify_discord_host_health treats independent failure keys as independently deduplicated" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+
+    # A recent notification for a different failure key must not suppress this one.
+    mkdir -p "${HOME}/.orchestrator"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.host_health_ssh_agent_down__global.state"
+
+    run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
     [ "${status}" -eq 0 ]
     [ -f "${curl_log}" ]
 }
