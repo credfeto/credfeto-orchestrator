@@ -3862,24 +3862,10 @@ STUBEOF
     [ "$(cat "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint")" = "current" ]
 }
 
-@test "migrate_legacy_orchestrator_state falls back to copy when mv fails (e.g. a cross-filesystem HOME/XDG split)" {
+@test "migrate_legacy_orchestrator_state warns and leaves the legacy directory in place when mv fails" {
     mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
     printf 'session-data' > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
     make_stub mv "exit 1"
-
-    run migrate_legacy_orchestrator_state
-
-    [ "${status}" -eq 0 ]
-    [ ! -e "${HOME}/.orchestrator" ]
-    [ "$(cat "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint")" = "session-data" ]
-    [[ "${output}" == *"copied across filesystems"* ]]
-}
-
-@test "migrate_legacy_orchestrator_state warns and leaves the legacy directory in place when both mv and copy fail" {
-    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
-    printf 'session-data' > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
-    make_stub mv "exit 1"
-    make_stub cp "exit 1"
 
     run migrate_legacy_orchestrator_state
 

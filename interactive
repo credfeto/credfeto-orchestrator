@@ -134,6 +134,12 @@ main() {
         *) usage >&2; die "Unknown argument: $1" ;;
     esac
 
+    # Runs before anything else can touch ORCHESTRATOR_STATE_DIR (set_repo_context below just
+    # assigns paths from it, but lib/podman later mkdir -p's under CLAUDE_STATE_DIR) - oneshot
+    # runs the same migration at the equivalent point in its own main(), and interactive is a
+    # second, independent front door onto the same legacy ~/.orchestrator tree (#52).
+    migrate_legacy_orchestrator_state
+
     # First, so a non-TTY launch is refused outright rather than by ssh-add or podman later
     # with a misleading message.
     terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"

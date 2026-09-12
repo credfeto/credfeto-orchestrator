@@ -46,7 +46,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Split the enforce-git-dash-c hook's hardcoded git subcommand allowlist into three named policy arrays, making it clear where a subcommand belongs when the list is next extended
 - Add git cherry-pick back to enforce-git-dash-c's subcommand allowlist (#1411), after a confirmed live need for it; the other subcommands #1394 dropped for having no confirmed use (am, mv, remote, restore, revert, rm, tag) stay blocked
 - SDK - Updated DotNet SDK to 10.0.401
-- Session/fingerprint state now lives under the XDG Base Directory Specification compliant ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo> instead of the hard-coded ~/.orchestrator/<owner>/<repo> (a new ORCHESTRATOR_STATE_DIR variable replaces every ~/.orchestrator reference across lib/git, lib/state, lib/discord and oneshot's lock directory); a non-destructive, idempotent migration step runs once at startup and moves any existing ~/.orchestrator tree to the new location the first time oneshot runs after upgrading (#52)
+- Session/fingerprint state now lives under the XDG Base Directory Specification compliant ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo> instead of the hard-coded ~/.orchestrator/<owner>/<repo> (a new ORCHESTRATOR_STATE_DIR variable replaces every ~/.orchestrator reference across lib/git, lib/state, lib/discord and oneshot's lock directory); a non-destructive, idempotent migration step runs once at startup, from both oneshot's and interactive's entry points, and moves any existing ~/.orchestrator tree to the new location the first time either is run after upgrading (#52)
 ### Deprecated
 ### Removed
 ### Deployment Changes
