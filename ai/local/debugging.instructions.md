@@ -33,9 +33,10 @@ it) rather than a symptom of anything broken.
 - **Checkout path**: `/home/<owner>/credfeto-orchestrator` (from `setup-owner`'s
   `clone_or_pull_repo`: `clone_dir="${owner_home}/credfeto-orchestrator"`) — **not**
   `~/work/personal/credfeto-orchestrator`.
-- **State/config paths**: `/home/<owner>/.orchestrator/...` and `/home/<owner>/.config/orchestrator/...`,
-  matching every `~/.orchestrator`/`~/.config/orchestrator` path below — but read as "the owner's
-  home", not `markr`'s.
+- **State/config paths**: `/home/<owner>/.local/state/orchestrator/...` (or wherever that owner's
+  `XDG_STATE_HOME` points, if set) and `/home/<owner>/.config/orchestrator/...`, matching every
+  `${XDG_STATE_HOME:-~/.local/state}/orchestrator`/`~/.config/orchestrator` path below — but read
+  as "the owner's home", not `markr`'s.
 - **Systemd unit names**: `credfeto-orchestrator-<owner>-<owner>.service` and `.timer` (from
   `install-timer`'s `SERVICE_NAME="credfeto-orchestrator-${CURRENT_USER}-${owner_filter}"`, and
   `CURRENT_USER` is normally the owner account itself, hence the doubled name) — **not**
@@ -130,7 +131,7 @@ Determines whether the service is running (`activating` for the duration of one 
 ### 3 — Lock files
 
 ```bash
-ls -la ~/.orchestrator/locks/
+ls -la ${XDG_STATE_HOME:-~/.local/state}/orchestrator/locks/
 ```
 
 A stale lock (`_global.lock` or `<owner>.lock`) left by a crashed process will cause every subsequent `oneshot` run to exit immediately with "Another oneshot instance is already running". Verify with `flock --exclusive --nonblock <lockfile>` — if it fails to acquire, a process still holds it; if it succeeds, the lock is stale and safe to remove.
@@ -138,7 +139,7 @@ A stale lock (`_global.lock` or `<owner>.lock`) left by a crashed process will c
 ### 4 — Rate-limit files
 
 ```bash
-find ~/.orchestrator -name 'rate-limit' -exec echo {} \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'rate-limit' -exec echo {} \; -exec cat {} \;
 ```
 
 A rate-limit file contains a unix timestamp. Compare against `date +%s` — if the stored value is in the future, the orchestrator will skip all items for that owner until it expires.
@@ -150,8 +151,8 @@ session (see `oneshot-prompts.instructions.md`). Instead each PR has an invocati
 holding two space-separated counters, `<total> <idle>`:
 
 ```bash
-find ~/.orchestrator -name 'PullRequest_*.invocations' | sort
-find ~/.orchestrator -name 'PullRequest_*.invocations' -exec echo "=== {} ===" \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.invocations' | sort
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.invocations' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
 - `total` — every agent invocation ever spent on the PR. At `MAX_PR_TOTAL_INVOCATIONS` (computed in lib/globals from the four per-phase round budgets plus a flat headroom — see lib/globals for the current value) the PR is marked Blocked. A PR stuck at a high total that never merges is churning without converging.
@@ -162,7 +163,7 @@ A companion `PullRequest_<n>.runaway-blocked` (or `Issue_<n>.runaway-blocked`) m
 Delete the file to reset both counters (also makes the next run treat the PR as first-touch and re-initialise its board status to "Not Started"):
 
 ```bash
-rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
+rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
 ```
 
 ### 5a — Environment auto-unblock files (#1118)
@@ -170,8 +171,8 @@ rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
 When an agent diagnoses a `Blocked`-ing failure as environmental/infrastructure (e.g. a missing tool in the container), it leaves a machine-readable trailer on its diagnosis comment: `<!-- orchestrator:env-block image-sha=<sha> -->` (see `agent-roles.instructions.md` § "Environment/Infrastructure Block Marker"). `oneshot` checks every `Blocked` PR carrying this marker against the currently-pulled agent image's own baked-in `IMAGE_SHA_DEVELOPMENT_AGENT` — if a newer image has been built since the diagnosis (different SHA), it auto-clears `Blocked` and comments, with no human needed:
 
 ```bash
-find ~/.orchestrator -name 'PullRequest_*.env-unblocks' -exec echo "=== {} ===" \; -exec cat {} \;
-find ~/.orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.env-unblocks' -exec echo "=== {} ===" \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
 ```
 
 - `PullRequest_<n>.env-unblocks` — count of times oneshot has auto-cleared this PR's Blocked label for an environment diagnosis. Resets to nothing whenever the PR is next observed open-and-unblocked through the normal path (a human clearing it, or a fresh unrelated block cycle).
@@ -183,7 +184,7 @@ find ~/.orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
 An Issue's `fingerprint_issue_json` includes its labels, but the agent applying `Blocked` after posting a plan is a *prompt instruction*, not something the shell verifies — an agent that ends its session without applying it leaves the Issue's fingerprint unchanged forever, so it is never re-invoked to notice its own omission (`Issue #N ... unchanged — skipping`, every tick). `oneshot` self-heals this directly: on an unchanged-fingerprint, plan-not-approved Issue, if a `## Implementation Plan` comment exists with no genuine human approval since (see `issue_plan_awaiting_human_approval` / `issue_json_has_human_plan_approval` in `lib/github-status`), it applies `Blocked` itself and writes a marker:
 
 ```bash
-find ~/.orchestrator -name 'Issue_*.plan-block' -exec echo "=== {} ===" \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'Issue_*.plan-block' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
 - `Issue_<n>.plan-block` — presence means oneshot has already auto-applied `Blocked` once for this exact drift. Bounds the self-heal to firing at most once per drift episode: if a human later clears `Blocked` **without** approving (no board `Approved`, no human approval comment), oneshot sees the marker and does **not** re-add the label — mirroring the `MAX_PR_ENV_AUTO_UNBLOCKS` precedent (bound the automation, never the human) and specifically avoiding a repeat of the #1115 incident (a bot re-adding `Blocked` within two hours of a human clearing it, with zero activity in between).
@@ -194,8 +195,8 @@ find ~/.orchestrator -name 'Issue_*.plan-block' -exec echo "=== {} ===" \; -exec
 ### 6 — Fingerprint files
 
 ```bash
-find ~/.orchestrator -name '*.fingerprint' | sort
-find ~/.orchestrator -name '*.fingerprint' -exec echo "=== {} ===" \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.fingerprint' | sort
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.fingerprint' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
 A fingerprint file holds `<schema-version>:<SHA-256 hash>` of a PR's or Issue's state at the end of the last run (see [fingerprinting.instructions.md](fingerprinting.instructions.md) for what's hashed and why the version prefix exists). When the fingerprint matches the current GitHub state, `oneshot` skips the item. An incorrect or stale fingerprint is why an item that should be worked on is being skipped — including a plan approved purely on the Workflow board, which the fingerprint now accounts for (#1204); if a board-approved item is still stuck, check whether `FINGERPRINT_SCHEMA_VERSION` was bumped for whatever field is supposed to catch it.
@@ -203,8 +204,8 @@ A fingerprint file holds `<schema-version>:<SHA-256 hash>` of a PR's or Issue's 
 To force a re-run, delete the relevant fingerprint file:
 
 ```bash
-rm ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.fingerprint
-rm ~/.orchestrator/<owner>/<repo>/Issue_<n>.fingerprint
+rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n>.fingerprint
+rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/Issue_<n>.fingerprint
 ```
 
 A separate `PullRequest_<n>.last-agent-comment-seen` file (#1307) tracks the newest trusted top-
@@ -213,7 +214,7 @@ fingerprint above, which the non-agentic-rebase path is still allowed to update 
 human's PR comment is being ignored despite `.fingerprint` looking current, check this file:
 
 ```bash
-cat ~/.orchestrator/<owner>/<repo>/PullRequest_<n>.last-agent-comment-seen 2>/dev/null || echo "(none recorded)"
+cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n>.last-agent-comment-seen 2>/dev/null || echo "(none recorded)"
 ```
 
 A missing or stale value here (older than the comment's own timestamp) means no real agent turn

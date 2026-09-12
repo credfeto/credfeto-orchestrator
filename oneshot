@@ -146,6 +146,12 @@ main() {
     # left-over process ... in control group" on the next timer firing (#1103).
     trap stop_ssh_agent EXIT
 
+    # Runs before anything else can touch ORCHESTRATOR_STATE_DIR (e.g. the lock-directory
+    # mkdir below, or a Discord dedup-state write) - once something else creates it as an
+    # empty directory, the migration's "target does not exist yet" check would wrongly treat
+    # migration as already done.
+    migrate_legacy_orchestrator_state
+
     while [ $# -gt 0 ]; do
         case "$1" in
             --owner)
@@ -214,7 +220,7 @@ main() {
 
     # Acquire an exclusive per-owner lock so concurrent invocations (e.g. two
     # systemd timer firings) do not race on the same git working directories.
-    local lock_dir="${HOME}/.orchestrator/locks"
+    local lock_dir="${ORCHESTRATOR_STATE_DIR}/locks"
     mkdir -p "${lock_dir}" || die "Failed to create lock directory at ${lock_dir}"
     # fd 9 stays open (and lock held) until the process exits.
     exec 9>"${lock_dir}/${owner_filter:-_global}.lock"

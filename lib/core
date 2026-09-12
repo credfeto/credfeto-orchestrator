@@ -376,3 +376,27 @@ bootstrap_orchestrator_config() {
     bootstrap_orchestrator_env_file "${repo_dir}"
     bootstrap_owner_token "${owner}"
 }
+
+# One-off migration of session/fingerprint/rate-limit/Discord-dedup state from the legacy
+# ~/.orchestrator to the XDG-compliant ORCHESTRATOR_STATE_DIR (#52). Called once from oneshot's
+# main(), before anything else can create ORCHESTRATOR_STATE_DIR (an empty target directory
+# would otherwise already "exist" by the time this runs, defeating the check below). Idempotent
+# and non-destructive: a no-op when there is nothing to migrate (no legacy directory) or when it
+# has already run (the target already exists) - a target that already has content is always left
+# alone rather than merged into, so a partially-migrated or manually populated XDG directory is
+# never overwritten. mv is tried first (atomic, same-filesystem); a cross-filesystem HOME/XDG
+# split falls back to cp -a + rm -rf. Failure of either warns and leaves the legacy directory in
+# place rather than dying, since a migration failure should not stop oneshot from running.
+migrate_legacy_orchestrator_state() {
+    local legacy_dir="${HOME}/.orchestrator"
+    [ -d "${legacy_dir}" ] || return 0
+    [ -e "${ORCHESTRATOR_STATE_DIR}" ] && return 0
+    mkdir -p "$(dirname "${ORCHESTRATOR_STATE_DIR}")" || die "Failed to create $(dirname "${ORCHESTRATOR_STATE_DIR}")"
+    if mv "${legacy_dir}" "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null; then
+        info "Migrated legacy session state from ${legacy_dir} to ${ORCHESTRATOR_STATE_DIR}"
+    elif cp -a "${legacy_dir}" "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null && rm -rf "${legacy_dir}"; then
+        info "Migrated legacy session state from ${legacy_dir} to ${ORCHESTRATOR_STATE_DIR} (copied across filesystems)"
+    else
+        warn "Failed to migrate legacy session state from ${legacy_dir} to ${ORCHESTRATOR_STATE_DIR} — leaving both in place"
+    fi
+}

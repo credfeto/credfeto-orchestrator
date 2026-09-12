@@ -12,8 +12,9 @@
 #     $HOME/work/personal/cs-template), mounted read-only at /workspace/rules;
 #   - scratch space is a fresh directory under $XDG_RUNTIME_DIR, mounted at /workspace/tmp;
 #   - the persistent Claude state directories (sessions, session-env, plans, cache, backups)
-#     are shared with oneshot under $HOME/.orchestrator/<owner>/<repo>; conversation
-#     transcripts (~/.claude/projects) are not mounted, so a session cannot be resumed later;
+#     are shared with oneshot under ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/
+#     <repo>; conversation transcripts (~/.claude/projects) are not mounted, so a session
+#     cannot be resumed later;
 #   - the git identity is the one git itself would use in that checkout (includeIf and
 #     .git/config honoured), not the shared .env's, so each owner's repository commits as the
 #     host would;
