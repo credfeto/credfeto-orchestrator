@@ -4,11 +4,17 @@
 #
 # These helpers keep every test isolated and offline:
 #   * a per-test temporary directory is created under BATS_TEST_TMPDIR
-#   * HOME / XDG_CONFIG_HOME / XDG_PROJECTS_DIR / SESSION_BASE_DIR are redirected there
+#   * HOME / XDG_CONFIG_HOME / XDG_PROJECTS_DIR / XDG_STATE_HOME / SESSION_BASE_DIR are redirected there
 #   * external commands are replaced with deterministic PATH stubs
 # Nothing here touches the real filesystem outside TEST_TMP or makes network calls.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Resolved once, before any test's setup_isolated_env prepends a stub directory to PATH,
+# so _finalize_stub's own house-keeping never picks up a test's stub for "mv" (e.g. a test
+# stubbing mv itself to exercise a migration fallback path) - it must always install stubs
+# with the real binary regardless of what the test under way is stubbing.
+REAL_MV="$(command -v mv)"
 
 # Tracks repo-tree fixture directories so teardown can remove them.
 REPO_FIXTURE_DIRS=()
@@ -25,6 +31,7 @@ setup_isolated_env() {
     export HOME="${TEST_TMP}/home"
     export XDG_CONFIG_HOME="${TEST_TMP}/config"
     export XDG_PROJECTS_DIR="${TEST_TMP}/projects"
+    export XDG_STATE_HOME="${TEST_TMP}/state"
     export SESSION_BASE_DIR="${TEST_TMP}/sessions"
 
     # Stub bin must live inside the repo tree so that stub scripts are executable;
@@ -32,7 +39,7 @@ setup_isolated_env() {
     STUB_BIN="$(mktemp -d "${REPO_ROOT}/test/.stub.XXXXXX")"
     export STUB_BIN
     STUB_BIN_DIRS+=("${STUB_BIN}")
-    mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${SESSION_BASE_DIR}"
+    mkdir -p "${HOME}" "${XDG_CONFIG_HOME}" "${XDG_PROJECTS_DIR}" "${XDG_STATE_HOME}" "${SESSION_BASE_DIR}"
 
     # Put the stub directory first so any stubs we create take precedence.
     export PATH="${STUB_BIN}:${PATH}"
@@ -109,6 +116,14 @@ seed_test_repo_context() {
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
     export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
     export ORCHESTRATOR_CACHE_DIR="${SESSION_BASE_DIR}/orchestrator-cache"
+}
+
+# Creates a legacy ~/.orchestrator/myorg/myrepo directory with a single fingerprint file, for
+# migrate_legacy_orchestrator_state tests (#52).
+seed_legacy_orchestrator_dir() {
+    local content="${1:-session-data}"
+    mkdir -p "${HOME}/.orchestrator/myorg/myrepo"
+    printf '%s' "${content}" > "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint"
 }
 
 # Sources the loop script so its functions are defined without running main.
@@ -200,7 +215,12 @@ cleanup_stubs() {
 _finalize_stub() {
     local name="$1" tmp="$2"
     chmod +x "${tmp}"
-    mv "${tmp}" "${STUB_BIN}/${name}"
+    "${REAL_MV}" "${tmp}" "${STUB_BIN}/${name}"
+    # bash's command hash table would otherwise keep resolving "${name}" to whatever
+    # it last resolved to (e.g. the real binary) for the rest of the test, silently
+    # ignoring the stub just written to STUB_BIN. Clear the cache so the next lookup
+    # of any command re-searches PATH and picks up this stub.
+    hash -r
 }
 
 # Writes an executable PATH stub named "$1" whose body is the remaining arguments,

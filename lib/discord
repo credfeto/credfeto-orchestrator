@@ -301,7 +301,7 @@ notify_discord_no_work() {
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
 
-    mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null || true
     printf '%s\n%s\n' "${dedup_hash}" "${now}" > "${state_file}"
 }
 
@@ -313,7 +313,7 @@ notify_discord_no_work() {
 _discord_dedup_state_file() {
     local key="$1" owner_slug="${2:-_global}"
     owner_slug="${owner_slug//\//_}"
-    printf '%s' "${HOME}/.orchestrator/.${key}_${owner_slug}.state"
+    printf '%s' "${ORCHESTRATOR_STATE_DIR}/.${key}_${owner_slug}.state"
 }
 
 # Returns success (allowed to send) unless state_file records a send within the last hour.
@@ -344,7 +344,7 @@ _discord_send_and_record() {
         -H "Content-Type: application/json" \
         -d "${payload}" \
         "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1; then
-        mkdir -p "${HOME}/.orchestrator" 2>/dev/null || true
+        mkdir -p "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null || true
         printf '%s\n' "${now}" > "${state_file}"
     else
         warn "Discord webhook notification failed"

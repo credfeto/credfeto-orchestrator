@@ -47,7 +47,7 @@ set_repo_context() {
     REPO_FULL="${repo_full}"
     RULES_DIR="${rules_dir:-${WORK}/${OWNER}/${REPO}/rules}"
     REPO_WORK_DIR="${repo_work_dir:-${WORK}/${OWNER}/${REPO}/repo}"
-    SESSION_BASE_DIR="${HOME}/.orchestrator/${OWNER}/${REPO}"
+    SESSION_BASE_DIR="${ORCHESTRATOR_STATE_DIR}/${OWNER}/${REPO}"
     # Host-side persistent store for the parts of the container's ~/.claude that
     # must survive across invocations (sessions, session-env, plans, cache,
     # backups). Nested under SESSION_BASE_DIR so state stays scoped per-repo,
@@ -304,7 +304,7 @@ github_repo_full_from_url() {
     path="${path%.git}"
     # Owner charset matches load_token_for_owner's (lib/core), so an owner this accepts always
     # has a loadable token file; the repo segment additionally rejects "." and "..", which
-    # would otherwise resolve ~/.orchestrator/<owner>/<repo> outside the owner's tree.
+    # would otherwise resolve ${ORCHESTRATOR_STATE_DIR}/<owner>/<repo> outside the owner's tree.
     [[ "${path}" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || return 1
     case "${path#*/}" in .|..) return 1 ;; esac
     printf '%s' "${path}"

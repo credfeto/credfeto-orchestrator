@@ -61,8 +61,8 @@ After the orchestrator finishes looking at an Issue or PR, it writes the
 fingerprint to a small file on disk, one file per item:
 
 ```text
-~/.orchestrator/<owner>/<repo>/Issue_<number>.fingerprint
-~/.orchestrator/<owner>/<repo>/PullRequest_<number>.fingerprint
+${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/Issue_<number>.fingerprint
+${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<number>.fingerprint
 ```
 
 Next time around, it reads that file back and compares.
@@ -198,6 +198,6 @@ for the full current field list this version number applies to.
 | --- | --- |
 | What is a fingerprint? | A short code that changes only if the Issue/PR's important details change. |
 | Why have one? | So the orchestrator can skip work on things that haven't changed, instead of re-checking everything, every time. |
-| Where's it stored? | One small file per Issue/PR under `~/.orchestrator/<owner>/<repo>/`. |
+| Where's it stored? | One small file per Issue/PR under `${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/`. |
 | What's in it? | Title, body, state, labels, trusted comments, assignees, milestone (+ reviews/CI/mergeability for PRs) — and now, board approval status for Issues. |
 | What's the version number for? | A safety switch so changing the recipe always forces a fresh, deliberate re-check everywhere, instead of maybe silently doing nothing. |

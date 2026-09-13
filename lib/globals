@@ -9,6 +9,10 @@
 
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
+# Base directory for mutable runtime state (session/fingerprint files, per-owner rate-limit
+# and pull-duration history, Discord notification dedup markers): XDG Base Directory
+# Specification compliant, replacing the old hard-coded ~/.orchestrator (#52).
+ORCHESTRATOR_STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/orchestrator"
 ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 # Set to 1 by invoke_claude after its first successful pull in this process. Deliberately NOT
 # seeded from the environment (no ${VAR:-0} indirection) — an inherited value would let a stray

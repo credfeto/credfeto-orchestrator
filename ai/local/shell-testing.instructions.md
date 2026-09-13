@@ -99,7 +99,11 @@ that it runs when `lib/core` failed to source, so `die` may not exist yet.
   bats cleans it up automatically.
 - Override every environment variable the scripts use to locate state, pointing each at the
   temporary directory before sourcing the script: `HOME`, `XDG_CONFIG_HOME`,
-  `XDG_PROJECTS_DIR`, and `SESSION_BASE_DIR`.
+  `XDG_PROJECTS_DIR`, `XDG_STATE_HOME`, and `SESSION_BASE_DIR`. `XDG_STATE_HOME` must be set
+  (not left to fall back to the isolated `HOME`) because `ORCHESTRATOR_STATE_DIR` (`lib/globals`)
+  is computed from it once at source time; without an explicit override a test would still be
+  isolated (the fallback resolves under the isolated `HOME`), but any assertion built from the
+  literal `${XDG_STATE_HOME}` value would silently pass against the wrong path.
 - Re-assign `SESSION_BASE_DIR` (and any other derived path) after sourcing, because the script
   sets it from `HOME` at source time.
 - `setup_isolated_env` sets `GIT_CEILING_DIRECTORIES="${REPO_ROOT}"`. `make_repo_fixture_dir`

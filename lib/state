@@ -342,13 +342,13 @@ reset_issue_invocation_counts_if_capped() {
 
 # Returns the path to the rate-limit file for the current owner.
 owner_rate_limit_file() {
-    printf '%s/.orchestrator/%s/rate-limit' "${HOME}" "${OWNER}"
+    printf '%s/%s/rate-limit' "${ORCHESTRATOR_STATE_DIR}" "${OWNER}"
 }
 
 # State file path for the current owner's rolling podman-pull-duration history (#1400): one
 # duration (seconds) per line, oldest first.
 pull_duration_state_file_path() {
-    printf '%s/.orchestrator/%s/pull-durations' "${HOME}" "${OWNER}"
+    printf '%s/%s/pull-durations' "${ORCHESTRATOR_STATE_DIR}" "${OWNER}"
 }
 
 # Internal: prints the current owner's recorded pull durations (one per line, oldest first),

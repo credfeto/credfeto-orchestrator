@@ -708,7 +708,7 @@ teardown() {
 @test "main exits cleanly when another instance holds the lock" {
     setup_main_mocks
     # Hold the lock in a background process so main's flock --nonblock fails.
-    local lock_dir="${HOME}/.orchestrator/locks"
+    local lock_dir="${ORCHESTRATOR_STATE_DIR}/locks"
     mkdir -p "${lock_dir}"
     # Use a subshell holding fd 9 for the duration of the test.
     exec 9>"${lock_dir}/_global.lock"
@@ -3799,7 +3799,7 @@ STUBEOF
     [ "${REPO_FULL}" = "myorg/myrepo" ]
     [ "${RULES_DIR}"     = "${WORK}/myorg/myrepo/rules" ]
     [ "${REPO_WORK_DIR}" = "${WORK}/myorg/myrepo/repo" ]
-    [ "${SESSION_BASE_DIR}" = "${HOME}/.orchestrator/myorg/myrepo" ]
+    [ "${SESSION_BASE_DIR}" = "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo" ]
     [ "${CLAUDE_STATE_DIR}" = "${SESSION_BASE_DIR}/claude" ]
     [ "${ORCHESTRATOR_CACHE_DIR}" = "${SESSION_BASE_DIR}/orchestrator-cache" ]
 }
@@ -3826,6 +3826,49 @@ STUBEOF
     _TRUSTED_LOGINS_JSON='["stale-value"]'
     set_repo_context "neworg/newrepo"
     [ -z "${_TRUSTED_LOGINS_JSON}" ]
+}
+
+# --- migrate_legacy_orchestrator_state (#52) -----------------------------------
+
+@test "migrate_legacy_orchestrator_state is a no-op when no legacy directory exists" {
+    run migrate_legacy_orchestrator_state
+    [ "${status}" -eq 0 ]
+    [ ! -e "${HOME}/.orchestrator" ]
+    [ ! -e "${ORCHESTRATOR_STATE_DIR}" ]
+}
+
+@test "migrate_legacy_orchestrator_state moves the legacy directory to ORCHESTRATOR_STATE_DIR" {
+    seed_legacy_orchestrator_dir
+
+    run migrate_legacy_orchestrator_state
+
+    [ "${status}" -eq 0 ]
+    [ ! -e "${HOME}/.orchestrator" ]
+    [ "$(cat "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint")" = "session-data" ]
+    [[ "${output}" == *"Migrated legacy session state"* ]]
+}
+
+@test "migrate_legacy_orchestrator_state is a no-op that leaves the legacy directory alone when ORCHESTRATOR_STATE_DIR already exists" {
+    seed_legacy_orchestrator_dir "legacy"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo"
+    printf 'current' > "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint"
+
+    run migrate_legacy_orchestrator_state
+
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${HOME}/.orchestrator/myorg/myrepo/Issue_1.fingerprint")" = "legacy" ]
+    [ "$(cat "${ORCHESTRATOR_STATE_DIR}/myorg/myrepo/Issue_1.fingerprint")" = "current" ]
+}
+
+@test "migrate_legacy_orchestrator_state warns and leaves the legacy directory in place when mv fails" {
+    seed_legacy_orchestrator_dir
+    make_stub mv "exit 1"
+
+    run migrate_legacy_orchestrator_state
+
+    [ "${status}" -eq 0 ]
+    [ -d "${HOME}/.orchestrator/myorg/myrepo" ]
+    [[ "${output}" == *"Failed to migrate legacy session state"* ]]
 }
 
 # --- fetch_all_priorities -----------------------------------------------------
@@ -6122,7 +6165,7 @@ STUBEOF
     run notify_discord_no_work "" 0 0 0 0
     [ "${status}" -eq 0 ]
 
-    local state_file="${HOME}/.orchestrator/.no_work__global.state"
+    local state_file="${ORCHESTRATOR_STATE_DIR}/.no_work__global.state"
     [ -f "${state_file}" ]
     local stored_hash
     stored_hash=$(sed -n '1p' "${state_file}")
@@ -7257,8 +7300,8 @@ STUBEOF
 @test "is_owner_rate_limited returns true when file has a future timestamp" {
     local future_unix
     future_unix=$(( $(date +%s) + 3600 ))
-    mkdir -p "${HOME}/.orchestrator/${OWNER}"
-    printf '%s\n' "${future_unix}" > "${HOME}/.orchestrator/${OWNER}/rate-limit"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}/${OWNER}"
+    printf '%s\n' "${future_unix}" > "${ORCHESTRATOR_STATE_DIR}/${OWNER}/rate-limit"
     run is_owner_rate_limited
     [ "${status}" -eq 0 ]
 }
@@ -7266,8 +7309,8 @@ STUBEOF
 @test "is_owner_rate_limited returns false and removes file when timestamp is in the past" {
     local past_unix
     past_unix=$(( $(date +%s) - 60 ))
-    mkdir -p "${HOME}/.orchestrator/${OWNER}"
-    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}/${OWNER}"
+    local rate_file="${ORCHESTRATOR_STATE_DIR}/${OWNER}/rate-limit"
     printf '%s\n' "${past_unix}" > "${rate_file}"
     run is_owner_rate_limited
     [ "${status}" -ne 0 ]
@@ -7275,8 +7318,8 @@ STUBEOF
 }
 
 @test "is_owner_rate_limited returns false and removes file when content is non-numeric" {
-    mkdir -p "${HOME}/.orchestrator/${OWNER}"
-    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}/${OWNER}"
+    local rate_file="${ORCHESTRATOR_STATE_DIR}/${OWNER}/rate-limit"
     printf 'not-a-number\n' > "${rate_file}"
     run is_owner_rate_limited
     [ "${status}" -ne 0 ]
@@ -7356,7 +7399,7 @@ STUBEOF
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     # Rate-limit file must exist and contain reset_time + 1hr buffer, both in the future.
-    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    local rate_file="${ORCHESTRATOR_STATE_DIR}/${OWNER}/rate-limit"
     [ -f "${rate_file}" ]
     local saved_unix
     saved_unix=$(cat "${rate_file}")
@@ -7383,7 +7426,7 @@ STUBEOF
     DISCORD_WEBHOOK_URL=""
     run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
-    local rate_file="${HOME}/.orchestrator/${OWNER}/rate-limit"
+    local rate_file="${ORCHESTRATOR_STATE_DIR}/${OWNER}/rate-limit"
     [ -f "${rate_file}" ]
     local saved_unix
     saved_unix=$(cat "${rate_file}")
@@ -9332,7 +9375,7 @@ STUBEOF
 
     invoke_claude "test prompt" "Issue" "1" "# mock CLAUDE.md" 2>/dev/null
 
-    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
+    [ -f "${ORCHESTRATOR_STATE_DIR}/owner/pull-durations" ]
 }
 
 @test "invoke_claude fires notify_discord_slow_pull when pull_duration_exceeds_baseline trips (#1400)" {
@@ -9940,8 +9983,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 30 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.low_disk_space__global.state"
 
     run notify_discord_low_disk_space
     [ "${status}" -eq 0 ]
@@ -9956,8 +9999,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 90 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.low_disk_space__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${ORCHESTRATOR_STATE_DIR}/.low_disk_space__global.state"
 
     run notify_discord_low_disk_space
     [ "${status}" -eq 0 ]
@@ -9972,7 +10015,7 @@ STUBEOF
 
     run notify_discord_low_disk_space
     [ "${status}" -eq 0 ]
-    [ ! -f "${HOME}/.orchestrator/.low_disk_space__global.state" ]
+    [ ! -f "${ORCHESTRATOR_STATE_DIR}/.low_disk_space__global.state" ]
 }
 
 @test "notify_discord_low_disk_space uses owner-scoped state file" {
@@ -9983,8 +10026,8 @@ STUBEOF
     hash curl
 
     # Write a state file for a different owner — should not suppress this call.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.low_disk_space_other_owner.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.low_disk_space_other_owner.state"
 
     run notify_discord_low_disk_space "myowner"
     [ "${status}" -eq 0 ]
@@ -10032,8 +10075,8 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.host_health_gpg_agent_down__global.state"
 
     run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
     [ "${status}" -eq 0 ]
@@ -10046,8 +10089,8 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${ORCHESTRATOR_STATE_DIR}/.host_health_gpg_agent_down__global.state"
 
     run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
     [ "${status}" -eq 0 ]
@@ -10061,7 +10104,7 @@ STUBEOF
 
     run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
     [ "${status}" -eq 0 ]
-    [ ! -f "${HOME}/.orchestrator/.host_health_gpg_agent_down__global.state" ]
+    [ ! -f "${ORCHESTRATOR_STATE_DIR}/.host_health_gpg_agent_down__global.state" ]
 }
 
 @test "notify_discord_host_health treats independent failure keys as independently deduplicated" {
@@ -10071,8 +10114,8 @@ STUBEOF
     hash curl
 
     # A recent notification for a different failure key must not suppress this one.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.host_health_ssh_agent_down__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.host_health_ssh_agent_down__global.state"
 
     run notify_discord_host_health gpg_agent_down "gpg-agent is not running"
     [ "${status}" -eq 0 ]
@@ -10084,8 +10127,8 @@ STUBEOF
 @test "record_pull_duration appends a duration to the owner's state file" {
     OWNER="owner"
     record_pull_duration 42
-    [ -f "${HOME}/.orchestrator/owner/pull-durations" ]
-    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "42" ]
+    [ -f "${ORCHESTRATOR_STATE_DIR}/owner/pull-durations" ]
+    [ "$(cat "${ORCHESTRATOR_STATE_DIR}/owner/pull-durations")" = "42" ]
 }
 
 @test "record_pull_duration caps history at PULL_DURATION_HISTORY_SIZE, keeping the most recent" {
@@ -10095,7 +10138,7 @@ STUBEOF
     record_pull_duration 2
     record_pull_duration 3
     record_pull_duration 4
-    [ "$(cat "${HOME}/.orchestrator/owner/pull-durations")" = "$(printf '2\n3\n4')" ]
+    [ "$(cat "${ORCHESTRATOR_STATE_DIR}/owner/pull-durations")" = "$(printf '2\n3\n4')" ]
 }
 
 @test "pull_duration_baseline fails when no samples are recorded" {
@@ -10199,8 +10242,8 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.slow_pull_owner.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.slow_pull_owner.state"
 
     run notify_discord_slow_pull "owner" 600 100
     [ "${status}" -eq 0 ]
@@ -10285,8 +10328,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 30 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.self_update_stale__global.state"
 
     run notify_discord_self_update_stale "" "abc1234" "3"
     [ "${status}" -eq 0 ]
@@ -10300,8 +10343,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 90 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.self_update_stale__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${ORCHESTRATOR_STATE_DIR}/.self_update_stale__global.state"
 
     run notify_discord_self_update_stale "" "abc1234" "3"
     [ "${status}" -eq 0 ]
@@ -10315,7 +10358,7 @@ STUBEOF
 
     run notify_discord_self_update_stale "" "abc1234" "3"
     [ "${status}" -eq 0 ]
-    [ ! -f "${HOME}/.orchestrator/.self_update_stale__global.state" ]
+    [ ! -f "${ORCHESTRATOR_STATE_DIR}/.self_update_stale__global.state" ]
 }
 
 @test "notify_discord_self_update_stale uses owner-scoped state file" {
@@ -10325,8 +10368,8 @@ STUBEOF
     hash curl
 
     # Write a state file for a different owner — should not suppress this call.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.self_update_stale_other_owner.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.self_update_stale_other_owner.state"
 
     run notify_discord_self_update_stale "myowner" "abc1234" "3"
     [ "${status}" -eq 0 ]
@@ -10375,8 +10418,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 30 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.priorities_unreachable__global.state"
 
     run notify_discord_priorities_unreachable
     [ "${status}" -eq 0 ]
@@ -10390,8 +10433,8 @@ STUBEOF
     hash curl
 
     # Write a state file with a timestamp from 90 minutes ago.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${ORCHESTRATOR_STATE_DIR}/.priorities_unreachable__global.state"
 
     run notify_discord_priorities_unreachable
     [ "${status}" -eq 0 ]
@@ -10406,8 +10449,8 @@ STUBEOF
 
     # PRIORITIES_URL is one global endpoint, not per-owner — a recent alert for a different
     # owner must suppress this call too, rather than each owner getting its own hourly quota.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.priorities_unreachable__global.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.priorities_unreachable__global.state"
 
     run notify_discord_priorities_unreachable "myowner"
     [ "${status}" -eq 0 ]
@@ -10448,8 +10491,8 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.pr_needs_approval_org_repo_397.state"
 
     run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
     [ "${status}" -eq 0 ]
@@ -10463,8 +10506,8 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
 
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 5400 ))" > "${ORCHESTRATOR_STATE_DIR}/.pr_needs_approval_org_repo_397.state"
 
     run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
     [ "${status}" -eq 0 ]
@@ -10479,7 +10522,7 @@ STUBEOF
 
     run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
     [ "${status}" -eq 0 ]
-    [ ! -f "${HOME}/.orchestrator/.pr_needs_approval_org_repo_397.state" ]
+    [ ! -f "${ORCHESTRATOR_STATE_DIR}/.pr_needs_approval_org_repo_397.state" ]
 }
 
 @test "notify_discord_pr_needs_approval scopes its dedup state per repo-and-PR, not just PR number" {
@@ -10491,8 +10534,8 @@ STUBEOF
 
     # A recent alert for PR #397 in a DIFFERENT repo must not suppress this call — same PR
     # number, different repo, is a different PR.
-    mkdir -p "${HOME}/.orchestrator"
-    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${HOME}/.orchestrator/.pr_needs_approval_other_repo_397.state"
+    mkdir -p "${ORCHESTRATOR_STATE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - 1800 ))" > "${ORCHESTRATOR_STATE_DIR}/.pr_needs_approval_other_repo_397.state"
 
     run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
     [ "${status}" -eq 0 ]

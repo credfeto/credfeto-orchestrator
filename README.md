@@ -7,7 +7,7 @@ Orchestrator tooling for driving Claude Code agents to work on GitHub issues and
 The `oneshot` script fetches the top-priority open work item for `credfeto/credfeto-orchestrator`
 from the [priorities API](https://git-workflow.markridgwell.com/priorities) and invokes a
 Claude Code session to work on it.  One session file is stored per issue or pull request at
-`$HOME/.orchestrator/credfeto/credfeto-orchestrator/<ItemType>_<id>.env` so that subsequent
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/credfeto/credfeto-orchestrator/<ItemType>_<id>.env` so that subsequent
 runs resume the correct Claude session.  When a PR has no session of its own the script
 inherits the session from any linked closing issue.
 
@@ -173,7 +173,7 @@ agent image; when the registry is unreachable the cached local image is used ins
 
 Sessions are not resumable across launches. The Claude state directories `oneshot` mounts
 (`sessions`, `session-env`, `plans`, `cache`, `backups` under
-`$HOME/.orchestrator/<owner>/<repo>/claude`) are shared, but the conversation transcripts
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, but the conversation transcripts
 Claude Code resumes from live under `~/.claude/projects`, which is neither mounted nor writable
 inside the container, so `/resume` and `claude --continue` find nothing next time.
 
