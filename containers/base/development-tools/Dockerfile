@@ -131,13 +131,25 @@ RUN useradd -m -s /bin/bash developer
 #                      e.g. funfair-server-code-analysis#463
 #   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
 #                      not; without it `python3 -m venv` fails outright (#1289)
+# dist-upgrade below: the debian:trixie-slim base image itself ships whichever
+# package snapshot was baked in when it was last built upstream, which lags
+# behind Debian's own security-patched apt candidates (confirmed live: a fresh
+# pull of debian:trixie-slim still carries a since-patched CRITICAL perl-base
+# CVE, even though the fix is already the apt candidate from the same mirror
+# configured below). Upgrading every already-installed package here, not just
+# the ones this Dockerfile explicitly names, matches this stage's own daily
+# cron (the only one in the whole build chain) and its purpose of staying
+# current, and avoids needing a dedicated fix for every future Trivy-flagged
+# base-package CVE individually.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
         > /etc/apt/sources.list.d/debian-contrib.sources \
     && echo 'ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true' \
         | debconf-set-selections \
-    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bats \
         bubblewrap \
         ca-certificates \
