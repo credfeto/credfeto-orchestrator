@@ -13313,7 +13313,10 @@ STUBEOF
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
-    [[ "${output}" == *"Failed to write runaway-blocked marker for PR #5"* ]]
+    # The warning now comes from mark_capped_block_for_forgiveness itself (lib/state), called by
+    # apply_blocked_label_with_reason (#1429), rather than a bespoke repo-aware message oneshot
+    # used to print after its own now-removed duplicate touch of the same marker.
+    [[ "${output}" == *"Failed to write runaway-blocked marker for PullRequest #5"* ]]
 }
 
 @test "main resets a PR's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
