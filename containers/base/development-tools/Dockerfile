@@ -77,6 +77,11 @@ ARG TRIVY_SHA256_ARM64=b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794
 # the .env provenance file alongside the HEAD SHA captured in the builder.
 ARG COMPOSITE_ACTION_LINT_UPSTREAM=https://github.com/bettermarks/composite-action-lint.git
 ARG COMPOSITE_ACTION_LINT_CACHE_BUST
+# Daily-changing value (build-development-tools.yml) so the apt dist-upgrade layer below
+# actually re-executes on every cron run, rather than replaying a stale GHA-cached layer
+# forever whenever the debian:trixie-slim base digest itself hasn't moved (same class of
+# problem #1441 fixed for the .NET SDK layer below).
+ARG APT_UPGRADE_CACHE_BUST
 # .NET SDK: installed by exact version (not --channel LTS/STS), resolved in
 # build-development-tools.yml from the same releases-index.json dotnet-version.yml
 # already queries. Passing the exact version means the ARG value itself - not a
@@ -131,24 +136,20 @@ RUN useradd -m -s /bin/bash developer
 #                      e.g. funfair-server-code-analysis#463
 #   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
 #                      not; without it `python3 -m venv` fails outright (#1289)
-# dist-upgrade below: the debian:trixie-slim base image itself ships whichever
-# package snapshot was baked in when it was last built upstream, which lags
-# behind Debian's own security-patched apt candidates (confirmed live: a fresh
-# pull of debian:trixie-slim still carries a since-patched CRITICAL perl-base
-# CVE, even though the fix is already the apt candidate from the same mirror
-# configured below). Upgrading every already-installed package here, not just
-# the ones this Dockerfile explicitly names, matches this stage's own daily
-# cron (the only one in the whole build chain) and its purpose of staying
-# current, and avoids needing a dedicated fix for every future Trivy-flagged
-# base-package CVE individually.
+# dist-upgrade below: the debian:trixie-slim base image's own package snapshot lags behind
+# Debian's security-patched apt candidates. Upgrading every already-installed package here,
+# not just the ones this Dockerfile explicitly names, avoids needing a dedicated fix for each
+# future Trivy-flagged base-package CVE individually — see docker-images.instructions.md's
+# "Workflow Build Chain" for why this stage specifically is the one with a daily cron.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    : "${APT_UPGRADE_CACHE_BUST}"; \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
         > /etc/apt/sources.list.d/debian-contrib.sources \
     && echo 'ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true' \
         | debconf-set-selections \
     && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y --no-install-recommends \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bats \
         bubblewrap \
