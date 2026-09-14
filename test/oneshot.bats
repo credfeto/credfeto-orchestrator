@@ -1651,22 +1651,6 @@ teardown() {
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
-@test "block_pr_for_ci_timeout now also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
-    # Before #1429's centralisation, block_pr_for_ci_timeout was one of the blocking paths that
-    # never opted into forgiveness-marking, so a human unblocking a CI-timeout-capped PR before a
-    # later tick observed it still Blocked got no fresh budget. Confirms that gap is now closed.
-    # shellcheck disable=SC2016
-    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
-    notify_discord_blocked_item() { :; }
-    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
-    CI_CHECK_TIMEOUT_MINUTES=60
-    save_pr_head_oid 5 "abc123" "$(date +%s)"
-
-    run block_pr_for_ci_timeout 5 "org/repo"
-    [ "${status}" -eq 0 ]
-    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
-}
-
 # --- block_issue_for_unapplied_plan_approval (#1286) --------------------------
 
 @test "block_issue_for_unapplied_plan_approval posts the self-heal reason once the label is verified present" {
@@ -1747,6 +1731,22 @@ teardown() {
     grep -q "pr comment 5 --repo org/repo --body CI checks have been pending for over 60 minutes" "${call_log}"
     grep -q 'notified PullRequest #5 reason=CI checks have been pending for over 60 minutes' "${_notif_log}"
     [ ! -f "$(pr_head_oid_file_path 5)" ]
+}
+
+@test "block_pr_for_ci_timeout now also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
+    # Before #1429's centralisation, block_pr_for_ci_timeout was one of the blocking paths that
+    # never opted into forgiveness-marking, so a human unblocking a CI-timeout-capped PR before a
+    # later tick observed it still Blocked got no fresh budget. Confirms that gap is now closed.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    CI_CHECK_TIMEOUT_MINUTES=60
+    save_pr_head_oid 5 "abc123" "$(date +%s)"
+
+    run block_pr_for_ci_timeout 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
 @test "block_pr_for_ci_timeout leaves the pending-CI state alone when the label cannot be verified (#1140 review)" {
