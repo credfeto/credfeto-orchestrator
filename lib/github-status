@@ -184,8 +184,9 @@ apply_blocked_label() {
 # centralised here, not left as a per-caller opt-in: mark_capped_block_for_forgiveness is itself
 # self-gating (lib/state) — a no-op unless the item's invocation total or idle counter is already
 # at/over its cap — so calling it unconditionally on every successful block never marks an item
-# that isn't actually capped, regardless of which reason blocked it. Its own header comment
-# already documents this as "regardless of which mechanism applied the Blocked label"; per-caller
+# that isn't actually capped, regardless of which reason blocked it. lib/state's own
+# runaway_blocked_marker_file_path header already documents this as "regardless of which
+# mechanism applied the Blocked label"; per-caller
 # opt-in (the pattern this replaced) required every new blocking function to separately remember
 # to add the call, and silently missed it for block_pr_for_ci_timeout and
 # block_issue_for_unapplied_plan_approval below until this change (#1429 review). Returns
