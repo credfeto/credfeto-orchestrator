@@ -93,7 +93,7 @@ jobs:
         run: |
           {
             echo "cal_sha=$(git ls-remote https://github.com/bettermarks/composite-action-lint.git HEAD | cut -f1)"
-            echo "apt_bust=$(date -u +%Y%m%d)"
+            echo "date=$(date -u +%Y-%m-%d)"
           } >> "$GITHUB_OUTPUT"
 
       - name: "Resolve .NET SDK versions"
@@ -179,7 +179,7 @@ jobs:
           tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           build-args: |
             COMPOSITE_ACTION_LINT_CACHE_BUST=${{ steps.cb.outputs.cal_sha }}
-            APT_UPGRADE_CACHE_BUST=${{ steps.cb.outputs.apt_bust }}
+            APT_UPGRADE_CACHE_BUST=${{ steps.cb.outputs.date }}
             DOTNET_LTS_VERSION=${{ steps.dotnet-sdk.outputs.lts_version }}
             DOTNET_STS_VERSION=${{ steps.dotnet-sdk.outputs.sts_version }}
             DOTNET_RELEASE_CANDIDATE_CHANNEL=${{ steps.dotnet-sdk.outputs.release_candidate_channel }}

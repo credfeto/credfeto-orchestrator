@@ -14,8 +14,10 @@ debian:trixie-slim
   └── development-tools   (apt packages, .NET SDK, static binary linters)
         └── development-node   (Node.js, Bun, npm globals)
               └── development-python   (pip tools)
-                    └── development-full   (.NET global tools, pre-commit, skill repos, system-gitconfig)
-                          └── development-agent   (removes pkg-mgmt/sudo, adds agent-entrypoint)
+                    └── development-dotnet-tools   (third-party dotnet global tools, Claude Code)
+                          └── development-credfeto-tools   (first-party Credfeto.*/FunFair.* dotnet tools)
+                                └── development-full   (pre-commit, skill repos, system-gitconfig)
+                                      └── development-agent   (removes pkg-mgmt/sudo, adds agent-entrypoint)
 ```
 
 `development-agent` (`ghcr.io/credfeto/development-agent:latest`) is the image the orchestrator actually runs.

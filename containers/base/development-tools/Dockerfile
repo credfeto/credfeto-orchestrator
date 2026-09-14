@@ -136,11 +136,13 @@ RUN useradd -m -s /bin/bash developer
 #                      e.g. funfair-server-code-analysis#463
 #   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
 #                      not; without it `python3 -m venv` fails outright (#1289)
-# dist-upgrade below: the debian:trixie-slim base image's own package snapshot lags behind
-# Debian's security-patched apt candidates. Upgrading every already-installed package here,
-# not just the ones this Dockerfile explicitly names, avoids needing a dedicated fix for each
-# future Trivy-flagged base-package CVE individually — see docker-images.instructions.md's
-# "Workflow Build Chain" for why this stage specifically is the one with a daily cron.
+# dist-upgrade below refreshes this whole apt layer daily (every package installed by this
+# RUN, not just the ones Debian bakes pre-installed into debian:trixie-slim itself), so it
+# avoids needing a dedicated fix for each future Trivy-flagged base-package CVE individually;
+# see docker-images.instructions.md's "Workflow Build Chain" for why this stage specifically
+# carries the daily cron. --force-confdef/--force-confold make the upgrade fully unattended:
+# without them, a package shipping a changed default conffile would otherwise try to prompt,
+# get EOF on this build's non-interactive stdin, and abort.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     : "${APT_UPGRADE_CACHE_BUST}"; \
@@ -150,6 +152,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         | debconf-set-selections \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y --no-install-recommends \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bats \
         bubblewrap \
