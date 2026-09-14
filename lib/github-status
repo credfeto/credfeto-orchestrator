@@ -178,11 +178,19 @@ apply_blocked_label() {
 }
 
 # Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —
-# see apply_blocked_label), and sends the Discord blocked notification with the same reason —
-# the sequence every automatic blocking path in this file needs, previously copy-pasted at
-# every call site (#1140 review). Returns apply_blocked_label's own exit status so callers can
-# still do their own extra bookkeeping (a runaway marker file, clearing a pending-CI state
-# file) conditionally on success, exactly as before this was extracted.
+# see apply_blocked_label), sends the Discord blocked notification with the same reason, and
+# marks the item for forgiveness (#1429) — the sequence every automatic blocking path in this
+# file needs, previously copy-pasted at every call site (#1140 review). Forgiveness-marking is
+# centralised here, not left as a per-caller opt-in: mark_capped_block_for_forgiveness is itself
+# self-gating (lib/state) — a no-op unless the item's invocation total or idle counter is already
+# at/over its cap — so calling it unconditionally on every successful block never marks an item
+# that isn't actually capped, regardless of which reason blocked it. Its own header comment
+# already documents this as "regardless of which mechanism applied the Blocked label"; per-caller
+# opt-in (the pattern this replaced) required every new blocking function to separately remember
+# to add the call, and silently missed it for block_pr_for_ci_timeout and
+# block_issue_for_unapplied_plan_approval below until this change (#1429 review). Returns
+# apply_blocked_label's own exit status so callers can still do their own extra bookkeeping (e.g.
+# clearing a pending-CI state file) conditionally on success.
 apply_blocked_label_with_reason() {
     local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
     local rc=0
@@ -190,6 +198,7 @@ apply_blocked_label_with_reason() {
     if [ "${rc}" -eq 0 ]; then
         gh "$(gh_noun_for_item_type "${item_type}")" comment "${item_id}" --repo "${item_repo}" \
             --body "${reason}" 2>/dev/null || true
+        mark_capped_block_for_forgiveness "${item_type}" "${item_id}"
     fi
     notify_discord_blocked_item "${item_type}" "${item_id}" "${reason}"
     return "${rc}"
@@ -203,15 +212,12 @@ apply_blocked_label_with_reason() {
 # escalation every tick forever, see apply_blocked_label). notify_discord_blocked_item is called
 # directly (it is idempotent per blocked spell) rather than relying on the next tick's
 # pr_json_has_blocked_label check, since that indirection is exactly what a label failure breaks.
-# Marks forgiveness immediately once the label is confirmed applied (#1429), mirroring
-# block_issue_for_idle_exhausted_no_plan below, rather than relying on some later tick to observe
-# this PR still carrying Blocked before writing the marker: a human who unblocks before any such
-# tick runs would otherwise never get the promised fresh budget.
+# Forgiveness-marking (#1429) is handled by apply_blocked_label_with_reason itself, so a human who
+# unblocks before any later tick observes this PR still carrying Blocked still gets a fresh budget.
 block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"
     local reason="This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
-    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}" \
-        && mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
 # Returns 0 (true) if GitHub's own review-decision aggregate is CHANGES_REQUESTED — a reviewer
@@ -236,27 +242,22 @@ pr_json_needs_review_approval() {
 
 # Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
 # while a reviewer's requested changes are still outstanding, so a human is pulled in instead of
-# the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above,
-# including the immediate forgiveness marking (#1429).
+# the PR silently rotting forever. Same shape as block_pr_for_idle_exhausted_failure, above.
 block_pr_for_idle_exhausted_review() {
     local item_id="$1" item_repo="$2"
     local reason="This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
-    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}" \
-        && mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
 # Posts a Blocked-marking comment and label when a plan-approved Issue's idle-invocation budget
 # has been exhausted with no durable progress observed (no new PR, no new trusted comment/label/
 # state change) — mirrors block_pr_for_idle_exhausted_failure/_review for Issues (#1264). Pushing
 # more agent invocations at an Issue that already isn't producing anything won't help; a human
-# needs to check whether work genuinely stalled (e.g. an expected PR was never opened). Marks
-# forgiveness immediately once the label is confirmed applied (#1429), same reasoning as
-# block_pr_for_idle_exhausted_failure above.
+# needs to check whether work genuinely stalled (e.g. an expected PR was never opened).
 block_issue_for_idle_exhausted_no_progress() {
     local item_id="$1" item_repo="$2"
     local reason="This issue's plan is approved but no further progress (e.g. a Pull Request) has been observed, and the automation's idle-invocation budget (${MAX_ISSUE_IDLE_INVOCATIONS}) is exhausted. Blocking this issue until a human investigates."
-    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}" \
-        && mark_capped_block_for_forgiveness "Issue" "${item_id}"
+    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
 # Posts a Blocked-marking comment and label when an Issue's idle-invocation budget has been
@@ -266,17 +267,11 @@ block_issue_for_idle_exhausted_no_progress() {
 # third state: no plan was ever posted, e.g. the issue was Blocked by an environment failure before
 # planning started, then unblocked, with no forcing function anywhere else in oneshot's decision
 # tree to ever revisit it. The reason states the actual recovery contract, not just the symptom,
-# since a human reading it needs to know where to look and what unblocking buys them. Marks
-# forgiveness immediately once the label is confirmed applied, same reasoning (and now the same
-# pattern, #1429) as block_pr_for_idle_exhausted_failure/_review and
-# block_issue_for_idle_exhausted_no_progress above: relying on some later tick to observe this
-# Issue still carrying Blocked before writing the marker would miss a human who unblocks before any
-# such tick runs.
+# since a human reading it needs to know where to look and what unblocking buys them.
 block_issue_for_idle_exhausted_no_plan() {
     local item_id="$1" item_repo="$2"
     local reason="This issue was re-invoked ${MAX_ISSUE_IDLE_INVOCATIONS} times to produce an implementation plan, but none was posted. Check agent transcripts / orchestrator logs for a session ending without output. Blocking this issue until a human investigates; removing Blocked grants a fresh idle budget."
-    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}" \
-        && mark_capped_block_for_forgiveness "Issue" "${item_id}"
+    apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
 # Returns 0 (true) if the pre-fetched Issue JSON contains a comment matching "## Implementation
