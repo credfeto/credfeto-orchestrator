@@ -1510,6 +1510,28 @@ teardown() {
     grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
 }
 
+@test "block_pr_for_idle_exhausted_failure marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_failure does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
 @test "block_pr_for_idle_exhausted_review does not post a comment when the label cannot be verified (#1140 review)" {
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
@@ -1533,6 +1555,28 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q 'pr comment 5 --repo org/repo --body This PR has an unaddressed review requesting changes' "${call_log}"
     grep -q 'notified PullRequest #5 reason=This PR has an unaddressed review requesting changes' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_review marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_review does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
@@ -1794,6 +1838,28 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q "issue comment 99 --repo org/repo --body This issue's plan is approved" "${call_log}"
     grep -q "notified Issue #99 reason=This issue.s plan is approved" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_progress marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "block_issue_for_idle_exhausted_no_progress does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
