@@ -287,7 +287,7 @@ main() {
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
-    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments
+    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments pr_issue_comments
     local issue_json issue_state issue_fp saved_issue_fp plan_approved plan_approved_or_later
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
@@ -482,6 +482,15 @@ main() {
                     warn "Failed to fetch review comments for PR #${open_pr} in ${item_repo} — skipping this item for now"
                     count_error=$((count_error + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch review comments - skipping this item for now")")
+                    continue
+                fi
+                # shellcheck disable=SC2034  # read via dynamic scoping by
+                # set_pr_has_unaddressed_comment (lib/github-status) below, same convention as
+                # pr_review_comments/trusted_logins
+                if ! pr_issue_comments=$(fetch_pr_issue_comments "${open_pr}"); then
+                    warn "Failed to fetch issue comments for PR #${open_pr} in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch issue comments - skipping this item for now")")
                     continue
                 fi
                 pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
@@ -943,6 +952,15 @@ main() {
                 warn "Failed to fetch review comments for PR #${item_id} in ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch review comments - skipping this item for now")")
+                continue
+            fi
+            # shellcheck disable=SC2034  # read via dynamic scoping by
+            # set_pr_has_unaddressed_comment (lib/github-status) below, same convention as
+            # pr_review_comments/trusted_logins
+            if ! pr_issue_comments=$(fetch_pr_issue_comments "${item_id}"); then
+                warn "Failed to fetch issue comments for PR #${item_id} in ${item_repo} — skipping this item for now"
+                count_error=$((count_error + 1))
+                item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch issue comments - skipping this item for now")")
                 continue
             fi
             pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
