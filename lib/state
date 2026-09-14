@@ -170,14 +170,16 @@ mark_capped_block_for_forgiveness() {
         || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
 }
 
-# Resets a PR's invocation-total counter once it is observed un-blocked, but only when it was
-# blocked while already at/over the cap (runaway_blocked_marker_file_path present — written either
-# by oneshot's own backstop or by mark_capped_block_for_forgiveness for other block sources).
+# Resets a PR's invocation total AND idle counters once it is observed un-blocked, but only when
+# it was blocked while already at/over a cap (runaway_blocked_marker_file_path present — written
+# either by oneshot's own backstop or by mark_capped_block_for_forgiveness, called for every
+# successful block via apply_blocked_label_with_reason regardless of the block's own reason).
 # Without this, a human clearing the Blocked label on a cap-blocked PR would be a no-op: the guard
 # file is never otherwise cleared, so the very next tick reloads the same at-or-over-cap total and
-# immediately re-blocks it, turning "unblock" into a silent re-block loop. Blocks for unrelated
-# reasons (CI timeout, idle-exhausted review/check) leave the total untouched here — resetting
-# those would hand back an undeserved fresh budget instead of preserving the PR's history.
+# immediately re-blocks it, turning "unblock" into a silent re-block loop. A PR blocked while NOT
+# at/over any cap leaves the total/idle counters untouched here — the marker file was never
+# written for it, so this is a no-op for that PR, preserving its history instead of handing back
+# an undeserved fresh budget.
 # Call alongside clear_blocked_marker, every place a PR is observed open and un-blocked.
 reset_pr_invocation_counts_if_capped() {
     local item_id="$1" marker_file

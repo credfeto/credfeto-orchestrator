@@ -1667,6 +1667,31 @@ teardown() {
     [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
+# --- block_issue_for_unapplied_plan_approval (#1286) --------------------------
+
+@test "block_issue_for_unapplied_plan_approval posts the self-heal reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s\n' "$1" "$2" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_unapplied_plan_approval 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 99 --repo org/repo --body This issue has a posted Implementation Plan" "${call_log}"
+    grep -qx "notified Issue #99" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_unapplied_plan_approval also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
+
+    run block_issue_for_unapplied_plan_approval 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
 # --- sync_pr_labels_from_linked_issues (#1321) --------------------------------
 
 @test "sync_pr_labels_from_linked_issues never copies Blocked or On-Hold, but still copies other labels" {
