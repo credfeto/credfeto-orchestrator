@@ -179,16 +179,16 @@ apply_blocked_label() {
 
 # Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —
 # see apply_blocked_label), sends the Discord blocked notification with the same reason, and
-# marks the item for forgiveness (#1429) — the sequence every automatic blocking path in this
+# marks the item for forgiveness (#1429), the sequence every automatic blocking path in this
 # file needs, previously copy-pasted at every call site (#1140 review). Forgiveness-marking is
 # centralised here, not left as a per-caller opt-in: mark_capped_block_for_forgiveness is itself
-# self-gating (lib/state) — a no-op unless the item's invocation total or idle counter is already
-# at/over its cap — so calling it unconditionally on every successful block never marks an item
+# self-gating (lib/state), a no-op unless the item's invocation total or idle counter is already
+# at/over its cap, so calling it unconditionally on every successful block never marks an item
 # that isn't actually capped, regardless of which reason blocked it. lib/state's own
 # runaway_blocked_marker_file_path header already documents this as "regardless of which
-# mechanism applied the Blocked label"; per-caller
-# opt-in (the pattern this replaced) required every new blocking function to separately remember
-# to add the call, and silently missed it for block_pr_for_ci_timeout and
+# mechanism applied the Blocked label"; per-caller opt-in (the pattern this replaced) required
+# every new blocking function to separately remember to add the call, and silently missed it
+# for block_pr_for_ci_timeout and
 # block_issue_for_unapplied_plan_approval below until this change (#1429 review). Returns
 # apply_blocked_label's own exit status so callers can still do their own extra bookkeeping (e.g.
 # clearing a pending-CI state file) conditionally on success.
