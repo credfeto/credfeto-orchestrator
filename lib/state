@@ -127,9 +127,8 @@ runaway_blocked_marker_file_path() {
 
 # Writes the marker for an item observed carrying the Blocked label whose invocation total OR
 # idle counter is already at/above its cap (#1115, extended to the idle cap by #1264 review) —
-# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review/security-review/
-# coverage workflow's own per-phase round-cap rules, or block_pr_for_idle_exhausted_failure/
-# _review / block_issue_for_idle_exhausted_no_progress), none of which call this on their own.
+# covers blocks NOT authored by oneshot's own backstop, e.g. the code-review/security-review/
+# coverage workflow's own per-phase round-cap rules, none of which call this on their own.
 # Without this, a human clearing such a Blocked label is a no-op: the counters survive
 # untouched, and the very next tick that reaches
 # the item reloads the same at-or-over-cap value and re-blocks it before any new work happens —
@@ -137,11 +136,16 @@ runaway_blocked_marker_file_path() {
 # much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
 # after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
 # failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
-# now. block_issue_for_idle_exhausted_no_plan (lib/github-status) is the one exception: it calls
-# this itself right after applying Blocked, since waiting for a later "observed carrying Blocked"
-# tick would miss a human who unblocks before any such tick ever runs.
+# now. Every blocking path in lib/github-status that applies the Blocked label via
+# apply_blocked_label_with_reason calls this itself immediately, right after applying Blocked,
+# rather than waiting for a later "observed carrying Blocked" tick to write the marker, which
+# would miss a human who unblocks before any such tick ever runs. This is safe to call
+# unconditionally from there regardless of the block's own reason: this function is self-gating
+# (see the total/idle cap check below) and only ever writes the marker for an item that is
+# actually at/over cap. Optional third argument item_repo: included in the failure warning below
+# when given, since a PR/Issue number alone is ambiguous across the many repos oneshot orchestrates.
 mark_capped_block_for_forgiveness() {
-    local item_type="$1" item_id="$2" total total_cap idle idle_cap
+    local item_type="$1" item_id="$2" item_repo="${3:-}" total total_cap idle idle_cap
     case "${item_type}" in
         PullRequest)
             load_pr_invocation_counts "${item_id}"
@@ -164,17 +168,19 @@ mark_capped_block_for_forgiveness() {
     { [ "${total}" -ge "${total_cap}" ] || [ "${idle}" -ge "${idle_cap}" ]; } || return 0
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
     touch "$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
-        || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
+        || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id}${item_repo:+ in ${item_repo}}: invocation budget will not auto-reset once a human clears the Blocked label"
 }
 
-# Resets a PR's invocation-total counter once it is observed un-blocked, but only when it was
-# blocked while already at/over the cap (runaway_blocked_marker_file_path present — written either
-# by oneshot's own backstop or by mark_capped_block_for_forgiveness for other block sources).
+# Resets a PR's invocation total AND idle counters once it is observed un-blocked, but only when
+# it was blocked while already at/over a cap (runaway_blocked_marker_file_path present, written
+# either by oneshot's own backstop or by mark_capped_block_for_forgiveness, called for every
+# successful block via apply_blocked_label_with_reason regardless of the block's own reason).
 # Without this, a human clearing the Blocked label on a cap-blocked PR would be a no-op: the guard
 # file is never otherwise cleared, so the very next tick reloads the same at-or-over-cap total and
-# immediately re-blocks it, turning "unblock" into a silent re-block loop. Blocks for unrelated
-# reasons (CI timeout, idle-exhausted review/check) leave the total untouched here — resetting
-# those would hand back an undeserved fresh budget instead of preserving the PR's history.
+# immediately re-blocks it, turning "unblock" into a silent re-block loop. A PR blocked while NOT
+# at/over any cap leaves the total/idle counters untouched here: the marker file was never
+# written for it, so this is a no-op for that PR, preserving its history instead of handing back
+# an undeserved fresh budget.
 # Call alongside clear_blocked_marker, every place a PR is observed open and un-blocked.
 reset_pr_invocation_counts_if_capped() {
     local item_id="$1" marker_file

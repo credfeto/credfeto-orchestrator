@@ -1510,6 +1510,28 @@ teardown() {
     grep -qx 'notified PullRequest #5' "${TEST_TMP}/discord_calls"
 }
 
+@test "block_pr_for_idle_exhausted_failure marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_failure does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
 @test "block_pr_for_idle_exhausted_review does not post a comment when the label cannot be verified (#1140 review)" {
     local call_log="${TEST_TMP}/gh_calls"
     # shellcheck disable=SC2016
@@ -1533,6 +1555,28 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q 'pr comment 5 --repo org/repo --body This PR has an unaddressed review requesting changes' "${call_log}"
     grep -q 'notified PullRequest #5 reason=This PR has an unaddressed review requesting changes' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_review marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_review does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
@@ -1580,6 +1624,56 @@ teardown() {
     run apply_blocked_label_with_reason "Issue" 42 "org/repo" "custom reason text"
     [ "${status}" -eq 0 ]
     grep -qx "type=Issue id=42 reason=custom reason text" "${_notif_log}"
+}
+
+@test "apply_blocked_label_with_reason marks forgiveness immediately once the label is verified present, for any caller (#1429 review)" {
+    # Forgiveness-marking moved from a per-caller opt-in into apply_blocked_label_with_reason
+    # itself, so this exercises the primitive directly rather than through any specific block_*
+    # wrapper - every blocking path gets this for free, not just the idle-exhaustion callers.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+
+    run apply_blocked_label_with_reason "PullRequest" 5 "org/repo" "any reason"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "apply_blocked_label_with_reason does not mark forgiveness when the label cannot be verified (#1429 review)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+
+    run apply_blocked_label_with_reason "PullRequest" 5 "org/repo" "any reason"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+# --- block_issue_for_unapplied_plan_approval (#1286) --------------------------
+
+@test "block_issue_for_unapplied_plan_approval posts the self-heal reason once the label is verified present" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s\n' "$1" "$2" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_issue_for_unapplied_plan_approval 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "issue comment 99 --repo org/repo --body This issue has a posted Implementation Plan" "${call_log}"
+    grep -qx "notified Issue #99" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_unapplied_plan_approval also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
+
+    run block_issue_for_unapplied_plan_approval 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- sync_pr_labels_from_linked_issues (#1321) --------------------------------
@@ -1637,6 +1731,22 @@ teardown() {
     grep -q "pr comment 5 --repo org/repo --body CI checks have been pending for over 60 minutes" "${call_log}"
     grep -q 'notified PullRequest #5 reason=CI checks have been pending for over 60 minutes' "${_notif_log}"
     [ ! -f "$(pr_head_oid_file_path 5)" ]
+}
+
+@test "block_pr_for_ci_timeout now also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
+    # block_pr_for_ci_timeout used to be one of the blocking paths that never opted into
+    # forgiveness-marking, so a human unblocking a CI-timeout-capped PR before a later tick
+    # observed it still Blocked got no fresh budget. Confirms that gap is now closed.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    CI_CHECK_TIMEOUT_MINUTES=60
+    save_pr_head_oid 5 "abc123" "$(date +%s)"
+
+    run block_pr_for_ci_timeout 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
 @test "block_pr_for_ci_timeout leaves the pending-CI state alone when the label cannot be verified (#1140 review)" {
@@ -1794,6 +1904,28 @@ teardown() {
     [ "${status}" -eq 0 ]
     grep -q "issue comment 99 --repo org/repo --body This issue's plan is approved" "${call_log}"
     grep -q "notified Issue #99 reason=This issue.s plan is approved" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_issue_for_idle_exhausted_no_progress marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "block_issue_for_idle_exhausted_no_progress does not mark forgiveness when the label cannot be verified (#1429)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_issue_invocation_counts 99 "${MAX_ISSUE_IDLE_INVOCATIONS}" "${MAX_ISSUE_IDLE_INVOCATIONS}"
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
@@ -13181,7 +13313,10 @@ STUBEOF
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
-    [[ "${output}" == *"Failed to write runaway-blocked marker for PR #5"* ]]
+    # The warning comes from mark_capped_block_for_forgiveness itself (lib/state), called by
+    # apply_blocked_label_with_reason with item_repo, rather than a bespoke message oneshot used
+    # to print after its own now-removed duplicate touch of the same marker.
+    [[ "${output}" == *"Failed to write runaway-blocked marker for PullRequest #5 in org/repo"* ]]
 }
 
 @test "main resets a PR's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
