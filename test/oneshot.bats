@@ -1734,9 +1734,9 @@ teardown() {
 }
 
 @test "block_pr_for_ci_timeout now also marks forgiveness once the label is verified present, closing the gap centralising left open before (#1429 review)" {
-    # Before #1429's centralisation, block_pr_for_ci_timeout was one of the blocking paths that
-    # never opted into forgiveness-marking, so a human unblocking a CI-timeout-capped PR before a
-    # later tick observed it still Blocked got no fresh budget. Confirms that gap is now closed.
+    # block_pr_for_ci_timeout used to be one of the blocking paths that never opted into
+    # forgiveness-marking, so a human unblocking a CI-timeout-capped PR before a later tick
+    # observed it still Blocked got no fresh budget. Confirms that gap is now closed.
     # shellcheck disable=SC2016
     make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
     notify_discord_blocked_item() { :; }
@@ -13313,10 +13313,10 @@ STUBEOF
     grep -q 'pr comment 5' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
-    # The warning now comes from mark_capped_block_for_forgiveness itself (lib/state), called by
-    # apply_blocked_label_with_reason (#1429), rather than a bespoke repo-aware message oneshot
-    # used to print after its own now-removed duplicate touch of the same marker.
-    [[ "${output}" == *"Failed to write runaway-blocked marker for PullRequest #5"* ]]
+    # The warning comes from mark_capped_block_for_forgiveness itself (lib/state), called by
+    # apply_blocked_label_with_reason with item_repo, rather than a bespoke message oneshot used
+    # to print after its own now-removed duplicate touch of the same marker.
+    [[ "${output}" == *"Failed to write runaway-blocked marker for PullRequest #5 in org/repo"* ]]
 }
 
 @test "main resets a PR's invocation counter when observed un-blocked after hitting the runaway cap (#1093)" {
