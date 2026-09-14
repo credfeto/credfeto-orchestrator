@@ -179,19 +179,19 @@ apply_blocked_label() {
 
 # Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —
 # see apply_blocked_label), sends the Discord blocked notification with the same reason, and
-# marks the item for forgiveness (#1429), the sequence every automatic blocking path in this
-# file needs, previously copy-pasted at every call site (#1140 review). Forgiveness-marking is
-# centralised here, not left as a per-caller opt-in: mark_capped_block_for_forgiveness is itself
+# marks the item for forgiveness, the sequence every automatic blocking path in this file needs,
+# previously copy-pasted at every call site (#1140 review). Forgiveness-marking is centralised
+# here rather than left as a per-caller opt-in: mark_capped_block_for_forgiveness is itself
 # self-gating (lib/state), a no-op unless the item's invocation total or idle counter is already
 # at/over its cap, so calling it unconditionally on every successful block never marks an item
 # that isn't actually capped, regardless of which reason blocked it. lib/state's own
 # runaway_blocked_marker_file_path header already documents this as "regardless of which
-# mechanism applied the Blocked label"; per-caller opt-in (the pattern this replaced) required
-# every new blocking function to separately remember to add the call, and silently missed it
-# for block_pr_for_ci_timeout and
-# block_issue_for_unapplied_plan_approval below until this change (#1429 review). Returns
-# apply_blocked_label's own exit status so callers can still do their own extra bookkeeping (e.g.
-# clearing a pending-CI state file) conditionally on success.
+# mechanism applied the Blocked label". A per-caller opt-in would have required every new
+# blocking function to separately remember to add the call; block_pr_for_ci_timeout and
+# block_issue_for_unapplied_plan_approval below never got such an opt-in at all, so centralising
+# here is also what closes that gap for them. Returns apply_blocked_label's own exit status so
+# callers can still do their own extra bookkeeping (e.g. clearing a pending-CI state file)
+# conditionally on success.
 apply_blocked_label_with_reason() {
     local item_type="$1" item_id="$2" item_repo="$3" reason="$4"
     local rc=0
@@ -199,7 +199,7 @@ apply_blocked_label_with_reason() {
     if [ "${rc}" -eq 0 ]; then
         gh "$(gh_noun_for_item_type "${item_type}")" comment "${item_id}" --repo "${item_repo}" \
             --body "${reason}" 2>/dev/null || true
-        mark_capped_block_for_forgiveness "${item_type}" "${item_id}"
+        mark_capped_block_for_forgiveness "${item_type}" "${item_id}" "${item_repo}"
     fi
     notify_discord_blocked_item "${item_type}" "${item_id}" "${reason}"
     return "${rc}"
@@ -213,7 +213,7 @@ apply_blocked_label_with_reason() {
 # escalation every tick forever, see apply_blocked_label). notify_discord_blocked_item is called
 # directly (it is idempotent per blocked spell) rather than relying on the next tick's
 # pr_json_has_blocked_label check, since that indirection is exactly what a label failure breaks.
-# Forgiveness-marking (#1429) is handled by apply_blocked_label_with_reason itself, so a human who
+# Forgiveness-marking is handled by apply_blocked_label_with_reason itself, so a human who
 # unblocks before any later tick observes this PR still carrying Blocked still gets a fresh budget.
 block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"

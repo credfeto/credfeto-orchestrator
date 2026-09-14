@@ -419,7 +419,7 @@ main() {
                 fi
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
-                    mark_capped_block_for_forgiveness "Issue" "${item_id}"
+                    mark_capped_block_for_forgiveness "Issue" "${item_id}" "${item_repo}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
@@ -461,7 +461,7 @@ main() {
                         continue
                     fi
                     info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
-                    mark_capped_block_for_forgiveness "PullRequest" "${open_pr}"
+                    mark_capped_block_for_forgiveness "PullRequest" "${open_pr}" "${item_repo}"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
                     count_blocked=$((count_blocked + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)")")
@@ -644,7 +644,7 @@ main() {
 
                 if issue_json_has_blocked_label "${issue_json}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
-                    mark_capped_block_for_forgiveness "Issue" "${item_id}"
+                    mark_capped_block_for_forgiveness "Issue" "${item_id}" "${item_repo}"
                     notify_discord_blocked_item "Issue" "${item_id}"
                     count_blocked=$((count_blocked + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
@@ -871,7 +871,7 @@ main() {
                     continue
                 fi
                 info "PR #${item_id} in ${item_repo} is blocked — skipping (not counting as active work)"
-                mark_capped_block_for_forgiveness "PullRequest" "${item_id}"
+                mark_capped_block_for_forgiveness "PullRequest" "${item_id}" "${item_repo}"
                 notify_discord_blocked_item "PullRequest" "${item_id}"
                 count_blocked=$((count_blocked + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - skipping (not counting as active work)")")
@@ -1189,9 +1189,8 @@ main() {
             if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
                 local pr_runaway_reason="This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate."
                 warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
-                # apply_blocked_label_with_reason itself calls mark_capped_block_for_forgiveness
-                # on success (#1429), which writes this exact runaway-blocked marker (PR_INVOCATION_
-                # TOTAL is already >= MAX_PR_TOTAL_INVOCATIONS here), so no separate touch is needed.
+                # apply_blocked_label_with_reason writes the runaway-blocked marker itself, since
+                # PR_INVOCATION_TOTAL is already >= MAX_PR_TOTAL_INVOCATIONS here.
                 apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${pr_runaway_reason}"
                 count_blocked=$((count_blocked + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "used ${PR_INVOCATION_TOTAL} agent invocations without converging - marking Blocked")")
@@ -1205,10 +1204,8 @@ main() {
             if [ "${ISSUE_INVOCATION_TOTAL}" -ge "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]; then
                 local issue_runaway_reason="This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate."
                 warn "Issue #${item_id} in ${item_repo} used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
-                # apply_blocked_label_with_reason itself calls mark_capped_block_for_forgiveness
-                # on success (#1429), which writes this exact runaway-blocked marker
-                # (ISSUE_INVOCATION_TOTAL is already >= MAX_ISSUE_TOTAL_INVOCATIONS here), so no
-                # separate touch is needed.
+                # apply_blocked_label_with_reason writes the runaway-blocked marker itself, since
+                # ISSUE_INVOCATION_TOTAL is already >= MAX_ISSUE_TOTAL_INVOCATIONS here.
                 apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${issue_runaway_reason}"
                 count_blocked=$((count_blocked + 1))
                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging - marking Blocked")")

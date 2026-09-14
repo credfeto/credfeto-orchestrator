@@ -137,14 +137,15 @@ runaway_blocked_marker_file_path() {
 # after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
 # failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
 # now. Every blocking path in lib/github-status that applies the Blocked label via
-# apply_blocked_label_with_reason calls this itself immediately, right after applying Blocked
-# (#1429), rather than waiting for a later "observed carrying Blocked" tick to write the marker,
-# which would miss a human who unblocks before any such tick ever runs. This is safe to call
+# apply_blocked_label_with_reason calls this itself immediately, right after applying Blocked,
+# rather than waiting for a later "observed carrying Blocked" tick to write the marker, which
+# would miss a human who unblocks before any such tick ever runs. This is safe to call
 # unconditionally from there regardless of the block's own reason: this function is self-gating
 # (see the total/idle cap check below) and only ever writes the marker for an item that is
-# actually at/over cap.
+# actually at/over cap. Optional third argument item_repo: included in the failure warning below
+# when given, since a PR/Issue number alone is ambiguous across the many repos oneshot orchestrates.
 mark_capped_block_for_forgiveness() {
-    local item_type="$1" item_id="$2" total total_cap idle idle_cap
+    local item_type="$1" item_id="$2" item_repo="${3:-}" total total_cap idle idle_cap
     case "${item_type}" in
         PullRequest)
             load_pr_invocation_counts "${item_id}"
@@ -167,7 +168,7 @@ mark_capped_block_for_forgiveness() {
     { [ "${total}" -ge "${total_cap}" ] || [ "${idle}" -ge "${idle_cap}" ]; } || return 0
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
     touch "$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
-        || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id} — invocation budget will not auto-reset once a human clears the Blocked label"
+        || warn "Failed to write runaway-blocked marker for ${item_type} #${item_id}${item_repo:+ in ${item_repo}}: invocation budget will not auto-reset once a human clears the Blocked label"
 }
 
 # Resets a PR's invocation total AND idle counters once it is observed un-blocked, but only when
