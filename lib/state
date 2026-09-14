@@ -127,9 +127,9 @@ runaway_blocked_marker_file_path() {
 
 # Writes the marker for an item observed carrying the Blocked label whose invocation total OR
 # idle counter is already at/above its cap (#1115, extended to the idle cap by #1264 review) —
-# covers blocks NOT authored by oneshot's own backstop (e.g. the code-review/security-review/
-# coverage workflow's own per-phase round-cap rules, or block_pr_for_idle_exhausted_failure/
-# _review / block_issue_for_idle_exhausted_no_progress), none of which call this on their own.
+# covers blocks NOT authored by oneshot's own backstop, e.g. the code-review/security-review/
+# coverage workflow's own per-phase round-cap rules, none of which call this on their own (the
+# idle-exhaustion blockers in lib/github-status all opt in directly instead, see below).
 # Without this, a human clearing such a Blocked label is a no-op: the counters survive
 # untouched, and the very next tick that reaches
 # the item reloads the same at-or-over-cap value and re-blocks it before any new work happens —
@@ -137,9 +137,11 @@ runaway_blocked_marker_file_path() {
 # much as the total cap: an idle-exhausted item's fingerprint is typically still unchanged right
 # after unblocking, so without this it re-blocks on literally the next tick. Best-effort: a
 # failure to write only means a future clear-the-label won't auto-reset, not that anything breaks
-# now. block_issue_for_idle_exhausted_no_plan (lib/github-status) is the one exception: it calls
-# this itself right after applying Blocked, since waiting for a later "observed carrying Blocked"
-# tick would miss a human who unblocks before any such tick ever runs.
+# now. block_issue_for_idle_exhausted_no_plan, block_pr_for_idle_exhausted_failure,
+# block_pr_for_idle_exhausted_review, and block_issue_for_idle_exhausted_no_progress (all
+# lib/github-status) are the exceptions: each calls this itself right after applying Blocked,
+# since waiting for a later "observed carrying Blocked" tick would miss a human who unblocks
+# before any such tick ever runs.
 mark_capped_block_for_forgiveness() {
     local item_type="$1" item_id="$2" total total_cap idle idle_cap
     case "${item_type}" in
