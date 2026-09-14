@@ -5,7 +5,7 @@
 # credfeto-setup-arch-desktop's own install.d/* scripts (DOCKER_INSTALLED and
 # other desktop-installer flags this script never used), copied in by mistake
 # and never actually deployed anywhere alongside it - die/info/success are
-# inlined here instead (#1452).
+# inlined here instead.
 die() {
     if [ -t 2 ]; then
         printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
