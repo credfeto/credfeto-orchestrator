@@ -554,55 +554,57 @@ main() {
                 fi
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                    if [ "${pr_is_draft}" != "true" ]; then
-                        # PR unchanged — also check whether the linked issue has new comments.
-                        require_trusted_logins || continue
-                        # Must match plan_approved exactly as compute_issue_fingerprint (the
-                        # post-invocation save for this same issue) computes it, or this
-                        # comparison never matches again once the plan is Approved (#1204 review).
-                        discover_or_create_workflow_project
-                        [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
-                        issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "$(issue_plan_approved "${item_repo}" "${item_id}")") \
-                            || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
-                        saved_issue_fp=$(load_issue_fingerprint "${item_id}")
-                        if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
-                            # pr_has_unaddressed_comment is passed through to
-                            # pr_should_advance_unchanged rather than bypassing this whole block
-                            # from outside: it still overrides that function's terminal
-                            # short-circuit (an unaddressed comment deserves a real look even on
-                            # an otherwise-settled PR), but stays subject to the same idle budget,
-                            # so the failed-check/unaddressed-review-request escalation below still
-                            # gets a real chance to fire once genuinely exhausted instead of being
-                            # silently defeated for as long as the comment stays unaddressed
-                            # (#1307 review).
-                            if pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
-                                info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
-                                pr_idle_advance=1
-                            else
-                                if pr_json_has_failed_required_check "${pr_json}"; then
-                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
-                                    block_pr_for_idle_exhausted_failure "${open_pr}" "${item_repo}"
-                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with a failed required check - blocking")")
-                                elif pr_json_has_unaddressed_review_request "${pr_json}"; then
-                                    info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
-                                    block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
-                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
-                                else
-                                    info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo")")
-                                fi
-                                count_unchanged=$((count_unchanged + 1))
-                                continue
-                            fi
+                    # PR unchanged, also check whether the linked issue has new comments. Applies
+                    # uniformly to draft and non-draft PRs: pr_should_advance_unchanged's only
+                    # draft-relevant check (pr_json_is_terminal) is always false for a draft,
+                    # since GitHub disallows enabling auto-merge on one, so special-casing drafts
+                    # out of this whole flow was never protecting against anything real; it just
+                    # meant a stuck draft never accrued PR_INVOCATION_IDLE and only the much looser
+                    # MAX_PR_TOTAL_INVOCATIONS lifetime cap ever caught it.
+                    require_trusted_logins || continue
+                    # Must match plan_approved exactly as compute_issue_fingerprint (the
+                    # post-invocation save for this same issue) computes it, or this
+                    # comparison never matches again once the plan is Approved (#1204 review).
+                    discover_or_create_workflow_project
+                    [ -n "${_WF_CREATION_FAILED}" ] && report_missing_workflow_project
+                    issue_fp=$(fingerprint_issue_json "${issue_json}" "${trusted_logins}" "$(issue_plan_approved "${item_repo}" "${item_id}")") \
+                        || die "Failed to compute fingerprint for Issue #${item_id} in ${item_repo}"
+                    saved_issue_fp=$(load_issue_fingerprint "${item_id}")
+                    if [ -n "${saved_issue_fp}" ] && [ "${issue_fp}" = "${saved_issue_fp}" ]; then
+                        # pr_has_unaddressed_comment is passed through to
+                        # pr_should_advance_unchanged rather than bypassing this whole block
+                        # from outside: it still overrides that function's terminal
+                        # short-circuit (an unaddressed comment deserves a real look even on
+                        # an otherwise-settled PR), but stays subject to the same idle budget,
+                        # so the failed-check/unaddressed-review-request escalation below still
+                        # gets a real chance to fire once genuinely exhausted instead of being
+                        # silently defeated for as long as the comment stays unaddressed
+                        # (#1307 review).
+                        if pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                            info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
+                            pr_idle_advance=1
                         else
-                            info "Issue #${item_id} in ${item_repo} changed — re-running against PR #${open_pr}"
+                            if pr_json_has_failed_required_check "${pr_json}"; then
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted with a failed required check — blocking"
+                                block_pr_for_idle_exhausted_failure "${open_pr}" "${item_repo}"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with a failed required check - blocking")")
+                            elif pr_json_has_unaddressed_review_request "${pr_json}"; then
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted with an unaddressed review request — blocking"
+                                block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
+                            else
+                                info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo")")
+                            fi
+                            count_unchanged=$((count_unchanged + 1))
+                            continue
                         fi
                     else
-                        info "PR #${open_pr} in ${item_repo} unchanged but still in draft — re-running"
+                        info "Issue #${item_id} in ${item_repo} changed — re-running against PR #${open_pr}"
                     fi
                 fi
 
-                # PR has changed (or issue changed, or still in draft) — work on it.
+                # PR has changed (or issue changed) — work on it.
                 original_issue_id="${item_id}"
                 item_id="${open_pr}"
                 item_type="PullRequest"
@@ -1026,9 +1028,7 @@ main() {
             fi
 
             if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                if [ "${pr_is_draft}" = "true" ]; then
-                    info "PR #${item_id} in ${item_repo} unchanged but still in draft — re-running"
-                elif [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
+                if [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
                     info "PR #${item_id} in ${item_repo} unchanged but ${pr_merge_state} — re-running"
                 # pr_has_unaddressed_comment is passed through to pr_should_advance_unchanged
                 # rather than bypassing this whole block from outside: it still overrides that
@@ -1036,7 +1036,11 @@ main() {
                 # even on an otherwise-settled PR), but stays subject to the same idle budget, so
                 # the failed-check/unaddressed-review-request escalation below still gets a real
                 # chance to fire once genuinely exhausted instead of being silently defeated for
-                # as long as the comment stays unaddressed (#1307 review).
+                # as long as the comment stays unaddressed (#1307 review). Applies uniformly to
+                # draft and non-draft PRs: pr_should_advance_unchanged's only draft-relevant check
+                # (pr_json_is_terminal) is always false for a draft anyway, since GitHub disallows
+                # enabling auto-merge on one, so special-casing drafts out of this whole flow was
+                # never protecting against anything real.
                 elif pr_should_advance_unchanged "${item_id}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                     info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                     pr_idle_advance=1

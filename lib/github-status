@@ -13,11 +13,15 @@
 # GitHub's own mergeStateStatus (e.g. BLOCKED) is deliberately not consulted here — it reflects
 # GitHub's own merge-readiness computation (missing reviews, branch-protection rules, etc.), not
 # something the orchestrator itself has any part in, and is not a reliable signal that the PR
-# needs a human (#1266).
+# needs a human (#1266). isDraft is checked explicitly rather than trusted to keep
+# autoMergeRequest null: GitHub disallows enabling auto-merge on a draft PR, but does not
+# document that converting an already-armed PR back to draft clears autoMergeRequest, so a
+# non-null value must not be treated as terminal for a PR that is currently a draft.
 pr_json_is_terminal() {
     local pr_json="$1"
     printf '%s' "${pr_json}" | jq -e '
-        .autoMergeRequest != null
+        .isDraft != true
+        and .autoMergeRequest != null
         and .reviewDecision != "CHANGES_REQUESTED"
         and (
             (.statusCheckRollup // [])
