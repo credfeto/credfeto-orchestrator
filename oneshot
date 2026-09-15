@@ -560,7 +560,7 @@ main() {
                     # since GitHub disallows enabling auto-merge on one, so special-casing drafts
                     # out of this whole flow was never protecting against anything real — it just
                     # meant a stuck draft never accrued PR_INVOCATION_IDLE and only the much looser
-                    # MAX_PR_TOTAL_INVOCATIONS lifetime cap ever caught it (#1447).
+                    # MAX_PR_TOTAL_INVOCATIONS lifetime cap ever caught it.
                     require_trusted_logins || continue
                     # Must match plan_approved exactly as compute_issue_fingerprint (the
                     # post-invocation save for this same issue) computes it, or this
@@ -1040,7 +1040,7 @@ main() {
                 # draft and non-draft PRs: pr_should_advance_unchanged's only draft-relevant check
                 # (pr_json_is_terminal) is always false for a draft anyway, since GitHub disallows
                 # enabling auto-merge on one, so special-casing drafts out of this whole flow was
-                # never protecting against anything real (#1447).
+                # never protecting against anything real.
                 elif pr_should_advance_unchanged "${item_id}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                     info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                     pr_idle_advance=1
