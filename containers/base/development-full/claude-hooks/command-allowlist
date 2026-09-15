@@ -45,7 +45,6 @@ docker
 
 # Network
 curl
-wget
 ping
 
 # Crypto / TLS

@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Blocks curl from reaching a fixed set of destination hosts, matching this repo's own
+# claude-settings.json WebFetch(domain:...) deny entries: api.github.com, github.com,
+# registry.npmjs.org, raw.githubusercontent.com, api.nuget.org. Exit 2 = blocked, 0 = allowed.
+#
+# curl is on claude-settings.json's blanket Bash(curl *) permissions.allow, and its danger
+# is in the *destination*, not the verb - a permissions.allow prefix pattern cannot express
+# "except this host" (see issue #1318, split from #1315). Unlike enforce-ssh-host-and-key's
+# positive host *allowlist* (ssh's own use in this repo is narrow and fixed-form: exactly
+# `ssh user@host.lan command`), curl is legitimately used here with many flags and dynamic
+# header/token values, so this hook is a destination *denylist* instead: reuse the same small
+# set of domains already denied to WebFetch, rather than inventing a broader curl-specific
+# allowlist policy. Deliberately does not restrict outbound-data flags (-d/--data/-T/
+# --upload-file) or any other flag beyond the two named below - narrower in scope than
+# enforce-ssh-host-and-key on purpose, per #1318's resolution.
+#
+# wget is not covered by this hook at all: it has zero real usage anywhere in this repo's
+# own scripts/Dockerfiles/instructions (confirmed on #1318 itself), so it was removed
+# entirely - from command-allowlist and permissions.allow - rather than given a matching
+# hook, the same treatment scp got from #1315/enforce-ssh-host-and-key. wget is simply not
+# on command-allowlist any more, so reject-obfuscated-commands blocks it outright before
+# any hook would ever see it.
+#
+# Every non-flag literal word (does not start with '-') in a curl call is checked as a
+# potential URL/host argument, regardless of which preceding flag (if any) it belongs to -
+# this sidesteps needing to classify curl's large flag set by arity (which flags consume a
+# following value vs. which don't), since a header value, filename, or token is exceedingly
+# unlikely to collide with one of the five denied host strings exactly (host matching is
+# exact-match on the host component only, not a substring test). --url's explicit form
+# (--url <value>) is covered the same way: its value is itself a non-flag word.
+#
+# A non-literal (substitution/expansion) word is NOT failed closed here, unlike ssh's target
+# position: curl is routinely called in this repo with dynamic Authorization headers and
+# tokens ($GH_TOKEN, $NUGET_TOKEN, ...), and a blanket non-literal-argument block would make
+# ordinary curl calls unusable. This is a deliberate, narrower scope than
+# enforce-ssh-host-and-key's fail-closed target-word check, matching #1318's resolution to
+# restrict destinations, not harden every possible dynamic-value bypass.
+#
+# -K/--config is blocked outright whenever present on a curl call: a curl config file can set
+# `url = <host>` (and any other option) with content this hook cannot see or parse, making the
+# literal-word host scan below moot. --connect-to is blocked outright too: it can redirect the
+# real TCP destination to a different host than the one written in the URL argument
+# (`curl --connect-to safe.example:443:api.github.com:443 https://safe.example/` actually
+# connects to api.github.com while every literal word in the command still reads
+# "safe.example") - this is a concrete bypass of the literal-word host match below, not a
+# generic hardening measure, so it is in scope even though outbound-data flags are not.
+#
+# Uses the same shfmt-parsed AST approach and base64-per-word transport as
+# enforce-ssh-host-and-key, for the same reasons documented in that hook's own header (a
+# tab/newline-joined transport can be desynced by a real tab/newline byte inside a
+# legitimately quoted word). Fails closed on missing jq/shfmt or an unparseable command.
+
+export LC_ALL=C
+
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+# Same list as enforce-ssh-host-and-key, duplicated rather than shared - every hook in this
+# family is a standalone, independently-deployed script (see that hook's own header).
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+MARKER='(non-literal)'
+
+# Reused verbatim from claude-settings.json's WebFetch(domain:...) deny entries.
+DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org)
+
+host_denied() {
+  local h="${1,,}" d
+  for d in "${DENIED_HOSTS[@]}"; do
+    [ "$h" = "$d" ] && return 0
+  done
+  return 1
+}
+
+# Extracts the host component from a URL or bare-host word: strips a leading scheme://,
+# then a leading user:pass@ userinfo prefix, then everything from the first /, ?, or #
+# (path/query/fragment), then a trailing :port. Good enough for an exact-match comparison
+# against the five fixed denied hosts above - not a general-purpose URL parser, and does not
+# need to be one for this comparison.
+extract_host() {
+  local w="$1"
+  case "$w" in
+    *://*) w="${w#*://}" ;;
+  esac
+  case "$w" in
+    *@*) w="${w#*@}" ;;
+  esac
+  w="${w%%/*}"
+  w="${w%%\?*}"
+  w="${w%%#*}"
+  w="${w%%:*}"
+  printf '%s' "${w,,}"
+}
+
+command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One compact JSON array per CallExpr, one per line - same literal_value extraction as
+# enforce-ssh-host-and-key (see that hook's header for why only these forms are treated as
+# literal): a bare word, or one layer of ordinary quoting with no expansion inside it.
+calls=$(printf '%s' "$ast" | jq -c '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | literal_value ]
+') || block 'command structure could not be analyzed - failing closed'
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+
+  words=()
+  while IFS= read -r entry; do
+    case "$entry" in
+      L:*)
+        decoded=$(
+          printf '%s' "${entry#L:}" | base64 -d 2>/dev/null
+          printf '.'
+        )
+        words+=("${decoded%.}")
+        ;;
+      *) words+=("$MARKER") ;;
+    esac
+  done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
+
+  positions=(0)
+  is_wrapper "${words[0]:-}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    [ "$tok" = "curl" ] || [[ "$tok" == */curl ]] || continue
+
+    for arg in "${words[@]:$((i + 1))}"; do
+      case "$arg" in
+        -K* | --config | --config=*) block 'curl -K/--config is not permitted - its contents (including the URL) are not visible to this check' ;;
+        --connect-to | --connect-to=*) block 'curl --connect-to is not permitted - it can redirect the real connection to a different host than the one written in the URL' ;;
+      esac
+    done
+
+    for arg in "${words[@]:$((i + 1))}"; do
+      case "$arg" in
+        -*) continue ;;
+      esac
+      [ "$arg" = "$MARKER" ] && continue
+      host=$(extract_host "$arg")
+      [ -n "$host" ] || continue
+      host_denied "$host" && block "curl to '${host}' is not permitted - use the appropriate CLI tool (gh, npm, dotnet nuget, ...) for this host instead"
+    done
+  done
+done <<<"$calls"
+
+exit 0
