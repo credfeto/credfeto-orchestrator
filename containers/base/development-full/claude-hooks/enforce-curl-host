@@ -161,11 +161,6 @@ while IFS= read -r call_line; do
       case "$arg" in
         -K* | --config | --config=*) block 'curl -K/--config is not permitted - its contents (including the URL) are not visible to this check' ;;
         --connect-to | --connect-to=*) block 'curl --connect-to is not permitted - it can redirect the real connection to a different host than the one written in the URL' ;;
-      esac
-    done
-
-    for arg in "${words[@]:$((i + 1))}"; do
-      case "$arg" in
         -*) continue ;;
       esac
       [ "$arg" = "$MARKER" ] && continue
