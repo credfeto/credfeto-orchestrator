@@ -88,8 +88,13 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "an -o output filename equal to a denied host string is not treated as the URL host, but the real URL still is" {
-    run_hook "curl -o result.json https://example.com"
+@test "an -o output filename equal to a denied host string is skipped as an opaque value, not treated as the URL host" {
+    run_hook "curl -o github.com https://example.com"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a -d data value equal to a denied host string is skipped as an opaque value" {
+    run_hook "curl -d github.com https://example.com"
     [ "${status}" -eq 0 ]
 }
 
@@ -127,4 +132,90 @@ teardown() {
     run_hook "curl --connect-to safe.example:443:api.github.com:443 https://safe.example/"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'--connect-to is not permitted'* ]]
+}
+
+@test "curl -x/--proxy is blocked outright" {
+    run_hook "curl -x http://attacker.example:8080 https://safe.example/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-x/--proxy is not permitted'* ]]
+}
+
+@test "curl --proxy=<value> glued form is blocked outright" {
+    run_hook "curl --proxy=http://attacker.example:8080 https://safe.example/"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-x/--proxy is not permitted'* ]]
+}
+
+# --- glued/expanded forms that could otherwise sneak past the host check --
+
+@test "curl --url=<denied host> glued long-option form is blocked" {
+    run_hook "curl --url=https://api.github.com/repos/foo/bar"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'api.github.com' is not permitted"* ]]
+}
+
+@test "curl --url=<non-denied host> glued long-option form is allowed" {
+    run_hook "curl --url=https://example.com/foo"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a URL argument containing brace-expansion characters is blocked outright" {
+    run_hook "curl https://api.github.com{,}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could expand into more than one word'* ]]
+}
+
+@test "a -K/cfg.txt pair hidden inside brace-expansion characters is blocked outright" {
+    run_hook "curl {-K,cfg.txt} https://example.com"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could expand into more than one word'* ]]
+}
+
+@test "a non-denied URL containing no expansion characters is unaffected by the brace check" {
+    run_hook "curl https://example.com/foo"
+    [ "${status}" -eq 0 ]
+}
+
+# --- combined short-option clusters -----------------------------------------
+
+@test "the -fsSL cluster actually used in this repo is allowed" {
+    run_hook "curl -fsSL https://example.com/foo -o /tmp/out"
+    [ "${status}" -eq 0 ]
+}
+
+@test "the -sf cluster actually used in this repo is allowed" {
+    run_hook "curl -sf https://example.com/foo"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unrecognised combined short-option cluster is blocked outright, even one hiding -K" {
+    run_hook "curl -sK cfg.txt https://example.com"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'combined short flags'* ]]
+}
+
+@test "an unrecognised combined short-option cluster to a denied host is still blocked" {
+    run_hook "curl -sL https://api.github.com/foo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'combined short flags'* ]]
+}
+
+# --- DENIED_HOSTS parity with claude-settings.json's WebFetch deny list -----
+#
+# Reads static repo files only (no HOME/PATH/git interaction), mirroring
+# test/command-allowlist-parity.bats's own approach for the exact same reason: without an
+# automated check, claude-settings.json's WebFetch(domain:...) deny list is free to gain (or
+# lose) a host that this hook's DENIED_HOSTS array never learns about, silently reopening the
+# gap this hook exists to close for curl specifically.
+
+@test "enforce-curl-host's DENIED_HOSTS matches claude-settings.json's WebFetch deny domains exactly" {
+    local settings="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
+    local settings_domains hook_domains
+
+    settings_domains=$(jq -r '.permissions.deny[]' "${settings}" | sed -nE 's/^WebFetch\(domain:(.+)\)$/\1/p' | sort -u)
+    hook_domains=$(grep -E '^DENIED_HOSTS=' "${HOOK}" | sed -E 's/^DENIED_HOSTS=\((.*)\)$/\1/' | tr ' ' '\n' | sort -u)
+
+    [ -n "${settings_domains}" ]
+    [ -n "${hook_domains}" ]
+    diff <(printf '%s\n' "${settings_domains}") <(printf '%s\n' "${hook_domains}")
 }
