@@ -352,6 +352,15 @@ teardown() {
     [[ "${output}" == *"NEVER apply the Blocked label without ALSO posting a comment"* ]]
 }
 
+# --- PHASE C board status only resets on a genuine commit (#1311) ---------------
+
+@test "build_pr_claude_md PHASE C only resets the board to Development on a genuine commit, otherwise leaves it unchanged (#1311)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'If this round pushes a genuine code commit'*'set the board status to "Development"'* ]]
+    [[ "${output}" == *"only action is a reply, a label sync, a"*"metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
+}
+
 # --- tightened plan-approval re-block instruction (#1140) -----------------------
 
 @test "build_issue_claude_md board-configured not-approved-yet text demands a diagnostic comment" {
