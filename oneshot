@@ -554,11 +554,11 @@ main() {
                 fi
 
                 if [ -n "${saved_fp}" ] && [ "${pr_fp}" = "${saved_fp}" ]; then
-                    # PR unchanged — also check whether the linked issue has new comments. Applies
+                    # PR unchanged, also check whether the linked issue has new comments. Applies
                     # uniformly to draft and non-draft PRs: pr_should_advance_unchanged's only
-                    # draft-relevant check (pr_json_is_terminal) is always false for a draft anyway,
+                    # draft-relevant check (pr_json_is_terminal) is always false for a draft,
                     # since GitHub disallows enabling auto-merge on one, so special-casing drafts
-                    # out of this whole flow was never protecting against anything real — it just
+                    # out of this whole flow was never protecting against anything real; it just
                     # meant a stuck draft never accrued PR_INVOCATION_IDLE and only the much looser
                     # MAX_PR_TOTAL_INVOCATIONS lifetime cap ever caught it.
                     require_trusted_logins || continue

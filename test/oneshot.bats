@@ -1347,6 +1347,13 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_is_terminal is false when isDraft is true even if autoMergeRequest is set" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"isDraft":true}'
+    [ "${status}" -ne 0 ]
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"isDraft":false}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_is_terminal is true when auto-merge is enabled, mergeStateStatus is BLOCKED, and statusCheckRollup is empty (#1266)" {
     run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"mergeStateStatus":"BLOCKED","statusCheckRollup":[]}'
     [ "${status}" -eq 0 ]
@@ -5363,6 +5370,60 @@ stub_plan_already_self_heal_marked() {
     [ ! -f "${TEST_TMP}/claude_log" ]
     grep -q 'pr comment 99' "${GH_CALL_LOG}"
     grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main blocks unchanged draft PR reached via issue pivot once idle budget exhausted with an unaddressed review request (#1447)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    grep -q 'pr comment 99' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main silently parks unchanged draft PR reached via issue pivot with idle budget exhausted but no failed required check (regression guard) (#1447)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    if [ -f "${GH_CALL_LOG}" ]; then
+        ! grep -q 'Blocked' "${GH_CALL_LOG}"
+        ! grep -q 'pr comment 99' "${GH_CALL_LOG}"
+    fi
 }
 
 @test "main saves issue fingerprint after running agent on PR via issue pivot" {
