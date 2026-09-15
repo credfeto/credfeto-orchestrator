@@ -1428,6 +1428,32 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_latest_trusted_comment_timestamp picks up an edited top-level comment's updated_at via the fourth argument, unlike pr_json.comments alone (#1309)" {
+    # gh CLI's --json comments never actually populates updatedAt, so a human's edit to an
+    # already-seen comment is invisible to pr_json.comments (createdAt never advances). The REST
+    # issue-comments source (fourth argument) carries the edit's real updated_at instead.
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[{"author":{"login":"credfeto"},"createdAt":"2026-08-12T07:26:12Z"}],"reviews":[]}' '["credfeto"]' '[]' '[{"user":{"login":"credfeto"},"created_at":"2026-08-12T07:26:12Z","updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "pr_json_latest_trusted_comment_timestamp ignores an untrusted issue comment via the fourth argument (#1309)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[],"reviews":[]}' '["credfeto"]' '[]' '[{"user":{"login":"random-passerby"},"created_at":"2026-08-12T07:26:12Z","updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "pr_json_latest_trusted_comment_timestamp returns the newest across all four trusted-activity sources (#1309)" {
+    run pr_json_latest_trusted_comment_timestamp '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T06:00:00Z"}],"reviews":[{"author":{"login":"credfeto"},"submittedAt":"2026-08-12T07:00:00Z"}]}' '["credfeto"]' '[{"user":{"login":"credfeto"},"updated_at":"2026-08-12T08:00:00Z"}]' '[{"user":{"login":"credfeto"},"created_at":"2026-08-12T07:26:12Z","updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
+}
+
+@test "pr_json_has_unaddressed_trusted_comment is true for an edited top-level comment detected via the fifth argument (#1309)" {
+    run pr_json_has_unaddressed_trusted_comment '{"comments":[{"author":{"login":"credfeto"},"createdAt":"2026-08-12T07:26:12Z"}],"reviews":[]}' '["credfeto"]' "2026-08-12T07:26:12Z" '[]' '[{"user":{"login":"credfeto"},"created_at":"2026-08-12T07:26:12Z","updated_at":"2026-08-12T10:05:07Z"}]'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_has_unaddressed_review_request is true for reviewDecision CHANGES_REQUESTED (#1083)" {
     run pr_json_has_unaddressed_review_request '{"reviewDecision":"CHANGES_REQUESTED"}'
     [ "${status}" -eq 0 ]
@@ -2518,6 +2544,42 @@ teardown() {
     GH_ITEM_FETCH_RETRY_DELAY_SECS=0
     make_stub gh 'exit 1'
     run fetch_pr_review_comments 5
+    [ "${status}" -ne 0 ]
+}
+
+# --- fetch_pr_issue_comments (#1309) --------------------------------------------
+
+@test "fetch_pr_issue_comments requests the issues/<n>/comments REST endpoint with pagination and slurp (#1309)" {
+    make_stub gh 'printf "%s" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
+    fetch_pr_issue_comments 42 > /dev/null
+    run cat "${TEST_TMP}/gh_args"
+    [[ "${output}" == *"repos/credfeto/credfeto-orchestrator/issues/42/comments"* ]]
+    [[ "${output}" == *"--paginate"* ]]
+    [[ "${output}" == *"--slurp"* ]]
+}
+
+@test "fetch_pr_issue_comments flattens multiple pages into a single flat array of comments (#1309)" {
+    make_stub gh 'printf "[[{\"id\":1},{\"id\":2}],[{\"id\":3}]]"'
+    run fetch_pr_issue_comments 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '[{"id":1},{"id":2},{"id":3}]' ]
+}
+
+@test "fetch_pr_issue_comments retries and succeeds after a transient gh failure (#1309)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=3
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
+    make_stub gh 'n=$(cat "'"${TEST_TMP}"'/ghcount" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "'"${TEST_TMP}"'/ghcount"; [ "$n" -lt 2 ] && exit 1; printf "[]\n"'
+    run fetch_pr_issue_comments 5
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+}
+
+@test "fetch_pr_issue_comments returns 1 without dying after exhausting retries (#1309)" {
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=2
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    run fetch_pr_issue_comments 5
     [ "${status}" -ne 0 ]
 }
 
@@ -4824,6 +4886,7 @@ setup_main_mocks() {
     validate_config()             { return 0; }
     get_trusted_logins()          { printf '["credfeto"]\n'; }
     fetch_pr_review_comments()    { printf '[]\n'; }
+    fetch_pr_issue_comments()     { printf '[]\n'; }
     notify_discord_work_item()         { return 0; }
     notify_discord_pr_waiting()        { return 0; }
     notify_discord_no_work()           { return 0; }
@@ -13031,6 +13094,7 @@ STUBEOF
     fetch_pr_json() { printf '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-08-12T10:05:07Z"}],"reviews":[]}\n'; }
     get_trusted_logins() { printf '["credfeto"]\n'; }
     fetch_pr_review_comments() { printf '[]\n'; }
+    fetch_pr_issue_comments() { printf '[]\n'; }
     run compute_pr_last_agent_comment_seen 42
     [ "${status}" -eq 0 ]
     [ "${output}" = "2026-08-12T10:05:07Z" ]
@@ -13048,6 +13112,25 @@ STUBEOF
     fetch_pr_review_comments() { return 1; }
     run compute_pr_last_agent_comment_seen 42
     [ "${status}" -eq 1 ]
+}
+
+@test "compute_pr_last_agent_comment_seen returns 1 when fetch_pr_issue_comments fails (#1309)" {
+    fetch_pr_json() { printf '{"comments":[]}\n'; }
+    get_trusted_logins() { printf '["credfeto"]\n'; }
+    fetch_pr_review_comments() { printf '[]\n'; }
+    fetch_pr_issue_comments() { return 1; }
+    run compute_pr_last_agent_comment_seen 42
+    [ "${status}" -eq 1 ]
+}
+
+@test "compute_pr_last_agent_comment_seen picks up an issue comment's updated_at via fetch_pr_issue_comments (#1309)" {
+    fetch_pr_json() { printf '{"comments":[],"reviews":[]}\n'; }
+    get_trusted_logins() { printf '["credfeto"]\n'; }
+    fetch_pr_review_comments() { printf '[]\n'; }
+    fetch_pr_issue_comments() { printf '[{"user":{"login":"credfeto"},"created_at":"2026-08-12T07:26:12Z","updated_at":"2026-08-12T10:05:07Z"}]\n'; }
+    run compute_pr_last_agent_comment_seen 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "2026-08-12T10:05:07Z" ]
 }
 
 @test "ci_checks_timed_out returns false and writes state on first call for a new OID" {
@@ -13239,6 +13322,45 @@ STUBEOF
     [ ! -f "${TEST_TMP}/claude_log" ]
     [ ! -f "${TEST_TMP}/fp_called" ]
     [[ "${output}" == *"Failed to fetch review comments for PR #99 in org/repo — skipping this item for now"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a fetch_pr_issue_comments failure in the direct-PR path (#1309)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_pr_issue_comments() { return 1; }
+    fingerprint_pr_json() { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'fp-new\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+    [[ "${output}" == *"Failed to fetch issue comments for PR #5 in org/repo — skipping this item for now"* ]]
+    [[ "${output}" == *"errors: 1"* ]]
+}
+
+@test "main skips (does not die on, and does not hand off to agent for) a fetch_pr_issue_comments failure in the Issue-to-PR pivot path (#1309)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fetch_pr_issue_comments()   { return 1; }
+    fingerprint_pr_json()       { printf 'called\n' >> "${TEST_TMP}/fp_called"; printf 'fp-new\n'; }
+    invoke_claude()             { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ ! -f "${TEST_TMP}/fp_called" ]
+    [[ "${output}" == *"Failed to fetch issue comments for PR #99 in org/repo — skipping this item for now"* ]]
     [[ "${output}" == *"errors: 1"* ]]
 }
 

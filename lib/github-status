@@ -34,40 +34,49 @@ pr_json_is_terminal() {
     ' > /dev/null 2>&1
 }
 
-# Returns the newest trusted-activity timestamp in pr_json — top-level comments, reviews, AND
-# (via the optional third argument) inline review comments — or empty string if there is none.
-# trusted_logins and review_comments_json follow fingerprint_pr_json's shapes exactly (JSON array
-# or "null" to trust everyone; REST-shaped inline comments, author under `.user.login`, timestamp
-# under `.updated_at`), and this deliberately covers the same three activity sources
-# fingerprint_pr_json hashes — omitting reviews/inline comments here would let a trusted review or
-# inline comment change the general PR fingerprint while never registering as "unaddressed",
-# reproducing #1307's exact symptom via a different surface. GitHub CLI's `--json comments` never
-# actually populates `updatedAt` (verified live — only `createdAt` is present), so in practice
-# this only detects a *new* top-level comment, not an edit to an already-seen one; tracked
-# separately as a known limitation rather than blocking this fix (#1309).
+# Returns the newest trusted-activity timestamp in pr_json — top-level comments, reviews, inline
+# review comments (via the optional third argument), AND (via the optional fourth argument)
+# REST-fetched top-level issue comments — or empty string if there is none. trusted_logins,
+# review_comments_json, and issue_comments_json follow fingerprint_pr_json's shapes exactly (JSON
+# array or "null" to trust everyone; REST-shaped comments, author under `.user.login`, timestamp
+# under `.updated_at`), and this deliberately covers the same activity sources fingerprint_pr_json
+# hashes — omitting reviews/inline comments here would let a trusted review or inline comment
+# change the general PR fingerprint while never registering as "unaddressed", reproducing #1307's
+# exact symptom via a different surface. GitHub CLI's `--json comments` never actually populates
+# `updatedAt` (verified live — only `createdAt` is present), so pr_json.comments alone only ever
+# detects a *new* top-level comment, never an edit to an already-seen one; the fourth argument
+# closes that gap by feeding in fetch_pr_issue_comments's REST-shaped array, which does carry a
+# real `updated_at` per comment (#1309). Kept alongside rather than replacing pr_json.comments so
+# every existing call site/test built on the latter keeps working unchanged — the two sources
+# describe the same underlying comments, so folding both into the same max-timestamp union is
+# always safe (a real edit's `updated_at` can only be >= its `created_at`/`createdAt`).
 # Used both to record what a genuine agent invocation actually saw (via
 # save_pr_last_agent_comment_seen, #1307) and, via pr_json_has_unaddressed_trusted_comment below,
 # to decide whether one is still unaddressed.
 pr_json_latest_trusted_comment_timestamp() {
-    local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}"
-    local review_comments_file result jq_status
+    local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}"
+    local review_comments_file issue_comments_file result jq_status
     review_comments_file=$(mktemp --suffix=.json) || return 1
     printf '%s' "${review_comments_json}" > "${review_comments_file}"
+    issue_comments_file=$(mktemp --suffix=.json) || { rm -f "${review_comments_file}"; return 1; }
+    printf '%s' "${issue_comments_json}" > "${issue_comments_file}"
 
-    result=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --rawfile reviewCommentsRaw "${review_comments_file}" '
+    result=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --rawfile reviewCommentsRaw "${review_comments_file}" --rawfile issueCommentsRaw "${issue_comments_file}" '
         ($reviewCommentsRaw | fromjson) as $reviewComments
+        | ($issueCommentsRaw | fromjson) as $issueComments
         | def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
         def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
         [
             (tc(.comments // [])[]? | (.updatedAt // .createdAt // "")),
             (tc(.reviews // [])[]? | (.submittedAt // .updatedAt // "")),
-            (trc($reviewComments)[]? | (.updated_at // ""))
+            (trc($reviewComments)[]? | (.updated_at // "")),
+            (trc($issueComments)[]? | (.updated_at // .created_at // ""))
         ]
         | map(select(. != ""))
         | sort | last // ""
     ')
     jq_status=$?
-    rm -f "${review_comments_file}"
+    rm -f "${review_comments_file}" "${issue_comments_file}"
     [ "${jq_status}" -eq 0 ] || return 1
     printf '%s' "${result}"
 }
@@ -92,28 +101,29 @@ pr_json_latest_trusted_comment_timestamp() {
 # string comparison is safe here because GitHub always emits these as fixed-width ISO-8601 UTC
 # timestamps.
 pr_json_has_unaddressed_trusted_comment() {
-    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}"
+    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}"
     local latest
-    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${review_comments_json}")
+    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${review_comments_json}" "${issue_comments_json}")
     [ -n "${latest}" ] && { [ -z "${last_seen_timestamp}" ] || [[ "${latest}" > "${last_seen_timestamp}" ]]; }
 }
 
 # Sets the caller's `pr_has_unaddressed_comment` from the caller's pre-fetched
-# `pr_json`/`trusted_logins`/`pr_review_comments` and the persisted last-agent-comment-seen marker
-# for item_id. Relies on bash's dynamic scoping of `local`s, same convention as
-# require_trusted_logins (lib/github): must only be called from within main()'s per-item loop,
-# where `pr_json`, `pr_review_comments`, and `pr_has_unaddressed_comment` are already declared
-# local. Shared by both PR code paths (issue-pivot and direct-PR) so this derivation cannot drift
-# between them (#1307).
+# `pr_json`/`trusted_logins`/`pr_review_comments`/`pr_issue_comments` and the persisted
+# last-agent-comment-seen marker for item_id. Relies on bash's dynamic scoping of `local`s, same
+# convention as require_trusted_logins (lib/github): must only be called from within main()'s
+# per-item loop, where `pr_json`, `pr_review_comments`, `pr_issue_comments`, and
+# `pr_has_unaddressed_comment` are already declared local. Shared by both PR code paths
+# (issue-pivot and direct-PR) so this derivation cannot drift between them (#1307).
 set_pr_has_unaddressed_comment() {
     local id="$1" last_seen
     last_seen=$(load_pr_last_agent_comment_seen "${id}")
     # shellcheck disable=SC2034  # set via dynamic scoping for the caller, same as
     # require_trusted_logins (lib/github) does for trusted_logins/count_error
     pr_has_unaddressed_comment=false
-    # shellcheck disable=SC2034,SC2154  # pr_json/pr_review_comments read here are set by the
-    # caller via dynamic scoping, same as item_repo is for require_trusted_logins (lib/github)
-    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" "${pr_review_comments}" \
+    # shellcheck disable=SC2034,SC2154  # pr_json/pr_review_comments/pr_issue_comments read here
+    # are set by the caller via dynamic scoping, same as item_repo is for require_trusted_logins
+    # (lib/github)
+    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" "${pr_review_comments}" "${pr_issue_comments}" \
         && pr_has_unaddressed_comment=true
 }
 

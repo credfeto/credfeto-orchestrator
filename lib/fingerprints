@@ -43,6 +43,29 @@ fetch_pr_review_comments() {
     return 1
 }
 
+# Fetches top-level PR comments via the REST issues-comments endpoint (PRs are issues under
+# the hood — same underlying object `fetch_pr_review_comments` above targets for inline
+# comments, just the issues-comments variant instead of pulls-comments). Unlike `gh pr view
+# --json comments` (which only ever populates `createdAt` — confirmed live, `updatedAt` is
+# never actually set), this REST endpoint returns a real `updated_at` per comment, letting a
+# human's edit to an already-seen top-level comment be detected rather than silently ignored
+# (#1309). Mirrors fetch_pr_review_comments's shape/retry/pagination-flatten behaviour exactly
+# (REST shape: author under `.user.login`, timestamp under `.updated_at`).
+fetch_pr_issue_comments() {
+    local item_id="$1" attempt=1 result flattened
+    while [ "${attempt}" -le "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ]; do
+        if result=$(gh api "repos/${REPO_FULL}/issues/${item_id}/comments" --paginate --slurp 2>/dev/null); then
+            flattened=$(printf '%s' "${result}" | jq -c 'flatten(1)') || return 1
+            printf '%s' "${flattened}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${GH_ITEM_FETCH_RETRY_ATTEMPTS}" ] && [ "${GH_ITEM_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
+            && sleep "${GH_ITEM_FETCH_RETRY_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
 # Hashes a fingerprint's canonical jq output and prepends the schema version. Rejects an empty
 # canonical string (the bare-pipeline-into-hash_sha256 failure mode from #1102: a jq error
 # upstream produces empty input here, which hash_sha256 would otherwise happily hash into a
@@ -259,20 +282,23 @@ load_pr_last_agent_comment_seen() {
 }
 
 # Fetches fresh PR state and returns the newest trusted-activity timestamp in it (top-level
-# comments, reviews, and inline review comments — mirrors compute_pr_fingerprint's own
-# fetch-then-derive pattern and its three data sources exactly). Deliberately re-fetches rather
-# than reusing this tick's pre-invocation pr_json/pr_review_comments: the whole point of this call
-# is to capture state AFTER the agent's session, including any top-level comment the agent itself
-# just posted with its own (trusted) login — reusing stale pre-invocation data would leave that
-# comment (or one a human posted mid-session) permanently unaccounted for, forcing a spurious
-# re-invocation every subsequent tick until the PR's total-invocation cap trips (#1307 review).
+# comments, reviews, inline review comments, and REST-fetched top-level issue comments — mirrors
+# compute_pr_fingerprint's own fetch-then-derive pattern). Deliberately re-fetches rather than
+# reusing this tick's pre-invocation pr_json/pr_review_comments/pr_issue_comments: the whole point
+# of this call is to capture state AFTER the agent's session, including any top-level comment the
+# agent itself just posted with its own (trusted) login — reusing stale pre-invocation data would
+# leave that comment (or one a human posted mid-session) permanently unaccounted for, forcing a
+# spurious re-invocation every subsequent tick until the PR's total-invocation cap trips (#1307
+# review). Issue comments are fetched after review comments so a review-comments fetch failure
+# still short-circuits before the extra call (#1309).
 compute_pr_last_agent_comment_seen() {
     local item_id="$1"
-    local pr_json trusted review_comments
+    local pr_json trusted review_comments issue_comments
     pr_json=$(fetch_pr_json "${item_id}") || return 1
     trusted=$(get_trusted_logins) || return 1
     review_comments=$(fetch_pr_review_comments "${item_id}") || return 1
-    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}" "${review_comments}"
+    issue_comments=$(fetch_pr_issue_comments "${item_id}") || return 1
+    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}" "${review_comments}" "${issue_comments}"
 }
 
 # Returns the path to the fingerprint file for a given Issue ID.
