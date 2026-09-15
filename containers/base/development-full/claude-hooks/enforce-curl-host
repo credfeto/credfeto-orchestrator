@@ -53,7 +53,7 @@
 # literal word like `https://api.github.com{,}` or `{-K,cfg.txt}` is exactly what this hook
 # sees, while real bash expands either into two argv words at runtime (confirmed live) - the
 # first hiding a denied host from the check below, the second hiding a bypass flag from the
-# check after it. Same defense enforce-ssh-host-and-key already applies to its own
+# check after it. Same defence enforce-ssh-host-and-key already applies to its own
 # single-word check, broadened here to every word since curl's grammar has no single fixed
 # "the interesting word is here" position the way ssh's does.
 #
@@ -97,7 +97,17 @@ block() {
 }
 
 # Same list as enforce-ssh-host-and-key, duplicated rather than shared - every hook in this
-# family is a standalone, independently-deployed script (see that hook's own header).
+# family is a standalone, independently-deployed script (see that hook's own header). Only
+# checks the fixed positions immediately after word 0 (see `positions` below), so a wrapper
+# invoked with its own leading argument (`timeout 30 curl ...`, `env FOO=bar curl ...`) or
+# stacked wrappers (`sudo timeout curl ...`) would put `curl` past where this hook looks -
+# a known, pre-existing, shared limitation across this hook family, tracked in #1320 rather
+# than fixed per-hook. Currently not a live gap in practice: every name in this list is also
+# in command-blocklist, which reject-obfuscated-commands (running before this hook in the
+# PreToolUse chain) rejects outright regardless of position or arguments, so none of these
+# wrapper forms reach this hook in the first place today - confirmed live. If a name were ever
+# removed from command-blocklist without a matching fix here, this hook's own wrapper handling
+# would silently stop being sufficient on its own.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 
 is_wrapper() {
@@ -176,6 +186,10 @@ extract_host() {
   w="${w%%\?*}"
   w="${w%%#*}"
   w="${w%%:*}"
+  # A trailing "." makes a syntactically valid absolute FQDN that DNS/curl resolve identically
+  # to the same name without it (confirmed live: curl connects to the same host either way) -
+  # stripped here so "api.github.com." doesn't slip past the exact-match check below.
+  w="${w%.}"
   EXTRACTED_HOST="${w,,}"
 }
 
@@ -197,25 +211,38 @@ command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the c
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One compact JSON array per CallExpr, one per line - same literal_value extraction as
-# enforce-ssh-host-and-key (see that hook's header for why only these forms are treated as
-# literal): a bare word, or one layer of ordinary quoting with no expansion inside it.
+# One compact JSON array per CallExpr, one per line. literal_value folds a word's Parts into
+# one concatenated string as long as EVERY part is a bare Lit, an ordinary single/double-quoted
+# literal with no expansion inside it, or empty - not just a single-Part word, unlike
+# enforce-ssh-host-and-key's own version of this function: a word built from several adjacent
+# quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`, `--connect-to''`,
+# `https://api.github.com''` - bash concatenates these into one fixed string with no runtime
+# unpredictability at all) is exactly as statically determined as a single-Part word, but the
+# single-Part version of this check nulled it out anyway purely because of the Part count,
+# turning it into the opaque MARKER used below and silently hiding it from every check that
+# relies on the real text (command-name match, host match, the -K/--connect-to/-x outright
+# block) - confirmed live as a real bypass during review. Any part that isn't one of those
+# literal forms (a $-expansion, command/process substitution, extglob, ...) still nulls the
+# whole word, same as before - this only widens what counts as literal, it does not narrow it.
 calls=$(printf '%s' "$ast" | jq -c '
   def literal_value:
-    if (.Parts | length) != 1 then null
-    else
-      .Parts[0] as $p |
-      if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then $p.Value
-      elif $p.Type == "SglQuoted" then $p.Value
-      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
-        then $p.Parts[0].Value
+    def part_lit:
+      if (.Dollar // false) then null
+      elif .Type == "Lit" then (.Value // "")
+      elif .Type == "SglQuoted" then (.Value // "")
+      elif .Type == "DblQuoted" then
+        (.Parts // []) as $dp |
+        if ($dp | length) == 0 then ""
+        elif ($dp | length) == 1 and ($dp[0].Type == "Lit") then ($dp[0].Value // "")
+        else null
+        end
       else null
-      end
-    end;
+      end;
+    (.Parts // []) as $parts |
+    reduce $parts[] as $p (""; if . == null then null else ($p | part_lit) as $pl | (if $pl == null then null else . + $pl end) end);
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
   [ .Args[] | literal_value ]
-') || block 'command structure could not be analyzed - failing closed'
+') || block 'command structure could not be analysed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
@@ -245,18 +272,20 @@ while IFS= read -r call_line; do
     for ((j = i + 1; j < ${#words[@]}; j++)); do
       arg="${words[$j]}"
 
-      if [ "$skip_next" = 1 ]; then
-        skip_next=0
-        continue
-      fi
-
       has_expansion_metachar "$arg" && block 'a curl argument contains a character that could expand into more than one word at runtime (brace/tilde/glob/backslash) - only plain arguments are permitted'
 
       case "$arg" in
         -K* | --config | --config=*) block 'curl -K/--config is not permitted - its contents (including the URL) are not visible to this check' ;;
         --connect-to | --connect-to=*) block 'curl --connect-to is not permitted - it can redirect the real connection to a different host than the one written in the URL' ;;
-        -x | --proxy | --proxy=*) block 'curl -x/--proxy is not permitted - the real connection goes to the proxy address, not the host named in the URL' ;;
+        -x* | --proxy | --proxy=* | --preproxy | --preproxy=* | --socks4 | --socks4=* | --socks4a | --socks4a=* | --socks5 | --socks5=* | --socks5-hostname | --socks5-hostname=*)
+          block 'curl -x/--proxy (or --preproxy/--socks4/--socks4a/--socks5/--socks5-hostname) is not permitted - the real connection goes to the proxy address, not the host named in the URL'
+          ;;
       esac
+
+      if [ "$skip_next" = 1 ]; then
+        skip_next=0
+        continue
+      fi
 
       [ "$arg" = "$MARKER" ] && continue
 
