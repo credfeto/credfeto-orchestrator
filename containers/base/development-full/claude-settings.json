@@ -192,7 +192,6 @@
       "Bash(uniq *)",
       "Bash(uv *)",
       "Bash(wc *)",
-      "Bash(wget *)",
       "Bash(which *)",
       "Bash(xmllint *)",
       "Bash(yamllint *)",
@@ -313,8 +312,7 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:api.nuget.org)",
-      "WebFetch(domain:registry.npmjs.org)"
+      "WebFetch(domain:api.nuget.org)"
     ]
   },
   "advisorModel": "fable",
@@ -355,6 +353,10 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/enforce-ssh-host-and-key"
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/enforce-curl-host"
           },
           {
             "type": "command",

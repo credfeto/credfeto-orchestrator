@@ -154,6 +154,7 @@ COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /home/deve
 COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /home/developer/.claude/hooks/enforce-ssh-host-and-key
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-curl-host /home/developer/.claude/hooks/enforce-curl-host
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /home/developer/.claude/hooks/enforce-background-for-long-running-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /home/developer/.claude/hooks/cache-gh-lookups
 COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
@@ -331,7 +332,7 @@ RUN set -e; \
     ! jq -r '.hooks.PreToolUse[].hooks[].command' /home/developer/.claude/settings.json | grep -q '/home/developer' \
         || { echo "FATAL sanity: settings.json hook commands contain a hardcoded /home/developer path instead of the portable \$HOME token" >&2; exit 1; }; \
     for h in reject-obfuscated-commands enforce-allowed-dirs enforce-git-identity enforce-git-dash-c \
-             block-git-worktree block-dotnet-tool-install enforce-ssh-host-and-key \
+             block-git-worktree block-dotnet-tool-install enforce-ssh-host-and-key enforce-curl-host \
              enforce-background-for-long-running-commands cache-gh-lookups; do \
         [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
