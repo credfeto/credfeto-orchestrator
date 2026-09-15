@@ -354,15 +354,10 @@ teardown() {
 
 # --- PHASE C board status only resets on a genuine commit (#1311) ---------------
 
-@test "build_pr_claude_md PHASE C only sets the board to Development when this round pushes a commit (#1311)" {
+@test "build_pr_claude_md PHASE C only resets the board to Development on a genuine commit, otherwise leaves it unchanged (#1311)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
     [ "${status}" -eq 0 ]
     [[ "${output}" == *'If this round pushes a genuine code commit'*'set the board status to "Development"'* ]]
-}
-
-@test "build_pr_claude_md PHASE C leaves the board status unchanged for a metadata-only round with no commit (#1311)" {
-    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
-    [ "${status}" -eq 0 ]
     [[ "${output}" == *"only action is a reply, a label sync, a"*"metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
 }
 
