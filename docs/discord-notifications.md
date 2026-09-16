@@ -63,10 +63,34 @@ endpoint everyone shares: if it goes down, every owner running concurrently woul
 flood the same channel with one identical alert each, right when the channel's signal-to-noise
 matters most).
 
+## Routing specific categories to their own webhook (#1456)
+
+By default every notification goes to the single webhook configured in `DISCORD_WEBHOOK_URL`.
+Four categories can each be routed to their own separate webhook instead, so (for example)
+"Blocked" alerts land in a different channel than everything else:
+
+| Category | Env var | Covers |
+| --- | --- | --- |
+| Blocked | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked |
+| Awaiting Approval | `DISCORD_WEBHOOK_URL_AWAITING_APPROVAL` | PR needs approval |
+| Permissions | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`) |
+| Slow image pull | `DISCORD_WEBHOOK_URL_SLOW_PULL` | Slow image pull |
+
+Each is opt-in and independent: set none, some, or all four. Whichever category vars are left
+unset (or empty) fall back to `DISCORD_WEBHOOK_URL`, so this is fully backward compatible with a
+single-webhook setup: nothing changes for a deployment that only ever configured
+`DISCORD_WEBHOOK_URL`. Every other notification category (work started/resumed, item observed
+waiting, no work found, low disk space, priorities API unreachable, self-update stale, Claude
+error, rate limited, image pull failed) always uses `DISCORD_WEBHOOK_URL` directly and is not
+affected by these four vars.
+
 ## Assumptions
 
 - `DISCORD_WEBHOOK_URL` is optional — every notification function checks for it first and
   silently does nothing at all if it isn't configured, rather than failing the run.
+- The four category-specific webhook vars above are likewise optional, checked before falling
+  back to `DISCORD_WEBHOOK_URL`: a category alert is silent only when both its own var and
+  `DISCORD_WEBHOOK_URL` are unset/empty.
 - A failed Discord POST is logged as a warning but never allowed to fail (or even delay) the
   actual work the orchestrator was doing — a notification is a nice-to-have on top of the real
   job, never a dependency of it.
