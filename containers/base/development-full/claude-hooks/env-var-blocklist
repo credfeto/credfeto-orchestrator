@@ -30,14 +30,13 @@ GIT_*
 npm_config_*
 NPM_CONFIG_*
 # curl (and other HTTP clients) route the real connection through whatever these name instead
-# of the host in the command's own URL argument - the same destination-redirection threat
-# enforce-curl-host's own -x/--proxy handling exists for, but invisible to that hook since it
-# only inspects a CallExpr's Args, never its per-command env-var Assigns prefix (#1460 review).
+# of the host in the command's own URL argument - a destination-redirection threat
+# enforce-curl-host cannot see itself, since it only inspects a CallExpr's Args, never its
+# per-command env-var Assigns prefix (#1460 review). Matching is case-insensitive (see
+# reject-obfuscated-commands), so the lowercase spelling alone covers HTTP_PROXY/HTTPS_PROXY/
+# etc too - no separate uppercase entries needed, unlike the NPM_CONFIG_*/npm_config_* pair
+# above (kept as pre-existing, not touched here).
 http_proxy
 https_proxy
 all_proxy
 ftp_proxy
-HTTP_PROXY
-HTTPS_PROXY
-ALL_PROXY
-FTP_PROXY
