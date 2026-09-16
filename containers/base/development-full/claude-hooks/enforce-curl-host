@@ -89,10 +89,15 @@ MARKER='(non-literal)'
 # from drifting apart.
 DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org)
 
-# Flags this repo's own curl usage actually needs (confirmed via a repo-wide grep), spelled
-# exactly - no globbing, no combined-cluster resolution. Anything not listed here is rejected
-# outright by the loop below, the same "positive allowlist, extend it if genuinely needed"
-# choice enforce-ssh-host-and-key's header explains for its own target charset.
+# Flags this repo's own curl usage actually needs, spelled exactly - no globbing, no
+# combined-cluster resolution. Anything not listed here is rejected outright by the loop
+# below, the same "positive allowlist, extend it if genuinely needed" choice
+# enforce-ssh-host-and-key's header explains for its own target charset. Provenance:
+# -fsSL/-sf/-f/-s/-S/-L confirmed via a repo-wide grep of this repo's Dockerfiles; -o/
+# --output, -v, --fail/--silent/--show-error/--location (long-form aliases for -f/-s/-S/-L),
+# and -w/--write-out/-m/--max-time confirmed via a scan of this repo's own past interactive
+# session transcripts for real curl invocations, cross-checked against every one that the
+# then-current allowlist would have blocked (#1460 review).
 #
 # Accepted, deliberate gap: -L (follow-redirects, both standalone and inside -fsSL) means the
 # host check below only ever validates the literal URL argument written in the command, not
@@ -104,8 +109,8 @@ DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent
 # runs. This hook is a best-effort control on ad-hoc, agent-written destinations, not a
 # guarantee that curl can never reach one of these hosts by any path (raw IP literals and
 # other forms of indirection have the same limit) - reviewed on #1460 and accepted as-is.
-ALLOWED_NOARG_FLAGS=(-fsSL -sf -f -s -S -L)
-ALLOWED_ARG_FLAGS=(-o --output)
+ALLOWED_NOARG_FLAGS=(-fsSL -sf -f -s -S -L -v --fail --silent --show-error --location)
+ALLOWED_ARG_FLAGS=(-o --output -w --write-out -m --max-time)
 
 host_denied() {
   local h="${1,,}" d
@@ -128,13 +133,6 @@ is_arg_flag() {
   for w in "${ALLOWED_ARG_FLAGS[@]}"; do
     [ "$1" = "$w" ] && return 0
   done
-  return 1
-}
-
-has_expansion_metachar() {
-  case "$1" in
-    *"\\"* | *'{'* | *'}'* | *'~'* | *'*'* | *'?'* | *'['* | *']'*) return 0 ;;
-  esac
   return 1
 }
 
@@ -179,16 +177,31 @@ command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the c
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One compact JSON array per CallExpr, one per line. literal_value folds a word's Parts into
-# one concatenated string as long as EVERY part is a bare Lit, an ordinary single/double-quoted
-# literal with no expansion inside it, or empty - not just a single-Part word: a word built
-# from several adjacent quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`,
-# bash concatenates these into one fixed string with no runtime unpredictability at all) is
-# exactly as statically determined as a single-Part word. Any part that isn't one of those
-# literal forms (a $-expansion, command/process substitution, extglob, ...) nulls the whole
-# word, which becomes the MARKER below and is rejected outright by every check that follows -
-# this hook, unlike the denylist-only design it replaced, fails closed on ANY non-literal word
-# anywhere, not just specific positions, since the closed grammar has no legitimate use for one.
+# One compact JSON array per CallExpr, one per line, of {v, r} objects: v is literal_value
+# (below) and r is word_risky (below). literal_value folds a word's Parts into one concatenated
+# string as long as EVERY part is a bare Lit, an ordinary single/double-quoted literal with no
+# expansion inside it, or empty - not just a single-Part word: a word built from several
+# adjacent quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`, bash
+# concatenates these into one fixed string with no runtime unpredictability at all) is exactly
+# as statically determined as a single-Part word. Any part that isn't one of those literal
+# forms (a $-expansion, command/process substitution, extglob, ...) nulls the whole word, which
+# becomes the MARKER below and is rejected outright by every check that follows - this hook,
+# unlike the denylist-only design it replaced, fails closed on ANY non-literal word anywhere,
+# not just specific positions, since the closed grammar has no legitimate use for one.
+#
+# word_risky flags a word whose LITERAL text could still expand into more than one argv word
+# (or otherwise not mean what it looks like) once bash actually runs it, despite passing
+# literal_value - quote-aware, unlike a plain string scan for {}~*?[]\, which would also flag
+# curl's own %{http_code}-style --write-out format codes (confirmed live: `-w
+# "...%{http_code}\n"` is ordinary, safe curl usage with zero bash significance, since neither
+# %/{/}/\n has any meaning to bash inside double quotes). A bare (unquoted) Lit part is risky if
+# it contains any of {}~*?[]\ at all - real brace/glob/tilde expansion and backslash-escaping
+# all apply unconditionally there. A SglQuoted part is never risky - single quotes make
+# everything inside them, including all of those characters, unconditionally literal. A
+# DblQuoted part is risky only if its one literal inner part contains one of the four
+# character-PAIRS bash still treats specially inside double quotes - \$, \`, \", or \\ (backslash
+# followed by an ordinary character, e.g. curl -w's own \n, is not special to bash there at all,
+# only to curl's own --write-out parser, which never sees this hook's argv-splitting concern).
 calls=$(printf '%s' "$ast" | jq -c '
   def literal_value:
     def part_lit:
@@ -205,26 +218,38 @@ calls=$(printf '%s' "$ast" | jq -c '
       end;
     (.Parts // []) as $parts |
     reduce $parts[] as $p (""; if . == null then null else ($p | part_lit) as $pl | (if $pl == null then null else . + $pl end) end);
+  def word_risky:
+    (.Parts // []) as $parts |
+    any($parts[];
+      if .Type == "Lit" then ((.Value // "") | test("[{}~*?\\[\\]\\\\]"))
+      elif .Type == "SglQuoted" then false
+      elif .Type == "DblQuoted" then
+        ((.Parts // []) | any(.[]?; .Type == "Lit" and ((.Value // "") | test("\\\\[$`\"\\\\]"))))
+      else true
+      end
+    );
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | literal_value ]
+  [ .Args[] | {v: literal_value, r: word_risky} ]
 ') || block 'command structure could not be analysed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
 
   words=()
-  while IFS= read -r entry; do
-    case "$entry" in
+  risky=()
+  while IFS=$'\t' read -r ventry rentry; do
+    case "$ventry" in
       L:*)
         decoded=$(
-          printf '%s' "${entry#L:}" | base64 -d 2>/dev/null
+          printf '%s' "${ventry#L:}" | base64 -d 2>/dev/null
           printf '.'
         )
         words+=("${decoded%.}")
         ;;
       *) words+=("$MARKER") ;;
     esac
-  done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
+    risky+=("$rentry")
+  done < <(printf '%s' "$call_line" | jq -r '.[] | (if .v == null then "N" else "L:" + (.v | @base64) end) + "\t" + (.r | tostring)')
 
   positions=(0)
   is_wrapper "${words[0]:-}" && positions+=(1)
@@ -239,7 +264,7 @@ while IFS= read -r call_line; do
       arg="${words[$j]}"
 
       [ "$arg" = "$MARKER" ] && block 'every curl argument must be a literal value - a dynamic ($-expansion) argument is not permitted'
-      has_expansion_metachar "$arg" && block 'a curl argument contains a character that could expand into more than one word at runtime (brace/tilde/glob/backslash) - only plain arguments are permitted'
+      [ "${risky[$j]}" = "true" ] && block 'a curl argument contains a character that could expand into more than one word at runtime (an unquoted brace/tilde/glob/backslash, or a quoted \$/`/"/\ escape) - only plain arguments are permitted'
 
       if [ "$skip_next" = 1 ]; then
         skip_next=0

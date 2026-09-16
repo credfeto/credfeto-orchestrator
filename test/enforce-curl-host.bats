@@ -118,6 +118,58 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "-v is allowed" {
+    run_hook "curl -v https://example.com"
+    [ "${status}" -eq 0 ]
+    run_hook "curl -fsSL -v https://example.com"
+    [ "${status}" -eq 0 ]
+}
+
+@test "long-form no-arg flag aliases are allowed" {
+    run_hook "curl --silent --fail --show-error --location https://example.com"
+    [ "${status}" -eq 0 ]
+}
+
+@test "-w/--write-out is allowed" {
+    run_hook 'curl -fsSL -o /dev/null -w "http_code=%{http_code}\n" https://example.com'
+    [ "${status}" -eq 0 ]
+    run_hook 'curl -fsSL -o /dev/null --write-out "http_code=%{http_code}\n" https://example.com'
+    [ "${status}" -eq 0 ]
+}
+
+@test "-m/--max-time is allowed" {
+    run_hook "curl -fsSL -m 5 https://example.com"
+    [ "${status}" -eq 0 ]
+    run_hook "curl -fsSL --max-time 5 https://example.com"
+    [ "${status}" -eq 0 ]
+}
+
+# --- quote-aware metachar check: {}~*?[]\ are only risky where bash would actually act on ---
+# --- them, not wherever the character happens to appear literally --------------------------
+
+@test "a double-quoted --write-out format string with curl's own %{...} codes is allowed" {
+    run_hook 'curl -fsSL -o /dev/null -w "%{http_code} %{time_total} %{size_download}\n" https://example.com'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a single-quoted value containing brace/glob/tilde characters is allowed" {
+    run_hook "curl -fsSL -w '%{http_code}[test]~x*y?z' https://example.com"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted brace/glob/tilde character anywhere is still rejected" {
+    run_hook "curl -fsSL -w %{http_code} https://example.com"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could expand into more than one word'* ]]
+}
+
+@test "a genuinely bash-significant escape inside a double-quoted value is still rejected" {
+    # shellcheck disable=SC2016  # literal backslash-dollar inside the double-quoted value - must reach the hook unexpanded
+    run_hook 'curl -fsSL -w "\$HOME" https://example.com'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could expand into more than one word'* ]]
+}
+
 @test "curl with no arguments at all is blocked (no URL)" {
     run_hook "curl"
     [ "${status}" -eq 2 ]
