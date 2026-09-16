@@ -32,13 +32,29 @@
 # genuinely needed, the same way command-allowlist itself is extended.
 #
 # Every word is required to be a fully literal, statically-known string with no
-# `$`-expansion/substitution anywhere (see literal_value below) and no
-# brace/tilde/glob/backslash character (shfmt's static AST does not perform brace/tilde/glob
-# expansion, so a literal word like `https://api.github.com{,}` is exactly what this hook
-# sees, while real bash expands it into two argv words at runtime, confirmed live) - anything
-# else is blocked outright rather than skipped or best-effort-classified. This means a dynamic
-# URL (`curl "$URL"`) or a dynamic header/token value is no longer supported by this hook
-# at all; per #1318's resolution this repo's own curl usage never needed either.
+# `$`-expansion/substitution anywhere (see literal_value below) - anything else is blocked
+# outright rather than skipped or best-effort-classified. This means a dynamic URL
+# (`curl "$URL"`) or a dynamic header/token value is no longer supported by this hook at all;
+# per #1318's resolution this repo's own curl usage never needed either.
+#
+# A word is also blocked if it contains a brace/tilde/glob/backslash character bash itself
+# would actually act on given how that word is quoted - NOT a blanket "these characters are
+# never permitted" rule, see word_risky below for the precise, quote-aware conditions (an
+# unquoted occurrence is always risky; a singly-quoted one never is; a doubly-quoted one only
+# is for the four escape pairs bash still honours inside "..."). This closes the same class of
+# bypass as the fail-closed rule above: shfmt's static AST does not perform brace/tilde/glob
+# expansion, so a literal, unquoted word like `https://api.github.com{,}` is exactly what this
+# hook sees, while real bash expands it into two argv words at runtime (confirmed live).
+#
+# The URL argument specifically is additionally checked for a bare `{`/`}`/`[`/`]` regardless
+# of quoting, even though word_risky would allow a quoted one: curl performs its own
+# URL-globbing on those characters (`man curl`, "URL GLOBBING") independent of shell quoting
+# at all, so a quoted `'https://{safe.example,api.github.com}/x'` is just as glob-expanded by
+# curl as an unquoted one (confirmed live) - not a bash-level concern word_risky could ever
+# catch, since curl's own parser runs after bash has already produced this word. `-g`/
+# `--globoff` (which would disable curl's globbing) is not on the allowlist, so a caller has no
+# way to opt back in to using either character legitimately; no known real need for one in this
+# repo's URLs.
 #
 # wget is not covered by this hook at all: it has zero real usage anywhere in this repo's own
 # scripts/Dockerfiles/instructions (confirmed on #1318 itself), so it was removed entirely -
@@ -218,6 +234,13 @@ calls=$(printf '%s' "$ast" | jq -c '
       end;
     (.Parts // []) as $parts |
     reduce $parts[] as $p (""; if . == null then null else ($p | part_lit) as $pl | (if $pl == null then null else . + $pl end) end);
+  # The DblQuoted branch here re-derives the same "exactly zero or one inner Lit part" AST
+  # shape literal_value own DblQuoted branch above already assumes - kept in sync by hand
+  # rather than sharing a jq def, since word_risky only needs the inner part raw text (to
+  # test for an escape pair) where literal_value needs its folded value; a future change to
+  # either assumption (e.g. supporting a multi-part concatenated double-quoted literal) must
+  # update both branches together, or literal_value notion of "safe literal" and word_risky
+  # notion of "risky" silently desync.
   def word_risky:
     (.Parts // []) as $parts |
     any($parts[];
@@ -292,6 +315,19 @@ while IFS= read -r call_line; do
     case "$url" in
       http://* | https://*) ;;
       *) block 'the curl URL argument must start with http:// or https://' ;;
+    esac
+
+    # curl performs its own URL-globbing on {}/[] by default (`man curl`, "URL GLOBBING"),
+    # entirely independent of shell quoting - a quoted 'https://{safe.example,api.github.com}/x'
+    # or 'https://api.github.co[m-m]/x' is just as glob-expanded by curl itself as an unquoted
+    # one, so word_risky above (which is correctly bash-quote-aware) cannot catch this: it is a
+    # curl-side property of the URL, not a bash-side one. -g/--globoff (which would disable it)
+    # is not on the allowlist, so there is no legitimate way for a caller to opt out - block the
+    # characters outright instead. No known legitimate use of {} or [] in this repo's URLs.
+    case "$url" in
+      *'{'* | *'}'* | *'['* | *']'*)
+        block 'the curl URL argument must not contain {}/[] - curl performs its own URL-globbing on these regardless of shell quoting, which could reach a different host than the one written here'
+        ;;
     esac
 
     extract_host "$url"

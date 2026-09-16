@@ -264,6 +264,26 @@ teardown() {
     [[ "${output}" == *'could expand into more than one word'* ]]
 }
 
+# --- curl's own URL-globbing on {}/[] is independent of shell quoting, unlike word_risky ---
+
+@test "a quoted URL hiding a denied host inside curl's own {} globbing is still rejected" {
+    run_hook "curl -fsSL 'https://{safe.example,api.github.com}/x'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'URL argument must not contain {}/[]'* ]]
+}
+
+@test "a quoted URL using curl's own [] range globbing is still rejected" {
+    run_hook "curl -fsSL 'https://api.github.co[m-m]/x'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'URL argument must not contain {}/[]'* ]]
+}
+
+@test "a double-quoted single-element {} in the URL is still rejected, even though it is inert to bash" {
+    run_hook 'curl -fsSL "https://{api.github.com}/repos/foo"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'URL argument must not contain {}/[]'* ]]
+}
+
 @test "a value-flag's value hiding a denied host via brace expansion is still rejected" {
     run_hook "curl -o {,https://api.github.com/x} https://safe.example/"
     [ "${status}" -eq 2 ]
