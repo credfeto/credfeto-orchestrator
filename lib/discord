@@ -329,7 +329,26 @@ _discord_dedup_allowed() {
     return 0
 }
 
-# Posts payload to DISCORD_WEBHOOK_URL and, only on success, records the given value verbatim in
+# Returns the per-category webhook URL for "blocked"/"awaiting_approval"/"permissions"/
+# "slow_pull" if its DISCORD_WEBHOOK_URL_<CATEGORY> env var is set and non-empty, else falls back
+# to DISCORD_WEBHOOK_URL (which may itself be empty - the caller's own "is the resolved URL
+# non-empty" guard handles that, same as every notify_discord_* function already did for
+# DISCORD_WEBHOOK_URL directly). An unrecognised category also falls back to DISCORD_WEBHOOK_URL,
+# so a typo'd category name degrades to today's single-webhook behaviour rather than silently
+# resolving to an empty string (#1456).
+_discord_webhook_for() {
+    local category="$1" var_name="" value=""
+    case "${category}" in
+        blocked) var_name="DISCORD_WEBHOOK_URL_BLOCKED" ;;
+        awaiting_approval) var_name="DISCORD_WEBHOOK_URL_AWAITING_APPROVAL" ;;
+        permissions) var_name="DISCORD_WEBHOOK_URL_PERMISSIONS" ;;
+        slow_pull) var_name="DISCORD_WEBHOOK_URL_SLOW_PULL" ;;
+    esac
+    [ -n "${var_name}" ] && value="${!var_name}"
+    printf '%s' "${value:-${DISCORD_WEBHOOK_URL}}"
+}
+
+# Posts payload to webhook_url and, only on success, records the given value verbatim in
 # state_file so a later call can compare against it. A failed post must NOT be recorded —
 # otherwise a Discord-webhook outage coincident with the condition being reported would silently
 # suppress retries of an alert that never actually reached anyone. Named for its original callers
@@ -337,13 +356,16 @@ _discord_dedup_allowed() {
 # _discord_dedup_allowed above), but the third argument is written as-is with no interpretation,
 # so a content-hash-latch caller (notify_discord_work_item's "waiting" branch — #1375) can pass a
 # hash instead and compare it directly on its own next call, rather than every caller needing its
-# own hand-rolled curl-then-record.
+# own hand-rolled curl-then-record. webhook_url defaults to DISCORD_WEBHOOK_URL when omitted, so
+# every pre-existing call site (one webhook for everything) is unchanged; a caller routing to a
+# per-category webhook (see _discord_webhook_for above) passes its resolved URL explicitly
+# (#1456).
 _discord_send_and_record() {
-    local payload="$1" state_file="$2" now="$3"
+    local payload="$1" state_file="$2" now="$3" webhook_url="${4:-${DISCORD_WEBHOOK_URL}}"
     if curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
         -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1; then
+        "${webhook_url}" > /dev/null 2>&1; then
         mkdir -p "${ORCHESTRATOR_STATE_DIR}" 2>/dev/null || true
         printf '%s\n' "${now}" > "${state_file}"
     else
@@ -416,9 +438,13 @@ notify_discord_host_health() {
 # pull_duration_baseline in lib/state. Deduplicates: at most one notification per hour per owner,
 # same shape as notify_discord_low_disk_space - a persistently slow registry/network condition
 # could otherwise fire on every tick.
-# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Routed via DISCORD_WEBHOOK_URL_SLOW_PULL if set, else DISCORD_WEBHOOK_URL (see
+# _discord_webhook_for, #1456); silent when the resolved URL is empty, logs a warning on curl
+# failure.
 notify_discord_slow_pull() {
-    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local webhook_url
+    webhook_url=$(_discord_webhook_for slow_pull)
+    [ -n "${webhook_url}" ] || return 0
     local owner="${1:-}" duration_secs="$2" baseline_secs="$3"
 
     local state_file now
@@ -438,7 +464,7 @@ notify_discord_slow_pull() {
         ]}]}') \
         || { warn "Discord: failed to build slow-pull payload"; return 0; }
 
-    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+    _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
 }
 
 # Internal: shared body for the no-suppression "post an error embed for this item" alerts -
@@ -552,7 +578,9 @@ notify_discord_priorities_unreachable() {
 # Notifies only on the transition into the blocked state: a per-item marker file
 # suppresses repeat notifications while the item stays blocked. clear_blocked_marker
 # re-arms it once the item is observed un-blocked.
-# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Routed via DISCORD_WEBHOOK_URL_BLOCKED if set, else DISCORD_WEBHOOK_URL (see
+# _discord_webhook_for, #1456); silent when the resolved URL is empty, logs a warning on curl
+# failure.
 # Priority/Sub-status are derived from already-tracked GitHub state, not a Claude invocation
 # (#1136). Unlike notify_discord_work_item, this function's ~12 call sites mostly don't have
 # the item's labels/title JSON already in scope, so it fetches them itself — the marker-file
@@ -567,7 +595,9 @@ notify_discord_priorities_unreachable() {
 # claude_md/build_pr_claude_md, since that comment is then the last thing posted before the
 # label landed (#1140).
 notify_discord_blocked_item() {
-    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local webhook_url
+    webhook_url=$(_discord_webhook_for blocked)
+    [ -n "${webhook_url}" ] || return 0
     local item_type="$1" item_id="$2" reason="${3:-}"
     local url payload marker_file gh_noun item_json item_title labels_json substatus priority truncated_reason
 
@@ -623,7 +653,7 @@ notify_discord_blocked_item() {
     curl --silent --fail --max-time 5 \
         -H "Content-Type: application/json" \
         -d "${payload}" \
-        "${DISCORD_WEBHOOK_URL}" > /dev/null 2>&1 \
+        "${webhook_url}" > /dev/null 2>&1 \
         || warn "Discord webhook notification failed"
 
     # Record that this blocked spell has been notified, so the next run is silent.
@@ -647,9 +677,13 @@ notify_discord_blocked_item() {
 # title is extracted, so a `jq` fork over pr_json is only ever paid on ticks that actually send —
 # every other tick this fires on (Discord unconfigured, or the once-an-hour dedup window not yet
 # open) returns early with no extra work (#1278 review).
-# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Routed via DISCORD_WEBHOOK_URL_AWAITING_APPROVAL if set, else DISCORD_WEBHOOK_URL (see
+# _discord_webhook_for, #1456); silent when the resolved URL is empty, logs a warning on curl
+# failure.
 notify_discord_pr_needs_approval() {
-    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local webhook_url
+    webhook_url=$(_discord_webhook_for awaiting_approval)
+    [ -n "${webhook_url}" ] || return 0
     local item_id="$1" pr_json="$2"
 
     local state_file now
@@ -677,7 +711,7 @@ notify_discord_pr_needs_approval() {
         ]}]}') \
         || { warn "Discord: failed to build pr-needs-approval payload for PR #${item_id}"; return 0; }
 
-    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+    _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
 }
 
 # Sends a Discord embed notification when Claude returns an application-level error.
@@ -699,9 +733,13 @@ notify_discord_claude_error() {
 # repeatedly (e.g. a stuck retry loop) would otherwise flood the channel with one near-identical
 # embed per invocation. A distinct denial arriving inside that same hour is still visible in
 # the warn() log line even while the Discord alert itself is suppressed.
-# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+# Routed via DISCORD_WEBHOOK_URL_PERMISSIONS if set, else DISCORD_WEBHOOK_URL (see
+# _discord_webhook_for, #1456); silent when the resolved URL is empty, logs a warning on curl
+# failure.
 notify_discord_permission_denials() {
-    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local webhook_url
+    webhook_url=$(_discord_webhook_for permissions)
+    [ -n "${webhook_url}" ] || return 0
     local item_type="${1:-}" item_id="${2:-}" summary="$3" denials_count="${4:-?}"
 
     local state_file now
@@ -742,7 +780,7 @@ notify_discord_permission_denials() {
         ]}]}') \
         || { warn "Discord: failed to build permission-denials payload"; return 0; }
 
-    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+    _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
 }
 
 # Sends a Discord embed notification when Claude returns a rate-limit error (HTTP 429).
