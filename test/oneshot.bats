@@ -358,7 +358,7 @@ teardown() {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
     [ "${status}" -eq 0 ]
     [[ "${output}" == *'If this round pushes a genuine code commit'*'set the board status to "Development"'* ]]
-    [[ "${output}" == *"only action is a reply, a label sync, a"*"metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
+    [[ "${output}" == *"only action is a reply, a label sync, a \`gh pr edit\` metadata change"*"or re-running a flaky check"*"with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to \"Development\")"* ]]
 }
 
 # --- tightened plan-approval re-block instruction (#1140) -----------------------
