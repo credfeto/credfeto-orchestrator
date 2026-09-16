@@ -41,10 +41,14 @@
 # would actually act on given how that word is quoted - NOT a blanket "these characters are
 # never permitted" rule, see word_risky below for the precise, quote-aware conditions (an
 # unquoted occurrence is always risky; a singly-quoted one never is; a doubly-quoted one only
-# is for the four escape pairs bash still honours inside "..."). This closes the same class of
-# bypass as the fail-closed rule above: shfmt's static AST does not perform brace/tilde/glob
-# expansion, so a literal, unquoted word like `https://api.github.com{,}` is exactly what this
-# hook sees, while real bash expands it into two argv words at runtime (confirmed live).
+# is for \$, \`, \", \\ - four of bash's five special double-quote escapes; the fifth,
+# backslash-newline line-continuation, is not separately checked here, but splitting a word
+# across one still produces more than one AST Part, which literal_value's own single-inner-Lit
+# rule already nulls to MARKER regardless of word_risky, confirmed live). This closes the same
+# class of bypass as the fail-closed rule above: shfmt's static AST does not perform
+# brace/tilde/glob expansion, so a literal, unquoted word like `https://api.github.com{,}` is
+# exactly what this hook sees, while real bash expands it into two argv words at runtime
+# (confirmed live).
 #
 # The URL argument specifically is additionally checked for a bare `{`/`}`/`[`/`]` regardless
 # of quoting, even though word_risky would allow a quoted one: curl performs its own
@@ -248,6 +252,9 @@ calls=$(printf '%s' "$ast" | jq -c '
       elif .Type == "SglQuoted" then false
       elif .Type == "DblQuoted" then
         ((.Parts // []) | any(.[]?; .Type == "Lit" and ((.Value // "") | test("\\\\[$`\"\\\\]"))))
+      # Any other Part type (ParamExp, CmdSubst, ExtGlob, ...) already makes literal_value null
+      # the whole word first, blocked as MARKER before this risky array is ever consulted for
+      # it - unreachable in practice, kept as a defensive true rather than assumed impossible.
       else true
       end
     );
