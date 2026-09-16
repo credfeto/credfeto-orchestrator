@@ -29,3 +29,15 @@ GIT_*
 # flag itself (#1385 review).
 npm_config_*
 NPM_CONFIG_*
+# curl (and other HTTP clients) route the real connection through whatever these name instead
+# of the host in the command's own URL argument - the same destination-redirection threat
+# enforce-curl-host's own -x/--proxy handling exists for, but invisible to that hook since it
+# only inspects a CallExpr's Args, never its per-command env-var Assigns prefix (#1460 review).
+http_proxy
+https_proxy
+all_proxy
+ftp_proxy
+HTTP_PROXY
+HTTPS_PROXY
+ALL_PROXY
+FTP_PROXY

