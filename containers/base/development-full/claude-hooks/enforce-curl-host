@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+# Restricts curl to a closed grammar: a small, exact-spelling allowlist of flags plus exactly
+# one literal https://... (or http://...) URL argument, whose host must not be one of a fixed
+# denied set matching this repo's own claude-settings.json WebFetch(domain:...) deny entries:
+# api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org.
+# Exit 2 = blocked, 0 = allowed.
+#
+# curl is on claude-settings.json's blanket Bash(curl *) permissions.allow, and its danger is
+# in the *destination*, not the verb - a permissions.allow prefix pattern cannot express
+# "except this host" (see issue #1318, split from #1315).
+#
+# This replaces an earlier, more permissive design (denylist-only, every non-flag word
+# host-checked regardless of position, a broad VALUE_FLAGS skip-list, generic
+# brace/glob/combined-cluster handling) after three rounds of code review kept finding new
+# bypasses AND new false positives from the same root cause: curl's flag grammar is too open
+# for a position-blind, per-word scanner to check safely, since in curl (unlike ssh's fixed
+# `user@host` position) a word's role - flag, flag-value, or URL - depends on which flag (if
+# any) precedes it, something this hook cannot fully resolve without real getopt awareness.
+# `curl -o github.com ...` (a filename, wrongly host-checked) and `curl -d '{"a":1}' ...` (a
+# JSON payload, wrongly blocked as "brace expansion") were false positives; `-x<value>` glued
+# short options, `env VAR=x curl ...`, and a value-flag's own value hiding a denied host via
+# brace expansion were bypasses - see PR #1460's review history for the full list. Closing the
+# grammar instead - the same choice enforce-ssh-host-and-key made for ssh, and the only one of
+# the three options discussed on #1318 that actually converges - removes the need to resolve
+# either problem: anything not on the allowlist below is rejected outright, so there is no
+# position-dependent flag/value/URL ambiguity left to get wrong in either direction.
+#
+# Confirmed via a repo-wide grep that this repo's own curl usage never needs more than
+# ALLOWED_NOARG_FLAGS/ALLOWED_ARG_FLAGS below (-fsSL/-sf combined, or -f/-s/-S/-L individually,
+# plus a single -o/--output for a destination file) - this hook does not try to guess every
+# flag a future caller might legitimately want; extend the allowlists below if one is
+# genuinely needed, the same way command-allowlist itself is extended.
+#
+# Every word is required to be a fully literal, statically-known string with no
+# `$`-expansion/substitution anywhere (see literal_value below) - anything else is blocked
+# outright rather than skipped or best-effort-classified. This means a dynamic URL
+# (`curl "$URL"`) or a dynamic header/token value is no longer supported by this hook at all;
+# per #1318's resolution this repo's own curl usage never needed either.
+#
+# A word is also blocked if it contains a brace/tilde/glob/backslash character bash itself
+# would actually act on given how that word is quoted - NOT a blanket "these characters are
+# never permitted" rule, see word_risky below for the precise, quote-aware conditions (an
+# unquoted occurrence is always risky; a singly-quoted one never is; a doubly-quoted one only
+# is for \$, \`, \", \\ - four of bash's five special double-quote escapes; the fifth,
+# backslash-newline line-continuation, is not separately checked here, but splitting a word
+# across one still produces more than one AST Part, which literal_value's own single-inner-Lit
+# rule already nulls to MARKER regardless of word_risky, confirmed live). This closes the same
+# class of bypass as the fail-closed rule above: shfmt's static AST does not perform
+# brace/tilde/glob expansion, so a literal, unquoted word like `https://api.github.com{,}` is
+# exactly what this hook sees, while real bash expands it into two argv words at runtime
+# (confirmed live).
+#
+# The URL argument specifically is additionally checked for a bare `{`/`}`/`[`/`]` regardless
+# of quoting, even though word_risky would allow a quoted one: curl performs its own
+# URL-globbing on those characters (`man curl`, "URL GLOBBING") independent of shell quoting
+# at all, so a quoted `'https://{safe.example,api.github.com}/x'` is just as glob-expanded by
+# curl as an unquoted one (confirmed live) - not a bash-level concern word_risky could ever
+# catch, since curl's own parser runs after bash has already produced this word. `-g`/
+# `--globoff` (which would disable curl's globbing) is not on the allowlist, so a caller has no
+# way to opt back in to using either character legitimately; no known real need for one in this
+# repo's URLs.
+#
+# wget is not covered by this hook at all: it has zero real usage anywhere in this repo's own
+# scripts/Dockerfiles/instructions (confirmed on #1318 itself), so it was removed entirely -
+# from command-allowlist and permissions.allow - rather than given a matching hook, the same
+# treatment scp got from #1315/enforce-ssh-host-and-key. wget is simply not on
+# command-allowlist any more, so reject-obfuscated-commands blocks it outright before any hook
+# would ever see it.
+#
+# Uses the same shfmt-parsed AST approach and base64-per-word transport as
+# enforce-ssh-host-and-key, for the same reasons documented in that hook's own header (a
+# tab/newline-joined transport can be desynced by a real tab/newline byte inside a
+# legitimately quoted word). Fails closed on missing jq/shfmt or an unparseable command.
+
+export LC_ALL=C
+
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+# Same list as enforce-ssh-host-and-key, duplicated rather than shared - every hook in this
+# family is a standalone, independently-deployed script (see that hook's own header). Only
+# checks the fixed positions immediately after word 0 (see `positions` below), so a wrapper
+# invoked with its own leading argument (`timeout 30 curl ...`, `env FOO=bar curl ...`) or
+# stacked wrappers (`sudo timeout curl ...`) would put `curl` past where this hook looks -
+# a known, pre-existing, shared limitation across this hook family, tracked in #1320 rather
+# than fixed per-hook. Currently not a live gap in practice: every name in this list is also
+# in command-blocklist, which reject-obfuscated-commands (running before this hook in the
+# PreToolUse chain) rejects outright regardless of position or arguments, so none of these
+# wrapper forms reach this hook in the first place today - confirmed live. If a name were ever
+# removed from command-blocklist without a matching fix here, this hook's own wrapper handling
+# would silently stop being sufficient on its own.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+
+is_wrapper() {
+  local w
+  for w in "${WRAPPERS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+MARKER='(non-literal)'
+
+# Reused verbatim from claude-settings.json's WebFetch(domain:...) deny entries. Kept in sync
+# with that file by test/enforce-curl-host.bats's own parity test, mirroring how
+# test/command-allowlist-parity.bats already keeps command-allowlist and permissions.allow
+# from drifting apart.
+DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org)
+
+# Flags this repo's own curl usage actually needs, spelled exactly - no globbing, no
+# combined-cluster resolution. Anything not listed here is rejected outright by the loop
+# below, the same "positive allowlist, extend it if genuinely needed" choice
+# enforce-ssh-host-and-key's header explains for its own target charset. Provenance:
+# -fsSL/-sf/-f/-s/-S/-L confirmed via a repo-wide grep of this repo's Dockerfiles; -o/
+# --output, -v, --fail/--silent/--show-error/--location (long-form aliases for -f/-s/-S/-L),
+# and -w/--write-out/-m/--max-time confirmed via a scan of this repo's own past interactive
+# session transcripts for real curl invocations, cross-checked against every one that the
+# then-current allowlist would have blocked (#1460 review).
+#
+# Accepted, deliberate gap: -L (follow-redirects, both standalone and inside -fsSL) means the
+# host check below only ever validates the literal URL argument written in the command, not
+# where curl actually ends up after following a server-issued redirect - a request to an
+# allowed host that 302s to one of DENIED_HOSTS would reach it without this hook ever seeing
+# that host. Not resolvable without either disabling redirect-following entirely (breaking
+# real downloads that need it - GitHub/npm/NuGet release/package URLs routinely redirect) or
+# re-checking curl's own post-redirect destination, which isn't available before the command
+# runs. This hook is a best-effort control on ad-hoc, agent-written destinations, not a
+# guarantee that curl can never reach one of these hosts by any path (raw IP literals and
+# other forms of indirection have the same limit) - reviewed on #1460 and accepted as-is.
+ALLOWED_NOARG_FLAGS=(-fsSL -sf -f -s -S -L -v --fail --silent --show-error --location)
+ALLOWED_ARG_FLAGS=(-o --output -w --write-out -m --max-time)
+
+host_denied() {
+  local h="${1,,}" d
+  for d in "${DENIED_HOSTS[@]}"; do
+    [ "$h" = "$d" ] && return 0
+  done
+  return 1
+}
+
+is_noarg_flag() {
+  local w
+  for w in "${ALLOWED_NOARG_FLAGS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+is_arg_flag() {
+  local w
+  for w in "${ALLOWED_ARG_FLAGS[@]}"; do
+    [ "$1" = "$w" ] && return 0
+  done
+  return 1
+}
+
+# Extracts the host component from a URL: strips a leading scheme://, then everything from the
+# first /, ?, or # (path/query/fragment) - which must happen BEFORE stripping userinfo, or an
+# "@" anywhere in the path defeats the host check entirely (see the function body for why) -
+# then a leading user:pass@ userinfo prefix, then a trailing :port, then a trailing "." (a
+# syntactically valid absolute-FQDN root label that DNS/curl resolve identically to the same
+# name without it, confirmed live). Good enough for an exact-match comparison against the five
+# fixed denied hosts above - not a general-purpose URL parser, and does not need to be one for
+# this comparison. Sets EXTRACTED_HOST rather than printing + capturing via $(...), avoiding an
+# extra subshell fork.
+extract_host() {
+  local w="$1"
+  case "$w" in
+    *://*) w="${w#*://}" ;;
+  esac
+  # Path/query/fragment must be cut BEFORE stripping userinfo: per RFC 3986 the authority
+  # component (where userinfo can legally appear) ends at the first /, ?, or # - stripping
+  # userinfo first would let an "@" anywhere in the path swallow the real host too
+  # (e.g. "host.example/@" leaving an empty EXTRACTED_HOST, or "host.example/a@b" leaving "b"),
+  # a live bypass confirmed during review.
+  w="${w%%/*}"
+  w="${w%%\?*}"
+  w="${w%%#*}"
+  case "$w" in
+    *@*) w="${w##*@}" ;;
+  esac
+  w="${w%%:*}"
+  w="${w%.}"
+  EXTRACTED_HOST="${w,,}"
+}
+
+command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
+input=$(cat)
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+[ -z "$raw_cmd" ] && exit 0
+
+command -v shfmt >/dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One compact JSON array per CallExpr, one per line, of {v, r} objects: v is literal_value
+# (below) and r is word_risky (below). literal_value folds a word's Parts into one concatenated
+# string as long as EVERY part is a bare Lit, an ordinary single/double-quoted literal with no
+# expansion inside it, or empty - not just a single-Part word: a word built from several
+# adjacent quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`, bash
+# concatenates these into one fixed string with no runtime unpredictability at all) is exactly
+# as statically determined as a single-Part word. Any part that isn't one of those literal
+# forms (a $-expansion, command/process substitution, extglob, ...) nulls the whole word, which
+# becomes the MARKER below and is rejected outright by every check that follows - this hook,
+# unlike the denylist-only design it replaced, fails closed on ANY non-literal word anywhere,
+# not just specific positions, since the closed grammar has no legitimate use for one.
+#
+# word_risky flags a word whose LITERAL text could still expand into more than one argv word
+# (or otherwise not mean what it looks like) once bash actually runs it, despite passing
+# literal_value - quote-aware, unlike a plain string scan for {}~*?[]\, which would also flag
+# curl's own %{http_code}-style --write-out format codes (confirmed live: `-w
+# "...%{http_code}\n"` is ordinary, safe curl usage with zero bash significance, since neither
+# %/{/}/\n has any meaning to bash inside double quotes). A bare (unquoted) Lit part is risky if
+# it contains any of {}~*?[]\ at all - real brace/glob/tilde expansion and backslash-escaping
+# all apply unconditionally there. A SglQuoted part is never risky - single quotes make
+# everything inside them, including all of those characters, unconditionally literal. A
+# DblQuoted part is risky only if its one literal inner part contains one of the four
+# character-PAIRS bash still treats specially inside double quotes - \$, \`, \", or \\ (backslash
+# followed by an ordinary character, e.g. curl -w's own \n, is not special to bash there at all,
+# only to curl's own --write-out parser, which never sees this hook's argv-splitting concern).
+calls=$(printf '%s' "$ast" | jq -c '
+  def literal_value:
+    def part_lit:
+      if (.Dollar // false) then null
+      elif .Type == "Lit" then (.Value // "")
+      elif .Type == "SglQuoted" then (.Value // "")
+      elif .Type == "DblQuoted" then
+        (.Parts // []) as $dp |
+        if ($dp | length) == 0 then ""
+        elif ($dp | length) == 1 and ($dp[0].Type == "Lit") then ($dp[0].Value // "")
+        else null
+        end
+      else null
+      end;
+    (.Parts // []) as $parts |
+    reduce $parts[] as $p (""; if . == null then null else ($p | part_lit) as $pl | (if $pl == null then null else . + $pl end) end);
+  # The DblQuoted branch here re-derives the same "exactly zero or one inner Lit part" AST
+  # shape literal_value own DblQuoted branch above already assumes - kept in sync by hand
+  # rather than sharing a jq def, since word_risky only needs the inner part raw text (to
+  # test for an escape pair) where literal_value needs its folded value; a future change to
+  # either assumption (e.g. supporting a multi-part concatenated double-quoted literal) must
+  # update both branches together, or literal_value notion of "safe literal" and word_risky
+  # notion of "risky" silently desync.
+  def word_risky:
+    (.Parts // []) as $parts |
+    any($parts[];
+      if .Type == "Lit" then ((.Value // "") | test("[{}~*?\\[\\]\\\\]"))
+      elif .Type == "SglQuoted" then false
+      elif .Type == "DblQuoted" then
+        ((.Parts // []) | any(.[]?; .Type == "Lit" and ((.Value // "") | test("\\\\[$`\"\\\\]"))))
+      # Any other Part type (ParamExp, CmdSubst, ExtGlob, ...) already makes literal_value null
+      # the whole word first, blocked as MARKER before this risky array is ever consulted for
+      # it - unreachable in practice, kept as a defensive true rather than assumed impossible.
+      else true
+      end
+    );
+  .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
+  [ .Args[] | {v: literal_value, r: word_risky} ]
+') || block 'command structure could not be analysed - failing closed'
+
+while IFS= read -r call_line; do
+  [ -z "$call_line" ] && continue
+
+  words=()
+  risky=()
+  while IFS=$'\t' read -r ventry rentry; do
+    case "$ventry" in
+      L:*)
+        decoded=$(
+          printf '%s' "${ventry#L:}" | base64 -d 2>/dev/null
+          printf '.'
+        )
+        words+=("${decoded%.}")
+        ;;
+      *) words+=("$MARKER") ;;
+    esac
+    risky+=("$rentry")
+  done < <(printf '%s' "$call_line" | jq -r '.[] | (if .v == null then "N" else "L:" + (.v | @base64) end) + "\t" + (.r | tostring)')
+
+  positions=(0)
+  is_wrapper "${words[0]:-}" && positions+=(1)
+
+  for i in "${positions[@]}"; do
+    tok="${words[$i]:-}"
+    [ "$tok" = "curl" ] || [[ "$tok" == */curl ]] || continue
+
+    url=""
+    skip_next=0
+    for ((j = i + 1; j < ${#words[@]}; j++)); do
+      arg="${words[$j]}"
+
+      [ "$arg" = "$MARKER" ] && block 'every curl argument must be a literal value - a dynamic ($-expansion) argument is not permitted'
+      [ "${risky[$j]}" = "true" ] && block 'a curl argument contains a character that could expand into more than one word at runtime (an unquoted brace/tilde/glob/backslash, or a quoted \$/`/"/\ escape) - only plain arguments are permitted'
+
+      if [ "$skip_next" = 1 ]; then
+        skip_next=0
+        continue
+      fi
+
+      if is_arg_flag "$arg"; then
+        skip_next=1
+        continue
+      fi
+
+      if is_noarg_flag "$arg"; then
+        continue
+      fi
+
+      case "$arg" in
+        -*) block "curl flag '${arg}' is not on the allowed flag list - extend ALLOWED_NOARG_FLAGS/ALLOWED_ARG_FLAGS in this hook if it is legitimately required" ;;
+      esac
+
+      [ -n "$url" ] && block 'curl with more than one URL argument is not permitted'
+      url="$arg"
+    done
+
+    [ -n "$url" ] || block 'curl requires exactly one literal http(s):// URL argument'
+    case "$url" in
+      http://* | https://*) ;;
+      *) block 'the curl URL argument must start with http:// or https://' ;;
+    esac
+
+    # curl performs its own URL-globbing on {}/[] by default (`man curl`, "URL GLOBBING"),
+    # entirely independent of shell quoting - a quoted 'https://{safe.example,api.github.com}/x'
+    # or 'https://api.github.co[m-m]/x' is just as glob-expanded by curl itself as an unquoted
+    # one, so word_risky above (which is correctly bash-quote-aware) cannot catch this: it is a
+    # curl-side property of the URL, not a bash-side one. -g/--globoff (which would disable it)
+    # is not on the allowlist, so there is no legitimate way for a caller to opt out - block the
+    # characters outright instead. No known legitimate use of {} or [] in this repo's URLs.
+    case "$url" in
+      *'{'* | *'}'* | *'['* | *']'*)
+        block 'the curl URL argument must not contain {}/[] - curl performs its own URL-globbing on these regardless of shell quoting, which could reach a different host than the one written here'
+        ;;
+    esac
+
+    extract_host "$url"
+    host_denied "$EXTRACTED_HOST" && block "curl to '${EXTRACTED_HOST}' is not permitted - use the appropriate CLI tool (gh, npm, dotnet nuget, ...) for this host instead"
+  done
+done <<<"$calls"
+
+exit 0
