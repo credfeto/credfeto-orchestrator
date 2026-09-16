@@ -1,88 +1,51 @@
 #!/usr/bin/env bash
-# Blocks curl from reaching a fixed set of destination hosts, matching this repo's own
-# claude-settings.json WebFetch(domain:...) deny entries: api.github.com, github.com,
-# registry.npmjs.org, raw.githubusercontent.com, api.nuget.org. Exit 2 = blocked, 0 = allowed.
+# Restricts curl to a closed grammar: a small, exact-spelling allowlist of flags plus exactly
+# one literal https://... (or http://...) URL argument, whose host must not be one of a fixed
+# denied set matching this repo's own claude-settings.json WebFetch(domain:...) deny entries:
+# api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org.
+# Exit 2 = blocked, 0 = allowed.
 #
-# curl is on claude-settings.json's blanket Bash(curl *) permissions.allow, and its danger
-# is in the *destination*, not the verb - a permissions.allow prefix pattern cannot express
-# "except this host" (see issue #1318, split from #1315). Unlike enforce-ssh-host-and-key's
-# positive host *allowlist* (ssh's own use in this repo is narrow and fixed-form: exactly
-# `ssh user@host.lan command`), curl is legitimately used here with many flags and dynamic
-# header/token values, so this hook is a destination *denylist* instead: reuse the same small
-# set of domains already denied to WebFetch, rather than inventing a broader curl-specific
-# allowlist policy. Deliberately does not restrict outbound-data flags (-d/--data/-T/
-# --upload-file) or any other flag beyond the ones named below - narrower in scope than
-# enforce-ssh-host-and-key on purpose, per #1318's resolution.
+# curl is on claude-settings.json's blanket Bash(curl *) permissions.allow, and its danger is
+# in the *destination*, not the verb - a permissions.allow prefix pattern cannot express
+# "except this host" (see issue #1318, split from #1315).
 #
-# wget is not covered by this hook at all: it has zero real usage anywhere in this repo's
-# own scripts/Dockerfiles/instructions (confirmed on #1318 itself), so it was removed
-# entirely - from command-allowlist and permissions.allow - rather than given a matching
-# hook, the same treatment scp got from #1315/enforce-ssh-host-and-key. wget is simply not
-# on command-allowlist any more, so reject-obfuscated-commands blocks it outright before
-# any hook would ever see it.
+# This replaces an earlier, more permissive design (denylist-only, every non-flag word
+# host-checked regardless of position, a broad VALUE_FLAGS skip-list, generic
+# brace/glob/combined-cluster handling) after three rounds of code review kept finding new
+# bypasses AND new false positives from the same root cause: curl's flag grammar is too open
+# for a position-blind, per-word scanner to check safely, since in curl (unlike ssh's fixed
+# `user@host` position) a word's role - flag, flag-value, or URL - depends on which flag (if
+# any) precedes it, something this hook cannot fully resolve without real getopt awareness.
+# `curl -o github.com ...` (a filename, wrongly host-checked) and `curl -d '{"a":1}' ...` (a
+# JSON payload, wrongly blocked as "brace expansion") were false positives; `-x<value>` glued
+# short options, `env VAR=x curl ...`, and a value-flag's own value hiding a denied host via
+# brace expansion were bypasses - see PR #1460's review history for the full list. Closing the
+# grammar instead - the same choice enforce-ssh-host-and-key made for ssh, and the only one of
+# the three options discussed on #1318 that actually converges - removes the need to resolve
+# either problem: anything not on the allowlist below is rejected outright, so there is no
+# position-dependent flag/value/URL ambiguity left to get wrong in either direction.
 #
-# Every non-flag literal word (does not start with '-') in a curl call is checked as a
-# potential URL/host argument, regardless of which preceding flag (if any) it belongs to,
-# EXCEPT the word immediately following a known value-taking flag (VALUE_FLAGS below, e.g.
-# -o/--output, -H/--header, -d/--data, ...), which is skipped entirely - a filename, header,
-# or token value is otherwise exceedingly unlikely to collide with one of the five denied
-# host strings exactly (host matching is exact-match on the host component only, not a
-# substring test), but a plain output filename that happens to equal one of them (e.g.
-# `curl -o github.com https://example.com`) would be a false positive without this skip
-# (confirmed live during review). --url's explicit form is covered two ways: as a separate
-# word (`--url <value>`, the value is itself a non-flag word checked normally) and as a
-# glued word (`--url=<value>`, handled explicitly below since the whole word otherwise starts
-# with '-' and would never reach the host check).
+# Confirmed via a repo-wide grep that this repo's own curl usage never needs more than
+# ALLOWED_NOARG_FLAGS/ALLOWED_ARG_FLAGS below (-fsSL/-sf combined, or -f/-s/-S/-L individually,
+# plus a single -o/--output for a destination file) - this hook does not try to guess every
+# flag a future caller might legitimately want; extend the allowlists below if one is
+# genuinely needed, the same way command-allowlist itself is extended.
 #
-# A non-literal (substitution/expansion) word in a position that isn't a recognised flag name
-# is NOT failed closed here, unlike ssh's target position: curl is routinely called in this
-# repo with dynamic Authorization headers, tokens, and URLs ($GH_TOKEN, $NUGET_TOKEN, $URL,
-# ...), and a blanket non-literal-argument block would make ordinary curl calls unusable.
-# This is a deliberate, narrower scope than enforce-ssh-host-and-key's fail-closed target-word
-# check, matching #1318's resolution to restrict destinations, not harden every possible
-# dynamic-value bypass - accepted as a residual gap for a non-literal word that could itself
-# evaluate to a bypass flag (e.g. --config="$X") rather than a value, tracked in #1461 rather
-# than closed here, since closing it would mean failing closed on every dynamic curl argument
-# at all, not just this narrow case, re-opening the exact usability trade-off #1318 already
-# decided against.
+# Every word is required to be a fully literal, statically-known string with no
+# `$`-expansion/substitution anywhere (see literal_value below) and no
+# brace/tilde/glob/backslash character (shfmt's static AST does not perform brace/tilde/glob
+# expansion, so a literal word like `https://api.github.com{,}` is exactly what this hook
+# sees, while real bash expands it into two argv words at runtime, confirmed live) - anything
+# else is blocked outright rather than skipped or best-effort-classified. This means a dynamic
+# URL (`curl "$URL"`) or a dynamic header/token value is no longer supported by this hook
+# at all; per #1318's resolution this repo's own curl usage never needed either.
 #
-# A literal word anywhere in the call containing a brace/tilde/glob/backslash character
-# (`{`, `}`, `~`, `*`, `?`, `[`, `]`, `\`) is blocked outright, applied uniformly rather than
-# only to specific positions: shfmt's static AST does not perform brace expansion (or
-# tilde/glob expansion, which only resolves against the filesystem at runtime), so a single
-# literal word like `https://api.github.com{,}` or `{-K,cfg.txt}` is exactly what this hook
-# sees, while real bash expands either into two argv words at runtime (confirmed live) - the
-# first hiding a denied host from the check below, the second hiding a bypass flag from the
-# check after it. Same defence enforce-ssh-host-and-key already applies to its own
-# single-word check, broadened here to every word since curl's grammar has no single fixed
-# "the interesting word is here" position the way ssh's does.
-#
-# Combined short options (e.g. `-sK` meaning `-s -K`) are blocked outright too, UNLESS the
-# whole cluster exactly matches one of SAFE_CLUSTERS (`fsSL`, `sf` - confirmed via a repo-wide
-# grep as the only combined clusters actually used here, and both composed entirely of
-# no-value flags, so there's no glued-value ambiguity in either). Resolving an arbitrary
-# combined cluster correctly (which flags take a value, and therefore consume the remaining
-# characters or the next word) needs real curl getopt awareness this hook does not implement;
-# rather than build that, any cluster outside the two confirmed-safe spellings is rejected,
-# same "positive allowlist over exhaustive classification" choice enforce-ssh-host-and-key's
-# header explains for its own target charset. Accepted trade-off: a glued alpha-only value for
-# a value-taking flag (e.g. `-oresult`, no separate word) is indistinguishable from an unsafe
-# cluster by this same check and is blocked too - a false positive (this repo's own curl usage
-# always gives -o's value as a separate word, confirmed via repo-wide grep), not a bypass, so
-# left as-is rather than adding more special-casing for a pattern with no real usage here.
-#
-# -K/--config and --connect-to are blocked outright whenever present (regardless of any
-# denied host elsewhere in the same call): a curl config file can set `url = <host>` (and any
-# other option) with content this hook cannot see or parse, making the literal-word host scan
-# below moot for -K/--config, and --connect-to can redirect the real TCP destination to a
-# different host than the one written in the URL argument
-# (`curl --connect-to safe.example:443:api.github.com:443 https://safe.example/` actually
-# connects to api.github.com while every literal word in the command still reads
-# "safe.example", confirmed live) - both are concrete bypasses of the literal-word host match,
-# not generic hardening, so they're in scope even though outbound-data flags are not. -x/
-# --proxy is blocked outright for the identical reason: curl connects to the proxy address,
-# not to the host named in the URL (confirmed live), the same destination-redirection threat
-# class as --connect-to.
+# wget is not covered by this hook at all: it has zero real usage anywhere in this repo's own
+# scripts/Dockerfiles/instructions (confirmed on #1318 itself), so it was removed entirely -
+# from command-allowlist and permissions.allow - rather than given a matching hook, the same
+# treatment scp got from #1315/enforce-ssh-host-and-key. wget is simply not on
+# command-allowlist any more, so reject-obfuscated-commands blocks it outright before any hook
+# would ever see it.
 #
 # Uses the same shfmt-parsed AST approach and base64-per-word transport as
 # enforce-ssh-host-and-key, for the same reasons documented in that hook's own header (a
@@ -126,16 +89,12 @@ MARKER='(non-literal)'
 # from drifting apart.
 DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent.com api.nuget.org)
 
-# Flags whose immediate next word is an opaque value (filename, header, token, ...), never a
-# host or a flag - skipped entirely rather than checked. Deliberately scoped to the flags this
-# repo's own curl usage and general common practice actually use with a separate value word
-# (confirmed via a repo-wide grep for -o specifically); not an exhaustive list of every
-# value-taking curl option.
-VALUE_FLAGS=(-o --output -H --header -d --data --data-raw --data-binary --data-urlencode -F --form -A --user-agent -e --referer -u --user -b --cookie -c --cookie-jar -D --dump-header -w --write-out -T --upload-file -X --request)
-
-# Combined short-option clusters confirmed (repo-wide grep) as the only ones actually used
-# here - see the header for why an arbitrary cluster isn't resolved instead.
-SAFE_CLUSTERS=(fsSL sf)
+# Flags this repo's own curl usage actually needs (confirmed via a repo-wide grep), spelled
+# exactly - no globbing, no combined-cluster resolution. Anything not listed here is rejected
+# outright by the loop below, the same "positive allowlist, extend it if genuinely needed"
+# choice enforce-ssh-host-and-key's header explains for its own target charset.
+ALLOWED_NOARG_FLAGS=(-fsSL -sf -f -s -S -L)
+ALLOWED_ARG_FLAGS=(-o --output)
 
 host_denied() {
   local h="${1,,}" d
@@ -145,17 +104,17 @@ host_denied() {
   return 1
 }
 
-is_value_flag() {
+is_noarg_flag() {
   local w
-  for w in "${VALUE_FLAGS[@]}"; do
+  for w in "${ALLOWED_NOARG_FLAGS[@]}"; do
     [ "$1" = "$w" ] && return 0
   done
   return 1
 }
 
-is_safe_cluster() {
+is_arg_flag() {
   local w
-  for w in "${SAFE_CLUSTERS[@]}"; do
+  for w in "${ALLOWED_ARG_FLAGS[@]}"; do
     [ "$1" = "$w" ] && return 0
   done
   return 1
@@ -168,36 +127,34 @@ has_expansion_metachar() {
   return 1
 }
 
-# Extracts the host component from a URL or bare-host word: strips a leading scheme://,
-# then a leading user:pass@ userinfo prefix, then everything from the first /, ?, or #
-# (path/query/fragment), then a trailing :port. Good enough for an exact-match comparison
-# against the five fixed denied hosts above - not a general-purpose URL parser, and does not
-# need to be one for this comparison. Sets EXTRACTED_HOST rather than printing + capturing via
-# $(...), avoiding an extra subshell fork per word checked.
+# Extracts the host component from a URL: strips a leading scheme://, then everything from the
+# first /, ?, or # (path/query/fragment) - which must happen BEFORE stripping userinfo, or an
+# "@" anywhere in the path defeats the host check entirely (see the function body for why) -
+# then a leading user:pass@ userinfo prefix, then a trailing :port, then a trailing "." (a
+# syntactically valid absolute-FQDN root label that DNS/curl resolve identically to the same
+# name without it, confirmed live). Good enough for an exact-match comparison against the five
+# fixed denied hosts above - not a general-purpose URL parser, and does not need to be one for
+# this comparison. Sets EXTRACTED_HOST rather than printing + capturing via $(...), avoiding an
+# extra subshell fork.
 extract_host() {
   local w="$1"
   case "$w" in
     *://*) w="${w#*://}" ;;
   esac
-  case "$w" in
-    *@*) w="${w#*@}" ;;
-  esac
+  # Path/query/fragment must be cut BEFORE stripping userinfo: per RFC 3986 the authority
+  # component (where userinfo can legally appear) ends at the first /, ?, or # - stripping
+  # userinfo first would let an "@" anywhere in the path swallow the real host too
+  # (e.g. "host.example/@" leaving an empty EXTRACTED_HOST, or "host.example/a@b" leaving "b"),
+  # a live bypass confirmed during review.
   w="${w%%/*}"
   w="${w%%\?*}"
   w="${w%%#*}"
+  case "$w" in
+    *@*) w="${w##*@}" ;;
+  esac
   w="${w%%:*}"
-  # A trailing "." makes a syntactically valid absolute FQDN that DNS/curl resolve identically
-  # to the same name without it (confirmed live: curl connects to the same host either way) -
-  # stripped here so "api.github.com." doesn't slip past the exact-match check below.
   w="${w%.}"
   EXTRACTED_HOST="${w,,}"
-}
-
-check_host_word() {
-  extract_host "$1"
-  [ -n "$EXTRACTED_HOST" ] || return 0
-  host_denied "$EXTRACTED_HOST" && block "curl to '${EXTRACTED_HOST}' is not permitted - use the appropriate CLI tool (gh, npm, dotnet nuget, ...) for this host instead"
-  return 0
 }
 
 command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
@@ -213,17 +170,14 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command cou
 
 # One compact JSON array per CallExpr, one per line. literal_value folds a word's Parts into
 # one concatenated string as long as EVERY part is a bare Lit, an ordinary single/double-quoted
-# literal with no expansion inside it, or empty - not just a single-Part word, unlike
-# enforce-ssh-host-and-key's own version of this function: a word built from several adjacent
-# quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`, `--connect-to''`,
-# `https://api.github.com''` - bash concatenates these into one fixed string with no runtime
-# unpredictability at all) is exactly as statically determined as a single-Part word, but the
-# single-Part version of this check nulled it out anyway purely because of the Part count,
-# turning it into the opaque MARKER used below and silently hiding it from every check that
-# relies on the real text (command-name match, host match, the -K/--connect-to/-x outright
-# block) - confirmed live as a real bypass during review. Any part that isn't one of those
-# literal forms (a $-expansion, command/process substitution, extglob, ...) still nulls the
-# whole word, same as before - this only widens what counts as literal, it does not narrow it.
+# literal with no expansion inside it, or empty - not just a single-Part word: a word built
+# from several adjacent quote/literal parts with zero actual expansion anywhere (e.g. `cu''rl`,
+# bash concatenates these into one fixed string with no runtime unpredictability at all) is
+# exactly as statically determined as a single-Part word. Any part that isn't one of those
+# literal forms (a $-expansion, command/process substitution, extglob, ...) nulls the whole
+# word, which becomes the MARKER below and is rejected outright by every check that follows -
+# this hook, unlike the denylist-only design it replaced, fails closed on ANY non-literal word
+# anywhere, not just specific positions, since the closed grammar has no legitimate use for one.
 calls=$(printf '%s' "$ast" | jq -c '
   def literal_value:
     def part_lit:
@@ -268,50 +222,44 @@ while IFS= read -r call_line; do
     tok="${words[$i]:-}"
     [ "$tok" = "curl" ] || [[ "$tok" == */curl ]] || continue
 
+    url=""
     skip_next=0
     for ((j = i + 1; j < ${#words[@]}; j++)); do
       arg="${words[$j]}"
 
+      [ "$arg" = "$MARKER" ] && block 'every curl argument must be a literal value - a dynamic ($-expansion) argument is not permitted'
       has_expansion_metachar "$arg" && block 'a curl argument contains a character that could expand into more than one word at runtime (brace/tilde/glob/backslash) - only plain arguments are permitted'
-
-      case "$arg" in
-        -K* | --config | --config=*) block 'curl -K/--config is not permitted - its contents (including the URL) are not visible to this check' ;;
-        --connect-to | --connect-to=*) block 'curl --connect-to is not permitted - it can redirect the real connection to a different host than the one written in the URL' ;;
-        -x* | --proxy | --proxy=* | --preproxy | --preproxy=* | --socks4 | --socks4=* | --socks4a | --socks4a=* | --socks5 | --socks5=* | --socks5-hostname | --socks5-hostname=*)
-          block 'curl -x/--proxy (or --preproxy/--socks4/--socks4a/--socks5/--socks5-hostname) is not permitted - the real connection goes to the proxy address, not the host named in the URL'
-          ;;
-      esac
 
       if [ "$skip_next" = 1 ]; then
         skip_next=0
         continue
       fi
 
-      [ "$arg" = "$MARKER" ] && continue
-
-      case "$arg" in
-        --url=*)
-          check_host_word "${arg#--url=}"
-          continue
-          ;;
-      esac
-
-      if is_value_flag "$arg"; then
+      if is_arg_flag "$arg"; then
         skip_next=1
         continue
       fi
 
-      if [[ "$arg" =~ ^-[A-Za-z]{2,}$ ]]; then
-        is_safe_cluster "${arg#-}" || block "curl combined short flags '${arg}' are not permitted except -fsSL/-sf - use separate flags"
+      if is_noarg_flag "$arg"; then
         continue
       fi
 
       case "$arg" in
-        -*) continue ;;
+        -*) block "curl flag '${arg}' is not on the allowed flag list - extend ALLOWED_NOARG_FLAGS/ALLOWED_ARG_FLAGS in this hook if it is legitimately required" ;;
       esac
 
-      check_host_word "$arg"
+      [ -n "$url" ] && block 'curl with more than one URL argument is not permitted'
+      url="$arg"
     done
+
+    [ -n "$url" ] || block 'curl requires exactly one literal http(s):// URL argument'
+    case "$url" in
+      http://* | https://*) ;;
+      *) block 'the curl URL argument must start with http:// or https://' ;;
+    esac
+
+    extract_host "$url"
+    host_denied "$EXTRACTED_HOST" && block "curl to '${EXTRACTED_HOST}' is not permitted - use the appropriate CLI tool (gh, npm, dotnet nuget, ...) for this host instead"
   done
 done <<<"$calls"
 
