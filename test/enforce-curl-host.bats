@@ -284,6 +284,24 @@ teardown() {
     [[ "${output}" == *'URL argument must not contain {}/[]'* ]]
 }
 
+# --- accepted trade-offs: real, legitimate curl syntax this hook still rejects, on purpose ---
+#
+# Both of these are pinned deliberately: exempting either one (e.g. only for a quoted [] on the
+# grounds that "IPv6 literals are legitimate") would reopen the exact round-5 curl-URL-globbing
+# bypass the {}/[] check above exists to close, since curl's own glob parser cannot be told
+# apart from a real IPv6 literal or an escaped brace by this hook without far more curl-syntax
+# awareness than it implements elsewhere.
+
+@test "an IPv6-literal URL is rejected (accepted trade-off, not a bug - see the {}/[] check above)" {
+    run_hook "curl -fsSL https://[::1]:8080/health"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a curl-native backslash-escaped brace in the URL is rejected (accepted trade-off)" {
+    run_hook 'curl -fsSL "https://example.com/\{literal\}"'
+    [ "${status}" -eq 2 ]
+}
+
 @test "a value-flag's value hiding a denied host via brace expansion is still rejected" {
     run_hook "curl -o {,https://api.github.com/x} https://safe.example/"
     [ "${status}" -eq 2 ]
