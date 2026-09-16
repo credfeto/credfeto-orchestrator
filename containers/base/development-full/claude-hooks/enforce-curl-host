@@ -93,6 +93,17 @@ DENIED_HOSTS=(api.github.com github.com registry.npmjs.org raw.githubusercontent
 # exactly - no globbing, no combined-cluster resolution. Anything not listed here is rejected
 # outright by the loop below, the same "positive allowlist, extend it if genuinely needed"
 # choice enforce-ssh-host-and-key's header explains for its own target charset.
+#
+# Accepted, deliberate gap: -L (follow-redirects, both standalone and inside -fsSL) means the
+# host check below only ever validates the literal URL argument written in the command, not
+# where curl actually ends up after following a server-issued redirect - a request to an
+# allowed host that 302s to one of DENIED_HOSTS would reach it without this hook ever seeing
+# that host. Not resolvable without either disabling redirect-following entirely (breaking
+# real downloads that need it - GitHub/npm/NuGet release/package URLs routinely redirect) or
+# re-checking curl's own post-redirect destination, which isn't available before the command
+# runs. This hook is a best-effort control on ad-hoc, agent-written destinations, not a
+# guarantee that curl can never reach one of these hosts by any path (raw IP literals and
+# other forms of indirection have the same limit) - reviewed on #1460 and accepted as-is.
 ALLOWED_NOARG_FLAGS=(-fsSL -sf -f -s -S -L)
 ALLOWED_ARG_FLAGS=(-o --output)
 
