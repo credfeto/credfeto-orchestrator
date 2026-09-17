@@ -20,6 +20,19 @@ build_item_url() {
     esac
 }
 
+# Truncates arbitrary text to max_len characters (codepoint-aware via jq, safe under a non-UTF-8
+# locale, unlike bash's byte-offset ${var:0:N} which can split a multi-byte UTF-8 character in
+# half and corrupt the result), appending a truncation notice when it was actually cut. Shared by
+# every caller that summarises command output, file content, or a session diagnostic into a
+# downstream size-limited field (a Discord embed field, a GitHub comment body).
+truncate_for_display() {
+    local text="$1" max_len="${2:-900}"
+    printf '%s' "${text}" | jq -Rsr --argjson max_len "${max_len}" '
+        if (length > $max_len) then .[0:$max_len] + "\n... (truncated; see the run log for the full list)"
+        else . end
+        '
+}
+
 # Builds one work-item's terminal-status JSON object for this tick, for notify_discord_no_work's
 # per-item breakdown (#1291). Arguments: item_type, item_id, item_repo, reason (derived from the
 # reason already given to info/warn at the call site — the redundant "<Type> #<id> in <repo>"
@@ -779,10 +792,7 @@ notify_discord_permission_denials() {
     # here is built from arbitrary command text and file paths (tool_input.command/.file_path),
     # exactly the kind of content that can legitimately contain multi-byte UTF-8.
     local truncated_summary
-    truncated_summary=$(printf '%s' "${summary}" | jq -Rsr '
-        if (length > 900) then .[0:900] + "\n... (truncated; see the run log for the full list)"
-        else . end
-        ' 2>/dev/null) \
+    truncated_summary=$(truncate_for_display "${summary}" 2>/dev/null) \
         || { warn "Discord: failed to build permission-denials payload"; return 0; }
 
     # Same 240-char title cap as notify_discord_blocked_item/notify_discord_pr_needs_approval,

@@ -221,12 +221,13 @@ apply_blocked_label_with_reason() {
 
 # Appends the last session's diagnostic (if any was recorded for this item - see
 # record_last_session_diagnostic, lib/podman) to an idle-exhaustion/runaway Blocked reason,
-# fenced under a short heading and truncated to the same 900-character cap notify_discord_
-# permission_denials already uses for the same text (#1448). Fencing and truncation both matter:
-# the raw text is tool_input.command/.file_path content (or a short diagnostic-refusal result),
-# which can contain @name or #123 sequences that would otherwise ping a user or cross-link an
-# unrelated issue when posted unfenced into a PR/issue comment. Returns reason unchanged when no
-# marker exists, so callers can always pass their reason through this unconditionally.
+# fenced under a short heading and truncated via the same truncate_for_display (lib/discord)
+# notify_discord_permission_denials uses for the same text (#1448). Fencing and truncation both
+# matter: the raw text is tool_input.command/.file_path content (or a short diagnostic-refusal
+# result), which can contain @name or #123 sequences that would otherwise ping a user or
+# cross-link an unrelated issue when posted unfenced into a PR/issue comment. Returns reason
+# unchanged when no marker exists, so callers can always pass their reason through this
+# unconditionally.
 append_last_diagnostic_to_reason() {
     local item_type="$1" item_id="$2" reason="$3"
     local diagnostic
@@ -234,10 +235,7 @@ append_last_diagnostic_to_reason() {
     [ -n "${diagnostic}" ] || { printf '%s' "${reason}"; return 0; }
 
     local truncated
-    truncated=$(printf '%s' "${diagnostic}" | jq -Rsr '
-        if (length > 900) then .[0:900] + "\n... (truncated; see the run log for the full list)"
-        else . end
-        ' 2>/dev/null) || truncated="${diagnostic}"
+    truncated=$(truncate_for_display "${diagnostic}" 2>/dev/null) || truncated="${diagnostic}"
 
     local heading="Last session's diagnostic:"
     printf '%s\n\n%s\n```\n%s\n```' "${reason}" "${heading}" "${truncated}"
