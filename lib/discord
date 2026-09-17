@@ -336,23 +336,29 @@ _discord_dedup_allowed() {
     return 0
 }
 
-# Returns the per-category webhook URL for "blocked"/"awaiting_approval"/"permissions"/
-# "slow_pull" if its DISCORD_WEBHOOK_URL_<CATEGORY> env var is set and non-empty, else falls back
-# to DISCORD_WEBHOOK_URL (which may itself be empty - the caller's own "is the resolved URL
-# non-empty" guard handles that, same as every notify_discord_* function already did for
-# DISCORD_WEBHOOK_URL directly). An unrecognised category also falls back to DISCORD_WEBHOOK_URL,
-# so a typo'd category name degrades to today's single-webhook behaviour rather than silently
-# resolving to an empty string (#1456).
+# Sets the caller's DISCORD_RESOLVED_WEBHOOK_URL to the per-category webhook URL for
+# "blocked"/"awaiting_approval"/"permissions"/"slow_pull" if its DISCORD_WEBHOOK_URL_<CATEGORY>
+# env var is set and non-empty, else falls back to DISCORD_WEBHOOK_URL (which may itself be
+# empty - the caller's own "is the resolved URL non-empty" guard handles that, same as every
+# notify_discord_* function already did for DISCORD_WEBHOOK_URL directly). An unrecognised
+# category also falls back to DISCORD_WEBHOOK_URL, so a typo'd category name degrades to today's
+# single-webhook behaviour rather than silently resolving to an empty string (#1456). Sets the
+# variable directly (relying on bash's dynamic scoping, same convention as
+# require_trusted_logins/set_pr_has_unaddressed_comment elsewhere in this codebase) rather than
+# printing + capturing via $(...): every notify_discord_* caller runs this unconditionally
+# before its own "is Discord configured at all" guard, so a per-call subshell fork here would
+# cost every idle tick, regardless of whether Discord ends up configured (#1456 review). This
+# also avoids `${!var}` indirect expansion, which lib/globals documents as a feature this
+# codebase otherwise avoids.
+DISCORD_RESOLVED_WEBHOOK_URL=""
 _discord_webhook_for() {
-    local category="$1" var_name="" value=""
-    case "${category}" in
-        blocked) var_name="DISCORD_WEBHOOK_URL_BLOCKED" ;;
-        awaiting_approval) var_name="DISCORD_WEBHOOK_URL_AWAITING_APPROVAL" ;;
-        permissions) var_name="DISCORD_WEBHOOK_URL_PERMISSIONS" ;;
-        slow_pull) var_name="DISCORD_WEBHOOK_URL_SLOW_PULL" ;;
+    case "$1" in
+        blocked)            DISCORD_RESOLVED_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_BLOCKED:-${DISCORD_WEBHOOK_URL}}" ;;
+        awaiting_approval)  DISCORD_RESOLVED_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL:-${DISCORD_WEBHOOK_URL}}" ;;
+        permissions)        DISCORD_RESOLVED_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_PERMISSIONS:-${DISCORD_WEBHOOK_URL}}" ;;
+        slow_pull)          DISCORD_RESOLVED_WEBHOOK_URL="${DISCORD_WEBHOOK_URL_SLOW_PULL:-${DISCORD_WEBHOOK_URL}}" ;;
+        *)                  DISCORD_RESOLVED_WEBHOOK_URL="${DISCORD_WEBHOOK_URL}" ;;
     esac
-    [ -n "${var_name}" ] && value="${!var_name}"
-    printf '%s' "${value:-${DISCORD_WEBHOOK_URL}}"
 }
 
 # Posts payload to webhook_url and, only on success, records the given value verbatim in
@@ -450,7 +456,8 @@ notify_discord_host_health() {
 # failure.
 notify_discord_slow_pull() {
     local webhook_url
-    webhook_url=$(_discord_webhook_for slow_pull)
+    _discord_webhook_for slow_pull
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
     [ -n "${webhook_url}" ] || return 0
     local owner="${1:-}" duration_secs="$2" baseline_secs="$3"
 
@@ -603,7 +610,8 @@ notify_discord_priorities_unreachable() {
 # label landed (#1140).
 notify_discord_blocked_item() {
     local webhook_url
-    webhook_url=$(_discord_webhook_for blocked)
+    _discord_webhook_for blocked
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
     [ -n "${webhook_url}" ] || return 0
     local item_type="$1" item_id="$2" reason="${3:-}"
     local url payload marker_file gh_noun item_json item_title labels_json substatus priority truncated_reason
@@ -694,7 +702,8 @@ notify_discord_blocked_item() {
 # failure.
 notify_discord_pr_needs_approval() {
     local webhook_url
-    webhook_url=$(_discord_webhook_for awaiting_approval)
+    _discord_webhook_for awaiting_approval
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
     [ -n "${webhook_url}" ] || return 0
     local item_id="$1" pr_json="$2"
 
@@ -750,7 +759,8 @@ notify_discord_claude_error() {
 # failure.
 notify_discord_permission_denials() {
     local webhook_url
-    webhook_url=$(_discord_webhook_for permissions)
+    _discord_webhook_for permissions
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
     [ -n "${webhook_url}" ] || return 0
     local item_type="${1:-}" item_id="${2:-}" summary="$3" denials_count="${4:-?}"
 

@@ -1027,6 +1027,24 @@ HOOKEOF
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
+@test "main blanks the four per-category Discord webhooks found in .env too (#1456)" {
+    setup_main_run
+    printf 'DISCORD_WEBHOOK_BLOCKED=https://discord.example/blocked\nDISCORD_WEBHOOK_AWAITING_APPROVAL=https://discord.example/awaiting-approval\nDISCORD_WEBHOOK_PERMISSIONS=https://discord.example/permissions\nDISCORD_WEBHOOK_SLOW_PULL=https://discord.example/slow-pull\n' >> "${CONFIG_DIR}/.env"
+    # shellcheck disable=SC2016  # the $1/$2 lines are the stub's own script text
+    make_stub_multiline podman \
+        '[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf "true\n"; exit 0; }' \
+        '[ "$1" = "inspect" ] && exit 0' \
+        'exit 0'
+    make_stub curl "touch '${TEST_TMP}/discord-posted'; exit 0"
+    run main
+    [ "${status}" -eq 1 ]
+    [ ! -e "${TEST_TMP}/discord-posted" ]
+    [ -z "${DISCORD_WEBHOOK_URL_BLOCKED}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_PERMISSIONS}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_SLOW_PULL}" ]
+}
+
 @test "main refuses a non-TTY launch before touching anything" {
     setup_main_run
     terminal_available() { return 1; }

@@ -65,16 +65,19 @@ matters most).
 
 ## Routing specific categories to their own webhook (#1456)
 
-By default every notification goes to the single webhook configured in `DISCORD_WEBHOOK_URL`.
-Four categories can each be routed to their own separate webhook instead, so (for example)
-"Blocked" alerts land in a different channel than everything else:
+By default every notification goes to the single webhook configured in `DISCORD_WEBHOOK_URL`
+(the internal variable `load_env_config` sets from `.env`'s own `DISCORD_WEBHOOK` key). Four
+categories can each be routed to their own separate webhook instead, so (for example) "Blocked"
+alerts land in a different channel than everything else. As with the base pair, set the `.env`
+key without the `_URL` infix; `load_env_config` sets the matching internal variable
+`lib/discord` actually reads:
 
-| Category | Env var | Covers |
-| --- | --- | --- |
-| Blocked | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked |
-| Awaiting Approval | `DISCORD_WEBHOOK_URL_AWAITING_APPROVAL` | PR needs approval |
-| Permissions | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`) |
-| Slow image pull | `DISCORD_WEBHOOK_URL_SLOW_PULL` | Slow image pull |
+| Category | `.env` key | Internal variable | Covers |
+| --- | --- | --- | --- |
+| Blocked | `DISCORD_WEBHOOK_BLOCKED` | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked |
+| Awaiting Approval | `DISCORD_WEBHOOK_AWAITING_APPROVAL` | `DISCORD_WEBHOOK_URL_AWAITING_APPROVAL` | PR needs approval |
+| Permissions | `DISCORD_WEBHOOK_PERMISSIONS` | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`) |
+| Slow image pull | `DISCORD_WEBHOOK_SLOW_PULL` | `DISCORD_WEBHOOK_URL_SLOW_PULL` | Slow image pull |
 
 Each is opt-in and independent: set none, some, or all four. Whichever category vars are left
 unset (or empty) fall back to `DISCORD_WEBHOOK_URL`, so this is fully backward compatible with a

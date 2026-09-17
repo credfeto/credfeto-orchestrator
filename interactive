@@ -165,9 +165,20 @@ main() {
     # The shared launch code (ensure_agent_container_ready, prepare_claude_container_args)
     # posts an oneshot-style "Claude Error" embed on its die paths, gated only on this URL. A
     # developer .env that shares an oneshot webhook would put an interactive launch failure in
-    # the team channel; the person to tell is at this terminal.
+    # the team channel; the person to tell is at this terminal. The four per-category vars
+    # (#1456) are blanked for the same reason: load_env_config reads them from this same shared
+    # .env, and leaving any of them set would let e.g. a slow-pull alert during an interactive
+    # pull reach that category's shared channel instead of staying silent at this terminal.
     # shellcheck disable=SC2034  # read by lib/discord's notify_* functions
     DISCORD_WEBHOOK_URL=""
+    # shellcheck disable=SC2034  # read by lib/discord's notify_discord_blocked_item
+    DISCORD_WEBHOOK_URL_BLOCKED=""
+    # shellcheck disable=SC2034  # read by lib/discord's notify_discord_pr_needs_approval
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL=""
+    # shellcheck disable=SC2034  # read by lib/discord's notify_discord_permission_denials
+    DISCORD_WEBHOOK_URL_PERMISSIONS=""
+    # shellcheck disable=SC2034  # read by lib/discord's notify_discord_slow_pull
+    DISCORD_WEBHOOK_URL_SLOW_PULL=""
     # A .env written before the bootstrap existed carries no gh token; the container cannot
     # fall back to the host's hosts.yml the way validate_config lets oneshot's host do.
     require_container_gh_token
