@@ -115,17 +115,25 @@ normalize_gh_host() {
     printf '%s' "${host}"
 }
 
-# Reads DISCORD_WEBHOOK, GH_TOKEN, GH_HOST, GIT_USER_NAME, GIT_USER_EMAIL, and
-# GIT_SIGNING_KEY from orchestrator/.env.
-# Sets DISCORD_WEBHOOK_URL; exports GH_HOST (normalised) and GH_ENTERPRISE_TOKEN when both are
-# present so host-side gh CLI calls use the same proxy as the agent container. For a direct
-# github.com host gh ignores GH_ENTERPRISE_TOKEN, so GH_TOKEN is exported as well: the
-# container plumbing keys off GH_ENTERPRISE_TOKEN (prepare_claude_container_args renames it at
-# the container boundary) while host-side gh reads GH_TOKEN.
+# Reads DISCORD_WEBHOOK, DISCORD_WEBHOOK_BLOCKED, DISCORD_WEBHOOK_AWAITING_APPROVAL,
+# DISCORD_WEBHOOK_PERMISSIONS, DISCORD_WEBHOOK_SLOW_PULL, GH_TOKEN, GH_HOST, GIT_USER_NAME,
+# GIT_USER_EMAIL, and GIT_SIGNING_KEY from orchestrator/.env.
+# Sets DISCORD_WEBHOOK_URL and the four DISCORD_WEBHOOK_URL_<CATEGORY> vars lib/discord's
+# _discord_webhook_for reads (#1456; same "_URL" naming split as the base DISCORD_WEBHOOK/
+# DISCORD_WEBHOOK_URL pair, so all five follow one convention in .env); exports GH_HOST
+# (normalised) and GH_ENTERPRISE_TOKEN when both are present so host-side gh CLI calls use the
+# same proxy as the agent container. For a direct github.com host gh ignores
+# GH_ENTERPRISE_TOKEN, so GH_TOKEN is exported as well: the container plumbing keys off
+# GH_ENTERPRISE_TOKEN (prepare_claude_container_args renames it at the container boundary)
+# while host-side gh reads GH_TOKEN.
 # GIT_USER_NAME, GIT_USER_EMAIL, and GIT_SIGNING_KEY are used by build_minimal_gitconfig.
 # Silent when the file is absent or a key is missing.
 load_env_config() {
     DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_BLOCKED=""
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL=""
+    DISCORD_WEBHOOK_URL_PERMISSIONS=""
+    DISCORD_WEBHOOK_URL_SLOW_PULL=""
     GIT_USER_NAME=""
     GIT_USER_EMAIL=""
     GIT_SIGNING_KEY=""
@@ -135,7 +143,7 @@ load_env_config() {
     local line val gh_token="" gh_host=""
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in
-            DISCORD_WEBHOOK=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*)
+            DISCORD_WEBHOOK=*|DISCORD_WEBHOOK_BLOCKED=*|DISCORD_WEBHOOK_AWAITING_APPROVAL=*|DISCORD_WEBHOOK_PERMISSIONS=*|DISCORD_WEBHOOK_SLOW_PULL=*|GH_TOKEN=*|GH_HOST=*|GIT_USER_NAME=*|GIT_USER_EMAIL=*|GIT_SIGNING_KEY=*|WHITELISTED_USERS=*|CI_CHECK_TIMEOUT_MINUTES=*)
                 val="${line#*=}"
                 val="${val%$'\r'}"
                 case "${val}" in
@@ -143,7 +151,11 @@ load_env_config() {
                     "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
                 case "${line}" in
-                    DISCORD_WEBHOOK=*)          DISCORD_WEBHOOK_URL="${val}" ;;
+                    DISCORD_WEBHOOK=*)                    DISCORD_WEBHOOK_URL="${val}" ;;
+                    DISCORD_WEBHOOK_BLOCKED=*)             DISCORD_WEBHOOK_URL_BLOCKED="${val}" ;;
+                    DISCORD_WEBHOOK_AWAITING_APPROVAL=*)   DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="${val}" ;;
+                    DISCORD_WEBHOOK_PERMISSIONS=*)         DISCORD_WEBHOOK_URL_PERMISSIONS="${val}" ;;
+                    DISCORD_WEBHOOK_SLOW_PULL=*)           DISCORD_WEBHOOK_URL_SLOW_PULL="${val}" ;;
                     GH_TOKEN=*)                 gh_token="${val}" ;;
                     GH_HOST=*)                  gh_host="${val}" ;;
                     GIT_USER_NAME=*)            GIT_USER_NAME="${val}" ;;

@@ -3170,6 +3170,47 @@ STUBEOF
     [ ! -f "${args_log}" ]
 }
 
+@test "notify_discord_permission_denials posts to DISCORD_WEBHOOK_URL_PERMISSIONS when set, not DISCORD_WEBHOOK_URL (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="https://discord.example.com/permissions"
+    set_repo_context "org/repo-perm-1"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/permissions" "${args_log}"
+    run ! grep -q "https://discord.example.com/general" "${args_log}"
+}
+
+@test "notify_discord_permission_denials falls back to DISCORD_WEBHOOK_URL when DISCORD_WEBHOOK_URL_PERMISSIONS is unset (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    unset DISCORD_WEBHOOK_URL_PERMISSIONS
+    set_repo_context "org/repo-perm-2"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/general" "${args_log}"
+}
+
+@test "notify_discord_permission_denials is silent when both DISCORD_WEBHOOK_URL_PERMISSIONS and DISCORD_WEBHOOK_URL are empty (#1456)" {
+    DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_PERMISSIONS=""
+    set_repo_context "org/repo-perm-3"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_permission_denials "Issue" "42" "- Bash: git status" "1"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "_discord_webhook_for falls back to DISCORD_WEBHOOK_URL for an unrecognised category (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="https://discord.example.com/permissions"
+    _discord_webhook_for "not_a_real_category"
+    [ "${DISCORD_RESOLVED_WEBHOOK_URL}" = "https://discord.example.com/general" ]
+}
+
 @test "notify_discord_permission_denials calls curl with embed payload including issue URL, count, and summary" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"
@@ -5955,6 +5996,36 @@ STUBEOF
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
+@test "load_env_config reads the four per-category Discord webhook keys from env file (#1456)" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    cat > "${XDG_CONFIG_HOME}/orchestrator/.env" << 'ENVEOF'
+DISCORD_WEBHOOK_BLOCKED=https://discord.example.com/blocked
+DISCORD_WEBHOOK_AWAITING_APPROVAL=https://discord.example.com/awaiting-approval
+DISCORD_WEBHOOK_PERMISSIONS=https://discord.example.com/permissions
+DISCORD_WEBHOOK_SLOW_PULL=https://discord.example.com/slow-pull
+ENVEOF
+    load_env_config
+    [ "${DISCORD_WEBHOOK_URL_BLOCKED}" = "https://discord.example.com/blocked" ]
+    [ "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" = "https://discord.example.com/awaiting-approval" ]
+    [ "${DISCORD_WEBHOOK_URL_PERMISSIONS}" = "https://discord.example.com/permissions" ]
+    [ "${DISCORD_WEBHOOK_URL_SLOW_PULL}" = "https://discord.example.com/slow-pull" ]
+}
+
+@test "load_env_config leaves the four per-category Discord webhook vars empty when absent from env file (#1456)" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/webhook\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL_BLOCKED="should-be-cleared"
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="should-be-cleared"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="should-be-cleared"
+    DISCORD_WEBHOOK_URL_SLOW_PULL="should-be-cleared"
+    load_env_config
+    [ -z "${DISCORD_WEBHOOK_URL_BLOCKED}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_PERMISSIONS}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_SLOW_PULL}" ]
+}
+
 @test "load_env_config strips trailing CR from CRLF env files" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK=https://discord.example.com/hook\r\n' \
@@ -6874,6 +6945,42 @@ STUBEOF
 
 @test "notify_discord_blocked_item does not call curl when DISCORD_WEBHOOK_URL is empty" {
     DISCORD_WEBHOOK_URL=""
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${args_log}" ]
+}
+
+@test "notify_discord_blocked_item posts to DISCORD_WEBHOOK_URL_BLOCKED when set, not DISCORD_WEBHOOK_URL (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_BLOCKED="https://discord.example.com/blocked"
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/blocked" "${args_log}"
+    run ! grep -q "https://discord.example.com/general" "${args_log}"
+}
+
+@test "notify_discord_blocked_item falls back to DISCORD_WEBHOOK_URL when DISCORD_WEBHOOK_URL_BLOCKED is unset (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    unset DISCORD_WEBHOOK_URL_BLOCKED
+    set_repo_context "org/repo"
+    local args_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
+    make_stub gh 'printf "{\"title\":\"T\",\"labels\":[],\"comments\":[]}"'
+    run notify_discord_blocked_item "Issue" "42"
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/general" "${args_log}"
+}
+
+@test "notify_discord_blocked_item is silent when both DISCORD_WEBHOOK_URL_BLOCKED and DISCORD_WEBHOOK_URL are empty (#1456)" {
+    DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_BLOCKED=""
     set_repo_context "org/repo"
     local args_log="${TEST_TMP}/curl_args"
     make_stub curl "printf '%s\n' \"\$@\" >> '${args_log}'"
@@ -10542,6 +10649,40 @@ STUBEOF
     [ ! -f "${curl_log}" ]
 }
 
+@test "notify_discord_slow_pull posts to DISCORD_WEBHOOK_URL_SLOW_PULL when set, not DISCORD_WEBHOOK_URL (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_SLOW_PULL="https://discord.example.com/slow-pull"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner-sp-1" 600 100
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/slow-pull" "${curl_log}"
+    run ! grep -q "https://discord.example.com/general" "${curl_log}"
+}
+
+@test "notify_discord_slow_pull falls back to DISCORD_WEBHOOK_URL when DISCORD_WEBHOOK_URL_SLOW_PULL is unset (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    unset DISCORD_WEBHOOK_URL_SLOW_PULL
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner-sp-2" 600 100
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/general" "${curl_log}"
+}
+
+@test "notify_discord_slow_pull is silent when both DISCORD_WEBHOOK_URL_SLOW_PULL and DISCORD_WEBHOOK_URL are empty (#1456)" {
+    DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_SLOW_PULL=""
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_slow_pull "owner-sp-3" 600 100
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
 @test "notify_discord_slow_pull sends embed with duration and baseline" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/webhook"
     local curl_log="${TEST_TMP}/curl_args"
@@ -10783,6 +10924,43 @@ STUBEOF
     make_stub curl "printf 'called\n' >> ${curl_log}"
     hash curl
     run notify_discord_pr_needs_approval 397 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    [ ! -f "${curl_log}" ]
+}
+
+@test "notify_discord_pr_needs_approval posts to DISCORD_WEBHOOK_URL_AWAITING_APPROVAL when set, not DISCORD_WEBHOOK_URL (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="https://discord.example.com/awaiting-approval"
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 501 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/awaiting-approval" "${curl_log}"
+    run ! grep -q "https://discord.example.com/general" "${curl_log}"
+}
+
+@test "notify_discord_pr_needs_approval falls back to DISCORD_WEBHOOK_URL when DISCORD_WEBHOOK_URL_AWAITING_APPROVAL is unset (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    unset DISCORD_WEBHOOK_URL_AWAITING_APPROVAL
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_args"
+    make_stub curl "printf '%s\n' \"\$@\" >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 502 '{"title":"Some PR title"}'
+    [ "${status}" -eq 0 ]
+    grep -q "https://discord.example.com/general" "${curl_log}"
+}
+
+@test "notify_discord_pr_needs_approval is silent when both DISCORD_WEBHOOK_URL_AWAITING_APPROVAL and DISCORD_WEBHOOK_URL are empty (#1456)" {
+    DISCORD_WEBHOOK_URL=""
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL=""
+    REPO_FULL="org/repo"
+    local curl_log="${TEST_TMP}/curl_log"
+    make_stub curl "printf 'called\n' >> ${curl_log}"
+    hash curl
+    run notify_discord_pr_needs_approval 503 '{"title":"Some PR title"}'
     [ "${status}" -eq 0 ]
     [ ! -f "${curl_log}" ]
 }

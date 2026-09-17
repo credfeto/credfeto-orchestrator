@@ -1027,6 +1027,33 @@ HOOKEOF
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
+@test "main blanks the four per-category Discord webhooks found in .env too (#1456)" {
+    setup_main_run
+    printf 'DISCORD_WEBHOOK_BLOCKED=https://discord.example/blocked\nDISCORD_WEBHOOK_AWAITING_APPROVAL=https://discord.example/awaiting-approval\nDISCORD_WEBHOOK_PERMISSIONS=https://discord.example/permissions\nDISCORD_WEBHOOK_SLOW_PULL=https://discord.example/slow-pull\n' >> "${CONFIG_DIR}/.env"
+    # shellcheck disable=SC2016  # the $1/$2 lines are the stub's own script text
+    make_stub_multiline podman \
+        '[ "$1" = "inspect" ] && [ "$2" = "--format" ] && { printf "true\n"; exit 0; }' \
+        '[ "$1" = "inspect" ] && exit 0' \
+        'exit 0'
+    make_stub curl "touch '${TEST_TMP}/discord-posted'; exit 0"
+    # `run` forks a subshell (needed since this die path calls `exit`, which `run main` alone
+    # can survive but a direct call cannot), so a post-run check of these vars would only ever
+    # see this test's own (never-touched) copies - never main's. ensure_agent_container_ready's
+    # die path calls notify_discord_claude_error just beforehand in that same subshell, so
+    # overriding it here captures the four vars' live values before the subshell exits
+    # (#1456 review, round 3).
+    notify_discord_claude_error() {
+        printf '%s\n%s\n%s\n%s\n' \
+            "${DISCORD_WEBHOOK_URL_BLOCKED}" "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" \
+            "${DISCORD_WEBHOOK_URL_PERMISSIONS}" "${DISCORD_WEBHOOK_URL_SLOW_PULL}" \
+            > "${TEST_TMP}/category-vars-at-die"
+    }
+    run main
+    [ "${status}" -eq 1 ]
+    [ ! -e "${TEST_TMP}/discord-posted" ]
+    [ -z "$(cat "${TEST_TMP}/category-vars-at-die")" ]
+}
+
 @test "main refuses a non-TTY launch before touching anything" {
     setup_main_run
     terminal_available() { return 1; }
