@@ -7754,6 +7754,16 @@ ENVEOF
     [[ "${output}" != *"${long_diagnostic}"* ]]
 }
 
+@test "append_last_diagnostic_to_reason neutralises a diagnostic containing a fence-breaking backtick run" {
+    save_last_diagnostic "Issue" "42" $'Bash: cat <<EOF\n```\n@someone please see #999\n```\nEOF'
+    run append_last_diagnostic_to_reason "Issue" "42" "Generic block reason."
+    [ "${status}" -eq 0 ]
+    # Exactly the opening and closing fence this function itself adds - no fence survives from
+    # the diagnostic content to prematurely close the block and un-fence "@someone"/"#999".
+    [ "$(grep -c '```' <<<"${output}")" -eq 2 ]
+    [[ "${output}" == *"@someone please see #999"* ]]
+}
+
 # --- report_unparseable_rate_limit --------------------------------------------
 
 @test "handle_claude_is_error does not call report_unparseable_rate_limit when parse_reset_time succeeds" {
