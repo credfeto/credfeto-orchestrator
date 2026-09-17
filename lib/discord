@@ -319,6 +319,13 @@ _discord_dedup_state_file() {
 # Returns success (allowed to send) unless state_file records a send within the last hour.
 # Arguments: state_file, now (unix timestamp — shared with _discord_send_and_record so both
 # calls in a single notify_discord_* invocation agree on "now" without forking `date` twice).
+# state_file is keyed by item/owner (see each caller's own _discord_dedup_state_file call), not
+# by which webhook the send actually used - a caller routed via _discord_webhook_for (#1456)
+# whose category webhook is newly configured mid-window can have its dedup window still primed
+# from an earlier send to the old (DISCORD_WEBHOOK_URL) destination, delaying the first alert on
+# the new channel by up to the remainder of that hour. Accepted as a one-time, self-healing
+# transition edge case around reconfiguring which webhook a category uses, not worth keying
+# every dedup state file by webhook to fix (#1456 review).
 _discord_dedup_allowed() {
     local state_file="$1" now="$2" last_sent elapsed
     [ -f "${state_file}" ] || return 0
@@ -602,7 +609,12 @@ notify_discord_blocked_item() {
     local url payload marker_file gh_noun item_json item_title labels_json substatus priority truncated_reason
 
     marker_file=$(blocked_marker_file_path "${item_type}" "${item_id}")
-    # Already notified for this blocked spell — stay silent until re-armed.
+    # Already notified for this blocked spell — stay silent until re-armed. Keyed only by
+    # item_type/item_id, not by webhook_url: an item already notified via DISCORD_WEBHOOK_URL
+    # before DISCORD_WEBHOOK_URL_BLOCKED was configured stays silent on the new channel for the
+    # rest of that same blocked spell (re-arms normally once the item is next seen unblocked).
+    # Accepted as a one-time transition edge case around reconfiguring which webhook a category
+    # uses, not worth keying every marker file by webhook to fix (#1456 review).
     [ -f "${marker_file}" ] && return 0
 
     url="$(build_item_url "${item_type}" "${item_id}")"

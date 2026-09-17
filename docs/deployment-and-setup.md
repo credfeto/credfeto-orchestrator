@@ -27,7 +27,11 @@ document covers the scripts that set all of that up.
    `~/.config/orchestrator/.env` with `GIT_USER_NAME`/`GIT_USER_EMAIL`/`GIT_SIGNING_KEY`/
    `DISCORD_WEBHOOK`, and a `~/.config/orchestrator/tokens/<owner-name>` file (mode `600`)
    holding that owner's Claude OAuth token. `setup-owner` refuses to proceed at all — before
-   touching the system — if any of these are missing.
+   touching the system — if any of these are missing. `.env` can optionally also set
+   `DISCORD_WEBHOOK_BLOCKED`/`DISCORD_WEBHOOK_AWAITING_APPROVAL`/`DISCORD_WEBHOOK_PERMISSIONS`/
+   `DISCORD_WEBHOOK_SLOW_PULL` to route those specific alert categories to their own webhook
+   instead of `DISCORD_WEBHOOK` — see [discord-notifications.md](discord-notifications.md);
+   `setup-owner` does not require any of these four.
 2. Run `setup-owner --owner <name>`. This creates the Linux account, clones the repository into
    it, copies the staged credentials in, **and installs the timer itself** — there is no separate
    manual "now run install-timer" step for a first-time setup.
