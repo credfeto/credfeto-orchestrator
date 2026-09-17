@@ -228,6 +228,12 @@ apply_blocked_label_with_reason() {
 # cross-link an unrelated issue when posted unfenced into a PR/issue comment. Returns reason
 # unchanged when no marker exists, so callers can always pass their reason through this
 # unconditionally.
+#
+# The diagnostic is attacker-influenceable (it is the literal tool_input.command/.file_path of a
+# denied tool call, which can echo content from an issue/PR body Claude was working from), so any
+# backtick run it contains is neutralised before fencing - otherwise a "```" sequence in the
+# diagnostic would close the fence early and un-fence the remainder, defeating the very protection
+# this comment describes (code review, #1467).
 append_last_diagnostic_to_reason() {
     local item_type="$1" item_id="$2" reason="$3"
     local diagnostic
@@ -236,6 +242,7 @@ append_last_diagnostic_to_reason() {
 
     local truncated
     truncated=$(truncate_for_display "${diagnostic}" 2>/dev/null) || truncated="${diagnostic}"
+    truncated=$(printf '%s' "${truncated}" | tr '`' "'")
 
     local heading="Last session's diagnostic:"
     printf '%s\n\n%s\n```\n%s\n```' "${reason}" "${heading}" "${truncated}"
