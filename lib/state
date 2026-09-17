@@ -614,6 +614,40 @@ clear_background_stall_marker() {
     rm -f "$(background_stall_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
 }
 
+# Guard file holding the most recent session's diagnostic text (permission-denials summary, or a
+# short diagnostic-refusal result) for this item (#1448), read back by append_last_diagnostic_to_
+# reason (lib/github-status) when building an idle-exhaustion/runaway Blocked comment. Written by
+# record_last_session_diagnostic (lib/podman) after every invocation, overwritten (not
+# accumulated) each time - mirrors background_stall_marker_file_path immediately above, but
+# stores the diagnostic TEXT itself rather than just existing as a boolean flag.
+last_diagnostic_marker_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.last-diagnostic' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Persists this session's diagnostic text for this item. Best-effort: a failure to write only
+# means a later Blocked comment misses the extra diagnostic detail, not that anything else breaks.
+save_last_diagnostic() {
+    local item_type="$1" item_id="$2" diagnostic_text="$3"
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    printf '%s' "${diagnostic_text}" > "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null \
+        || warn "Failed to write last-diagnostic marker for ${item_type} #${item_id} — a later Blocked comment will not include it"
+}
+
+# Echoes the stored diagnostic text for this item, or empty if no marker file exists.
+load_last_diagnostic() {
+    local item_type="$1" item_id="$2"
+    cat "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+}
+
+# Clears the last-diagnostic marker - called on every invocation whose result recorded neither a
+# permission-denials summary nor a diagnostic-refusal match, so the marker only ever reflects the
+# most recent session.
+clear_last_diagnostic() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(last_diagnostic_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+}
+
 # Clears the blocked-notification marker for an item, re-arming the notifier so a
 # future transition back into the blocked state notifies again. Call on any path
 # where the item is observed open and not carrying the Blocked label.

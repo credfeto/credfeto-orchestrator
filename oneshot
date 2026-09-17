@@ -1210,6 +1210,7 @@ main() {
             fi
             if [ "${PR_INVOCATION_TOTAL}" -ge "${MAX_PR_TOTAL_INVOCATIONS}" ]; then
                 local pr_runaway_reason="This PR has been worked ${PR_INVOCATION_TOTAL} times by the automation without reaching a mergeable state. Blocking for a human to investigate."
+                pr_runaway_reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${pr_runaway_reason}")
                 warn "PR #${item_id} in ${item_repo} used ${PR_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
                 # apply_blocked_label_with_reason writes the runaway-blocked marker itself, since
                 # PR_INVOCATION_TOTAL is already >= MAX_PR_TOTAL_INVOCATIONS here.
@@ -1225,6 +1226,7 @@ main() {
             # the PR backstop takes over (#1093).
             if [ "${ISSUE_INVOCATION_TOTAL}" -ge "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]; then
                 local issue_runaway_reason="This issue has been worked ${ISSUE_INVOCATION_TOTAL} times by the automation without producing a mergeable pull request. Blocking for a human to investigate."
+                issue_runaway_reason=$(append_last_diagnostic_to_reason "Issue" "${item_id}" "${issue_runaway_reason}")
                 warn "Issue #${item_id} in ${item_repo} used ${ISSUE_INVOCATION_TOTAL} agent invocations without converging — marking Blocked"
                 # apply_blocked_label_with_reason writes the runaway-blocked marker itself, since
                 # ISSUE_INVOCATION_TOTAL is already >= MAX_ISSUE_TOTAL_INVOCATIONS here.

@@ -201,6 +201,7 @@ claude_result_indicates_background_stall() {
 # Arguments: tmpfile (the Claude JSON result), item_type, item_id.
 handle_claude_permission_denials() {
     local tmpfile="$1" item_type="$2" item_id="$3"
+    PERMISSION_DENIALS_SUMMARY=""
 
     # Every permission_denials element is coerced to an object before indexing .tool_name/
     # .tool_input - indexing a non-object element (e.g. a bare string) is a jq runtime error,
@@ -237,7 +238,55 @@ handle_claude_permission_denials() {
     warn "Claude reported ${denials_count} permission denial(s) for ${REPO_FULL}:
 ${summary}"
 
+    PERMISSION_DENIALS_SUMMARY="${summary}"
+
     notify_discord_permission_denials "${item_type}" "${item_id}" "${summary}" "${denials_count}"
+}
+
+# Narrow heuristic for a session's final result text being a short, clearly-diagnostic refusal
+# (e.g. "every gh invocation is denied by the permission system") rather than ordinary long-form
+# workflow narration that happens to mention "denied" in passing - same style and same false-
+# positive concern as claude_result_indicates_background_stall above. Gated to a fixed length cap
+# so a normal multi-paragraph implementation summary can never match regardless of wording, since
+# a genuine diagnostic refusal is always short (the session gave up almost immediately).
+claude_result_indicates_diagnostic_refusal() {
+    local result_text="$1"
+    [ "${#result_text}" -le 500 ] || return 1
+
+    local refusal_re='denied by the permission system'
+    refusal_re+='|I can.t proceed without'
+    refusal_re+='|is denied'
+    refusal_re+='|need you to [^.]*(confirm|allowlist)'
+
+    local shopt_nocasematch
+    shopt_nocasematch=$(shopt -p nocasematch)
+    shopt -s nocasematch
+    [[ "${result_text}" =~ ${refusal_re} ]]
+    local match_rc=$?
+    eval "${shopt_nocasematch}"
+    return "${match_rc}"
+}
+
+# Persists this session's diagnostic signal (#1448) so a later idle-exhaustion/runaway Blocked
+# comment on this item can quote it instead of only ever showing the generic "worked N times"
+# text - the actual reason (e.g. every gh call denied) previously only ever reached Discord
+# (#1328), deduplicated and never posted to the PR/issue a human is actually looking at. Prefers
+# the permission-denials summary (set by handle_claude_permission_denials, immediately above in
+# invoke_claude) over the result-text heuristic, since a denials summary is a structured signal
+# while the heuristic is best-effort text matching; overwritten (not accumulated) every
+# invocation, mirroring mark_background_stall/clear_background_stall_marker, so the marker always
+# reflects only the most recent session's outcome and stale diagnostics from many cycles ago
+# never leak into an unrelated later block reason.
+record_last_session_diagnostic() {
+    local item_type="$1" item_id="$2" result_text="$3"
+
+    if [ -n "${PERMISSION_DENIALS_SUMMARY}" ]; then
+        save_last_diagnostic "${item_type}" "${item_id}" "${PERMISSION_DENIALS_SUMMARY}"
+    elif claude_result_indicates_diagnostic_refusal "${result_text}"; then
+        save_last_diagnostic "${item_type}" "${item_id}" "${result_text}"
+    else
+        clear_last_diagnostic "${item_type}" "${item_id}"
+    fi
 }
 
 # In cgroup v2, the "no-internal-process" constraint forbids a cgroup that
@@ -538,14 +587,20 @@ invoke_claude() {
     # where they are most likely to explain the failure.
     handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
 
+    local result_text
+    result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
+
+    # Persisted here, before handle_claude_is_error's possible die below, so a run that both
+    # recorded permission denials and ended in error still gets its diagnostic persisted (#1448)
+    # - handle_claude_is_error always dies (and deletes tmpfile) on an errored run, which would
+    # otherwise skip this entirely on exactly the runs where the diagnostic matters most.
+    record_last_session_diagnostic "${item_type}" "${item_id}" "${result_text}"
+
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
         handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
-
-    local result_text
-    result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
 
     # Persist whether THIS session ended in the background-stall pattern (see
     # claude_result_indicates_background_stall above) so the next invocation's prompt can warn
