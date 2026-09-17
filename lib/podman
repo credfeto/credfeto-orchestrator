@@ -136,6 +136,21 @@ handle_claude_is_error() {
     die "Claude invocation failed: ${result_text}"
 }
 
+# Case-insensitively matches text against an extended regex, saving and restoring the shell's
+# nocasematch option around the match so callers never need to worry about leaking it into
+# unrelated code that runs after them. Shared by every "does this free-form text look like X"
+# heuristic below, each of which supplies its own regex and cares only about the match result.
+match_nocase() {
+    local text="$1" re="$2"
+    local shopt_nocasematch
+    shopt_nocasematch=$(shopt -p nocasematch)
+    shopt -s nocasematch
+    [[ "${text}" =~ ${re} ]]
+    local match_rc=$?
+    eval "${shopt_nocasematch}"
+    return "${match_rc}"
+}
+
 # Returns 0 (true) if the given Claude result text shows the session ended by backgrounding a
 # local check (build/test/pre-commit) and stopping its turn to "wait" for a later notification
 # instead of polling for it within the same turn (#1326/credfeto-orchestrator#1335). Confirmed
@@ -178,13 +193,7 @@ claude_result_indicates_background_stall() {
     # will pick up once CI settles" case or an unrelated "I'll resume ... once ..." sentence.
     stall_re+='|I.ll (pick (this|it) up|resume|continue this)[^.]*(background|monitor|notification)'
     stall_re+='|(background|monitor|notification)[^.]*I.ll (pick (this|it) up|resume|continue this)'
-    local shopt_nocasematch
-    shopt_nocasematch=$(shopt -p nocasematch)
-    shopt -s nocasematch
-    [[ "${result_text}" =~ ${stall_re} ]]
-    local match_rc=$?
-    eval "${shopt_nocasematch}"
-    return "${match_rc}"
+    match_nocase "${result_text}" "${stall_re}"
 }
 
 # Parses and surfaces any permission_denials recorded in the Claude JSON result (#1328).
@@ -198,10 +207,11 @@ claude_result_indicates_background_stall() {
 # when denials are present, and notifies Discord so a denial doesn't require someone to go
 # read journald to notice it. No-ops (no log, no notification) when the array is absent,
 # empty, or not an array.
-# Arguments: tmpfile (the Claude JSON result), item_type, item_id.
+# Arguments: tmpfile (the Claude JSON result), item_type, item_id. Prints the rendered summary
+# on stdout (empty when no denials were found) so the caller can capture it directly instead of
+# routing it through a global.
 handle_claude_permission_denials() {
     local tmpfile="$1" item_type="$2" item_id="$3"
-    PERMISSION_DENIALS_SUMMARY=""
 
     # Every permission_denials element is coerced to an object before indexing .tool_name/
     # .tool_input - indexing a non-object element (e.g. a bare string) is a jq runtime error,
@@ -238,9 +248,9 @@ handle_claude_permission_denials() {
     warn "Claude reported ${denials_count} permission denial(s) for ${REPO_FULL}:
 ${summary}"
 
-    PERMISSION_DENIALS_SUMMARY="${summary}"
-
     notify_discord_permission_denials "${item_type}" "${item_id}" "${summary}" "${denials_count}"
+
+    printf '%s' "${summary}"
 }
 
 # Narrow heuristic for a session's final result text being a short, clearly-diagnostic refusal
@@ -258,30 +268,24 @@ claude_result_indicates_diagnostic_refusal() {
     refusal_re+='|is denied'
     refusal_re+='|need you to [^.]*(confirm|allowlist)'
 
-    local shopt_nocasematch
-    shopt_nocasematch=$(shopt -p nocasematch)
-    shopt -s nocasematch
-    [[ "${result_text}" =~ ${refusal_re} ]]
-    local match_rc=$?
-    eval "${shopt_nocasematch}"
-    return "${match_rc}"
+    match_nocase "${result_text}" "${refusal_re}"
 }
 
 # Persists this session's diagnostic signal (#1448) so a later idle-exhaustion/runaway Blocked
 # comment on this item can quote it instead of only ever showing the generic "worked N times"
 # text - the actual reason (e.g. every gh call denied) previously only ever reached Discord
 # (#1328), deduplicated and never posted to the PR/issue a human is actually looking at. Prefers
-# the permission-denials summary (set by handle_claude_permission_denials, immediately above in
-# invoke_claude) over the result-text heuristic, since a denials summary is a structured signal
-# while the heuristic is best-effort text matching; overwritten (not accumulated) every
-# invocation, mirroring mark_background_stall/clear_background_stall_marker, so the marker always
-# reflects only the most recent session's outcome and stale diagnostics from many cycles ago
-# never leak into an unrelated later block reason.
+# the permission-denials summary (the caller's own capture of handle_claude_permission_denials'
+# output) over the result-text heuristic, since a denials summary is a structured signal while the
+# heuristic is best-effort text matching; overwritten (not accumulated) every invocation,
+# mirroring mark_background_stall/clear_background_stall_marker, so the marker always reflects
+# only the most recent session's outcome and stale diagnostics from many cycles ago never leak
+# into an unrelated later block reason.
 record_last_session_diagnostic() {
-    local item_type="$1" item_id="$2" result_text="$3"
+    local item_type="$1" item_id="$2" result_text="$3" denials_summary="$4"
 
-    if [ -n "${PERMISSION_DENIALS_SUMMARY}" ]; then
-        save_last_diagnostic "${item_type}" "${item_id}" "${PERMISSION_DENIALS_SUMMARY}"
+    if [ -n "${denials_summary}" ]; then
+        save_last_diagnostic "${item_type}" "${item_id}" "${denials_summary}"
     elif claude_result_indicates_diagnostic_refusal "${result_text}"; then
         save_last_diagnostic "${item_type}" "${item_id}" "${result_text}"
     else
@@ -585,7 +589,8 @@ invoke_claude() {
     # Parsed before the is_error check below: handle_claude_is_error always dies (and deletes
     # tmpfile) on an errored run, so denials would otherwise never surface on exactly the runs
     # where they are most likely to explain the failure.
-    handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}"
+    local denials_summary
+    denials_summary=$(handle_claude_permission_denials "${tmpfile}" "${item_type}" "${item_id}")
 
     local result_text
     result_text=$(jq -r '.result // ""' "${tmpfile}" 2>/dev/null)
@@ -594,7 +599,7 @@ invoke_claude() {
     # recorded permission denials and ended in error still gets its diagnostic persisted (#1448)
     # - handle_claude_is_error always dies (and deletes tmpfile) on an errored run, which would
     # otherwise skip this entirely on exactly the runs where the diagnostic matters most.
-    record_last_session_diagnostic "${item_type}" "${item_id}" "${result_text}"
+    record_last_session_diagnostic "${item_type}" "${item_id}" "${result_text}" "${denials_summary}"
 
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')

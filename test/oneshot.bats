@@ -7603,25 +7603,26 @@ ENVEOF
     [[ "${output}" == *"NoInput: {}"* ]]
 }
 
-@test "handle_claude_permission_denials sets PERMISSION_DENIALS_SUMMARY when denials are found" {
+@test "handle_claude_permission_denials prints the summary on stdout when denials are found" {
     local tmpfile
     tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
     printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}' > "${tmpfile}"
 
     notify_discord_permission_denials() { return 0; }
 
-    handle_claude_permission_denials "${tmpfile}" "Issue" "42"
-    [[ "${PERMISSION_DENIALS_SUMMARY}" == *"Bash: git status"* ]]
+    local denials_summary
+    denials_summary=$(handle_claude_permission_denials "${tmpfile}" "Issue" "42")
+    [[ "${denials_summary}" == *"Bash: git status"* ]]
 }
 
-@test "handle_claude_permission_denials resets PERMISSION_DENIALS_SUMMARY to empty when no denials are found" {
-    PERMISSION_DENIALS_SUMMARY="stale summary from a previous call"
+@test "handle_claude_permission_denials prints nothing when no denials are found" {
     local tmpfile
     tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
     printf '%s' '{"is_error":false,"result":"done"}' > "${tmpfile}"
 
-    handle_claude_permission_denials "${tmpfile}" "Issue" "42"
-    [ -z "${PERMISSION_DENIALS_SUMMARY}" ]
+    local denials_summary
+    denials_summary=$(handle_claude_permission_denials "${tmpfile}" "Issue" "42")
+    [ -z "${denials_summary}" ]
 }
 
 # --- claude_result_indicates_diagnostic_refusal (#1448) ------------------------
@@ -7698,24 +7699,21 @@ ENVEOF
 
 # --- record_last_session_diagnostic (#1448) -------------------------------------
 
-@test "record_last_session_diagnostic persists the denials summary when PERMISSION_DENIALS_SUMMARY is set" {
-    PERMISSION_DENIALS_SUMMARY="- Bash: git status"
-    record_last_session_diagnostic "Issue" "42" "some unrelated result text"
+@test "record_last_session_diagnostic persists the denials summary when one is passed" {
+    record_last_session_diagnostic "Issue" "42" "some unrelated result text" "- Bash: git status"
     run load_last_diagnostic "Issue" "42"
     [ "${output}" = "- Bash: git status" ]
 }
 
 @test "record_last_session_diagnostic falls back to result_text when it matches the refusal heuristic" {
-    PERMISSION_DENIALS_SUMMARY=""
-    record_last_session_diagnostic "Issue" "42" "git push is denied by the permission system"
+    record_last_session_diagnostic "Issue" "42" "git push is denied by the permission system" ""
     run load_last_diagnostic "Issue" "42"
     [ "${output}" = "git push is denied by the permission system" ]
 }
 
 @test "record_last_session_diagnostic clears the marker on an ordinary successful result" {
-    PERMISSION_DENIALS_SUMMARY=""
     save_last_diagnostic "Issue" "42" "stale diagnostic from a previous session"
-    record_last_session_diagnostic "Issue" "42" "Implemented the feature and pushed the commit."
+    record_last_session_diagnostic "Issue" "42" "Implemented the feature and pushed the commit." ""
     run load_last_diagnostic "Issue" "42"
     [ -z "${output}" ]
 }
@@ -7723,8 +7721,7 @@ ENVEOF
 @test "record_last_session_diagnostic persists a denials summary even when the run is later flagged is_error (#1448)" {
     # Called from invoke_claude before handle_claude_is_error's possible die, so a run that both
     # had denials and ended in error still gets its diagnostic persisted.
-    PERMISSION_DENIALS_SUMMARY="- Bash: git push"
-    record_last_session_diagnostic "PullRequest" "7" "some error-ish result text"
+    record_last_session_diagnostic "PullRequest" "7" "some error-ish result text" "- Bash: git push"
     run load_last_diagnostic "PullRequest" "7"
     [ "${output}" = "- Bash: git push" ]
 }

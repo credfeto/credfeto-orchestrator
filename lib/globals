@@ -350,11 +350,6 @@ _TRUSTED_LOGINS_JSON=""
 # Per-item mutable counters. Initialized here; populated by the load_*/save_* helpers in
 # lib/state and lib/github-status.
 INFRA_FAILURE_COUNT=0
-# Set by handle_claude_permission_denials (lib/podman) to the rendered denials summary when the
-# most recent Claude result recorded any, reset to empty at the top of every call otherwise -
-# lets record_last_session_diagnostic tell "denials found" from "none" without handle_claude_
-# permission_denials' own always-succeeds return contract changing (#1448).
-PERMISSION_DENIALS_SUMMARY=""
 PR_INVOCATION_TOTAL=0
 PR_INVOCATION_IDLE=0
 ENV_UNBLOCK_ATTEMPTS=0
