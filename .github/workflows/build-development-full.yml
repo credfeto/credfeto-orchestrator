@@ -16,11 +16,13 @@ name: "Build development-full base image"
 
 on:
   repository_dispatch:
-    # Fired by credfeto-global-pre-commit on every push to main so the image
-    # is rebuilt immediately when the pre-commit hook config is updated rather
+    # Fired by credfeto-global-pre-commit and credfeto-ai-skills on every push
+    # to their respective main branches so the image is rebuilt immediately
+    # when the pre-commit hook config or AI skills content is updated rather
     # than waiting up to an hour for the scheduled run.
     types:
       - pre-commit-updated
+      - ai-skills-updated
   workflow_run:
     workflows: ["Build development-credfeto-tools base image"]
     types:

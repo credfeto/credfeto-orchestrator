@@ -15,7 +15,8 @@ on:
   schedule:
     # Daily, and the only cron anywhere in the image chain — every downstream stage rebuilds via
     # its workflow_run trigger from this one tick. Real changes still rebuild immediately via
-    # push (paths-filtered) and, for development-full, repository_dispatch: pre-commit-updated.
+    # push (paths-filtered) and, for development-full, repository_dispatch: pre-commit-updated /
+    # ai-skills-updated.
     # Previously each of the 7 stages had its own hourly-or-tighter cron; stacked through the
     # chain that moved development-agent:latest every 15-30 minutes, and the orchestrator host,
     # which pulls before every invocation, lost ~2 hours of a 4.5-hour window purely to podman
