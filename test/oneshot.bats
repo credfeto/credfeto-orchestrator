@@ -5989,6 +5989,36 @@ STUBEOF
     [ -z "${DISCORD_WEBHOOK_URL}" ]
 }
 
+@test "load_env_config reads the four per-category Discord webhook keys from env file (#1456)" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    cat > "${XDG_CONFIG_HOME}/orchestrator/.env" << 'ENVEOF'
+DISCORD_WEBHOOK_BLOCKED=https://discord.example.com/blocked
+DISCORD_WEBHOOK_AWAITING_APPROVAL=https://discord.example.com/awaiting-approval
+DISCORD_WEBHOOK_PERMISSIONS=https://discord.example.com/permissions
+DISCORD_WEBHOOK_SLOW_PULL=https://discord.example.com/slow-pull
+ENVEOF
+    load_env_config
+    [ "${DISCORD_WEBHOOK_URL_BLOCKED}" = "https://discord.example.com/blocked" ]
+    [ "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" = "https://discord.example.com/awaiting-approval" ]
+    [ "${DISCORD_WEBHOOK_URL_PERMISSIONS}" = "https://discord.example.com/permissions" ]
+    [ "${DISCORD_WEBHOOK_URL_SLOW_PULL}" = "https://discord.example.com/slow-pull" ]
+}
+
+@test "load_env_config leaves the four per-category Discord webhook vars empty when absent from env file (#1456)" {
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
+    printf 'DISCORD_WEBHOOK=https://discord.example.com/webhook\n' \
+        > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    DISCORD_WEBHOOK_URL_BLOCKED="should-be-cleared"
+    DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="should-be-cleared"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="should-be-cleared"
+    DISCORD_WEBHOOK_URL_SLOW_PULL="should-be-cleared"
+    load_env_config
+    [ -z "${DISCORD_WEBHOOK_URL_BLOCKED}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_PERMISSIONS}" ]
+    [ -z "${DISCORD_WEBHOOK_URL_SLOW_PULL}" ]
+}
+
 @test "load_env_config strips trailing CR from CRLF env files" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'DISCORD_WEBHOOK=https://discord.example.com/hook\r\n' \
