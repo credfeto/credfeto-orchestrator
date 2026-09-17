@@ -3204,6 +3204,13 @@ STUBEOF
     [ ! -f "${args_log}" ]
 }
 
+@test "_discord_webhook_for falls back to DISCORD_WEBHOOK_URL for an unrecognised category (#1456)" {
+    DISCORD_WEBHOOK_URL="https://discord.example.com/general"
+    DISCORD_WEBHOOK_URL_PERMISSIONS="https://discord.example.com/permissions"
+    _discord_webhook_for "not_a_real_category"
+    [ "${DISCORD_RESOLVED_WEBHOOK_URL}" = "https://discord.example.com/general" ]
+}
+
 @test "notify_discord_permission_denials calls curl with embed payload including issue URL, count, and summary" {
     DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
     set_repo_context "org/repo"

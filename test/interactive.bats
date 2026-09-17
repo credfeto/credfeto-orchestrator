@@ -1036,13 +1036,22 @@ HOOKEOF
         '[ "$1" = "inspect" ] && exit 0' \
         'exit 0'
     make_stub curl "touch '${TEST_TMP}/discord-posted'; exit 0"
+    # `run` forks a subshell (needed since this die path calls `exit`, which `run main` alone
+    # can survive but a direct call cannot), so a post-run check of these vars would only ever
+    # see this test's own (never-touched) copies - never main's. ensure_agent_container_ready's
+    # die path calls notify_discord_claude_error just beforehand in that same subshell, so
+    # overriding it here captures the four vars' live values before the subshell exits
+    # (#1456 review, round 3).
+    notify_discord_claude_error() {
+        printf '%s\n%s\n%s\n%s\n' \
+            "${DISCORD_WEBHOOK_URL_BLOCKED}" "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" \
+            "${DISCORD_WEBHOOK_URL_PERMISSIONS}" "${DISCORD_WEBHOOK_URL_SLOW_PULL}" \
+            > "${TEST_TMP}/category-vars-at-die"
+    }
     run main
     [ "${status}" -eq 1 ]
     [ ! -e "${TEST_TMP}/discord-posted" ]
-    [ -z "${DISCORD_WEBHOOK_URL_BLOCKED}" ]
-    [ -z "${DISCORD_WEBHOOK_URL_AWAITING_APPROVAL}" ]
-    [ -z "${DISCORD_WEBHOOK_URL_PERMISSIONS}" ]
-    [ -z "${DISCORD_WEBHOOK_URL_SLOW_PULL}" ]
+    [ -z "$(cat "${TEST_TMP}/category-vars-at-die")" ]
 }
 
 @test "main refuses a non-TTY launch before touching anything" {
