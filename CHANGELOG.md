@@ -10,6 +10,19 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+
+## [0.0.4] - 2026-09-17
+### Security
 - Denied Claude Code Read/Write/Edit access to /tmp in development-full's claude-settings.json
 - Restricted git -C <dir> Bash calls to an explicit subcommand allowlist enforced by enforce-git-dash-c, closing the gap where the blanket Bash(git -C *) permission implicitly allowed any git subcommand (e.g. filter-branch, daemon, credential, submodule)
 - Scoped claude-settings.json's blanket ~/.claude Edit denies down to explicit sensitive files (settings*.json*, .credentials.json, hooks/**, sessions/**, history.jsonl, CLAUDE.md, skills/**, plugins/**) and added matching Read denies for the literal-path entries, freeing plans/** and other non-sensitive paths for normal access
@@ -55,13 +68,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Add git cherry-pick back to enforce-git-dash-c's subcommand allowlist (#1411), after a confirmed live need for it; the other subcommands #1394 dropped for having no confirmed use (am, mv, remote, restore, revert, rm, tag) stay blocked
 - SDK - Updated DotNet SDK to 10.0.401
 - Session/fingerprint state now lives under the XDG Base Directory Specification compliant ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo> instead of the hard-coded ~/.orchestrator/<owner>/<repo> (a new ORCHESTRATOR_STATE_DIR variable replaces every ~/.orchestrator reference across lib/git, lib/state, lib/discord and oneshot's lock directory); a non-destructive, idempotent migration step runs once at startup, from both oneshot's and interactive's entry points, and moves any existing ~/.orchestrator tree to the new location the first time either is run after upgrading (#52)
-### Deprecated
-### Removed
-### Deployment Changes
-
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
 
 ## [0.0.3] - 2026-08-19
 ### Security
