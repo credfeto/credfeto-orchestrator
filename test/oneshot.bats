@@ -1621,6 +1621,43 @@ teardown() {
     [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
 }
 
+@test "block_pr_for_idle_exhausted_failure includes the last session's diagnostic in the Blocked comment when one was recorded (#1448)" {
+    save_last_diagnostic "PullRequest" "5" "- Bash: gh pr view 5"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
+    grep -q -- '- Bash: gh pr view 5' "${call_log}"
+}
+
+@test "block_pr_for_idle_exhausted_failure produces the existing generic-only reason when no diagnostic was recorded (#1448)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_failure 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    run grep -q "Last session's diagnostic:" "${call_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "block_pr_for_idle_exhausted_review includes the last session's diagnostic in the Blocked comment when one was recorded (#1448)" {
+    save_last_diagnostic "PullRequest" "5" "- Bash: gh pr view 5"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_review 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
@@ -1970,6 +2007,18 @@ teardown() {
     [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
+@test "block_issue_for_idle_exhausted_no_progress includes the last session's diagnostic in the Blocked comment when one was recorded (#1448)" {
+    save_last_diagnostic "Issue" "99" "- Bash: gh issue view 99"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_issue_for_idle_exhausted_no_progress 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
+}
+
 # --- issue_should_advance_unchanged / block_issue_for_idle_exhausted_no_plan (#1427) ---
 # The plan-posted-not-approved case is already covered above ("... is false when the plan is not
 # approved, regardless of idle count") with the same has_plan_comment="true": that test already
@@ -2037,6 +2086,18 @@ teardown() {
     run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
     [ "${status}" -ne 0 ]
     [ ! -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
+}
+
+@test "block_issue_for_idle_exhausted_no_plan includes the last session's diagnostic in the Blocked comment when one was recorded (#1448)" {
+    save_last_diagnostic "Issue" "99" "- Bash: gh issue view 99"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_issue_for_idle_exhausted_no_plan 99 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
 }
 
 # --- fingerprinting --------------------------------------------------------
@@ -3428,6 +3489,25 @@ STUBEOF
     # been surfaced before tmpfile was deleted on that path (#1328).
     [ "${status}" -ne 0 ]
     grep -q "git status" "${notify_log}"
+}
+
+@test "invoke_claude persists the permission-denials summary as the last-session diagnostic even when the run also errors (#1448)" {
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    cat > "${STUB_BIN}/podman" << 'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = "inspect" ] && exit 1
+[ "$1" = "pull" ] && exit 0
+printf '{"is_error":true,"api_error_status":"500","result":"internal error","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}\n'
+STUBEOF
+    chmod +x "${STUB_BIN}/podman"
+
+    notify_discord_claude_error() { return 0; }
+    notify_discord_permission_denials() { return 0; }
+
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
+    [ "${status}" -ne 0 ]
+    run load_last_diagnostic "Issue" "42"
+    [[ "${output}" == *"Bash: git status"* ]]
 }
 
 @test "invoke_claude surfaces permission_denials via Discord on a successful run (#1328)" {
@@ -7521,6 +7601,160 @@ ENVEOF
     [[ "${output}" == *"2 permission denial"* ]]
     [[ "${output}" == *"Weird: {}"* ]]
     [[ "${output}" == *"NoInput: {}"* ]]
+}
+
+@test "handle_claude_permission_denials sets PERMISSION_DENIALS_SUMMARY when denials are found" {
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done","permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git status"}}]}' > "${tmpfile}"
+
+    notify_discord_permission_denials() { return 0; }
+
+    handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [[ "${PERMISSION_DENIALS_SUMMARY}" == *"Bash: git status"* ]]
+}
+
+@test "handle_claude_permission_denials resets PERMISSION_DENIALS_SUMMARY to empty when no denials are found" {
+    PERMISSION_DENIALS_SUMMARY="stale summary from a previous call"
+    local tmpfile
+    tmpfile="$(mktemp "${TEST_TMP}/claude.XXXXXX.json")"
+    printf '%s' '{"is_error":false,"result":"done"}' > "${tmpfile}"
+
+    handle_claude_permission_denials "${tmpfile}" "Issue" "42"
+    [ -z "${PERMISSION_DENIALS_SUMMARY}" ]
+}
+
+# --- claude_result_indicates_diagnostic_refusal (#1448) ------------------------
+
+@test "claude_result_indicates_diagnostic_refusal matches confirmed #182 incident phrasing" {
+    local texts=(
+        "Every invocation of gh — in any form, with any arguments — is denied by the permission system in this session (\"don't ask mode\")."
+        "I need you to either confirm gh should be allowlisted, or tell me an alternative way to interact with GitHub here."
+        "git push is denied. I can't proceed without a working git remote."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_diagnostic_refusal "${t}"
+        [ "${status}" -eq 0 ]
+    done
+}
+
+@test "claude_result_indicates_diagnostic_refusal does not match ordinary long-form workflow narration" {
+    local texts=(
+        "Implemented the feature, ran the tests, and pushed the commit. CI is green and the PR is ready for review."
+        "Fixed the failing test by correcting the assertion. The build passed and the change was denied entry to the cache once but retried successfully."
+    )
+    local t
+    for t in "${texts[@]}"; do
+        run claude_result_indicates_diagnostic_refusal "${t}"
+        [ "${status}" -ne 0 ]
+    done
+}
+
+@test "claude_result_indicates_diagnostic_refusal does not match a refusal-shaped result over the length cap" {
+    local long_text
+    long_text="is denied$(printf ' padding%.0s' $(seq 1 100))"
+    run claude_result_indicates_diagnostic_refusal "${long_text}"
+    [ "${status}" -ne 0 ]
+}
+
+# --- last-diagnostic marker (lib/state, #1448) ----------------------------------
+
+@test "load_last_diagnostic is empty when no marker file exists" {
+    run load_last_diagnostic "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "save_last_diagnostic then load_last_diagnostic round-trips" {
+    save_last_diagnostic "Issue" "42" "- Bash: git status"
+    run load_last_diagnostic "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "- Bash: git status" ]
+}
+
+@test "clear_last_diagnostic removes the marker" {
+    save_last_diagnostic "PullRequest" "7" "- Bash: git status"
+    clear_last_diagnostic "PullRequest" "7"
+    run load_last_diagnostic "PullRequest" "7"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "clear_last_diagnostic is a no-op when no marker exists" {
+    run clear_last_diagnostic "Issue" "99"
+    [ "${status}" -eq 0 ]
+}
+
+@test "last-diagnostic marker is keyed independently per item type and id" {
+    save_last_diagnostic "Issue" "1" "- Bash: git status"
+    run load_last_diagnostic "PullRequest" "1"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    run load_last_diagnostic "Issue" "2"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+# --- record_last_session_diagnostic (#1448) -------------------------------------
+
+@test "record_last_session_diagnostic persists the denials summary when PERMISSION_DENIALS_SUMMARY is set" {
+    PERMISSION_DENIALS_SUMMARY="- Bash: git status"
+    record_last_session_diagnostic "Issue" "42" "some unrelated result text"
+    run load_last_diagnostic "Issue" "42"
+    [ "${output}" = "- Bash: git status" ]
+}
+
+@test "record_last_session_diagnostic falls back to result_text when it matches the refusal heuristic" {
+    PERMISSION_DENIALS_SUMMARY=""
+    record_last_session_diagnostic "Issue" "42" "git push is denied by the permission system"
+    run load_last_diagnostic "Issue" "42"
+    [ "${output}" = "git push is denied by the permission system" ]
+}
+
+@test "record_last_session_diagnostic clears the marker on an ordinary successful result" {
+    PERMISSION_DENIALS_SUMMARY=""
+    save_last_diagnostic "Issue" "42" "stale diagnostic from a previous session"
+    record_last_session_diagnostic "Issue" "42" "Implemented the feature and pushed the commit."
+    run load_last_diagnostic "Issue" "42"
+    [ -z "${output}" ]
+}
+
+@test "record_last_session_diagnostic persists a denials summary even when the run is later flagged is_error (#1448)" {
+    # Called from invoke_claude before handle_claude_is_error's possible die, so a run that both
+    # had denials and ended in error still gets its diagnostic persisted.
+    PERMISSION_DENIALS_SUMMARY="- Bash: git push"
+    record_last_session_diagnostic "PullRequest" "7" "some error-ish result text"
+    run load_last_diagnostic "PullRequest" "7"
+    [ "${output}" = "- Bash: git push" ]
+}
+
+# --- append_last_diagnostic_to_reason (#1448) -----------------------------------
+
+@test "append_last_diagnostic_to_reason returns the reason unchanged when no marker exists" {
+    run append_last_diagnostic_to_reason "Issue" "42" "Generic block reason."
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Generic block reason." ]
+}
+
+@test "append_last_diagnostic_to_reason appends the fenced marker text when present" {
+    save_last_diagnostic "Issue" "42" "- Bash: git status"
+    run append_last_diagnostic_to_reason "Issue" "42" "Generic block reason."
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Generic block reason."* ]]
+    [[ "${output}" == *"Last session's diagnostic:"* ]]
+    [[ "${output}" == *'```'* ]]
+    [[ "${output}" == *"- Bash: git status"* ]]
+}
+
+@test "append_last_diagnostic_to_reason truncates an oversized diagnostic" {
+    local long_diagnostic
+    long_diagnostic=$(printf 'x%.0s' $(seq 1 1000))
+    save_last_diagnostic "Issue" "42" "${long_diagnostic}"
+    run append_last_diagnostic_to_reason "Issue" "42" "Generic block reason."
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"... (truncated; see the run log for the full list)"* ]]
+    [[ "${output}" != *"${long_diagnostic}"* ]]
 }
 
 # --- report_unparseable_rate_limit --------------------------------------------
@@ -13709,6 +13943,27 @@ STUBEOF
     grep -q "type=PullRequest id=5 reason=This PR has been worked ${MAX_PR_TOTAL_INVOCATIONS} times by the automation without reaching a mergeable state" "${_notif_log}"
 }
 
+@test "main includes the last session's diagnostic in the PR-runaway Blocked comment when one was recorded (#1448)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    save_last_diagnostic "PullRequest" "5" "- Bash: gh pr view 5"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${GH_CALL_LOG}"
+    grep -q -- '- Bash: gh pr view 5' "${GH_CALL_LOG}"
+}
+
 @test "main still blocks and warns loudly when the runaway-blocked marker cannot be written (#1093 review)" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -13985,6 +14240,26 @@ STUBEOF
     [ "${status}" -eq 0 ]
     grep -q "issue comment 10 --repo org/repo --body This issue has been worked ${MAX_ISSUE_TOTAL_INVOCATIONS} times by the automation without producing a mergeable pull request" "${GH_CALL_LOG}"
     grep -q "type=Issue id=10 reason=This issue has been worked ${MAX_ISSUE_TOTAL_INVOCATIONS} times by the automation without producing a mergeable pull request" "${_notif_log}"
+}
+
+@test "main includes the last session's diagnostic in the Issue-runaway Blocked comment when one was recorded (#1448)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
+    save_last_diagnostic "Issue" "10" "- Bash: gh issue view 10"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${GH_CALL_LOG}"
+    grep -q -- '- Bash: gh issue view 10' "${GH_CALL_LOG}"
 }
 
 @test "main invokes agent and increments the invocation counter for an Issue below the runaway cap (#1093)" {
