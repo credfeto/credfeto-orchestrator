@@ -68,11 +68,11 @@ RUN git init -q /opt/wshobson-agents \
     && git -C /opt/wshobson-agents checkout -q FETCH_HEAD \
     && chown -R root:root /opt/wshobson-agents
 
-# ---- dotnet/skills — sparse-checkout seven plugins --------------------------
+# ---- dotnet/skills: sparse-checkout seven plugins ----------------------------
 # The full repo covers many more plugins than this image needs; only the
 # seven named in issue #1333 are pulled in. `--filter=blob:none` pulls only
 # the metadata up front, then sparse-checkout materialises just those
-# subtrees. Pinned to an exact commit rather than the repo's only tag — see
+# subtrees. Pinned to an exact commit rather than the repo's only tag; see
 # the pin-policy comment block above.
 # hadolint ignore=DL3059
 RUN git init -q /opt/dotnet-skills \
@@ -135,7 +135,7 @@ RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
 # The resulting count is recorded to /opt/.claude-skill-count (rather than
 # hardcoded in the sanity check below) so the check stays correct as any
 # source's skill set changes, while still catching a broken symlink pass.
-# hadolint ignore=DL3059
+# hadolint ignore=DL3059,SC3045
 RUN mkdir -p /home/developer/.claude/skills \
     && chown root:root /home/developer/.claude \
     && chmod 0755 /home/developer/.claude \
@@ -159,14 +159,14 @@ RUN mkdir -p /home/developer/.claude/skills \
         case "${skills_root}" in \
             /opt/credfeto-ai-skills/*) prefix="credfeto-" ;; \
         esac; \
-        find "${skills_root}" -mindepth 1 -maxdepth 1 -type d -exec sh -c ' \
-                skill_dir="$1"; prefix="$2"; \
+        find "${skills_root}" -mindepth 1 -maxdepth 1 -type d -print0 \
+            | while IFS= read -r -d '' skill_dir; do \
                 skill_name="${prefix}$(basename "${skill_dir}")"; \
                 target="/home/developer/.claude/skills/${skill_name}"; \
                 test ! -e "${target}" \
-                    || { echo "FATAL: duplicate skill name ${skill_name} (from ${skill_dir})" >&2; exit 1; }; \
+                    || { echo "FATAL: duplicate skill name '${skill_name}' (from ${skill_dir})" >&2; exit 1; }; \
                 ln -s "${skill_dir}" "${target}"; \
-            ' _ {} "${prefix}" \; ; \
+              done; \
     done \
     && find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-skill-count \
     && chown -R root:root /home/developer/.claude/skills /opt/.claude-skill-count \

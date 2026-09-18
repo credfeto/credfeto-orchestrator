@@ -29,7 +29,7 @@ install and why they're split out.
 | `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; developer:developer ownership |
 | `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; developer:developer ownership |
 | `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
-| `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag — see pin-policy comment in the Dockerfile); root:root ownership |
+| `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
 ### Linking skills into `~/.claude/skills`
 
@@ -44,7 +44,7 @@ roots themselves):
 | `/opt/wshobson-agents` | `plugins/{javascript-typescript,python-development,shell-scripting}/skills/<name>/` | 23 |
 | `/opt/cc-devops-skills` | `devops-skills-plugin/skills/<name>/` | 31 |
 | `/opt/markdown-linter-fixer` | `skills/<name>/` | 1 |
-| `/opt/dotnet-skills` | `plugins/{dotnet,dotnet-advanced,dotnet-diag,dotnet-msbuild,dotnet-nuget,dotnet-test,dotnet-upgrade}/skills/<name>/` | counted dynamically — see Stage 1 sanity check |
+| `/opt/dotnet-skills` | `plugins/{dotnet,dotnet-advanced,dotnet-diag,dotnet-msbuild,dotnet-nuget,dotnet-test,dotnet-upgrade}/skills/<name>/` | counted dynamically, see Stage 1 sanity check |
 
 The symlinking step is driven by a `find -mindepth 1 -maxdepth 1 -type d` loop over each repo's `skills/`
 subtree (not a hardcoded name list), so newly added upstream skills are picked up automatically on the
@@ -247,7 +247,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 each be root:root 0755 and executable; the
 `.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files must each be root:root 0444.
 
-**Claude Code skills wiring** — the number of symlinks recorded at build time in
+**Claude Code skills wiring**: the number of symlinks recorded at build time in
 `/opt/.claude-skill-count` must exist directly under `/home/developer/.claude/skills/`; a spot-check of
 representative skill names (one per source repo, e.g. `markdown-linter-fixer`, `tdd`, `k8s-debug`,
 `python-type-safety`, `bash-defensive-patterns`, `terraform-validator`, `analyzing-dotnet-performance`)
