@@ -1658,6 +1658,67 @@ teardown() {
     grep -q "Last session's diagnostic:" "${call_log}"
 }
 
+# --- block_pr_for_idle_exhausted_no_progress (#1463) -----------------------------
+
+@test "block_pr_for_idle_exhausted_no_progress does not post a comment when the label cannot be verified (#1463)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified PullRequest #5 reason=This PR.s automation idle-invocation budget' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress posts the no-known-blocking-reason text once the label is verified present (#1463)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR's automation idle-invocation budget" "${call_log}"
+    grep -q "notified PullRequest #5 reason=This PR.s automation idle-invocation budget" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1463)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_no_progress does not mark forgiveness when the label cannot be verified (#1463)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_no_progress includes the last session's diagnostic in the Blocked comment when one was recorded (#1463)" {
+    save_last_diagnostic "PullRequest" "5" "- Bash: gh pr view 5"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
@@ -5528,7 +5589,7 @@ stub_plan_already_self_heal_marked() {
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged draft PR reached via issue pivot with idle budget exhausted but no failed required check (regression guard) (#1447)" {
+@test "main blocks unchanged draft PR reached via issue pivot with idle budget exhausted and no known blocking reason (#1463)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -5550,10 +5611,8 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 99' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 99' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main saves issue fingerprint after running agent on PR via issue pivot" {
@@ -14392,7 +14451,7 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged PR with idle budget exhausted but no failed required check (regression guard)" {
+@test "main blocks unchanged PR with idle budget exhausted and no known blocking reason in direct-PR path (#1463)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -14409,10 +14468,8 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main invokes the agent for an unchanged draft PR within the idle budget in direct-PR path (#1447)" {
@@ -14455,10 +14512,10 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged draft PR with idle budget exhausted but no failed required check (#1447)" {
-    # Matches the non-draft regression guard above: with no specific escalation reason, an
-    # idle-exhausted draft PR is skipped (not re-invoked forever) rather than Blocked — the same
-    # treatment a non-draft PR already gets in this exact case.
+@test "main blocks unchanged draft PR with idle budget exhausted and no known blocking reason in direct-PR path (#1463)" {
+    # Matches the non-draft case above: with no failed-check/review-request escalation reason, an
+    # idle-exhausted draft PR now gets the no-progress escalation instead of being silently
+    # skipped — the same treatment a non-draft PR gets in this exact case (#1463).
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -14475,10 +14532,8 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main does not invoke the agent for a changed-fingerprint terminal PR (auto-merge armed, nothing failed/pending) (#1256)" {

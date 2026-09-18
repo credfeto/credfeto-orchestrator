@@ -87,7 +87,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
-# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged,
+# block_pr_for_idle_exhausted_no_progress, pr_json_needs_review_approval,
+# pr_should_advance_unchanged, issue_should_advance_unchanged,
 # block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
 # declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
@@ -593,8 +594,9 @@ main() {
                                 block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                             else
-                                info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo")")
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                             fi
                             count_unchanged=$((count_unchanged + 1))
                             continue
@@ -1054,8 +1056,9 @@ main() {
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
-                        info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged - skipping")")
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
                     continue

@@ -295,6 +295,23 @@ block_pr_for_idle_exhausted_review() {
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
+# Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been exhausted
+# with neither a failed required check nor an unaddressed review request to explain why — the
+# third PR escalation path, covering the "everything's fine, just idle" gap the two siblings above
+# don't (#1463). Without this, pr_should_advance_unchanged keeps returning "park" forever once the
+# idle budget is exhausted and neither sibling condition applies (e.g. a PR sitting at a board
+# column between workflow phases with CI green and no requested changes), with nothing left in
+# oneshot's decision tree to call — the PR silently rotted with zero signal except a human noticing
+# and commenting. Same shape as its two siblings; the "no known blocking reason" wording mirrors
+# block_issue_for_idle_exhausted_no_progress below so a human immediately understands why the PR
+# was blocked despite nothing being visibly wrong.
+block_pr_for_idle_exhausted_no_progress() {
+    local item_id="$1" item_repo="$2"
+    local reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason — no required check has failed and there is no unaddressed review request. Blocking this PR until a human investigates."
+    reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
+    apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
+}
+
 # Posts a Blocked-marking comment and label when a plan-approved Issue's idle-invocation budget
 # has been exhausted with no durable progress observed (no new PR, no new trusted comment/label/
 # state change) — mirrors block_pr_for_idle_exhausted_failure/_review for Issues (#1264). Pushing
