@@ -142,12 +142,12 @@ handle_claude_is_error() {
 # heuristic below, each of which supplies its own regex and cares only about the match result.
 match_nocase() {
     local text="$1" re="$2"
-    local shopt_nocasematch
-    shopt_nocasematch=$(shopt -p nocasematch)
+    local was_set=1
+    shopt -q nocasematch && was_set=0
     shopt -s nocasematch
     [[ "${text}" =~ ${re} ]]
     local match_rc=$?
-    eval "${shopt_nocasematch}"
+    [ "${was_set}" -eq 0 ] || shopt -u nocasematch
     return "${match_rc}"
 }
 
