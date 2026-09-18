@@ -1336,7 +1336,26 @@ main() {
         clear_infra_failure_count "${item_type}" "${item_id}"
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
-            [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+            if [ "${pr_idle_advance}" = "1" ]; then
+                pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+                # The pre-invocation pending-CI check (above) can race a container's own
+                # slower startup: CI can still be genuinely pending by the time the agent
+                # itself checks, several seconds to a minute later, so its own PHASE B
+                # no-op still lands here as an "unchanged" idle-advance. Re-checking with
+                # freshly fetched PR state — same non-agentic pr_json_has_pending_ci_checks
+                # test used pre-invocation, so both v1 (StatusContext) and v2 (CheckRun)
+                # checks are covered identically — catches that race after the fact: if CI
+                # is still pending right now, this tick was really a CI wait, not idleness,
+                # so it must not count against the budget (confirmed live on PR #1473,
+                # whose own idle budget was exhausted by exactly this race one minute
+                # before its CI run finished). A failed fetch here falls back to charging
+                # the tick as before, rather than risk the budget never advancing at all.
+                local post_run_pr_json
+                if post_run_pr_json=$(fetch_pr_json "${item_id}") && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
+                    info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"
+                    pr_new_idle="${PR_INVOCATION_IDLE}"
+                fi
+            fi
             save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
         elif [ "${item_type}" = "Issue" ]; then
             local issue_new_idle=0
