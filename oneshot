@@ -365,11 +365,17 @@ main() {
         set_repo_context "${item_repo}"
 
         if [ "${item_type}" = "Issue" ]; then
-            # Lazy check: does this repo already have an open non-blocked PR that we are actually
-            # driving (created by us AND containing at least one commit we authored — #1131)?
+            # Lazy check: does this repo already have an open PR that we are actually driving
+            # (created by us AND containing at least one commit we authored — #1131)? Blocked
+            # candidates are deliberately included (unlike the direct-PR path's own lookups)
+            # so a Blocked PR is recognized as "this issue's own PR exists, but is blocked" and
+            # the Issue stands off via the existing pr_json_has_blocked_label check below, rather
+            # than being filtered out here and silently misread as "no PR yet" — which re-armed
+            # the plan-approved idle-reinvocation path on an issue that already had a PR, wastefully
+            # re-invoking a session that could only ever find the same blocked PR and stop (#1463).
             # A transient gh failure here (identity lookup or PR list) should skip just this item,
             # not abort the whole cycle and throw away every other priority item (#1085).
-            if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}"); then
+            if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}" true); then
                 warn "Failed to query open PRs for ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to query open PRs - skipping this item for now")")
@@ -435,7 +441,7 @@ main() {
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
 
-                info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
+                info "Issue #${item_id} in ${item_repo}: found open PR #${open_pr} — switching to PR workflow"
 
                 if ! pr_json=$(fetch_pr_json "${open_pr}"); then
                     warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"

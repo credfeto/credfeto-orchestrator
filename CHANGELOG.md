@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Fixed
 - PR idle-invocation budget exhaustion now escalates to a Blocked label and explanatory comment even when CI is green and there is no changes-requested review, closing the one gap #1075's two escalation paths didn't cover - a healthy-looking PR sitting idle at a workflow phase boundary no longer silently rots forever with zero signal (#1463)
 - PR idle-invocation budget no longer counts a tick against the idle cap when a required CI check is still genuinely pending after the session ended - closes a race where the orchestrator's own pre-session pending-check missed a check that the agent's own later, slower check still found running, silently burning the idle budget on nothing but CI-wait time (#1463)
+- A Blocked pull request linked to an Issue is now recognized as such during the Issue-to-PR pivot lookup, instead of being filtered out and silently misread as 'no PR yet' - closing the gap where blocking a PR did not actually stand off its linked Issue, which kept getting re-invoked against its own idle budget for a session that could only ever find the same blocked PR and stop (#1463)
 ### Changed
 ### Deprecated
 ### Removed

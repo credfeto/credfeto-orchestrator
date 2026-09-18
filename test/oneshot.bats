@@ -4367,6 +4367,16 @@ STUBEOF
     [ "${output}" = "8" ]
 }
 
+@test "find_open_nonblocked_pr_for_repo returns a Blocked PR when include_blocked is true (#1463)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":7,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}},{"number":8,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr7.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 7"*"--json commits"*) cat "'"${TEST_TMP}"'/pr7.json" ;; *) exit 1 ;; esac'
+    run find_open_nonblocked_pr_for_repo "org/repo" true
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "7" ]
+}
+
 @test "find_open_nonblocked_pr_for_repo skips a candidate with no bot-authored commits and returns the next (#1131)" {
     _GH_ME="testuser"
     printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":50,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
@@ -7394,6 +7404,37 @@ ENVEOF
     run main
     [ "${status}" -eq 0 ]
     grep -q 'type=PullRequest id=99' "${_notif_log}"
+}
+
+@test "main finds and skips a Blocked linked PR via the real lookup instead of falling through to plan-approved re-invocation (#1463)" {
+    # Regression test for the real end-to-end bug: find_open_nonblocked_pr_for_repo used to
+    # exclude Blocked PRs from its own candidates, making a Blocked linked PR invisible to the
+    # issue-pivot lookup — the Issue then fell through into "plan approved, no PR yet" idle
+    # re-invocation instead of recognizing "this issue's own PR exists, but is blocked" and
+    # standing off. Deliberately does NOT stub find_open_nonblocked_pr_for_repo itself, so the
+    # real function — and the include_blocked=true argument threaded from oneshot's call site —
+    # is exercised end to end, unlike the test above which stubs the lookup away entirely.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    _GH_ME="testuser"
+    printf '%s' '[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr99.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 99"*"--json commits"*) cat "'"${TEST_TMP}"'/pr99.json" ;; *) exit 1 ;; esac'
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo: found open PR #99 — switching to PR workflow"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [[ "${output}" != *"plan approved"* ]]
+    [ ! -f "${_invoke_log}" ]
 }
 
 @test "main posts an explanatory comment and reason when no .ai-instructions is found (#1140)" {
