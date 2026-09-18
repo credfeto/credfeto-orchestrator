@@ -219,6 +219,35 @@ apply_blocked_label_with_reason() {
     return "${rc}"
 }
 
+# Appends the last session's diagnostic (if any was recorded for this item - see
+# record_last_session_diagnostic, lib/podman) to an idle-exhaustion/runaway Blocked reason,
+# fenced under a short heading and truncated via the same truncate_for_display (lib/discord)
+# notify_discord_permission_denials uses for the same text (#1448). Fencing and truncation both
+# matter: the raw text is tool_input.command/.file_path content (or a short diagnostic-refusal
+# result), which can contain @name or #123 sequences that would otherwise ping a user or
+# cross-link an unrelated issue when posted unfenced into a PR/issue comment. Returns reason
+# unchanged when no marker exists, so callers can always pass their reason through this
+# unconditionally.
+#
+# The diagnostic is attacker-influenceable (it is the literal tool_input.command/.file_path of a
+# denied tool call, which can echo content from an issue/PR body Claude was working from), so any
+# backtick run it contains is neutralised before fencing - otherwise a "```" sequence in the
+# diagnostic would close the fence early and un-fence the remainder, defeating the very protection
+# this comment describes (code review, #1467).
+append_last_diagnostic_to_reason() {
+    local item_type="$1" item_id="$2" reason="$3"
+    local diagnostic
+    diagnostic=$(load_last_diagnostic "${item_type}" "${item_id}")
+    [ -n "${diagnostic}" ] || { printf '%s' "${reason}"; return 0; }
+
+    local truncated
+    truncated=$(truncate_for_display "${diagnostic}" 2>/dev/null) || truncated="${diagnostic}"
+    truncated=${truncated//\`/\'}
+
+    local heading="Last session's diagnostic:"
+    printf '%s\n\n%s\n```\n%s\n```' "${reason}" "${heading}" "${truncated}"
+}
+
 # Posts a Blocked-marking comment and label when a PR's idle-invocation budget has been
 # exhausted while a required check is still definitively failed, so a human is pulled in instead
 # of the PR silently rotting forever — the idle budget alone has no way to escalate. The label is
@@ -232,6 +261,7 @@ apply_blocked_label_with_reason() {
 block_pr_for_idle_exhausted_failure() {
     local item_id="$1" item_repo="$2"
     local reason="This PR has a failed required check and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
@@ -261,6 +291,7 @@ pr_json_needs_review_approval() {
 block_pr_for_idle_exhausted_review() {
     local item_id="$1" item_repo="$2"
     local reason="This PR has an unaddressed review requesting changes and the automation's idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted without further progress. Blocking this PR until a human investigates."
+    reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
 
@@ -272,6 +303,7 @@ block_pr_for_idle_exhausted_review() {
 block_issue_for_idle_exhausted_no_progress() {
     local item_id="$1" item_repo="$2"
     local reason="This issue's plan is approved but no further progress (e.g. a Pull Request) has been observed, and the automation's idle-invocation budget (${MAX_ISSUE_IDLE_INVOCATIONS}) is exhausted. Blocking this issue until a human investigates."
+    reason=$(append_last_diagnostic_to_reason "Issue" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
@@ -286,6 +318,7 @@ block_issue_for_idle_exhausted_no_progress() {
 block_issue_for_idle_exhausted_no_plan() {
     local item_id="$1" item_repo="$2"
     local reason="This issue was re-invoked ${MAX_ISSUE_IDLE_INVOCATIONS} times to produce an implementation plan, but none was posted. Check agent transcripts / orchestrator logs for a session ending without output. Blocking this issue until a human investigates; removing Blocked grants a fresh idle budget."
+    reason=$(append_last_diagnostic_to_reason "Issue" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "Issue" "${item_id}" "${item_repo}" "${reason}"
 }
 
