@@ -25,13 +25,16 @@ ARG CC_DEVOPS_SKILLS_REF=v1.0.0
 #     main has advanced. dotnet-claude-kit's only tag (v0.7.0) is stale and
 #     predates a skill-catalog refactor this image depends on, so it is
 #     pinned this way instead of to that tag. wshobson/agents publishes no
-#     tags at all, so it is pinned this way too.
+#     tags at all, so it is pinned this way too. dotnet/skills' only tag
+#     (v1.0.0) predates the dotnet-advanced plugin entirely, so it is pinned
+#     to a commit rather than that tag for the same reason as dotnet-claude-kit.
 #   - credfeto-owned repos are implicitly trusted: credfeto-global-pre-commit
 #     always tracks live main HEAD with no pinned-commit assertion.
 ARG DOTNET_CLAUDE_KIT_COMMIT=cbad34af27faf94b52a86694925b91ba49f3d10c
 ARG WSHOBSON_AGENTS_COMMIT=5cc2549a50fc672230efd0a0307e2fd27ffba792
 ARG CC_DEVOPS_SKILLS_COMMIT=7fe7595e4512f8ce43dcf956aa5190b96d627dd1
 ARG MARKDOWN_LINTER_FIXER_COMMIT=72aedc7915a0918d897b63b28d935989c054585e
+ARG DOTNET_SKILLS_COMMIT=874ff14cff1015104cf343ed480a6879020b4820
 
 # NuGet.Config, NUGET_PACKAGES, claude-code, all twelve .NET global tools, their
 # dotnet-* subcommand aliases, and the PSScriptAnalyzer module are already baked
@@ -64,6 +67,28 @@ RUN git init -q /opt/wshobson-agents \
         plugins/shell-scripting \
     && git -C /opt/wshobson-agents checkout -q FETCH_HEAD \
     && chown -R root:root /opt/wshobson-agents
+
+# ---- dotnet/skills: sparse-checkout seven plugins ----------------------------
+# The full repo covers many more plugins than this image needs; only the
+# seven named in issue #1333 are pulled in. `--filter=blob:none` pulls only
+# the metadata up front, then sparse-checkout materialises just those
+# subtrees. Pinned to an exact commit rather than the repo's only tag; see
+# the pin-policy comment block above.
+# hadolint ignore=DL3059
+RUN git init -q /opt/dotnet-skills \
+    && git -C /opt/dotnet-skills sparse-checkout init --cone \
+    && git -C /opt/dotnet-skills fetch -q --depth 1 --filter=blob:none \
+        https://github.com/dotnet/skills.git "${DOTNET_SKILLS_COMMIT}" \
+    && git -C /opt/dotnet-skills sparse-checkout set \
+        plugins/dotnet \
+        plugins/dotnet-advanced \
+        plugins/dotnet-diag \
+        plugins/dotnet-msbuild \
+        plugins/dotnet-nuget \
+        plugins/dotnet-test \
+        plugins/dotnet-upgrade \
+    && git -C /opt/dotnet-skills checkout -q FETCH_HEAD \
+    && chown -R root:root /opt/dotnet-skills
 
 # ---- akin-ozer/cc-devops-skills (GitHub Actions et al) ----------------------
 # CC_DEVOPS_SKILLS_REF is the git tag used for the shallow clone.
@@ -110,7 +135,7 @@ RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
 # The resulting count is recorded to /opt/.claude-skill-count (rather than
 # hardcoded in the sanity check below) so the check stays correct as any
 # source's skill set changes, while still catching a broken symlink pass.
-# hadolint ignore=DL3059
+# hadolint ignore=DL3059,SC3045
 RUN mkdir -p /home/developer/.claude/skills \
     && chown root:root /home/developer/.claude \
     && chmod 0755 /home/developer/.claude \
@@ -121,6 +146,13 @@ RUN mkdir -p /home/developer/.claude/skills \
         /opt/wshobson-agents/plugins/shell-scripting/skills \
         /opt/cc-devops-skills/devops-skills-plugin/skills \
         /opt/markdown-linter-fixer/skills \
+        /opt/dotnet-skills/plugins/dotnet/skills \
+        /opt/dotnet-skills/plugins/dotnet-advanced/skills \
+        /opt/dotnet-skills/plugins/dotnet-diag/skills \
+        /opt/dotnet-skills/plugins/dotnet-msbuild/skills \
+        /opt/dotnet-skills/plugins/dotnet-nuget/skills \
+        /opt/dotnet-skills/plugins/dotnet-test/skills \
+        /opt/dotnet-skills/plugins/dotnet-upgrade/skills \
         /opt/credfeto-ai-skills/ai/skills; do \
         test -d "${skills_root}" || { echo "FATAL: skills root ${skills_root} is missing" >&2; exit 1; }; \
         prefix=""; \
@@ -241,6 +273,7 @@ RUN { \
       echo "wshobson-agents: ${WSHOBSON_AGENTS_COMMIT}"; \
       echo "cc-devops-skills: ${CC_DEVOPS_SKILLS_REF} @ ${CC_DEVOPS_SKILLS_COMMIT}"; \
       echo "markdown-linter-fixer: ${MARKDOWN_LINTER_FIXER_REF} @ ${MARKDOWN_LINTER_FIXER_COMMIT}"; \
+      echo "dotnet-skills: ${DOTNET_SKILLS_COMMIT}"; \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
       echo "pre-commit-check: present-only, no --version support"; \
       echo "querydb: present-only, no --version support"; \
@@ -352,7 +385,7 @@ RUN set -e; \
     expected_skill_count=$(cat /opt/.claude-skill-count); \
     [ "$skill_count" -eq "$expected_skill_count" ] && [ "$skill_count" -gt 0 ] \
         || { echo "FATAL sanity: expected $expected_skill_count skill symlinks in ~/.claude/skills (recorded at build time), found $skill_count" >&2; exit 1; }; \
-    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator credfeto-git-commit; do \
+    for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator credfeto-git-commit analyzing-dotnet-performance; do \
         test -f "/home/developer/.claude/skills/${skill}/SKILL.md" \
             || { echo "FATAL sanity: skill '$skill' missing or has no SKILL.md" >&2; exit 1; }; \
     done; \

@@ -29,11 +29,12 @@ install and why they're split out.
 | `/opt/wshobson-agents` | `github.com/wshobson/agents` | Sparse checkout of three plugins only: `plugins/javascript-typescript`, `plugins/python-development`, `plugins/shell-scripting`; developer:developer ownership |
 | `/opt/cc-devops-skills` | `github.com/akin-ozer/cc-devops-skills` | Full shallow clone; developer:developer ownership |
 | `/opt/markdown-linter-fixer` | `github.com/s2005/markdown-linter-fixer-skill` | Shallow clone pinned to the tag in `MARKDOWN_LINTER_FIXER_REF` (default `v1.5.4`); developer:developer ownership |
+| `/opt/dotnet-skills` | `github.com/dotnet/skills` | Sparse checkout of seven plugins only: `plugins/dotnet`, `plugins/dotnet-advanced`, `plugins/dotnet-diag`, `plugins/dotnet-msbuild`, `plugins/dotnet-nuget`, `plugins/dotnet-test`, `plugins/dotnet-upgrade`; pinned to `DOTNET_SKILLS_COMMIT` (no usable tag, see pin-policy comment in the Dockerfile); root:root ownership |
 
 ### Linking skills into `~/.claude/skills`
 
 Claude Code discovers "personal" skills as immediate subdirectories of `~/.claude/skills/`, each
-containing a `SKILL.md`. The four repos above nest their skills at different depths, so after cloning,
+containing a `SKILL.md`. The repos above nest their skills at different depths, so after cloning,
 every individual skill directory is symlinked into `/home/developer/.claude/skills/<name>` (not the repo
 roots themselves):
 
@@ -43,6 +44,7 @@ roots themselves):
 | `/opt/wshobson-agents` | `plugins/{javascript-typescript,python-development,shell-scripting}/skills/<name>/` | 23 |
 | `/opt/cc-devops-skills` | `devops-skills-plugin/skills/<name>/` | 31 |
 | `/opt/markdown-linter-fixer` | `skills/<name>/` | 1 |
+| `/opt/dotnet-skills` | `plugins/{dotnet,dotnet-advanced,dotnet-diag,dotnet-msbuild,dotnet-nuget,dotnet-test,dotnet-upgrade}/skills/<name>/` | counted dynamically, see Stage 1 sanity check |
 
 The symlinking step is driven by a `find -mindepth 1 -maxdepth 1 -type d` loop over each repo's `skills/`
 subtree (not a hardcoded name list), so newly added upstream skills are picked up automatically on the
@@ -183,7 +185,8 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/opt/wshobson-agents/` | root:root | 0755 | Sparse-checkout of javascript-typescript, python-development, shell-scripting plugins; agent can read/execute but not modify |
 | `/opt/cc-devops-skills/` | root:root | 0755 | GitHub Actions devops skills plugin; agent can read/execute but not modify |
 | `/opt/markdown-linter-fixer/` | root:root | 0755 | Markdown linter/fixer skill (pinned to `MARKDOWN_LINTER_FIXER_REF`); agent can read/execute but not modify |
-| `/home/developer/.claude/skills/` | root:root | 0755 | 100 symlinks into the `/opt/*` skill repos above, one per skill; agent can read/execute but not add, remove, or retarget |
+| `/opt/dotnet-skills/` | root:root | 0755 | Sparse-checkout of dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade plugins (pinned to `DOTNET_SKILLS_COMMIT`); agent can read/execute but not modify |
+| `/home/developer/.claude/skills/` | root:root | 0755 | Symlinks into the `/opt/*` skill repos above, one per skill (count recorded at build time in `/opt/.claude-skill-count`); agent can read/execute but not add, remove, or retarget |
 | `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code settings (from `claude-settings.json`); read-only for all users |
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/home/developer/.claude/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
@@ -244,10 +247,11 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 each be root:root 0755 and executable; the
 `.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files must each be root:root 0444.
 
-**Claude Code skills wiring** — exactly 100 symlinks must exist directly under
-`/home/developer/.claude/skills/`; a spot-check of representative skill names (one per source repo,
-e.g. `markdown-linter-fixer`, `tdd`, `k8s-debug`, `python-type-safety`, `bash-defensive-patterns`,
-`terraform-validator`) must each resolve to a directory containing `SKILL.md`.
+**Claude Code skills wiring**: the number of symlinks recorded at build time in
+`/opt/.claude-skill-count` must exist directly under `/home/developer/.claude/skills/`; a spot-check of
+representative skill names (one per source repo, e.g. `markdown-linter-fixer`, `tdd`, `k8s-debug`,
+`python-type-safety`, `bash-defensive-patterns`, `terraform-validator`, `analyzing-dotnet-performance`)
+must each resolve to a directory containing `SKILL.md`.
 
 ### Stage 2 — acceptance test suite
 
