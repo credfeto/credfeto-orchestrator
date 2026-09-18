@@ -14,6 +14,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
 - Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image
 ### Fixed
+- TBD - to be finalized after review
 ### Changed
 ### Deprecated
 ### Removed
