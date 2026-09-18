@@ -242,7 +242,7 @@ append_last_diagnostic_to_reason() {
 
     local truncated
     truncated=$(truncate_for_display "${diagnostic}" 2>/dev/null) || truncated="${diagnostic}"
-    truncated=$(printf '%s' "${truncated}" | tr '`' "'")
+    truncated=$(tr '`' "'" <<< "${truncated}")
 
     local heading="Last session's diagnostic:"
     printf '%s\n\n%s\n```\n%s\n```' "${reason}" "${heading}" "${truncated}"
