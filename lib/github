@@ -267,7 +267,7 @@ find_open_nonblocked_pr_for_repo() {
 
 # Returns the number of the first open PR in the given repo, regardless of author or Blocked
 # label — the broad "is this repo's single active-branch/PR slot occupied at all" question,
-# distinct from find_open_nonblocked_pr_for_repo above, which deliberately excludes Blocked PRs
+# distinct from find_open_nonblocked_pr_for_repo above, which by default excludes Blocked PRs
 # and non-bot-authored PRs for its own narrower "is there a PR I should pivot into and drive"
 # question (#1131/#1134). A Blocked PR, or one authored by a human or another tool, still
 # occupies the repo's one-active-branch-or-PR-at-a-time slot per the mandatory PR Lifecycle rule
