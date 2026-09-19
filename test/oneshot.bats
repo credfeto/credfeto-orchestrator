@@ -5598,13 +5598,14 @@ stub_plan_already_self_heal_marked() {
     fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     local _board_call_file="${TEST_TMP}/_board_calls"
     printf '0' > "${_board_call_file}"
-    board_substatus_for_item() {
+    fetch_single_item_workflow_status() {
         local _count
         _count=$(cat "${_board_call_file}")
         _count=$((_count + 1))
         printf '%d' "${_count}" > "${_board_call_file}"
         [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
     }
+    compute_pr_last_agent_comment_seen() { printf ''; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -5617,33 +5618,22 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [ -f "${_invoke_log}" ]
-    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 99
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
-@test "main resets the idle budget when a new comment is posted during the session, via issue pivot (#1474)" {
+@test "main resets the idle budget when a new trusted comment is posted during the session, via issue pivot (#1474)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     find_open_nonblocked_pr_for_repo() { printf '99\n'; }
     fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
-    printf '0' > "${_pr_json_call_file}"
-    fetch_pr_json() {
-        local _count
-        _count=$(cat "${_pr_json_call_file}")
-        _count=$((_count + 1))
-        printf '%d' "${_count}" > "${_pr_json_call_file}"
-        if [ "${_count}" -eq 1 ]; then
-            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'
-        else
-            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[{"body":"Posted the reply"}],"reviews":[],"statusCheckRollup":[]}\n'
-        fi
-    }
-    board_substatus_for_item() { printf 'Development'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_single_item_workflow_status() { printf 'Development'; }
+    compute_pr_last_agent_comment_seen() { printf '2026-09-19T12:00:00Z\n'; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -5656,7 +5646,7 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [ -f "${_invoke_log}" ]
-    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 99
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
@@ -5670,7 +5660,8 @@ stub_plan_already_self_heal_marked() {
     find_open_nonblocked_pr_for_repo() { printf '99\n'; }
     fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    board_substatus_for_item() { printf 'AI Review'; }
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+    compute_pr_last_agent_comment_seen() { printf ''; }
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json()       { printf 'fp-same\n'; }
     load_pr_fingerprint()       { printf 'fp-same\n'; }
@@ -12149,6 +12140,71 @@ STUBEOF
     [ "${output}" = "Human Review" ]
 }
 
+# --- fetch_single_item_workflow_status (#1474) ------------------------------
+
+@test "fetch_single_item_workflow_status returns Unknown when the board is not configured" {
+    _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
+@test "fetch_single_item_workflow_status resolves the status name for a single PR via node-id then item-id" {
+    # Each gh invocation here uses its own --jq filter (matching real gh's behaviour), so the
+    # stub must return the already-extracted value directly, not the wrapping JSON envelope —
+    # unlike update_workflow_status's own gh stubs elsewhere, which only assert the call
+    # happened and never check the extracted value downstream.
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    _WF_OPTION_IDS[Development]="opt_dev"
+    make_stub gh 'case "$*" in
+        *"pulls/42"*) printf "PR_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "opt_dev\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Development" ]
+}
+
+@test "fetch_single_item_workflow_status uses the issues API path for an Issue" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    _WF_OPTION_IDS[Development]="opt_dev"
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+        case "$*" in
+        *"issues/42"*) printf "Issue_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "opt_dev\n" ;;
+        *) exit 1 ;;
+        esac'
+    run fetch_single_item_workflow_status "Issue" 42
+    [ "${output}" = "Development" ]
+    grep -q "issues/42" "${call_log}"
+}
+
+@test "fetch_single_item_workflow_status returns Unknown when the node ID lookup fails" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    make_stub gh 'exit 1'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
+@test "fetch_single_item_workflow_status returns Unknown for an item not on the board" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    make_stub gh 'case "$*" in
+        *"pulls/42"*) printf "PR_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
 # --- _wf_status_ordinal (#1276) ---------------------------------------------
 
 @test "_wf_status_ordinal returns the index of a known status name" {
@@ -14729,13 +14785,14 @@ STUBEOF
     fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
     local _board_call_file="${TEST_TMP}/_board_calls"
     printf '0' > "${_board_call_file}"
-    board_substatus_for_item() {
+    fetch_single_item_workflow_status() {
         local _count
         _count=$(cat "${_board_call_file}")
         _count=$((_count + 1))
         printf '%d' "${_count}" > "${_board_call_file}"
         [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
     }
+    compute_pr_last_agent_comment_seen() { printf ''; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     save_pr_invocation_counts 5 2 2
@@ -14744,34 +14801,25 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
-@test "main resets the idle budget when a new comment is posted during the session, in direct-PR path (#1474)" {
+@test "main resets the idle budget when a new trusted comment is posted during the session, in direct-PR path (#1474)" {
     # A reply-only PHASE C round ("Posted the reply, no commit") leaves the board status
-    # unchanged but is still real progress. A new top-level comment appearing after the session
-    # must reset the idle counter to 0 the same as a board move does.
+    # unchanged but is still real progress. A new trusted comment appearing after the session
+    # must reset the idle counter to 0 the same as a board move does — using the same
+    # trusted-filtered pr_json_latest_trusted_comment_timestamp/compute_pr_last_agent_comment_seen
+    # machinery the codebase already relies on elsewhere, not a raw unfiltered comment count.
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
-    printf '0' > "${_pr_json_call_file}"
-    fetch_pr_json() {
-        local _count
-        _count=$(cat "${_pr_json_call_file}")
-        _count=$((_count + 1))
-        printf '%d' "${_count}" > "${_pr_json_call_file}"
-        if [ "${_count}" -eq 1 ]; then
-            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
-        else
-            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[{"body":"Posted the reply"}],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
-        fi
-    }
-    board_substatus_for_item() { printf 'Development'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_single_item_workflow_status() { printf 'Development'; }
+    compute_pr_last_agent_comment_seen() { printf '2026-09-19T12:00:00Z\n'; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     save_pr_invocation_counts 5 2 2
@@ -14780,21 +14828,22 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
 @test "main still charges the idle budget when neither the board nor comments changed, in direct-PR path (#1474)" {
-    # Regression guard: a session that made literally no progress (same board substatus, same
-    # comment count, CI not pending) must still charge the idle budget as before #1474.
+    # Regression guard: a session that made literally no progress (same board substatus, no new
+    # trusted comment activity, CI not pending) must still charge the idle budget as before #1474.
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
     fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
-    board_substatus_for_item() { printf 'AI Review'; }
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+    compute_pr_last_agent_comment_seen() { printf ''; }
     fingerprint_pr_json() { printf 'fp-same\n'; }
     load_pr_fingerprint()  { printf 'fp-same\n'; }
     save_pr_invocation_counts 5 2 2

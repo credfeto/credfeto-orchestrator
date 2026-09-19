@@ -103,8 +103,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _wf_ensure_status_field_option, discover_or_create_workflow_project,
 # report_missing_workflow_project, _wf_invite_trusted_collaborators, _wf_create_project,
 # update_workflow_status, fetch_board_approved_items, fetch_board_item_statuses,
-# workflow_status_name_for_option_id, board_substatus_for_item, _wf_status_ordinal,
-# sync_pr_workflow_status_from_linked_issues, coarse_status_for_substatus, and
+# workflow_status_name_for_option_id, board_substatus_for_item, fetch_single_item_workflow_status,
+# _wf_status_ordinal, sync_pr_workflow_status_from_linked_issues, coarse_status_for_substatus, and
 # priority_for_labels are declared in lib/workflow-board.
 
 # _build_plan_approval_check, _build_plan_approval_instruction,
@@ -293,7 +293,6 @@ main() {
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pre_session_board_status pre_session_comment_count
     local pr_has_unaddressed_comment post_comment_seen
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
@@ -1303,13 +1302,13 @@ main() {
         # pushes no commit, so it is otherwise indistinguishable from genuine idleness to
         # pr_should_advance_unchanged, and both were confirmed live to falsely exhaust the idle
         # budget (#1474; #1463's own escalation is what first made this visible instead of a
-        # silent parked-forever skip).
-        pre_session_board_status=""
-        pre_session_comment_count=0
-        if [ "${item_type}" = "PullRequest" ]; then
-            pre_session_board_status=$(board_substatus_for_item "${item_id}")
-            pre_session_comment_count=$(printf '%s' "${pr_json}" | jq -r '(.comments // []) | length' 2>/dev/null)
-            pre_session_comment_count="${pre_session_comment_count:-0}"
+        # silent parked-forever skip). Only worth capturing when pr_idle_advance is already known
+        # to apply — a PR whose fingerprint changed this tick (a real commit) never reaches the
+        # idle-accounting branch that reads these, so capturing them for it would be wasted work.
+        local pre_session_board_status="" pre_session_comment_ts=""
+        if [ "${item_type}" = "PullRequest" ] && [ "${pr_idle_advance}" = "1" ]; then
+            pre_session_board_status=$(fetch_single_item_workflow_status "PullRequest" "${item_id}")
+            pre_session_comment_ts=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${pr_review_comments}" "${pr_issue_comments}")
         fi
 
         invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"
@@ -1358,6 +1357,21 @@ main() {
         # progress). A real session running — regardless of how it ends — also clears the
         # consecutive-infra-failure streak: the container is demonstrably working again.
         clear_infra_failure_count "${item_type}" "${item_id}"
+        # Computed here, once, for PRs — ahead of both the idle-accounting block below (which
+        # reads it to detect a reply-only real-progress session) and the fingerprint/last-seen
+        # save block further down (which used to recompute it independently). Deliberately
+        # re-fetches fresh PR state (compute_pr_last_agent_comment_seen) rather than reusing this
+        # tick's pre-invocation pr_json: it must capture any top-level comment, review, or inline
+        # review comment posted during the invocation itself, including one the agent's own
+        # trusted login just posted — reusing stale data would leave that permanently unaccounted
+        # for and force a spurious re-invocation every subsequent tick (#1307 review). A failure
+        # here is benign (worst case: a trusted comment is re-treated as unaddressed next tick,
+        # and this tick's idle check falls back to charging as before) so it is warned rather
+        # than died on.
+        local post_comment_seen post_comment_seen_ok=1
+        if [ "${item_type}" = "PullRequest" ]; then
+            post_comment_seen=$(compute_pr_last_agent_comment_seen "${item_id}") && post_comment_seen_ok=0
+        fi
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
             if [ "${pr_idle_advance}" = "1" ]; then
@@ -1384,23 +1398,23 @@ main() {
                     # and may not change the PR's fingerprint either, so it is otherwise
                     # indistinguishable from genuine idleness here. Re-check the two other
                     # GitHub-visible signs of real progress a no-commit session can leave: the
-                    # Workflow Status board moved, or a new top-level comment was posted.
-                    # _WF_ITEM_STATUS_FETCHED is invalidated first since it caches this repo's
-                    # board reads for the whole tick — pre_session_board_status was captured
-                    # before invoke_claude, so without invalidating it here this would just
-                    # re-read that same stale pre-session value. Either signal changing means
+                    # Workflow Status board moved, or a new trusted comment/review/inline-review
+                    # comment appeared (post_comment_seen, computed once above and reused here —
+                    # the same trusted-filtered helper the last-agent-comment-seen save below
+                    # already relies on, rather than a separate untrusted raw comment count that
+                    # a random stranger's comment could also satisfy). fetch_single_item_workflow_
+                    # status reads this one item's own card directly, rather than forcing
+                    # board_substatus_for_item's per-repo-per-tick cache to re-walk every item on
+                    # the board just to answer this one question. Either signal changing means
                     # the session made real progress and gets the same "reset to 0" treatment a
                     # genuine commit already gets via the changed-fingerprint path (confirmed
                     # live: PR #799 in funfair-server-common was falsely Blocked after only
                     # three clean phase advances, #1474).
-                    unset "_WF_ITEM_STATUS_FETCHED[${REPO_FULL}]"
-                    local post_session_board_status post_session_comment_count
-                    post_session_board_status=$(board_substatus_for_item "${item_id}")
-                    post_session_comment_count=$(printf '%s' "${post_run_pr_json}" | jq -r '(.comments // []) | length' 2>/dev/null)
-                    post_session_comment_count="${post_session_comment_count:-0}"
+                    local post_session_board_status
+                    post_session_board_status=$(fetch_single_item_workflow_status "PullRequest" "${item_id}")
                     if [ "${post_session_board_status}" != "${pre_session_board_status}" ] \
-                        || [ "${post_session_comment_count}" -gt "${pre_session_comment_count}" ]; then
-                        info "PR #${item_id} in ${item_repo}: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"
+                        || { [ "${post_comment_seen_ok}" -eq 0 ] && [ -n "${post_comment_seen}" ] && [ "${post_comment_seen}" != "${pre_session_comment_ts}" ]; }; then
+                        info "PR #${item_id} in ${item_repo}: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"
                         pr_new_idle=0
                     fi
                 fi
@@ -1439,15 +1453,12 @@ main() {
                 warn "Failed to compute post-run fingerprint(s) for ${item_type} #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
             fi
             # Only a real agent turn (this point) is allowed to advance what counts as "seen".
-            # Deliberately re-fetches fresh PR state (compute_pr_last_agent_comment_seen) rather
-            # than reusing this tick's pre-invocation pr_json: it must capture any top-level
-            # comment posted during the invocation itself, including one the agent's own trusted
-            # login just posted — reusing stale data would leave that permanently unaccounted for
-            # and force a spurious re-invocation every subsequent tick (#1307 review). A failure
-            # here is benign (worst case: a trusted comment is re-treated as unaddressed next
-            # tick, forcing one redundant real invocation, not a stuck PR) so it is warned rather
-            # than died on, matching the fingerprint save above.
-            if post_comment_seen=$(compute_pr_last_agent_comment_seen "${item_id}"); then
+            # post_comment_seen was already computed once, right after invoke_claude — reused
+            # here rather than recomputed. A failure there (post_comment_seen_ok != 0) is benign
+            # (worst case: a trusted comment is re-treated as unaddressed next tick, forcing one
+            # redundant real invocation, not a stuck PR) so it only warns, matching the
+            # fingerprint save above.
+            if [ "${post_comment_seen_ok}" -eq 0 ]; then
                 save_pr_last_agent_comment_seen "${item_id}" "${post_comment_seen}"
             else
                 warn "Failed to compute post-run last-agent-comment-seen for PR #${item_id} in ${item_repo} — a trusted comment may be re-evaluated as unaddressed next tick"
