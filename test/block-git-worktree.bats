@@ -234,3 +234,68 @@ run_hook_enter_worktree() {
     run_hook "git worktree list"
     [ "${status}" -eq 0 ]
 }
+
+@test "EnterWorktree with an explicit empty-string name is blocked, not treated as absent (#1324)" {
+    run_hook_payload '{"tool_name":"EnterWorktree","tool_input":{"name":"","path":"/repo/.claude/worktrees/x"}}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'EnterWorktree creates a new linked worktree'* ]]
+}
+
+# --- transport desync regressions (#1324) -----------------------------------
+
+@test "an embedded tab byte inside a literal argument does not desync word positions" {
+    # A backslash immediately followed by a real tab character escapes the
+    # tab, so it stays part of a single unquoted literal word rather than
+    # splitting it - the old tab-joined transport desynced on this exact
+    # byte, shifting "worktree add" out of the position it checked and
+    # silently allowing the command through.
+    run_hook "$(printf 'git -c pager.log=cat\\\tx worktree add /tmp/attacker-worktree')"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "a non-literal word ahead of worktree add does not desync word positions" {
+    # "$dir" is a parameter expansion, not a plain literal, so it becomes a
+    # non-literal placeholder - the old tab-joined transport emitted that
+    # placeholder as an empty string, which tab word-splitting silently
+    # collapsed away, shifting "worktree add" one position to the left and
+    # out of where the check looked.
+    # shellcheck disable=SC2016  # literal "$dir" — must reach the hook unexpanded
+    run_hook 'git -C "$dir" worktree add ../foo'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+# --- fail-closed infrastructure (#1324) -------------------------------------
+
+@test "a failing jq fails closed on a Bash-shaped payload" {
+    make_stub jq 'exit 1'
+    run bash -c 'printf "%s" "$1" | "$2"' _ '{"tool_input":{"command":"git worktree add ../foo"}}' "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
+}
+
+@test "a failing jq fails closed on an EnterWorktree-shaped payload" {
+    make_stub jq 'exit 1'
+    run bash -c 'printf "%s" "$1" | "$2"' _ '{"tool_name":"EnterWorktree","tool_input":{"path":"/x"}}' "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
+}
+
+@test "an unrecognised tool_name is blocked outright (fail closed)" {
+    run_hook_payload '{"tool_name":"SomethingElse","tool_input":{"command":"git worktree list"}}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"unrecognised tool_name 'SomethingElse'"* ]]
+}
+
+@test "a payload with no tool_name, no command, and only name set is blocked (issue repro)" {
+    run_hook_payload '{"tool_input":{"name":"my-feature"}}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'no command to inspect'* ]]
+}
+
+@test "an empty command with tool_name Bash is blocked, not silently allowed" {
+    run_hook_payload '{"tool_name":"Bash","tool_input":{"command":""}}'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'no command to inspect'* ]]
+}
