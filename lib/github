@@ -230,11 +230,19 @@ json_has_commit_author_identity() {
 # is found after such a failure the lookup returns 1, because misreading "could not tell" as
 # "PR-less" would let the issue workflow open a duplicate branch.
 # Returns 1 if the PR list fetch fails.
+# Optional second argument include_blocked ("true"/"false", default "false"): by default a
+# Blocked PR is filtered out of the candidate list entirely, same as list_bot_created_open_prs'
+# own default — right for a caller that only wants a PR it should actively pivot into and drive.
+# A caller that instead needs to recognize "this issue's own PR exists but is Blocked" (so it can
+# stand off explicitly, rather than fall through to Blocked-PR-shaped candidates being invisible
+# and misread as "no PR yet, still needs one opened") must pass "true" here (#1463 review — see
+# oneshot's issue-pivot call site, which pairs this with its own existing pr_json_has_blocked_label
+# check once the candidate is fetched).
 find_open_nonblocked_pr_for_repo() {
-    local repo_full="$1"
+    local repo_full="$1" include_blocked="${2:-false}"
 
     local candidates candidate commit_rc scan_error=0
-    candidates=$(list_bot_created_open_prs "${repo_full}" false) || return 1
+    candidates=$(list_bot_created_open_prs "${repo_full}" "${include_blocked}") || return 1
     while IFS= read -r candidate; do
         [ -n "${candidate}" ] || continue
         commit_rc=0
@@ -259,7 +267,7 @@ find_open_nonblocked_pr_for_repo() {
 
 # Returns the number of the first open PR in the given repo, regardless of author or Blocked
 # label — the broad "is this repo's single active-branch/PR slot occupied at all" question,
-# distinct from find_open_nonblocked_pr_for_repo above, which deliberately excludes Blocked PRs
+# distinct from find_open_nonblocked_pr_for_repo above, which by default excludes Blocked PRs
 # and non-bot-authored PRs for its own narrower "is there a PR I should pivot into and drive"
 # question (#1131/#1134). A Blocked PR, or one authored by a human or another tool, still
 # occupies the repo's one-active-branch-or-PR-at-a-time slot per the mandatory PR Lifecycle rule

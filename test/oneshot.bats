@@ -1658,6 +1658,67 @@ teardown() {
     grep -q "Last session's diagnostic:" "${call_log}"
 }
 
+# --- block_pr_for_idle_exhausted_no_progress (#1463) -----------------------------
+
+@test "block_pr_for_idle_exhausted_no_progress does not post a comment when the label cannot be verified (#1463)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    run grep -q 'pr comment 5' "${call_log}"
+    [ "${status}" -ne 0 ]
+    grep -q 'notified PullRequest #5 reason=This PR.s automation idle-invocation budget' "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress posts the no-known-blocking-reason text once the label is verified present (#1463)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { printf 'notified %s #%s reason=%s\n' "$1" "$2" "$3" >> "${TEST_TMP}/discord_calls"; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR's automation idle-invocation budget" "${call_log}"
+    grep -q "notified PullRequest #5 reason=This PR.s automation idle-invocation budget" "${TEST_TMP}/discord_calls"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1463)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_no_progress does not mark forgiveness when the label cannot be verified (#1463)" {
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    save_pr_invocation_counts 5 "${MAX_PR_IDLE_INVOCATIONS}" "${MAX_PR_IDLE_INVOCATIONS}"
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -ne 0 ]
+    [ ! -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+}
+
+@test "block_pr_for_idle_exhausted_no_progress includes the last session's diagnostic in the Blocked comment when one was recorded (#1463)" {
+    save_last_diagnostic "PullRequest" "5" "- Bash: gh pr view 5"
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo"
+    [ "${status}" -eq 0 ]
+    grep -q "Last session's diagnostic:" "${call_log}"
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
@@ -4306,6 +4367,16 @@ STUBEOF
     [ "${output}" = "8" ]
 }
 
+@test "find_open_nonblocked_pr_for_repo returns a Blocked PR when include_blocked is true (#1463)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":7,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}},{"number":8,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr7.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 7"*"--json commits"*) cat "'"${TEST_TMP}"'/pr7.json" ;; *) exit 1 ;; esac'
+    run find_open_nonblocked_pr_for_repo "org/repo" true
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "7" ]
+}
+
 @test "find_open_nonblocked_pr_for_repo skips a candidate with no bot-authored commits and returns the next (#1131)" {
     _GH_ME="testuser"
     printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":50,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
@@ -5476,6 +5547,47 @@ stub_plan_already_self_heal_marked() {
     [ -f "${_invoke_log}" ]
 }
 
+@test "main does not charge the idle budget when a required check is still pending after the session, via issue pivot (#1463)" {
+    # Same race as the direct-PR path equivalent test: the pre-invocation CI-pending check can
+    # miss a check that is still genuinely running by the time the agent's own session checks
+    # it, so the post-session re-check must catch it and leave the idle counter unchanged.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
+    printf '0' > "${_pr_json_call_file}"
+    fetch_pr_json() {
+        local _count
+        _count=$(cat "${_pr_json_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_json_call_file}"
+        if [ "${_count}" -eq 1 ]; then
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'
+        else
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}\n'
+        fi
+    }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
 @test "main blocks unchanged draft PR reached via issue pivot once idle budget exhausted with a failed required check (#1447)" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -5528,7 +5640,7 @@ stub_plan_already_self_heal_marked() {
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged draft PR reached via issue pivot with idle budget exhausted but no failed required check (regression guard) (#1447)" {
+@test "main blocks unchanged draft PR reached via issue pivot with idle budget exhausted and no known blocking reason (#1463)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -5550,10 +5662,8 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 99' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 99' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main saves issue fingerprint after running agent on PR via issue pivot" {
@@ -7294,6 +7404,37 @@ ENVEOF
     run main
     [ "${status}" -eq 0 ]
     grep -q 'type=PullRequest id=99' "${_notif_log}"
+}
+
+@test "main finds and skips a Blocked linked PR via the real lookup instead of falling through to plan-approved re-invocation (#1463)" {
+    # Regression test for the real end-to-end bug: find_open_nonblocked_pr_for_repo used to
+    # exclude Blocked PRs from its own candidates, making a Blocked linked PR invisible to the
+    # issue-pivot lookup — the Issue then fell through into "plan approved, no PR yet" idle
+    # re-invocation instead of recognizing "this issue's own PR exists, but is blocked" and
+    # standing off. Deliberately does NOT stub find_open_nonblocked_pr_for_repo itself, so the
+    # real function — and the include_blocked=true argument threaded from oneshot's call site —
+    # is exercised end to end, unlike the test above which stubs the lookup away entirely.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    _GH_ME="testuser"
+    printf '%s' '[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr99.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 99"*"--json commits"*) cat "'"${TEST_TMP}"'/pr99.json" ;; *) exit 1 ;; esac'
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo: found open PR #99 — switching to PR workflow"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [[ "${output}" != *"plan approved"* ]]
+    [ ! -f "${_invoke_log}" ]
 }
 
 @test "main posts an explanatory comment and reason when no .ai-instructions is found (#1140)" {
@@ -14392,7 +14533,7 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged PR with idle budget exhausted but no failed required check (regression guard)" {
+@test "main blocks unchanged PR with idle budget exhausted and no known blocking reason in direct-PR path (#1463)" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -14409,10 +14550,8 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main invokes the agent for an unchanged draft PR within the idle budget in direct-PR path (#1447)" {
@@ -14432,6 +14571,48 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #5 in org/repo unchanged — re-invoking to advance the next workflow phase"* ]]
     [ -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main does not charge the idle budget when a required check is still pending after the session, in direct-PR path (#1463)" {
+    # The pre-invocation CI-pending check (pr_json_has_pending_ci_checks, run against the
+    # pre-session pr_json) can race a slower container startup: CI can still be genuinely
+    # pending by the time the agent itself checks, several seconds to a minute later, so its
+    # own PHASE B no-op still lands here as an "unchanged" idle-advance. A re-check against
+    # freshly fetched PR state after the session must catch that and leave the idle counter
+    # unchanged (confirmed live on PR #1473, whose own idle budget was exhausted by exactly
+    # this race one minute before its CI run actually finished).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
+    printf '0' > "${_pr_json_call_file}"
+    fetch_pr_json() {
+        local _count
+        _count=$(cat "${_pr_json_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_json_call_file}"
+        if [ "${_count}" -eq 1 ]; then
+            # Pre-invocation snapshot: nothing pending, so the tick proceeds to the
+            # idle-advance path and the agent is invoked.
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
+        else
+            # Post-invocation re-fetch: the required check is still IN_PROGRESS.
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null,"isRequired":true}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
+        fi
+    }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
 @test "main blocks unchanged draft PR with idle budget exhausted and a failed required check in direct-PR path (#1447)" {
@@ -14455,10 +14636,10 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main silently parks unchanged draft PR with idle budget exhausted but no failed required check (#1447)" {
-    # Matches the non-draft regression guard above: with no specific escalation reason, an
-    # idle-exhausted draft PR is skipped (not re-invoked forever) rather than Blocked — the same
-    # treatment a non-draft PR already gets in this exact case.
+@test "main blocks unchanged draft PR with idle budget exhausted and no known blocking reason in direct-PR path (#1463)" {
+    # Matches the non-draft case above: with no failed-check/review-request escalation reason, an
+    # idle-exhausted draft PR now gets the no-progress escalation instead of being silently
+    # skipped — the same treatment a non-draft PR gets in this exact case (#1463).
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -14475,10 +14656,8 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    if [ -f "${GH_CALL_LOG}" ]; then
-        ! grep -q 'Blocked' "${GH_CALL_LOG}"
-        ! grep -q 'pr comment 5' "${GH_CALL_LOG}"
-    fi
+    grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
 @test "main does not invoke the agent for a changed-fingerprint terminal PR (auto-merge armed, nothing failed/pending) (#1256)" {

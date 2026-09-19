@@ -87,7 +87,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
-# pr_json_needs_review_approval, pr_should_advance_unchanged, issue_should_advance_unchanged,
+# block_pr_for_idle_exhausted_no_progress, pr_json_needs_review_approval,
+# pr_should_advance_unchanged, issue_should_advance_unchanged,
 # block_issue_for_idle_exhausted_no_progress, and block_issue_for_idle_exhausted_no_plan are
 # declared in lib/github-status.
 # find_ai_instructions is declared in lib/git.
@@ -364,11 +365,17 @@ main() {
         set_repo_context "${item_repo}"
 
         if [ "${item_type}" = "Issue" ]; then
-            # Lazy check: does this repo already have an open non-blocked PR that we are actually
-            # driving (created by us AND containing at least one commit we authored — #1131)?
+            # Lazy check: does this repo already have an open PR that we are actually driving
+            # (created by us AND containing at least one commit we authored — #1131)? Blocked
+            # candidates are deliberately included (unlike the direct-PR path's own lookups)
+            # so a Blocked PR is recognized as "this issue's own PR exists, but is blocked" and
+            # the Issue stands off via the existing pr_json_has_blocked_label check below, rather
+            # than being filtered out here and silently misread as "no PR yet" — which re-armed
+            # the plan-approved idle-reinvocation path on an issue that already had a PR, wastefully
+            # re-invoking a session that could only ever find the same blocked PR and stop (#1463).
             # A transient gh failure here (identity lookup or PR list) should skip just this item,
             # not abort the whole cycle and throw away every other priority item (#1085).
-            if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}"); then
+            if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}" true); then
                 warn "Failed to query open PRs for ${item_repo} — skipping this item for now"
                 count_error=$((count_error + 1))
                 item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to query open PRs - skipping this item for now")")
@@ -434,7 +441,7 @@ main() {
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
 
-                info "Issue #${item_id} in ${item_repo}: found open non-blocked PR #${open_pr} — switching to PR workflow"
+                info "Issue #${item_id} in ${item_repo}: found open PR #${open_pr} — switching to PR workflow"
 
                 if ! pr_json=$(fetch_pr_json "${open_pr}"); then
                     warn "Failed to fetch state for PR #${open_pr} in ${item_repo} — skipping this item for now"
@@ -593,8 +600,9 @@ main() {
                                 block_pr_for_idle_exhausted_review "${open_pr}" "${item_repo}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                             else
-                                info "PR #${open_pr} in ${item_repo} unchanged — skipping repo"
-                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "unchanged - skipping repo")")
+                                info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}"
+                                item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                             fi
                             count_unchanged=$((count_unchanged + 1))
                             continue
@@ -1054,8 +1062,9 @@ main() {
                         block_pr_for_idle_exhausted_review "${item_id}" "${item_repo}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
-                        info "PR #${item_id} in ${item_repo} unchanged — skipping"
-                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged - skipping")")
+                        info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
                     continue
@@ -1333,7 +1342,26 @@ main() {
         clear_infra_failure_count "${item_type}" "${item_id}"
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
-            [ "${pr_idle_advance}" = "1" ] && pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+            if [ "${pr_idle_advance}" = "1" ]; then
+                pr_new_idle=$(( PR_INVOCATION_IDLE + 1 ))
+                # The pre-invocation pending-CI check (above) can race a container's own
+                # slower startup: CI can still be genuinely pending by the time the agent
+                # itself checks, several seconds to a minute later, so its own PHASE B
+                # no-op still lands here as an "unchanged" idle-advance. Re-checking with
+                # freshly fetched PR state — same non-agentic pr_json_has_pending_ci_checks
+                # test used pre-invocation, so both v1 (StatusContext) and v2 (CheckRun)
+                # checks are covered identically — catches that race after the fact: if CI
+                # is still pending right now, this tick was really a CI wait, not idleness,
+                # so it must not count against the budget (confirmed live on PR #1473,
+                # whose own idle budget was exhausted by exactly this race one minute
+                # before its CI run finished). A failed fetch here falls back to charging
+                # the tick as before, rather than risk the budget never advancing at all.
+                local post_run_pr_json
+                if post_run_pr_json=$(fetch_pr_json "${item_id}") && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
+                    info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"
+                    pr_new_idle="${PR_INVOCATION_IDLE}"
+                fi
+            fi
             save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
         elif [ "${item_type}" = "Issue" ]; then
             local issue_new_idle=0
