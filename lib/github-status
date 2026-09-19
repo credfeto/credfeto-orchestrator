@@ -191,6 +191,24 @@ apply_blocked_label() {
     return 1
 }
 
+# Returns 0 (true) only when a live, direct `gh ... view --json labels` call — never the tick's
+# own already-fetched JSON — positively confirms the item does NOT currently carry a Blocked
+# label. Same endpoint/shape apply_blocked_label already uses to verify a label it just applied.
+# Called by reset_pr_invocation_counts_if_capped/reset_issue_invocation_counts_if_capped
+# (lib/state) on the narrow path where a runaway-blocked marker is present, to re-confirm a
+# tick's cached "not blocked" reading is not a stale read lagging behind an earlier tick's own
+# already-verified write (#1310). Fails safe, not open: a failed or empty gh response is treated
+# as still-blocked (returns 1), since the entire point of this call is to stop trusting a single
+# read on its own — a call that could not complete adds no confidence over the cached read it
+# exists to double-check.
+item_confirmed_not_blocked_live() {
+    local item_type="$1" item_id="$2" item_repo="$3"
+    local gh_noun
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
+    gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
+        --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null | grep -q '^false$'
+}
+
 # Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —
 # see apply_blocked_label), sends the Discord blocked notification with the same reason, and
 # marks the item for forgiveness, the sequence every automatic blocking path in this file needs,

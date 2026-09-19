@@ -105,7 +105,10 @@ time and money with nothing to show for it. Two independent budgets catch this:
 Both caps reset automatically once a human clears the `Blocked` label on an item that was capped
 — but *only* if it was actually blocked *because* it was capped; a PR blocked for an unrelated
 reason (a failed CI check, a pending review) keeps its existing count when unblocked, since
-nothing about the underlying churn problem has actually been addressed.
+nothing about the underlying churn problem has actually been addressed. The reset itself
+re-confirms with a fresh, direct GitHub check before trusting a "not blocked" reading, so a stale
+read lagging behind an already-verified label write can delay the reset by at most one tick rather
+than wrongly reopening the budget early.
 
 ## What "trusted" means, and why it matters here
 

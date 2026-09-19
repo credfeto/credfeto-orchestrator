@@ -1003,11 +1003,14 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "reset_pr_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present" {
+@test "reset_pr_invocation_counts_if_capped resets and clears the marker when the runaway-blocked marker is present and a live re-check confirms unblocked (#1310)" {
     save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked"
-    reset_pr_invocation_counts_if_capped 42
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    run reset_pr_invocation_counts_if_capped 42 "org/repo"
+    [ "${status}" -eq 0 ]
     load_pr_invocation_counts 42
     [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
@@ -1016,7 +1019,8 @@ teardown() {
 
 @test "reset_pr_invocation_counts_if_capped leaves the total untouched when no runaway-blocked marker exists" {
     save_pr_invocation_counts 42 5 3
-    reset_pr_invocation_counts_if_capped 42
+    run reset_pr_invocation_counts_if_capped 42 "org/repo"
+    [ "${status}" -eq 0 ]
     load_pr_invocation_counts 42
     [ "${PR_INVOCATION_TOTAL}" -eq 5 ]
     [ "${PR_INVOCATION_IDLE}" -eq 3 ]
@@ -1027,9 +1031,43 @@ teardown() {
     # yet (the marker is only written once the block is actually applied). Resetting here would
     # erase the counter before the backstop ever gets to fire, defeating the cap entirely.
     save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 0
-    reset_pr_invocation_counts_if_capped 42
+    run reset_pr_invocation_counts_if_capped 42 "org/repo"
+    [ "${status}" -eq 0 ]
     load_pr_invocation_counts 42
     [ "${PR_INVOCATION_TOTAL}" -eq "${MAX_PR_TOTAL_INVOCATIONS}" ]
+}
+
+@test "reset_pr_invocation_counts_if_capped does NOT reset and returns 1 when the marker is present but a live re-check still finds the Blocked label (#1310 stale-read regression)" {
+    # Reproduces the #1310 race: a runaway-blocked marker is present (a prior tick applied and
+    # verified Blocked), but this tick's already-fetched JSON is a stale read that lags behind
+    # that verified write and shows the item as unblocked. The direct live re-check must catch
+    # this and refuse the reset, leaving both the marker and the counters untouched.
+    save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 3
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked"
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    run reset_pr_invocation_counts_if_capped 42 "org/repo"
+    [ "${status}" -eq 1 ]
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq "${MAX_PR_TOTAL_INVOCATIONS}" ]
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
+}
+
+@test "reset_pr_invocation_counts_if_capped does NOT reset when the marker is present and the live re-check itself fails (fail-safe, #1310)" {
+    # A gh error/empty response must not be treated as confirmation of "unblocked" — that would
+    # defeat the whole point of re-checking. It must defer, exactly like a confirmed-still-blocked
+    # read, rather than falling back to trusting the original (already-suspect) cached reading.
+    save_pr_invocation_counts 42 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked"
+    make_stub gh 'exit 1'
+    run reset_pr_invocation_counts_if_capped 42 "org/repo"
+    [ "${status}" -eq 1 ]
+    load_pr_invocation_counts 42
+    [ "${PR_INVOCATION_TOTAL}" -eq "${MAX_PR_TOTAL_INVOCATIONS}" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_42.runaway-blocked" ]
 }
 
 # --- per-Issue invocation guard ----------------------------------------------
@@ -1079,11 +1117,14 @@ teardown() {
     [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
 }
 
-@test "reset_issue_invocation_counts_if_capped resets both counters and clears the marker when the runaway-blocked marker is present" {
+@test "reset_issue_invocation_counts_if_capped resets both counters and clears the marker when the runaway-blocked marker is present and a live re-check confirms unblocked (#1310)" {
     save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 3
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_99.runaway-blocked"
-    reset_issue_invocation_counts_if_capped 99
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    run reset_issue_invocation_counts_if_capped 99 "org/repo"
+    [ "${status}" -eq 0 ]
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
     [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
@@ -1092,7 +1133,8 @@ teardown() {
 
 @test "reset_issue_invocation_counts_if_capped leaves the counters untouched when no runaway-blocked marker exists" {
     save_issue_invocation_counts 99 5 2
-    reset_issue_invocation_counts_if_capped 99
+    run reset_issue_invocation_counts_if_capped 99 "org/repo"
+    [ "${status}" -eq 0 ]
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 5 ]
     [ "${ISSUE_INVOCATION_IDLE}" -eq 2 ]
@@ -1102,9 +1144,24 @@ teardown() {
     # Regression guard: same rationale as the PR-side test — a not-yet-blocked Issue whose total
     # just reached the cap must not be reset before the backstop gets a chance to fire.
     save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
-    reset_issue_invocation_counts_if_capped 99
+    run reset_issue_invocation_counts_if_capped 99 "org/repo"
+    [ "${status}" -eq 0 ]
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]
+}
+
+@test "reset_issue_invocation_counts_if_capped does NOT reset and returns 1 when the marker is present but a live re-check still finds the Blocked label (#1310 stale-read regression)" {
+    save_issue_invocation_counts 99 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 3
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_99.runaway-blocked"
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    run reset_issue_invocation_counts_if_capped 99 "org/repo"
+    [ "${status}" -eq 1 ]
+    load_issue_invocation_counts 99
+    [ "${ISSUE_INVOCATION_TOTAL}" -eq "${MAX_ISSUE_TOTAL_INVOCATIONS}" ]
+    [ "${ISSUE_INVOCATION_IDLE}" -eq 3 ]
+    [ -f "${SESSION_BASE_DIR}/Issue_99.runaway-blocked" ]
 }
 
 # --- mark_capped_block_for_forgiveness (#1115) ------------------------------
@@ -1140,7 +1197,9 @@ teardown() {
     # the very next observe-unblocked tick found the same stale total.
     save_pr_invocation_counts 116 "${MAX_PR_TOTAL_INVOCATIONS}" 0
     mark_capped_block_for_forgiveness PullRequest 116
-    reset_pr_invocation_counts_if_capped 116
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    reset_pr_invocation_counts_if_capped 116 "org/repo"
     load_pr_invocation_counts 116
     [ "${PR_INVOCATION_TOTAL}" -eq 0 ]
     [ "${PR_INVOCATION_IDLE}" -eq 0 ]
@@ -1166,7 +1225,9 @@ teardown() {
     # tick.
     save_issue_invocation_counts 99 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
     mark_capped_block_for_forgiveness Issue 99
-    reset_issue_invocation_counts_if_capped 99
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
+    reset_issue_invocation_counts_if_capped 99 "org/repo"
     load_issue_invocation_counts 99
     [ "${ISSUE_INVOCATION_TOTAL}" -eq 0 ]
     [ "${ISSUE_INVOCATION_IDLE}" -eq 0 ]
@@ -14363,6 +14424,10 @@ STUBEOF
     save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked"
+    # The marker is present, so reset_pr_invocation_counts_if_capped re-confirms with a live
+    # check (#1310) before honouring the reset — stub it to agree the label is genuinely gone.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -14370,6 +14435,36 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
     # Reset to 0/0 then bumped once for this invocation — proof the stale cap did not re-block it.
     [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.invocations")" = "1 0" ]
+}
+
+@test "main does not reset or invoke the agent for a PR when a stale read-after-write lags behind an already-verified Blocked label (#1310)" {
+    # Reproduces #1310: a runaway-blocked marker is present (a prior tick applied and verified
+    # Blocked), but THIS tick's own already-fetched JSON is a stale read lagging behind that
+    # verified write and shows no Blocked label. The live re-check must catch this and treat the
+    # tick as still blocked — no reset, no agent invocation, no re-post of the runaway comment.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    save_pr_invocation_counts 5 "${MAX_PR_TOTAL_INVOCATIONS}" 0
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.invocations")" = "${MAX_PR_TOTAL_INVOCATIONS} 0" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_5.runaway-blocked" ]
+    # No duplicate runaway-cap escalation comment was posted this tick — the item was routed to
+    # the ordinary blocked-skip branch, not through the backstop a second time.
+    run grep -q 'pr comment 5' "${GH_CALL_LOG}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "main writes the runaway-blocked marker when observing a PR blocked by a non-backstop rule while at the cap (#1115 regression)" {
@@ -14416,6 +14511,10 @@ STUBEOF
     pr_json_has_blocked_label() { return 1; }
     fingerprint_pr_json() { printf 'fp-new\n'; }
     load_pr_fingerprint()  { printf 'fp-old\n'; }
+    # The marker from tick 1 is still present, so tick 2's reset re-confirms live (#1310) before
+    # honouring it — stub it to agree the label is genuinely gone now.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
 
     run main
     [ "${status}" -eq 0 ]
@@ -14644,6 +14743,10 @@ STUBEOF
     save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
     mkdir -p "${SESSION_BASE_DIR}"
     touch "${SESSION_BASE_DIR}/Issue_10.runaway-blocked"
+    # The marker is present, so reset_issue_invocation_counts_if_capped re-confirms with a live
+    # check (#1310) before honouring the reset — stub it to agree the label is genuinely gone.
+    # shellcheck disable=SC2016
+    make_stub gh 'case "$*" in *"--json labels"*) printf "false\n" ;; esac; exit 0'
     invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
 
     run main
@@ -14651,6 +14754,32 @@ STUBEOF
     [ -f "${TEST_TMP}/claude_log" ]
     # Reset to 0 then bumped once for this invocation — proof the stale cap did not re-block it.
     [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "1 0" ]
+}
+
+@test "main does not reset or invoke the agent for an Issue when a stale read-after-write lags behind an already-verified Blocked label (#1310)" {
+    # Issue-side counterpart of the PR stale-read regression above.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    save_issue_invocation_counts 10 "${MAX_ISSUE_TOTAL_INVOCATIONS}" 0
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_10.runaway-blocked"
+    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #10 in org/repo is blocked — skipping"* ]]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.invocations")" = "${MAX_ISSUE_TOTAL_INVOCATIONS} 0" ]
+    [ -f "${SESSION_BASE_DIR}/Issue_10.runaway-blocked" ]
+    run grep -q 'issue comment 10' "${GH_CALL_LOG}"
+    [ "${status}" -ne 0 ]
 }
 
 @test "main skips (does not die on, and does not hand off to agent for) a transient repo-fetch failure (#1090)" {

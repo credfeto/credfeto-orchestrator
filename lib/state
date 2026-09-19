@@ -181,14 +181,25 @@ mark_capped_block_for_forgiveness() {
 # at/over any cap leaves the total/idle counters untouched here: the marker file was never
 # written for it, so this is a no-op for that PR, preserving its history instead of handing back
 # an undeserved fresh budget.
+#
+# When the marker IS present, a single already-fetched "not blocked" JSON reading is not trusted
+# on its own (#1310): GitHub's read side can lag behind a write an earlier, independent tick
+# already verified, so a second tick observing a stale `labels: []` would otherwise both discard
+# the marker and hand back a fresh invocation budget with no defect in the write path itself, only
+# in trusting one read too much. item_confirmed_not_blocked_live (lib/github-status) re-checks
+# with a fresh, direct call before the reset is honoured. Returns 0 when the caller may safely
+# proceed to treat this tick as unblocked (no marker, or marker present and the reset happened);
+# returns 1 when the live re-check confirms the item is still actually Blocked, so the caller
+# must treat this tick as blocked instead — see the 4 oneshot call sites, each of which folds this
+# return into the same condition as their own pr_json_has_blocked_label check.
 # Call alongside clear_blocked_marker, every place a PR is observed open and un-blocked.
 reset_pr_invocation_counts_if_capped() {
-    local item_id="$1" marker_file
+    local item_id="$1" item_repo="$2" marker_file
     marker_file=$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")
-    if [ -f "${marker_file}" ]; then
-        save_pr_invocation_counts "${item_id}" 0 0
-        rm -f "${marker_file}" 2>/dev/null || true
-    fi
+    [ -f "${marker_file}" ] || return 0
+    item_confirmed_not_blocked_live "PullRequest" "${item_id}" "${item_repo}" || return 1
+    save_pr_invocation_counts "${item_id}" 0 0
+    rm -f "${marker_file}" 2>/dev/null || true
 }
 
 # Guard-file paths for the environment-block auto-unblock feature (#1118). PR-only: Issues have
@@ -335,15 +346,16 @@ save_issue_invocation_counts() {
 # Same reset-on-unblock treatment as reset_pr_invocation_counts_if_capped, for Issues (#1093,
 # #1115): only reset when this Issue was blocked while already at/over the cap (marker file
 # present), so clearing the Blocked label actually un-sticks it instead of it re-capping on the
-# next tick. Call alongside clear_blocked_marker, every place an Issue is observed open and
-# un-blocked.
+# next tick. Same stale-read re-confirmation and return-value contract as
+# reset_pr_invocation_counts_if_capped above (#1310) — see its comment for the full rationale.
+# Call alongside clear_blocked_marker, every place an Issue is observed open and un-blocked.
 reset_issue_invocation_counts_if_capped() {
-    local item_id="$1" marker_file
+    local item_id="$1" item_repo="$2" marker_file
     marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
-    if [ -f "${marker_file}" ]; then
-        save_issue_invocation_counts "${item_id}" 0 0
-        rm -f "${marker_file}" 2>/dev/null || true
-    fi
+    [ -f "${marker_file}" ] || return 0
+    item_confirmed_not_blocked_live "Issue" "${item_id}" "${item_repo}" || return 1
+    save_issue_invocation_counts "${item_id}" 0 0
+    rm -f "${marker_file}" 2>/dev/null || true
 }
 
 # Returns the path to the rate-limit file for the current owner.
