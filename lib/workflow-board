@@ -717,6 +717,44 @@ board_substatus_for_item() {
     fi
 }
 
+# Returns the current fine-grained Workflow-board sub-status name for a single Issue or PR via
+# one targeted GraphQL read of that item's own project-item field value — no per-repo board walk.
+# Unlike board_substatus_for_item (backed by fetch_board_item_statuses' per-repo-per-tick cache,
+# the right choice when several items in the same repo may need checking in the same tick), this
+# is for a caller that needs one fresh read of exactly one item without forcing everyone else's
+# already-cached board data in that repo to be re-fetched too — e.g. confirming a single PR's own
+# card moved during a session just run for it (#1474). Mirrors update_workflow_status's own
+# node-id-then-item-id resolution (above): addProjectV2ItemById is idempotent, so calling it again
+# for an item already on the board just returns its existing item id rather than duplicating it.
+# Outputs "Unknown" when the board isn't configured, the item can't be resolved, or the query
+# fails — the same fallback board_substatus_for_item uses for the same situations.
+fetch_single_item_workflow_status() {
+    local item_type="$1" item_number="$2" api_path item_node_id project_item_id opt_id
+    discover_or_create_workflow_project
+    [ -n "${_WF_PROJECT_ID}" ] || { printf 'Unknown'; return 0; }
+
+    if [ "${item_type}" = "Issue" ]; then
+        api_path="repos/${REPO_FULL}/issues/${item_number}"
+    else
+        api_path="repos/${REPO_FULL}/pulls/${item_number}"
+    fi
+    item_node_id=$(gh api "${api_path}" --jq '.node_id' 2>/dev/null) || { printf 'Unknown'; return 0; }
+
+    project_item_id=$(gh api graphql \
+        -f query="mutation(\$p:ID!,\$c:ID!){addProjectV2ItemById(input:{projectId:\$p,contentId:\$c}){item{id}}}" \
+        -f p="${_WF_PROJECT_ID}" -f c="${item_node_id}" \
+        --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || { printf 'Unknown'; return 0; }
+
+    opt_id=$(gh api graphql \
+        -f query="query(\$i:ID!){node(id:\$i){... on ProjectV2Item{fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}" \
+        -f i="${project_item_id}" \
+        --jq '.data.node.fieldValueByName.optionId // empty' 2>/dev/null)
+
+    local substatus
+    substatus=$(workflow_status_name_for_option_id "${opt_id}")
+    printf '%s' "${substatus:-Unknown}"
+}
+
 # Returns the ordinal (0-based index into _WF_STATUS_ORDER, lib/globals) for a Workflow Status
 # name on stdout, or nothing if the name is blank or unrecognised (e.g. "Unknown" from
 # board_substatus_for_item, meaning the item isn't on the board at all).

@@ -5061,6 +5061,9 @@ setup_main_mocks() {
     # stand-off paths override these individually.
     find_human_taken_over_pr_for_issue() { return 1; }
     pr_is_human_driven()                 { return 1; }
+    # Default: no other PR occupies the repo's active-branch/PR slot (#1476) — tests that
+    # exercise the occupied-slot deferral override this individually.
+    find_any_open_pr_for_repo()          { printf ''; }
     # Stub resolve_gh_me for the assignee standoff check (#1142) — no real gh call
     # in integration tests.  := preserves any _GH_ME set directly by unit tests.
     resolve_gh_me()                      { _GH_ME="${_GH_ME:-testuser}"; return 0; }
@@ -5585,6 +5588,98 @@ stub_plan_already_self_heal_marked() {
     [[ "${output}" == *"PR #99 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 99
     [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when the board advances during the session, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    local _board_call_file="${TEST_TMP}/_board_calls"
+    printf '0' > "${_board_call_file}"
+    fetch_single_item_workflow_status() {
+        local _count
+        _count=$(cat "${_board_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_board_call_file}"
+        [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
+    }
+    compute_pr_last_agent_comment_seen() { printf ''; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when a new trusted comment is posted during the session, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_single_item_workflow_status() { printf 'Development'; }
+    compute_pr_last_agent_comment_seen() { printf '2026-09-19T12:00:00Z\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still charges the idle budget when neither the board nor comments changed, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+    compute_pr_last_agent_comment_seen() { printf ''; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" != *"not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
@@ -8788,7 +8883,11 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main does not block a plan-approved Issue on idle exhaustion when another open PR occupies the repo (#1326)" {
+@test "main defers a plan-approved Issue at idle exhaustion when another open PR occupies the repo, without invoking (#1326, #1476)" {
+    # The occupying-PR check now runs once, unconditionally, at the top of the "no bot-driven PR"
+    # branch (#1476) - before the fingerprint/idle-budget logic this test used to reach directly.
+    # This still exercises the same real-world case (idle-exhausted re-poke deferred because
+    # another PR holds the repo's slot); it just now short-circuits earlier.
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
@@ -8815,13 +8914,13 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"idle budget exhausted but another open PR occupies the repo's active-branch slot — deferring, not blocking"* ]]
+    [[ "${output}" == *"Issue #42 in org/repo: repo's active-branch/PR slot occupied by PR #99 — deferring, not invoking"* ]]
     [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'issue comment' "${GH_CALL_LOG}"
 }
 
-@test "main does not block a plan-approved Issue on idle exhaustion when the occupying-PR check itself fails (#1326)" {
+@test "main skips (does not invoke or block) a plan-approved Issue when the occupying-PR check itself fails (#1326, #1476)" {
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
@@ -8848,9 +8947,50 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — not blocking Issue #42 on an uncertain read"* ]]
+    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — skipping this item for now"* ]]
     [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main defers a fresh Issue invocation without invoking when another open PR already occupies the repo (#1476)" {
+    # Regression test for #1476: a freshly plan-approved Issue (first pass, no saved fingerprint
+    # yet - the exact shape of a just-approved plan) with no bot-driven PR of its own must not
+    # burn a paid agent invocation to rediscover that a completely unrelated, human-driven PR
+    # already occupies the repo's one-active-branch-or-PR-at-a-time slot; oneshot itself must
+    # catch this for free before ever invoking.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    find_any_open_pr_for_repo()        { printf '1475\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
+}
+
+@test "main defers a second Issue in the same occupied repo at zero extra cost via skip_repos (#1476)" {
+    # The first Issue's occupancy check populates skip_repos, so a second Issue in the SAME repo
+    # later in the same tick is skipped via the cheap is_skipped path at the top of the loop -
+    # never re-calling find_any_open_pr_for_repo, let alone invoking an agent.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":1311,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    export FIND_ANY_OPEN_PR_CALLS="${TEST_TMP}/find_any_open_pr_calls"
+    find_any_open_pr_for_repo() { printf 'x\n' >> "${FIND_ANY_OPEN_PR_CALLS}"; printf '1475\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
+    [[ "${output}" == *"Skipping Issue #1311 in org/repo — repo already has active work"* ]]
+    [ "$(wc -l < "${FIND_ANY_OPEN_PR_CALLS}")" -eq 1 ]
 }
 
 # --- main() integration: self-heal a plan posted without Blocked (#1286) ----
@@ -12048,6 +12188,71 @@ STUBEOF
     [ "${output}" = "Human Review" ]
 }
 
+# --- fetch_single_item_workflow_status (#1474) ------------------------------
+
+@test "fetch_single_item_workflow_status returns Unknown when the board is not configured" {
+    _WF_PROJECT_ID=""
+    discover_or_create_workflow_project() { return 0; }
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
+@test "fetch_single_item_workflow_status resolves the status name for a single PR via node-id then item-id" {
+    # Each gh invocation here uses its own --jq filter (matching real gh's behaviour), so the
+    # stub must return the already-extracted value directly, not the wrapping JSON envelope —
+    # unlike update_workflow_status's own gh stubs elsewhere, which only assert the call
+    # happened and never check the extracted value downstream.
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    _WF_OPTION_IDS[Development]="opt_dev"
+    make_stub gh 'case "$*" in
+        *"pulls/42"*) printf "PR_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "opt_dev\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Development" ]
+}
+
+@test "fetch_single_item_workflow_status uses the issues API path for an Issue" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    _WF_OPTION_IDS[Development]="opt_dev"
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"
+        case "$*" in
+        *"issues/42"*) printf "Issue_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "opt_dev\n" ;;
+        *) exit 1 ;;
+        esac'
+    run fetch_single_item_workflow_status "Issue" 42
+    [ "${output}" = "Development" ]
+    grep -q "issues/42" "${call_log}"
+}
+
+@test "fetch_single_item_workflow_status returns Unknown when the node ID lookup fails" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    make_stub gh 'exit 1'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
+@test "fetch_single_item_workflow_status returns Unknown for an item not on the board" {
+    set_repo_context "org/repo"
+    discover_or_create_workflow_project() { _WF_PROJECT_ID="PVT_test"; }
+    make_stub gh 'case "$*" in
+        *"pulls/42"*) printf "PR_node_42\n" ;;
+        *"addProjectV2ItemById"*) printf "item_42\n" ;;
+        *"fieldValueByName"*) printf "\n" ;;
+        *) exit 1 ;;
+    esac'
+    run fetch_single_item_workflow_status "PullRequest" 42
+    [ "${output}" = "Unknown" ]
+}
+
 # --- _wf_status_ordinal (#1276) ---------------------------------------------
 
 @test "_wf_status_ordinal returns the index of a known status name" {
@@ -14612,6 +14817,92 @@ STUBEOF
     [[ "${output}" == *"PR #5 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when the board advances during the session, in direct-PR path (#1474)" {
+    # A clean phase advance (e.g. "Simplify clean - advancing to code review") pushes no commit
+    # and posts no comment the fingerprint necessarily picks up, so it is otherwise
+    # indistinguishable from genuine idleness to pr_should_advance_unchanged. The board actually
+    # moving during the session is real progress and must reset the idle counter to 0 (confirmed
+    # live: PR #799 in funfair-server-common was falsely Blocked after only three such advances).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    local _board_call_file="${TEST_TMP}/_board_calls"
+    printf '0' > "${_board_call_file}"
+    fetch_single_item_workflow_status() {
+        local _count
+        _count=$(cat "${_board_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_board_call_file}"
+        [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
+    }
+    compute_pr_last_agent_comment_seen() { printf ''; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when a new trusted comment is posted during the session, in direct-PR path (#1474)" {
+    # A reply-only PHASE C round ("Posted the reply, no commit") leaves the board status
+    # unchanged but is still real progress. A new trusted comment appearing after the session
+    # must reset the idle counter to 0 the same as a board move does — using the same
+    # trusted-filtered pr_json_latest_trusted_comment_timestamp/compute_pr_last_agent_comment_seen
+    # machinery the codebase already relies on elsewhere, not a raw unfiltered comment count.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_single_item_workflow_status() { printf 'Development'; }
+    compute_pr_last_agent_comment_seen() { printf '2026-09-19T12:00:00Z\n'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still charges the idle budget when neither the board nor comments changed, in direct-PR path (#1474)" {
+    # Regression guard: a session that made literally no progress (same board substatus, no new
+    # trusted comment activity, CI not pending) must still charge the idle budget as before #1474.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    fetch_single_item_workflow_status() { printf 'AI Review'; }
+    compute_pr_last_agent_comment_seen() { printf ''; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" != *"not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
