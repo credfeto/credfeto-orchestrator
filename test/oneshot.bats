@@ -5588,6 +5588,107 @@ stub_plan_already_self_heal_marked() {
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
+@test "main resets the idle budget when the board advances during the session, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    local _board_call_file="${TEST_TMP}/_board_calls"
+    printf '0' > "${_board_call_file}"
+    board_substatus_for_item() {
+        local _count
+        _count=$(cat "${_board_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_board_call_file}"
+        [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
+    }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when a new comment is posted during the session, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
+    printf '0' > "${_pr_json_call_file}"
+    fetch_pr_json() {
+        local _count
+        _count=$(cat "${_pr_json_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_json_call_file}"
+        if [ "${_count}" -eq 1 ]; then
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'
+        else
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[{"body":"Posted the reply"}],"reviews":[],"statusCheckRollup":[]}\n'
+        fi
+    }
+    board_substatus_for_item() { printf 'Development'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" == *"PR #99 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still charges the idle budget when neither the board nor comments changed, via issue pivot (#1474)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    board_substatus_for_item() { printf 'AI Review'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${_invoke_log}" ]
+    [[ "${output}" != *"not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
 @test "main blocks unchanged draft PR reached via issue pivot once idle budget exhausted with a failed required check (#1447)" {
     setup_main_mocks
     fetch_all_priorities() {
@@ -14612,6 +14713,99 @@ STUBEOF
     [[ "${output}" == *"PR #5 in org/repo: still CI-pending after this session — not counting it against the idle budget"* ]]
     load_pr_invocation_counts 5
     [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when the board advances during the session, in direct-PR path (#1474)" {
+    # A clean phase advance (e.g. "Simplify clean - advancing to code review") pushes no commit
+    # and posts no comment the fingerprint necessarily picks up, so it is otherwise
+    # indistinguishable from genuine idleness to pr_should_advance_unchanged. The board actually
+    # moving during the session is real progress and must reset the idle counter to 0 (confirmed
+    # live: PR #799 in funfair-server-common was falsely Blocked after only three such advances).
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    local _board_call_file="${TEST_TMP}/_board_calls"
+    printf '0' > "${_board_call_file}"
+    board_substatus_for_item() {
+        local _count
+        _count=$(cat "${_board_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_board_call_file}"
+        [ "${_count}" -eq 1 ] && printf 'AI Review' || printf 'AI Security Review'
+    }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main resets the idle budget when a new comment is posted during the session, in direct-PR path (#1474)" {
+    # A reply-only PHASE C round ("Posted the reply, no commit") leaves the board status
+    # unchanged but is still real progress. A new top-level comment appearing after the session
+    # must reset the idle counter to 0 the same as a board move does.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    local _pr_json_call_file="${TEST_TMP}/_pr_json_calls"
+    printf '0' > "${_pr_json_call_file}"
+    fetch_pr_json() {
+        local _count
+        _count=$(cat "${_pr_json_call_file}")
+        _count=$((_count + 1))
+        printf '%d' "${_count}" > "${_pr_json_call_file}"
+        if [ "${_count}" -eq 1 ]; then
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
+        else
+            printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[{"body":"Posted the reply"}],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
+        fi
+    }
+    board_substatus_for_item() { printf 'Development'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: made real progress this session (board moved or a new comment was posted) — not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main still charges the idle budget when neither the board nor comments changed, in direct-PR path (#1474)" {
+    # Regression guard: a session that made literally no progress (same board substatus, same
+    # comment count, CI not pending) must still charge the idle budget as before #1474.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'; }
+    board_substatus_for_item() { printf 'AI Review'; }
+    fingerprint_pr_json() { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    save_pr_invocation_counts 5 2 2
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" != *"not counting it against the idle budget"* ]]
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
     [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
 }
 
