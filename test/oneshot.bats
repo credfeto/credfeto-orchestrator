@@ -5061,6 +5061,9 @@ setup_main_mocks() {
     # stand-off paths override these individually.
     find_human_taken_over_pr_for_issue() { return 1; }
     pr_is_human_driven()                 { return 1; }
+    # Default: no other PR occupies the repo's active-branch/PR slot (#1476) — tests that
+    # exercise the occupied-slot deferral override this individually.
+    find_any_open_pr_for_repo()          { printf ''; }
     # Stub resolve_gh_me for the assignee standoff check (#1142) — no real gh call
     # in integration tests.  := preserves any _GH_ME set directly by unit tests.
     resolve_gh_me()                      { _GH_ME="${_GH_ME:-testuser}"; return 0; }
@@ -8880,7 +8883,11 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main does not block a plan-approved Issue on idle exhaustion when another open PR occupies the repo (#1326)" {
+@test "main defers a plan-approved Issue at idle exhaustion when another open PR occupies the repo, without invoking (#1326, #1476)" {
+    # The occupying-PR check now runs once, unconditionally, at the top of the "no bot-driven PR"
+    # branch (#1476) - before the fingerprint/idle-budget logic this test used to reach directly.
+    # This still exercises the same real-world case (idle-exhausted re-poke deferred because
+    # another PR holds the repo's slot); it just now short-circuits earlier.
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
@@ -8907,13 +8914,13 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"idle budget exhausted but another open PR occupies the repo's active-branch slot — deferring, not blocking"* ]]
+    [[ "${output}" == *"Issue #42 in org/repo: repo's active-branch/PR slot occupied by PR #99 — deferring, not invoking"* ]]
     [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'issue comment' "${GH_CALL_LOG}"
 }
 
-@test "main does not block a plan-approved Issue on idle exhaustion when the occupying-PR check itself fails (#1326)" {
+@test "main skips (does not invoke or block) a plan-approved Issue when the occupying-PR check itself fails (#1326, #1476)" {
     setup_main_mocks
     recover_orphaned_branch() { return 1; }
     resolve_resumable_issue_branch() { return 1; }
@@ -8940,9 +8947,50 @@ STUBEOF
     run main
     [ "${status}" -eq 0 ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — not blocking Issue #42 on an uncertain read"* ]]
+    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — skipping this item for now"* ]]
     [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
     [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
+}
+
+@test "main defers a fresh Issue invocation without invoking when another open PR already occupies the repo (#1476)" {
+    # Regression test for #1476: a freshly plan-approved Issue (first pass, no saved fingerprint
+    # yet - the exact shape of a just-approved plan) with no bot-driven PR of its own must not
+    # burn a paid agent invocation to rediscover that a completely unrelated, human-driven PR
+    # already occupies the repo's one-active-branch-or-PR-at-a-time slot; oneshot itself must
+    # catch this for free before ever invoking.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    find_any_open_pr_for_repo()        { printf '1475\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
+}
+
+@test "main defers a second Issue in the same occupied repo at zero extra cost via skip_repos (#1476)" {
+    # The first Issue's occupancy check populates skip_repos, so a second Issue in the SAME repo
+    # later in the same tick is skipped via the cheap is_skipped path at the top of the loop -
+    # never re-calling find_any_open_pr_for_repo, let alone invoking an agent.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":1311,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    export FIND_ANY_OPEN_PR_CALLS="${TEST_TMP}/find_any_open_pr_calls"
+    find_any_open_pr_for_repo() { printf 'x\n' >> "${FIND_ANY_OPEN_PR_CALLS}"; printf '1475\n'; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
+    [[ "${output}" == *"Skipping Issue #1311 in org/repo — repo already has active work"* ]]
+    [ "$(wc -l < "${FIND_ANY_OPEN_PR_CALLS}")" -eq 1 ]
 }
 
 # --- main() integration: self-heal a plan posted without Blocked (#1286) ----

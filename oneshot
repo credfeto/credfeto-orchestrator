@@ -618,6 +618,36 @@ main() {
                 item_type="PullRequest"
 
             else
+                # No bot-driven PR to pivot into, but the repo's single active-branch/PR slot may
+                # still be occupied by a PR the pivot above deliberately excludes — human-driven
+                # (the include_blocked=true above only widens the pivot to Blocked bot PRs, not to
+                # human-driven ones), or authored by some other tool entirely. Any of those still
+                # occupies the one-active-branch-or-PR-at-a-time slot per the mandatory PR
+                # Lifecycle rule (#1326), so invoking a fresh session for THIS issue could never
+                # make progress either — it would just spend a paid invocation re-discovering the
+                # same occupied slot from inside the session instead of for free here (#1476:
+                # confirmed live — Issue #1310 burned a full invocation to self-report exactly this
+                # after PR #1475, entirely unrelated and human-driven, had already sat open for
+                # over an hour). Checked once per repo per tick, then cached via skip_repos for the
+                # rest of this tick's items in the same repo, same as every other "repo already has
+                # active work" path above. A failed check is treated the same as "occupied" — skip
+                # rather than risk starting duplicate work on an uncertain read, mirroring the
+                # identical failure handling on the idle-budget-exhausted occupancy check further
+                # down.
+                other_open_pr=$(find_any_open_pr_for_repo "${item_repo}") || {
+                    warn "Failed to check for an occupying PR in ${item_repo} — skipping this item for now"
+                    count_error=$((count_error + 1))
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to check for an occupying PR - skipping this item for now")")
+                    continue
+                }
+                if [ -n "${other_open_pr}" ]; then
+                    info "Issue #${item_id} in ${item_repo}: repo's active-branch/PR slot occupied by PR #${other_open_pr} — deferring, not invoking"
+                    skip_repos+=("${item_repo}")
+                    count_active_repo=$((count_active_repo + 1))
+                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "repo's active-branch/PR slot occupied by PR #${other_open_pr} - deferring")")
+                    continue
+                fi
+
                 # No active PR — check the issue itself.
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then
                     warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
@@ -772,29 +802,17 @@ main() {
                         issue_idle_advance=1
                     else
                         if [ "${plan_approved_or_later}" = "true" ]; then
-                            # Before blocking for idle exhaustion, check whether this repo's
-                            # single active-branch/PR slot is occupied by some OTHER open PR —
-                            # any author, including Blocked (unlike find_open_nonblocked_pr_for_repo
-                            # above, which deliberately excludes those for its own narrower
-                            # pivot-and-drive question). If so, no amount of re-invoking this Issue
-                            # could ever have made progress, so an exhausted idle budget is not a
-                            # "human needs to investigate" signal here — it is normal, self-clearing
-                            # serialisation once the occupying PR closes (#1326: "an existing PR
-                            # being open is NOT a reason to add a blocked label"). A failed check is
-                            # treated the same as "occupied" — skip rather than risk a wrongful
-                            # block on an already-uncertain read.
-                            other_open_pr=$(find_any_open_pr_for_repo "${item_repo}") || {
-                                warn "Failed to check for an occupying PR in ${item_repo} — not blocking Issue #${item_id} on an uncertain read"
-                                other_open_pr="unknown"
-                            }
-                            if [ -n "${other_open_pr}" ]; then
-                                info "Issue #${item_id} in ${item_repo}: idle budget exhausted but another open PR occupies the repo's active-branch slot — deferring, not blocking"
-                                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted but another open PR occupies the active-branch slot - deferring")")
-                            else
-                                info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
-                                block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
-                                item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
-                            fi
+                            # No occupying-PR check here: the unconditional check at the top of
+                            # this "no bot-driven PR" branch (#1476) already ran earlier in this
+                            # same pass, for every Issue that reaches this branch regardless of
+                            # fingerprint state — so by the time execution reaches this deep,
+                            # find_any_open_pr_for_repo is guaranteed to have found nothing for
+                            # this repo moments ago. A second check here could only ever repeat
+                            # that same empty answer; it was removed rather than left as
+                            # unreachable dead code (former #1326 occupancy re-check).
+                            info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
+                            block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                            item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
                         elif ! issue_plan_block_marked "${item_id}" \
                             && issue_plan_awaiting_human_approval "${issue_json}" "${_GH_ME}" "${trusted_logins}" "${has_plan_comment}"; then
                             # Cheap local-file check first, so the jq-backed approval check inside

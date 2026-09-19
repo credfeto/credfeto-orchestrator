@@ -18,15 +18,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR idle-invocation budget no longer counts a tick against the idle cap when a required CI check is still genuinely pending after the session ended - closes a race where the orchestrator's own pre-session pending-check missed a check that the agent's own later, slower check still found running, silently burning the idle budget on nothing but CI-wait time (#1463)
 - A Blocked pull request linked to an Issue is now recognized as such during the Issue-to-PR pivot lookup, instead of being filtered out and silently misread as 'no PR yet' - closing the gap where blocking a PR did not actually stand off its linked Issue, which kept getting re-invoked against its own idle budget for a session that could only ever find the same blocked PR and stop (#1463)
 - PR idle-invocation budget no longer counts a tick against the idle cap when the session made real forward progress with no commit - a Workflow Status board move (a clean phase advance) or a new top-level comment (a reply-only round) now resets the idle counter the same way a genuine commit already does, instead of being charged the same as literal idleness - closing the gap where a healthy PR working through the review pipeline could hit idle-budget-exhausted and get falsely Blocked after only a few clean phase advances (#1474)
+- Avoid a wasted agent invocation on a fresh Issue when the repo's active-branch/PR slot is already occupied by an unrelated PR the bot doesn't own (#1476)
 ### Changed
 ### Deprecated
 ### Removed
 ### Deployment Changes
-
 <!--
 Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
 -->
-
 ## [0.0.4] - 2026-09-17
 ### Security
 - Denied Claude Code Read/Write/Edit access to /tmp in development-full's claude-settings.json
