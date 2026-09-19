@@ -10,7 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
-- TBD - to be finalized after review
+- Fixed several fail-open bugs in the block-git-worktree Claude Code hook: a word-extraction transport that could desync on embedded tab bytes or non-literal arguments, unguarded jq calls that silently disabled the hook on failure, an EnterWorktree tool_name dispatch with no fail-closed default, and an empty-string EnterWorktree name treated the same as an absent one
 ### Added
 - Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
 - Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image

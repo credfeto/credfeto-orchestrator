@@ -8,13 +8,13 @@
 # EnterWorktree tool, a first-class tool that performs the equivalent of
 # `git worktree add` directly — no shell command string involved, so the
 # usual shfmt/AST parsing below does not apply to it. That call shape is
-# dispatched on up front, via the hook payload's own .tool_name field: block
-# it unless it is entering a worktree that already exists (a non-empty
-# `path` argument and no `name`); creating one (a `name` argument, no `path`,
-# or neither) is blocked, matching the shell form's create-vs-inspect
-# distinction. A payload that supplies both `name` and `path` is malformed
-# per EnterWorktree's own "mutually exclusive" contract, and is blocked
-# rather than guessed at, consistent with this hook's fail-closed posture.
+# dispatched on up front, via the hook payload's own .tool_name field:
+# "EnterWorktree" -> the dedicated check below; "Bash", or empty/absent
+# (every existing Bash-shaped payload, including every test in this repo,
+# omits tool_name entirely) -> the shell-command path below; any other
+# value is an unrecognised tool identity and is blocked outright, fail
+# closed, rather than falling through to the shell-command path and
+# finding no command to inspect (#1324).
 #
 # Exit 2 = blocked, 0 = allowed.
 #
@@ -38,8 +38,35 @@
 # to the EnterWorktree branch above, whose input is already structured JSON,
 # not a shell command line.)
 #
-# Fails closed: shfmt missing or the command not parsing as shell blocks
-# the command.
+# Word extraction uses the same delimiter-collision-free, base64-per-word,
+# JSON-array-per-call transport as the sibling enforce-ssh-host-and-key (see
+# that hook's header for the full history), not a plain character join like
+# the tab/newline transport this replaced. That old transport had two
+# independent desync bugs, both found during #1324's review: (1) a
+# `Lit`-type word can itself contain a real embedded tab byte (e.g. via
+# backslash-tab escaping), which desyncs `IFS=$'\t' read -ra` regardless of
+# any marker used for non-literal words; (2) non-literal words were actually
+# emitted as an empty string, not the `\x01` marker an earlier version of
+# this comment claimed, and since tab is IFS whitespace, `IFS=$'\t'
+# read -ra` collapses consecutive/empty fields, silently shifting later
+# words into the wrong position (e.g. `git -C "$dir" worktree add ../foo`
+# could lose the `$dir` word entirely, shifting `worktree add` left). Both
+# are closed at once here: each call becomes one compact JSON array (a word
+# that isn't a single plain `Lit` becomes JSON null), and each call's words
+# are then individually base64-encoded, one per line — no word's content,
+# whatever bytes it contains, can ever be mistaken for a delimiter. Literal
+# recognition here stays narrower than enforce-ssh-host-and-key's (`Lit`
+# only, not `SglQuoted`/single-part `DblQuoted`) — minimally scoped to
+# fixing the transport bug itself, not widening detection.
+#
+# jq is required, and every jq call is guarded: a missing jq, or any jq
+# invocation failing outright, blocks rather than silently disabling this
+# hook's checks (#1324 found both the `tool_name` and `raw_cmd` extractions
+# unguarded — a jq failure silently disabled both the EnterWorktree
+# guardrail and the shell-command git worktree add block in the same call).
+#
+# Fails closed: jq missing/failing, shfmt missing, or the command not
+# parsing as shell all block the command.
 
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
@@ -65,13 +92,22 @@ is_wrapper() {
   return 1
 }
 
+MARKER='(non-literal)'
+
+command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
 input=$(cat)
-tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""')
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+case "$tool_name" in
+  EnterWorktree | Bash | "") : ;;
+  *) block "unrecognised tool_name '${tool_name}' - failing closed" ;;
+esac
 
 if [ "$tool_name" = "EnterWorktree" ]; then
   # Structured JSON input, not a shell command line - no shfmt parsing
   # needed. Allowed only when entering an existing worktree: a non-empty
-  # string `path` and no string-valued `name`. Every create-shaped
+  # string `path` and no `name` present at all. Every create-shaped
   # combination is blocked: no `name`/`path` (random-name create), `name`
   # only, an empty `path`, and `name`+`path` both set (malformed per
   # EnterWorktree's own "mutually exclusive" contract - failed closed
@@ -79,51 +115,72 @@ if [ "$tool_name" = "EnterWorktree" ]; then
   # `length` (which is also valid on arrays/objects/numbers and treats a
   # JSON `false` the same as an absent key via `//`) - failing closed on
   # any non-string `name`/`path` rather than letting jq's type coercion
-  # silently wave through a malformed payload as an allowed entry.
+  # silently wave through a malformed payload as an allowed entry. `$name`
+  # must be genuinely absent/null to count as "no name" - an explicit
+  # empty string is a present-but-blank value, not an omitted one, and is
+  # therefore treated the same as any other present `name` (blocked), not
+  # waved through as if absent (#1324).
   allowed=$(printf '%s' "$input" | jq -r '
     (.tool_input.path) as $path |
     (.tool_input.name) as $name |
     (($path != null) and ($path | type == "string") and ($path | length > 0)) as $has_path |
-    (($name == null) or (($name | type == "string") and ($name | length == 0))) as $no_name |
-    $has_path and $no_name')
+    ($name == null) as $no_name |
+    $has_path and $no_name') || block 'tool payload could not be parsed by jq - failing closed'
   if [ "$allowed" != "true" ]; then
     block 'EnterWorktree creates a new linked worktree, which is prohibited in this repo - use a normal branch checkout instead, or pass path to switch into a worktree that already exists'
   fi
   exit 0
 fi
 
-raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
 
-[ -z "$raw_cmd" ] && exit 0
+# An empty/absent command now blocks rather than allowing outright: on this
+# dual-registered hook, "no command" is indistinguishable from a
+# mis-dispatched EnterWorktree-shaped payload (tool_name absent/empty, no
+# `command` key, only `name`/`path`) - the exact shape needed to reach this
+# path with nothing to inspect (#1324).
+[ -z "${raw_cmd}" ] && block 'no command to inspect and tool_name did not identify this as EnterWorktree - failing closed'
 
 command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One line per CallExpr: every word that is a single plain literal is
-# emitted verbatim; anything else (quoted text, substitutions, expansions)
-# is represented as a \x01 marker — layer 0 of reject-obfuscated-commands
-# (which runs before this hook) already guarantees a real \x01 byte can
-# never appear in the input, so the marker is unambiguous, can never equal
-# "git"/"worktree"/"-C"/"-c" and so is opaque to the checks below, and —
-# unlike an empty string — is never dropped by IFS=<tab> word-splitting's
-# collapsing of consecutive whitespace delimiters. Words cannot contain raw
-# whitespace, so tab is a safe separator.
-calls=$(printf '%s' "$ast" | jq -r '
+# One compact JSON array per CallExpr, one per line: a word that is a single
+# plain `Lit` literal is the JSON string value; anything else (quoted text,
+# substitutions, expansions) is JSON null. See the header for why this
+# replaced the earlier tab/newline text-join transport.
+calls=$(printf '%s' "$ast" | jq -c '
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
-  join("\t")')
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end ]
+') || block 'command structure could not be analyzed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
-  IFS=$'\t' read -ra words <<< "$call_line"
+
+  # Second stage: decode this one call's words out of the JSON array via a
+  # base64-per-line transport, which cannot collide with any word's real
+  # content regardless of what bytes it contains - see the header for why
+  # the tab/newline text-join this replaced was unsafe.
+  words=()
+  while IFS= read -r entry; do
+    case "$entry" in
+      L:*)
+        decoded=$(
+          printf '%s' "${entry#L:}" | base64 -d 2> /dev/null
+          printf '.'
+        )
+        words+=("${decoded%.}")
+        ;;
+      *) words+=("$MARKER") ;;
+    esac
+  done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
 
   # Only the command-name position, and the position immediately after a
   # known wrapper name in the command-name position, are checked — a `git`
   # token appearing anywhere else is an ordinary argument, not a git
   # invocation (e.g. `grep -r git .`, `find . -name git`).
   positions=(0)
-  is_wrapper "${words[0]}" && positions+=(1)
+  is_wrapper "${words[0]:-}" && positions+=(1)
 
   for i in "${positions[@]}"; do
     tok="${words[$i]:-}"
