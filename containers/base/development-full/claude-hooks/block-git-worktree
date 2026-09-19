@@ -64,9 +64,14 @@
 # hook's checks (#1324 found both the `tool_name` and `raw_cmd` extractions
 # unguarded — a jq failure silently disabled both the EnterWorktree
 # guardrail and the shell-command git worktree add block in the same call).
+# base64 is required and guarded the same way: it is a dependency this PR
+# itself introduces (the old tab-joined transport never used it), and an
+# unguarded failure would decode every literal word to an empty string,
+# so `tok` never equals `git` and the command is allowed instead of
+# blocked — the same fail-open shape as the jq bugs above (#1324).
 #
-# Fails closed: jq missing/failing, shfmt missing, or the command not
-# parsing as shell all block the command.
+# Fails closed: jq or base64 missing/failing, shfmt missing, or the
+# command not parsing as shell all block the command.
 
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
@@ -95,6 +100,7 @@ is_wrapper() {
 MARKER='(non-literal)'
 
 command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+command -v base64 > /dev/null 2>&1 || block 'base64 is not available to decode the command words - failing closed'
 
 input=$(cat)
 tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
@@ -167,10 +173,7 @@ while IFS= read -r call_line; do
   while IFS= read -r entry; do
     case "$entry" in
       L:*)
-        decoded=$(
-          printf '%s' "${entry#L:}" | base64 -d 2> /dev/null
-          printf '.'
-        )
+        decoded=$(printf '%s' "${entry#L:}" | base64 -d 2> /dev/null && printf '.') || block 'command structure could not be analyzed - failing closed'
         words+=("${decoded%.}")
         ;;
       *) words+=("$MARKER") ;;
