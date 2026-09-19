@@ -434,10 +434,9 @@ main() {
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier. Any
-                # invocation-budget reset (when the Blocked label was applied while already
-                # at/over the cap) already happened above, inside the condition, via
-                # reset_issue_invocation_counts_if_capped (#1093, #1115, #1310).
+                # Issue observed open and un-blocked — re-arm its blocked notifier; the budget
+                # reset already happened above via reset_issue_invocation_counts_if_capped
+                # (#1093, #1115, #1310).
                 clear_blocked_marker "Issue" "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
@@ -478,10 +477,8 @@ main() {
                     continue
                 fi
                 # PR observed open and un-blocked — re-arm its blocked notifier and clear any
-                # environment-auto-unblock history (#1118). Any invocation-budget reset (when the
-                # Blocked label was applied while already at/over the cap) already happened above,
-                # inside the condition, via reset_pr_invocation_counts_if_capped (#1093, #1115,
-                # #1310).
+                # environment-auto-unblock history (#1118); the budget reset already happened
+                # above via reset_pr_invocation_counts_if_capped (#1093, #1115, #1310).
                 clear_blocked_marker "PullRequest" "${open_pr}"
                 reset_env_unblock_attempts "${open_pr}"
 
@@ -704,10 +701,9 @@ main() {
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier. Any
-                # invocation-budget reset (when the Blocked label was applied while already
-                # at/over the cap) already happened above, inside the condition, via
-                # reset_issue_invocation_counts_if_capped (#1093, #1115, #1310).
+                # Issue observed open and un-blocked — re-arm its blocked notifier; the budget
+                # reset already happened above via reset_issue_invocation_counts_if_capped
+                # (#1093, #1115, #1310).
                 clear_blocked_marker "Issue" "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
@@ -921,10 +917,8 @@ main() {
                 continue
             fi
             # PR observed open and un-blocked — re-arm its blocked notifier and clear any
-            # environment-auto-unblock history (#1118). Any invocation-budget reset (when the
-            # Blocked label was applied while already at/over the cap) already happened above,
-            # inside the condition, via reset_pr_invocation_counts_if_capped (#1093, #1115,
-            # #1310).
+            # environment-auto-unblock history (#1118); the budget reset already happened above
+            # via reset_pr_invocation_counts_if_capped (#1093, #1115, #1310).
             clear_blocked_marker "PullRequest" "${item_id}"
             reset_env_unblock_attempts "${item_id}"
 

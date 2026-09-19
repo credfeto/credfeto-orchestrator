@@ -165,6 +165,20 @@ gh_noun_for_item_type() {
     fi
 }
 
+# Issues a single live, direct `gh ... view --json labels` call — never the tick's own
+# already-fetched JSON — and prints "true"/"false" (or nothing, on failure) for whether the item
+# currently carries a Blocked label. Shared by apply_blocked_label (verify-after-write) and
+# item_confirmed_not_blocked_live (verify-before-reset) so the endpoint/jq shape lives in exactly
+# one place; each caller greps the raw output for the specific literal/fail-safe direction it
+# needs, since "gh failed" must NOT be conflated with a confirmed true or false reading.
+_live_item_blocked_label_status() {
+    local item_type="$1" item_id="$2" item_repo="$3"
+    local gh_noun
+    gh_noun=$(gh_noun_for_item_type "${item_type}")
+    gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
+        --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null
+}
+
 # Applies the Blocked label to an Issue or PullRequest and VERIFIES it actually landed —
 # `gh ... edit --add-label` can fail silently (e.g. the repo has no "Blocked" label yet), and an
 # unverified label-add is how every escalation path in this file used to lose its escalation:
@@ -180,8 +194,7 @@ apply_blocked_label() {
     local attempt
     for attempt in 1 2; do
         gh "${gh_noun}" edit "${item_id}" --repo "${item_repo}" --add-label Blocked >/dev/null 2>&1
-        if gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
-            --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null | grep -q '^true$'; then
+        if _live_item_blocked_label_status "${item_type}" "${item_id}" "${item_repo}" | grep -q '^true$'; then
             return 0
         fi
         [ "${attempt}" -eq 1 ] \
@@ -191,22 +204,13 @@ apply_blocked_label() {
     return 1
 }
 
-# Returns 0 (true) only when a live, direct `gh ... view --json labels` call — never the tick's
-# own already-fetched JSON — positively confirms the item does NOT currently carry a Blocked
-# label. Same endpoint/shape apply_blocked_label already uses to verify a label it just applied.
-# Called by reset_pr_invocation_counts_if_capped/reset_issue_invocation_counts_if_capped
-# (lib/state) on the narrow path where a runaway-blocked marker is present, to re-confirm a
-# tick's cached "not blocked" reading is not a stale read lagging behind an earlier tick's own
-# already-verified write (#1310). Fails safe, not open: a failed or empty gh response is treated
-# as still-blocked (returns 1), since the entire point of this call is to stop trusting a single
-# read on its own — a call that could not complete adds no confidence over the cached read it
-# exists to double-check.
+# Returns 0 (true) only when a live, direct re-check positively confirms the item does NOT
+# currently carry a Blocked label (#1310) — see reset_pr_invocation_counts_if_capped/
+# reset_issue_invocation_counts_if_capped (lib/state) for why this re-check exists. Fails safe:
+# a failed/empty gh response counts as still-blocked, since an inconclusive re-check can't
+# overrule the cached read it exists to double-check.
 item_confirmed_not_blocked_live() {
-    local item_type="$1" item_id="$2" item_repo="$3"
-    local gh_noun
-    gh_noun=$(gh_noun_for_item_type "${item_type}")
-    gh "${gh_noun}" view "${item_id}" --repo "${item_repo}" --json labels \
-        --jq '[.labels[].name] | index("Blocked") != null' 2>/dev/null | grep -q '^false$'
+    _live_item_blocked_label_status "$1" "$2" "$3" | grep -q '^false$'
 }
 
 # Applies the Blocked label, posts an explanatory comment (only once the label is CONFIRMED —

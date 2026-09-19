@@ -192,14 +192,24 @@ mark_capped_block_for_forgiveness() {
 # returns 1 when the live re-check confirms the item is still actually Blocked, so the caller
 # must treat this tick as blocked instead — see the 4 oneshot call sites, each of which folds this
 # return into the same condition as their own pr_json_has_blocked_label check.
+# Shared body for reset_pr_invocation_counts_if_capped/reset_issue_invocation_counts_if_capped
+# below — identical for both item types except which save_*_invocation_counts to call once the
+# reset is confirmed.
+_reset_invocation_counts_if_capped() {
+    local item_type="$1" item_id="$2" item_repo="$3" marker_file
+    marker_file=$(runaway_blocked_marker_file_path "${item_type}" "${item_id}")
+    [ -f "${marker_file}" ] || return 0
+    item_confirmed_not_blocked_live "${item_type}" "${item_id}" "${item_repo}" || return 1
+    case "${item_type}" in
+        PullRequest) save_pr_invocation_counts "${item_id}" 0 0 ;;
+        Issue) save_issue_invocation_counts "${item_id}" 0 0 ;;
+    esac
+    rm -f "${marker_file}" 2>/dev/null || true
+}
+
 # Call alongside clear_blocked_marker, every place a PR is observed open and un-blocked.
 reset_pr_invocation_counts_if_capped() {
-    local item_id="$1" item_repo="$2" marker_file
-    marker_file=$(runaway_blocked_marker_file_path "PullRequest" "${item_id}")
-    [ -f "${marker_file}" ] || return 0
-    item_confirmed_not_blocked_live "PullRequest" "${item_id}" "${item_repo}" || return 1
-    save_pr_invocation_counts "${item_id}" 0 0
-    rm -f "${marker_file}" 2>/dev/null || true
+    _reset_invocation_counts_if_capped "PullRequest" "$1" "$2"
 }
 
 # Guard-file paths for the environment-block auto-unblock feature (#1118). PR-only: Issues have
@@ -350,12 +360,7 @@ save_issue_invocation_counts() {
 # reset_pr_invocation_counts_if_capped above (#1310) — see its comment for the full rationale.
 # Call alongside clear_blocked_marker, every place an Issue is observed open and un-blocked.
 reset_issue_invocation_counts_if_capped() {
-    local item_id="$1" item_repo="$2" marker_file
-    marker_file=$(runaway_blocked_marker_file_path "Issue" "${item_id}")
-    [ -f "${marker_file}" ] || return 0
-    item_confirmed_not_blocked_live "Issue" "${item_id}" "${item_repo}" || return 1
-    save_issue_invocation_counts "${item_id}" 0 0
-    rm -f "${marker_file}" 2>/dev/null || true
+    _reset_invocation_counts_if_capped "Issue" "$1" "$2"
 }
 
 # Returns the path to the rate-limit file for the current owner.
