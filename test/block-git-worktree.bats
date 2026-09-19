@@ -299,3 +299,23 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'no command to inspect'* ]]
 }
+
+@test "missing base64 fails closed" {
+    mkdir -p "${STUB_BIN}/nobase64"
+    ln -s "$(command -v jq)" "${STUB_BIN}/nobase64/jq"
+    ln -s "$(command -v shfmt)" "${STUB_BIN}/nobase64/shfmt"
+    ln -s "$(command -v bash)" "${STUB_BIN}/nobase64/bash"
+    ln -s "$(command -v cat)" "${STUB_BIN}/nobase64/cat"
+    local payload
+    payload=$(jq -n --arg cmd 'git worktree add ../foo' '{tool_input: {command: $cmd}}')
+    run bash -c 'printf "%s" "$1" | PATH="$2" "$3"' _ "$payload" "${STUB_BIN}/nobase64" "$HOOK"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'base64 is not available'* ]]
+}
+
+@test "a failing base64 decode fails closed instead of decoding literal words to empty strings (#1324)" {
+    make_stub base64 'exit 1'
+    run_hook "git worktree add ../foo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'command structure could not be analyzed'* ]]
+}
