@@ -161,6 +161,8 @@ while IFS= read -r call_line; do
   # base64-per-line transport, which cannot collide with any word's real
   # content regardless of what bytes it contains - see the header for why
   # the tab/newline text-join this replaced was unsafe.
+  entries=$(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end') || block 'command structure could not be analyzed - failing closed'
+
   words=()
   while IFS= read -r entry; do
     case "$entry" in
@@ -173,7 +175,7 @@ while IFS= read -r call_line; do
         ;;
       *) words+=("$MARKER") ;;
     esac
-  done < <(printf '%s' "$call_line" | jq -r '.[] | if . == null then "N" else "L:" + (. | @base64) end')
+  done <<< "$entries"
 
   # Only the command-name position, and the position immediately after a
   # known wrapper name in the command-name position, are checked — a `git`
