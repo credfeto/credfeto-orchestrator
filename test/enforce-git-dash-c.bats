@@ -615,3 +615,152 @@ make_writable_repo() {
     run_hook_in_dir '\cd '"${repo}"' && git status' "${repo}"
     [ "${status}" -eq 2 ]
 }
+
+# Hook-bypass flag tests (#1399): --no-verify (long form) on every subcommand
+# whose hooks it actually skips, -n (short form / bundle) scoped to commit
+# only, -c core.hooksPath=... on any subcommand, and the separate HUSKY=0
+# env-var override.
+
+@test "git commit --no-verify is blocked" {
+    run_hook_in_dir 'git -C . commit --no-verify -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git push --no-verify is blocked" {
+    run_hook_in_dir "git -C . push --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git merge --no-verify is blocked" {
+    run_hook_in_dir "git -C . merge --no-verify some-branch"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git cherry-pick --no-verify is blocked" {
+    run_hook_in_dir "git -C . cherry-pick --no-verify abc123"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git rebase --no-verify is blocked" {
+    run_hook_in_dir "git -C . rebase --no-verify main"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git commit -n (short form) is blocked" {
+    run_hook_in_dir 'git -C . commit -n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
+@test "git commit -vn (short-flag bundle containing n) is blocked" {
+    run_hook_in_dir 'git -C . commit -vn -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
+@test "git push -n is allowed (means dry-run on push, not hook bypass)" {
+    run_hook_in_dir "git -C . push -n"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git merge -n is allowed (means no-stat on merge, not hook bypass)" {
+    run_hook_in_dir "git -C . merge -n some-branch"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git commit --no-color is not falsely blocked (long flag merely containing the letter n)" {
+    run_hook_in_dir 'git -C . commit --no-color -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "git commit --allow-empty-message is not falsely blocked (long flag merely containing the letter n)" {
+    run_hook_in_dir 'git -C . commit --allow-empty-message -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted -m commit message merely mentioning --no-verify is not falsely blocked" {
+    run_hook_in_dir 'git -C . commit -m "note: --no-verify is banned here"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted -m value containing the letter n is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -m fixno"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an -F value containing the letter n is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -Fnotes.txt"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted attached-value -m form is not falsely blocked (trailing text never evaluated as a separate flag)" {
+    run_hook_in_dir "git -C . commit -mwip-new"
+    [ "${status}" -eq 0 ]
+}
+
+@test "-n consumed as -F's filename argument is not falsely blocked as the hook-bypass flag" {
+    run_hook_in_dir "git -C . commit -F -n"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git am --no-verify is still blocked, but via the pre-existing subcommand allowlist, not the new hook-bypass check" {
+    run_hook_in_dir "git -C . am --no-verify some.patch"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand 'am' is not permitted"* ]]
+    [[ "${output}" != *'--no-verify is not permitted'* ]]
+}
+
+@test "HUSKY=0 before a git command is blocked" {
+    run_hook_in_dir 'HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=\"0\" (double-quoted) before a git command is blocked" {
+    run_hook_in_dir 'HUSKY="0" git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY='0' (single-quoted) before a git command is blocked" {
+    run_hook_in_dir "HUSKY='0' git -C . commit -m 'wip'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=0 after a ; separator is blocked" {
+    run_hook_in_dir 'true; HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=0 after a && separator is blocked" {
+    run_hook_in_dir 'true && HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "a variable that merely ends with HUSKY=0 as a substring is not falsely blocked" {
+    run_hook_in_dir 'MYHUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "NOT_HUSKY=0 is not falsely blocked" {
+    run_hook_in_dir 'NOT_HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "HUSKY=1 is not falsely blocked (value is not 0)" {
+    run_hook_in_dir 'HUSKY=1 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "HUSKY=01 is not falsely blocked (value is not exactly 0)" {
+    run_hook_in_dir 'HUSKY=01 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
