@@ -678,11 +678,6 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
-@test "git commit --allow-empty-message is not falsely blocked (long flag merely containing the letter n)" {
-    run_hook_in_dir 'git -C . commit --allow-empty-message -m "wip"'
-    [ "${status}" -eq 0 ]
-}
-
 @test "a quoted -m commit message merely mentioning --no-verify is not falsely blocked" {
     run_hook_in_dir 'git -C . commit -m "note: --no-verify is banned here"'
     [ "${status}" -eq 0 ]

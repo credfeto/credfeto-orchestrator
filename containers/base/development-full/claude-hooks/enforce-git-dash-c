@@ -62,27 +62,10 @@
 #         --remove-section are blocked outright — interactive,
 #         arbitrary-file or whole-section forms this hook cannot classify
 #         as pure reads.
-#   * Hook-bypass flags and overrides (#1399), closing the same bypass class
-#     the globally-installed npm tool `block-no-verify` already blocks for
-#     other Bash commands, but via this hook's AST parse rather than a
-#     second hand-rolled tokenizer:
-#       - The long-form `--no-verify` flag is blocked on
-#         GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK (cherry-pick/commit/merge/
-#         push/rebase) - the subcommands whose hooks it actually skips.
-#       - The short form `-n`, or a short-flag bundle containing it (e.g.
-#         `-vn`), is blocked only when the subcommand is `commit` - on
-#         `push`/`merge`/etc the same letter means something else entirely
-#         (dry-run/no-stat).
-#       - `-c core.hooksPath=...` is deliberately NOT duplicated here:
-#         enforce-allowed-dirs (earlier in the PreToolUse chain) already
-#         denies any git -c/--config-env key outside its small inert
-#         allowlist, for every subcommand, not only the ones listed above -
-#         see test/enforce-allowed-dirs.bats's own core.hooksPath case. A
-#         narrower repeat of that check here would add no real coverage.
-#       - `HUSKY=0` (plain or quoted, anchored to a real assignment
-#         boundary) is blocked via a plain regex over the raw command text,
-#         checked unconditionally - it is an env-var assignment, not a git
-#         argv token, so the AST walk above cannot see it.
+#   * Hook-bypass flags and overrides (#1399): blocks `--no-verify` (all of
+#     GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK) and short-form `-n`/bundles (commit
+#     only) via the AST walk, plus a `HUSKY=0` env-var override via a
+#     separate raw-text regex. Full rationale: ai/local/claude-hooks.instructions.md.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
@@ -185,11 +168,8 @@ is_allowed_subcommand() {
   in_list "$1" "${GIT_ALLOWED_SUBCOMMANDS[@]}"
 }
 
-# Subcommands whose git hooks --no-verify/-n actually skips (#1399) - a
-# subset of GIT_SUBCOMMANDS_REQUIRE_C. `am` also has a --no-verify flag, but
-# it has no confirmed use in this repo and is already blocked outright by
-# the subcommand allowlist above, so a call with that subcommand never
-# reaches check_hook_bypass_flags below.
+# Subcommands whose git hooks --no-verify/-n actually skips (#1399) - see
+# ai/local/claude-hooks.instructions.md for why `am` is deliberately excluded.
 GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK=(cherry-pick commit merge push rebase)
 
 input=$(cat)
@@ -197,15 +177,12 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 [ -z "$raw_cmd" ] && exit 0
 
-# HUSKY=0 override (#1399): an env-var assignment, not a git argv token, so
-# this is a plain regex over raw_cmd instead of an AST check - mirrors the
-# globally-installed npm tool block-no-verify's hasHuskySkip semantics.
-# Anchored to a real assignment boundary (start of string or a shell
-# separator immediately before it, end of string or another separator
-# immediately after) so an unrelated word merely containing the substring
-# (e.g. MYHUSKY=0, HUSKY=01) does not match. Checked unconditionally,
-# independent of whether this command contains a git call at all, exactly
-# like the npm tool it mirrors.
+# HUSKY=0 override (#1399): the AST walk below only extracts each call's
+# Args, not its env-var Assigns, so this checks raw_cmd directly via a regex
+# anchored to a real assignment boundary (start/end of string or a shell
+# separator) rather than a substring match - see
+# ai/local/claude-hooks.instructions.md for the full rationale and the one
+# known residual false-positive class this trades off.
 husky_re='(^|[;&|[:space:]])HUSKY=("0"|'\''0'\''|0)($|[;&|[:space:]])'
 [[ "$raw_cmd" =~ $husky_re ]] && block 'HUSKY=0 is not permitted - hook bypass is blocked'
 
@@ -341,18 +318,10 @@ check_config_call() {
 # Blocks the git-hook-bypass flag (#1399) on subcommands whose hooks it
 # actually skips (GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK above). Reads the
 # surrounding loop's state: words (tokens of the call), j (index of the
-# subcommand token), sub (subcommand name). The long form is checked on
-# every one of these subcommands; the short form -n (or a short-flag bundle
-# containing it, e.g. -vn) means something else entirely on push/merge/etc
-# (dry-run/no-stat), so it is only checked when sub=commit - and only
-# against a genuine single-dash short-option word (`-[!-]*`, second
-# character not itself a dash): any other long `--foo` flag that merely
-# happens to contain the letter n (--no-color, --no-edit, --annotate, ...)
-# is a real GNU-style long flag, never a bundle, so it must not be scanned
-# for the letter at all. A value-consuming option (-m/-F/-c/-C) has its
-# value skipped - attached (-mFoo) or as the following word - so a commit
-# message word can never be mistaken for a flag, mirroring
-# check_config_call's own read/write scan above.
+# subcommand token), sub (subcommand name). See
+# ai/local/claude-hooks.instructions.md for why -n is scoped to commit only,
+# why -[!-]* avoids misreading long flags as bundles, and why -m/-F/-c/-C
+# values are skipped.
 check_hook_bypass_flags() {
   local k=$((j + 1)) tk
   while [ "$k" -lt "${#words[@]}" ]; do
