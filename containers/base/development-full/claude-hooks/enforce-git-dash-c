@@ -361,11 +361,8 @@ check_hook_bypass_flags() {
       --no-verify)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
         ;;
-      -m* | -F* | -c* | -C*)
-        case "$tk" in
-          -m | -F | -c | -C) k=$((k + 1)) ;;
-        esac
-        ;;
+      -m | -F | -c | -C) k=$((k + 1)) ;;
+      -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
         if [ "$sub" = "commit" ]; then
           case "$tk" in
