@@ -21,15 +21,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR idle-invocation budget no longer counts a tick against the idle cap when the session made real forward progress with no commit - a Workflow Status board move (a clean phase advance) or a new top-level comment (a reply-only round) now resets the idle counter the same way a genuine commit already does, instead of being charged the same as literal idleness - closing the gap where a healthy PR working through the review pipeline could hit idle-budget-exhausted and get falsely Blocked after only a few clean phase advances (#1474)
 - Avoid a wasted agent invocation on a fresh Issue when the repo's active-branch/PR slot is already occupied by an unrelated PR the bot doesn't own (#1476)
 - Harden the runaway-invocation-cap reset against a stale read-after-write of the Blocked label - a tick observing a marker-present item as unblocked now re-confirms with a live GitHub check before discarding the invocation budget, so a read that lags behind an earlier tick's own verified Blocked write can no longer silently reopen the cap (#1310)
+- A PR that has finished its review pipeline but sits on a repo where auto-merge isn't supported is now correctly recognized as settled (via the Workflow Status board's Human Review substatus), so it stops burning agent invocations with nothing to do and correctly gets the review-needed notification (#1479)
 ### Changed
 ### Deprecated
 ### Removed
 ### Deployment Changes
-
 <!--
 Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
 -->
-
 ## [0.0.4] - 2026-09-17
 ### Security
 - Denied Claude Code Read/Write/Edit access to /tmp in development-full's claude-settings.json
