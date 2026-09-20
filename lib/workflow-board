@@ -717,6 +717,24 @@ board_substatus_for_item() {
     fi
 }
 
+# Returns 0 (true) when a PR's own autoMergeRequest is null (auto-merge could not be armed - either
+# unsupported on this repo, or Phase D's P3 simply hasn't run yet) AND the Workflow Status board
+# substatus is "Human Review" - the fallback signal that the review pipeline actually finished
+# despite that, for pr_json_is_terminal's optional second argument (lib/github-status, #1479).
+# Phase D's P2 step (agent-roles.instructions.md) moves the board to Human Review
+# unconditionally, BEFORE attempting to enable auto-merge in P3, so it is set whether or not that
+# attempt succeeds - unlike autoMergeRequest, it does not depend on the repo supporting auto-merge
+# at all. Only ever consulted by a caller that already found autoMergeRequest null (checked here
+# too, rather than trusted from the caller, so this function's own contract holds on its own): a
+# repo where auto-merge IS supported and was armed never needs this board round-trip, and a repo
+# with no board configured (board_substatus_for_item returning "Unknown") simply never matches
+# "Human Review" and gets no fallback either - there being nothing else to check it against.
+pr_review_pipeline_finished_without_auto_merge() {
+    local pr_json="$1" item_id="$2"
+    printf '%s' "${pr_json}" | jq -e '.autoMergeRequest == null' > /dev/null 2>&1 || return 1
+    [ "$(board_substatus_for_item "${item_id}")" = "Human Review" ]
+}
+
 # Returns the current fine-grained Workflow-board sub-status name for a single Issue or PR via
 # one targeted GraphQL read of that item's own project-item field value — no per-repo board walk.
 # Unlike board_substatus_for_item (backed by fetch_board_item_statuses' per-repo-per-tick cache,

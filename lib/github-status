@@ -17,11 +17,21 @@
 # autoMergeRequest null: GitHub disallows enabling auto-merge on a draft PR, but does not
 # document that converting an already-armed PR back to draft clears autoMergeRequest, so a
 # non-null value must not be treated as terminal for a PR that is currently a draft.
+# Optional second argument review_pipeline_finished ("true"/"false", default "false"): substitutes
+# for the autoMergeRequest check, for a repo where auto-merge cannot be armed at all (unsupported,
+# so agent-roles.instructions.md's Phase D P3 fell back to `gh pr ready` instead). autoMergeRequest
+# is only ever a proxy for "the review pipeline actually finished" — a caller unable to arm
+# auto-merge must supply that same fact some other way (see pr_review_pipeline_finished_without_
+# auto_merge, lib/workflow-board) rather than this PR staying permanently non-terminal (#1479: on
+# such a repo, a settled PR was invoked repeatedly forever, and never got the review-needed
+# notification, because both were gated on autoMergeRequest alone). The remaining checks (no
+# CHANGES_REQUESTED, no failed required check) still apply regardless of which signal made the
+# pipeline "finished" — either can go stale after the fact and both still need a human.
 pr_json_is_terminal() {
-    local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -e '
+    local pr_json="$1" review_pipeline_finished="${2:-false}"
+    printf '%s' "${pr_json}" | jq -e --argjson finished "${review_pipeline_finished}" '
         .isDraft != true
-        and .autoMergeRequest != null
+        and (.autoMergeRequest != null or $finished)
         and .reviewDecision != "CHANGES_REQUESTED"
         and (
             (.statusCheckRollup // [])

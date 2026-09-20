@@ -1429,6 +1429,38 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_is_terminal is false when autoMergeRequest is null and review_pipeline_finished is omitted or false (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":null}'
+    [ "${status}" -ne 0 ]
+    run pr_json_is_terminal '{"autoMergeRequest":null}' false
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal is true when autoMergeRequest is null but review_pipeline_finished is true (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":null}' true
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_is_terminal with review_pipeline_finished true still requires no CHANGES_REQUESTED (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":null,"reviewDecision":"CHANGES_REQUESTED"}' true
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal with review_pipeline_finished true still requires no failed required check (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":null,"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}' true
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal with review_pipeline_finished true still requires not draft (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":null,"isDraft":true}' true
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal ignores review_pipeline_finished when autoMergeRequest is already set (#1479)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"}}' false
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_has_unaddressed_trusted_comment is false when there are no comments (#1307)" {
     run pr_json_has_unaddressed_trusted_comment '{"comments":[]}' '["credfeto"]' ""
     [ "${status}" -eq 1 ]
@@ -5125,6 +5157,11 @@ setup_main_mocks() {
     # Default: no other PR occupies the repo's active-branch/PR slot (#1476) — tests that
     # exercise the occupied-slot deferral override this individually.
     find_any_open_pr_for_repo()          { printf ''; }
+    # Default: the auto-merge-unsupported board fallback never matches (#1479) — matches every
+    # pre-existing test's expectation byte-for-byte, since pr_json_is_terminal's behaviour before
+    # this fallback existed is exactly what "no fallback match" reproduces. Tests exercising the
+    # fallback itself override this individually.
+    pr_review_pipeline_finished_without_auto_merge() { return 1; }
     # Stub resolve_gh_me for the assignee standoff check (#1142) — no real gh call
     # in integration tests.  := preserves any _GH_ME set directly by unit tests.
     resolve_gh_me()                      { _GH_ME="${_GH_ME:-testuser}"; return 0; }
@@ -5276,6 +5313,45 @@ stub_plan_already_self_heal_marked() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #5 in org/repo: settled"* ]]
     [ ! -f "${discord_log}" ]
+}
+
+@test "main treats a direct PR as settled via the Workflow Status board fallback when auto-merge isn't supported (#1479)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_pr_needs_approval() { printf 'notified %s: %s\n' "$1" "$2" >> "${discord_log}"; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #5 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
+    [ -f "${discord_log}" ]
+    grep -q '^notified 5: .*"title":"T"' "${discord_log}"
+}
+
+@test "main does not treat a direct PR as settled when autoMergeRequest is null and the board fallback doesn't match either (#1479)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    # pr_review_pipeline_finished_without_auto_merge defaults to false (setup_main_mocks) - not
+    # overridden here, so the board never claims the pipeline finished.
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"settled"* ]]
+    [ -f "${TEST_TMP}/claude_log" ]
 }
 
 @test "main notifies Discord waiting on CI for a direct PR with pending required checks (#1375)" {
@@ -5482,6 +5558,35 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #99 in org/repo: settled"* ]]
+    [ -f "${discord_log}" ]
+    grep -q '^notified 99: .*"title":"PR title"' "${discord_log}"
+}
+
+@test "main treats a pivot PR as settled via the Workflow Status board fallback when auto-merge isn't supported (#1479)" {
+    # Same pivot scenario as above (Issue #10 → linked PR #99), but autoMergeRequest is null -
+    # the fallback must still recognize the pipeline finished and both suppress the agent
+    # invocation AND fire the review-needed nudge, from the issue-pivot call site.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    pr_review_pipeline_finished_without_auto_merge() { return 0; }
+    local discord_log="${TEST_TMP}/discord_log"
+    notify_discord_pr_needs_approval() { printf 'notified %s: %s\n' "$1" "$2" >> "${discord_log}"; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"PR #99 in org/repo: settled (ready to merge, nothing failed/pending) — no agent needed"* ]]
     [ -f "${discord_log}" ]
     grep -q '^notified 99: .*"title":"PR title"' "${discord_log}"
 }
@@ -12247,6 +12352,48 @@ STUBEOF
     _WF_OPTION_IDS["Human Review"]="opt_review"
     run board_substatus_for_item 7
     [ "${output}" = "Human Review" ]
+}
+
+# --- pr_review_pipeline_finished_without_auto_merge (#1479) -----------------
+
+@test "pr_review_pipeline_finished_without_auto_merge is false when autoMergeRequest is already set" {
+    # Short-circuits on the pr_json check alone - board_substatus_for_item must never be called
+    # when auto-merge IS supported and armed, so a stub that would die/fail if called proves this.
+    board_substatus_for_item() { die "must not be called when autoMergeRequest is set"; }
+    run pr_review_pipeline_finished_without_auto_merge '{"autoMergeRequest":{"enabledAt":"now"}}' 42
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_review_pipeline_finished_without_auto_merge is true when autoMergeRequest is null and the board says Human Review" {
+    board_substatus_for_item() { printf 'Human Review\n'; }
+    run pr_review_pipeline_finished_without_auto_merge '{"autoMergeRequest":null}' 42
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_review_pipeline_finished_without_auto_merge is false when autoMergeRequest is null but the board says something else" {
+    board_substatus_for_item() { printf 'Development\n'; }
+    run pr_review_pipeline_finished_without_auto_merge '{"autoMergeRequest":null}' 42
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_review_pipeline_finished_without_auto_merge is false when autoMergeRequest is null and the board is not configured" {
+    board_substatus_for_item() { printf 'Unknown\n'; }
+    run pr_review_pipeline_finished_without_auto_merge '{"autoMergeRequest":null}' 42
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_review_pipeline_finished_without_auto_merge is false when autoMergeRequest is absent entirely" {
+    board_substatus_for_item() { printf 'Human Review\n'; }
+    run pr_review_pipeline_finished_without_auto_merge '{}' 42
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_review_pipeline_finished_without_auto_merge passes the item id through to board_substatus_for_item" {
+    local call_log="${TEST_TMP}/board_substatus_calls"
+    board_substatus_for_item() { printf '%s\n' "$1" >> "${call_log}"; printf 'Human Review\n'; }
+    run pr_review_pipeline_finished_without_auto_merge '{"autoMergeRequest":null}' 1479
+    [ "${status}" -eq 0 ]
+    grep -qx '1479' "${call_log}"
 }
 
 # --- fetch_single_item_workflow_status (#1474) ------------------------------
