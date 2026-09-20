@@ -364,11 +364,7 @@ check_hook_bypass_flags() {
       -m | -F | -c | -C) k=$((k + 1)) ;;
       -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
-        if [ "$sub" = "commit" ]; then
-          case "$tk" in
-            *n*) block 'git commit -n is not permitted - hook bypass is blocked' ;;
-          esac
-        fi
+        [ "$sub" = "commit" ] && [[ "$tk" == *n* ]] && block 'git commit -n is not permitted - hook bypass is blocked'
         ;;
     esac
     k=$((k + 1))
