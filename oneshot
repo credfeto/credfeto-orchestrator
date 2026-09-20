@@ -85,7 +85,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # reset_issue_invocation_counts_if_capped are declared in lib/state.
 
 # pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
-# apply_blocked_label, apply_blocked_label_with_reason, block_pr_for_idle_exhausted_failure,
+# apply_blocked_label, apply_blocked_label_with_reason, item_confirmed_not_blocked_live,
+# block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
 # block_pr_for_idle_exhausted_no_progress, pr_json_needs_review_approval,
 # pr_should_advance_unchanged, issue_should_advance_unchanged,
@@ -424,7 +425,8 @@ main() {
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - tagging linked PR #${open_pr} for investigation")")
                     continue
                 fi
-                if issue_json_has_blocked_label "${issue_json}"; then
+                if issue_json_has_blocked_label "${issue_json}" \
+                    || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
                     mark_capped_block_for_forgiveness "Issue" "${item_id}" "${item_repo}"
                     notify_discord_blocked_item "Issue" "${item_id}"
@@ -432,11 +434,10 @@ main() {
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was applied while already at/over the cap, reset its budget
-                # (#1093, #1115).
+                # Issue observed open and un-blocked — re-arm its blocked notifier; the budget
+                # reset already happened above via reset_issue_invocation_counts_if_capped
+                # (#1093, #1115, #1310).
                 clear_blocked_marker "Issue" "${item_id}"
-                reset_issue_invocation_counts_if_capped "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
@@ -461,7 +462,8 @@ main() {
                     continue
                 fi
 
-                if pr_json_has_blocked_label "${pr_json}"; then
+                if pr_json_has_blocked_label "${pr_json}" \
+                    || ! reset_pr_invocation_counts_if_capped "${open_pr}" "${item_repo}"; then
                     if try_auto_unblock_env_diagnosed_pr "${open_pr}" "${item_repo}" "${pr_json}"; then
                         count_blocked=$((count_blocked + 1))
                         item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - auto-unblock attempted this tick")")
@@ -474,11 +476,10 @@ main() {
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)")")
                     continue
                 fi
-                # PR observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was applied while already at/over the cap, reset its budget
-                # (#1093, #1115); also clear any environment-auto-unblock history (#1118).
+                # PR observed open and un-blocked — re-arm its blocked notifier and clear any
+                # environment-auto-unblock history (#1118); the budget reset already happened
+                # above via reset_pr_invocation_counts_if_capped (#1093, #1115, #1310).
                 clear_blocked_marker "PullRequest" "${open_pr}"
-                reset_pr_invocation_counts_if_capped "${open_pr}"
                 reset_env_unblock_attempts "${open_pr}"
 
                 # PR is confirmed open, non-blocked — mark repo as having active work.
@@ -691,7 +692,8 @@ main() {
                     continue
                 fi
 
-                if issue_json_has_blocked_label "${issue_json}"; then
+                if issue_json_has_blocked_label "${issue_json}" \
+                    || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
                     mark_capped_block_for_forgiveness "Issue" "${item_id}" "${item_repo}"
                     notify_discord_blocked_item "Issue" "${item_id}"
@@ -699,11 +701,10 @@ main() {
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - skipping")")
                     continue
                 fi
-                # Issue observed open and un-blocked — re-arm its blocked notifier and, if the
-                # Blocked label was applied while already at/over the cap, reset its budget
-                # (#1093, #1115).
+                # Issue observed open and un-blocked — re-arm its blocked notifier; the budget
+                # reset already happened above via reset_issue_invocation_counts_if_capped
+                # (#1093, #1115, #1310).
                 clear_blocked_marker "Issue" "${item_id}"
-                reset_issue_invocation_counts_if_capped "${item_id}"
                 # Issue observed open — re-arm the one-time closed-issue checks so a future
                 # reopen/re-close cycle is tagged again (#1134 review round 3, #1103).
                 rearm_closed_issue_markers "${item_id}"
@@ -901,7 +902,8 @@ main() {
                 continue
             fi
 
-            if pr_json_has_blocked_label "${pr_json}"; then
+            if pr_json_has_blocked_label "${pr_json}" \
+                || ! reset_pr_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                 if try_auto_unblock_env_diagnosed_pr "${item_id}" "${item_repo}" "${pr_json}"; then
                     count_blocked=$((count_blocked + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - auto-unblock attempted this tick")")
@@ -914,11 +916,10 @@ main() {
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "blocked - skipping (not counting as active work)")")
                 continue
             fi
-            # PR observed open and un-blocked — re-arm its blocked notifier and, if the
-            # Blocked label was applied while already at/over the cap, reset its budget
-            # (#1093, #1115); also clear any environment-auto-unblock history (#1118).
+            # PR observed open and un-blocked — re-arm its blocked notifier and clear any
+            # environment-auto-unblock history (#1118); the budget reset already happened above
+            # via reset_pr_invocation_counts_if_capped (#1093, #1115, #1310).
             clear_blocked_marker "PullRequest" "${item_id}"
-            reset_pr_invocation_counts_if_capped "${item_id}"
             reset_env_unblock_attempts "${item_id}"
 
             # An open non-blocked PR whose status cannot be determined must still serialize its
