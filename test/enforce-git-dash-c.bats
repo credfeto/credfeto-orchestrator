@@ -651,6 +651,12 @@ make_writable_repo() {
     [[ "${output}" == *'--no-verify is not permitted'* ]]
 }
 
+@test "git rebase -m --no-verify is blocked (rebase's -m is a bare --merge flag, not value-consuming)" {
+    run_hook_in_dir "git -C . rebase -m --no-verify main"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
 @test "git commit -n (short form) is blocked" {
     run_hook_in_dir 'git -C . commit -n -m "wip"'
     [ "${status}" -eq 2 ]
@@ -670,6 +676,16 @@ make_writable_repo() {
 
 @test "git merge -n is allowed (means no-stat on merge, not hook bypass)" {
     run_hook_in_dir "git -C . merge -n some-branch"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git rebase -m alone is allowed (bare --merge flag, not a bypass)" {
+    run_hook_in_dir "git -C . rebase -m main"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a merge -m value containing --no-verify is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir 'git -C . merge -m "note: --no-verify is banned here" some-branch'
     [ "${status}" -eq 0 ]
 }
 

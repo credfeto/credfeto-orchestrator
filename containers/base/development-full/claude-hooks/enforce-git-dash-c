@@ -320,8 +320,11 @@ check_config_call() {
 # surrounding loop's state: words (tokens of the call), j (index of the
 # subcommand token), sub (subcommand name). See
 # ai/local/claude-hooks.instructions.md for why -n is scoped to commit only,
-# why -[!-]* avoids misreading long flags as bundles, and why -m/-F/-c/-C
-# values are skipped.
+# why -[!-]* avoids misreading long flags as bundles, and why -F/-c/-C values
+# are skipped. -m is handled separately from -F/-c/-C: on rebase it is a bare
+# boolean flag (--merge, no argument), unlike on commit/merge/cherry-pick
+# where it takes a value - treating it as always value-consuming would
+# swallow a following --no-verify unseen (e.g. `git rebase -m --no-verify`).
 check_hook_bypass_flags() {
   local k=$((j + 1)) tk
   while [ "$k" -lt "${#words[@]}" ]; do
@@ -330,7 +333,8 @@ check_hook_bypass_flags() {
       --no-verify)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
         ;;
-      -m | -F | -c | -C) k=$((k + 1)) ;;
+      -m) [ "$sub" != "rebase" ] && k=$((k + 1)) ;;
+      -F | -c | -C) k=$((k + 1)) ;;
       -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
         [ "$sub" = "commit" ] && [[ "$tk" == *n* ]] && block 'git commit -n is not permitted - hook bypass is blocked'
