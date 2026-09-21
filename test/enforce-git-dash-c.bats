@@ -882,3 +882,32 @@ line two" && git -C . push'
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'--no-verify is not permitted'* ]]
 }
+
+# Unquoted backslash-escape tests (#1399 code review round 3): outside any quoting, bash
+# drops a backslash and keeps the next character literally for any character, not just shell
+# metacharacters - so --no-\verify runs as --no-verify - but shfmt's AST keeps the raw,
+# undecoded source text (backslash included) in Lit.Value. resolve_parts now decodes a bare
+# backslash in a top-level (unquoted) Lit part; a Lit nested inside a DblQuoted is left alone,
+# since backslash inside double quotes is only special before $, `, ", \ and newline.
+
+@test "an unquoted backslash-escaped --no-\\verify is blocked on commit" {
+    run_hook_in_dir 'git -C . commit --no-\verify -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an unquoted backslash-escaped -\\-no-verify is blocked on push" {
+    run_hook_in_dir 'git -C . push -\-no-verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a double-quoted --no-\\verify is not decoded (stays literal, not a bypass)" {
+    run_hook_in_dir 'git -C . commit "--no-\verify" -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted backslash-escaped word with no bypass flag is not falsely blocked" {
+    run_hook_in_dir 'git -C . push origin refs/heads/a\bc'
+    [ "${status}" -eq 0 ]
+}
