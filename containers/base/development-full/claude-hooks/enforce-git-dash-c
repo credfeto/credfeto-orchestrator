@@ -173,7 +173,7 @@ is_allowed_subcommand() {
 
 # Subcommands whose git hooks --no-verify/-n actually skips (#1399) - see
 # ai/local/claude-hooks.instructions.md for why `am` is deliberately excluded.
-GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK=(cherry-pick commit merge push rebase)
+GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK=(cherry-pick commit merge pull push rebase)
 
 # Sentinel for an ANSI-C-quoted word ($'...') containing a backslash escape (#1399 code
 # review), used only by check_hook_bypass_flags below. Unlike a plain $'...' with no
