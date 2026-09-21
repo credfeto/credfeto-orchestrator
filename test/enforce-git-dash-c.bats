@@ -651,6 +651,23 @@ make_writable_repo() {
     [[ "${output}" == *'--no-verify is not permitted'* ]]
 }
 
+@test "git pull --no-verify is blocked (#1399 code review - pull delegates to merge's hooks)" {
+    run_hook_in_dir "git -C . pull --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git pull -m --no-verify is blocked (pull has no -m flag, not value-consuming)" {
+    run_hook_in_dir "git -C . pull -m --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git pull -n is allowed (means no diffstat on pull, not hook bypass)" {
+    run_hook_in_dir "git -C . pull -n"
+    [ "${status}" -eq 0 ]
+}
+
 @test "git rebase -m --no-verify is blocked (rebase's -m is a bare --merge flag, not value-consuming)" {
     run_hook_in_dir "git -C . rebase -m --no-verify main"
     [ "${status}" -eq 2 ]
