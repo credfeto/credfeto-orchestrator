@@ -657,6 +657,12 @@ make_writable_repo() {
     [[ "${output}" == *'--no-verify is not permitted'* ]]
 }
 
+@test "git push -m --no-verify is blocked (push has no -m flag, not value-consuming)" {
+    run_hook_in_dir "git -C . push -m --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
 @test "git commit -n (short form) is blocked" {
     run_hook_in_dir 'git -C . commit -n -m "wip"'
     [ "${status}" -eq 2 ]
