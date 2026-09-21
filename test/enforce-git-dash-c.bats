@@ -911,3 +911,14 @@ line two" && git -C . push'
     run_hook_in_dir 'git -C . push origin refs/heads/a\bc'
     [ "${status}" -eq 0 ]
 }
+
+# HUSKY=0 subshell-boundary test (#1399 code review round 3): the assignment-boundary
+# character class previously only recognised ;/&/|/whitespace as a separator immediately
+# before/after HUSKY=0, so a parenthesised subshell slipped past unblocked even though
+# reject-obfuscated-commands walks into subshells rather than rejecting them outright.
+
+@test "HUSKY=0 inside a subshell is blocked" {
+    run_hook_in_dir '(HUSKY=0 git -C . commit -m "wip")'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
