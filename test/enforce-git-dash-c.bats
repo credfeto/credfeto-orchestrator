@@ -692,6 +692,23 @@ make_writable_repo() {
     [[ "${output}" == *'-n is not permitted'* ]]
 }
 
+@test "git commit -am -m --no-verify is blocked (bundle-trailing m still consumes the next word as its value)" {
+    run_hook_in_dir 'git -C . commit -am -m --no-verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git merge -qm -m --no-verify is blocked (bundle-trailing m still consumes the next word as its value)" {
+    run_hook_in_dir 'git -C . merge -qm -m --no-verify some-branch'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git commit -am with a real message is still allowed" {
+    run_hook_in_dir 'git -C . commit -am "wip"'
+    [ "${status}" -eq 0 ]
+}
+
 @test "git push -n is allowed (means dry-run on push, not hook bypass)" {
     run_hook_in_dir "git -C . push -n"
     [ "${status}" -eq 0 ]
