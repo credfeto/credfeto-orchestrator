@@ -410,7 +410,9 @@ check_config_call() {
 # of the subcommand token), sub (subcommand name). See
 # ai/local/claude-hooks.instructions.md for why -n is scoped to commit only,
 # why -[!-]* avoids misreading long flags as bundles, why -F/-c/-C values
-# are skipped, and why -m consumes a value only on commit/merge/cherry-pick.
+# are skipped, why -m consumes a value only on commit/merge/cherry-pick, and
+# why a bundle's own trailing value-consuming letter (e.g. -am) also consumes
+# the next word (#1399 code review round 4).
 check_hook_bypass_flags() {
   local k=$((j + 1)) tk
   while [ "$k" -lt "${#resolved[@]}" ]; do
@@ -427,6 +429,16 @@ check_hook_bypass_flags() {
       -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
         [ "$sub" = "commit" ] && [[ "$tk" == *n* ]] && block 'git commit -n is not permitted - hook bypass is blocked'
+        # A bundle whose trailing letter is a value-consuming option with nothing attached
+        # after it in the same token (e.g. -am, -qm, -aC) takes its value from the *next*
+        # word, exactly like the bare -m/-F/-c/-C arms above - git's own short-option
+        # bundling rule, not just this token's own text. Without this, that next word (a
+        # real --no-verify) is silently swallowed as the bundle's value while an unrelated
+        # decoy word left in its place is scanned instead (#1399 code review round 4).
+        case "${tk: -1}" in
+          F | c | C) k=$((k + 1)) ;;
+          m) case "$sub" in commit | merge | cherry-pick) k=$((k + 1)) ;; esac ;;
+        esac
         ;;
     esac
     k=$((k + 1))
