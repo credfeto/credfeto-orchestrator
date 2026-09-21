@@ -13998,6 +13998,32 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# `gh pr view --json statusCheckRollup` reports an unset conclusion as "" rather than null (#1483).
+@test "pr_json_has_pending_ci_checks returns true when a required check is IN_PROGRESS with an empty-string conclusion" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":"","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true when a required check is QUEUED with an empty-string conclusion" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"QUEUED","conclusion":"","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns true for an IN_PROGRESS empty-string conclusion among completed checks with no isRequired field" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"tests","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"build-development-full","status":"IN_PROGRESS","conclusion":""}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when a non-required check is IN_PROGRESS with an empty-string conclusion" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"badge","status":"IN_PROGRESS","conclusion":"","isRequired":false}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_has_pending_ci_checks returns false when status is COMPLETED with an empty-string conclusion" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
 @test "clear_pr_ci_pending_state removes the state file when it exists" {
     save_pr_head_oid 42 "deadbeef" "1700000000"
     local state_file

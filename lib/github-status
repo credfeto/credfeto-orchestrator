@@ -507,14 +507,15 @@ pr_json_has_pending_ci_checks() {
     # of inconsistency the other way, so pending requires BOTH fields to still say not-done
     # instead of trusting either one alone: whichever field reaches a terminal value first is
     # enough to call the check done. A genuine re-run still reads as pending, since it surfaces
-    # as a new CheckRun node whose own conclusion starts out null.
+    # as a new CheckRun node whose own conclusion starts out unset: null in raw GraphQL/REST, but
+    # "" in `gh pr view --json statusCheckRollup` (what this is fed), so both count (#1483).
     printf '%s' "${pr_json}" | jq -e '
         (.statusCheckRollup // [])
         | (length > 0) and any(.[];
             .isRequired != false
             and (
                 if (.status != null)
-                then .status != "COMPLETED" and .conclusion == null
+                then .status != "COMPLETED" and ((.conclusion // "") == "")
                 else ((.state // "") | . == "PENDING" or . == "EXPECTED")
                 end
             )

@@ -21,6 +21,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - PR idle-invocation budget no longer counts a tick against the idle cap when the session made real forward progress with no commit - a Workflow Status board move (a clean phase advance) or a new top-level comment (a reply-only round) now resets the idle counter the same way a genuine commit already does, instead of being charged the same as literal idleness - closing the gap where a healthy PR working through the review pipeline could hit idle-budget-exhausted and get falsely Blocked after only a few clean phase advances (#1474)
 - Avoid a wasted agent invocation on a fresh Issue when the repo's active-branch/PR slot is already occupied by an unrelated PR the bot doesn't own (#1476)
 - Harden the runaway-invocation-cap reset against a stale read-after-write of the Blocked label - a tick observing a marker-present item as unblocked now re-confirms with a live GitHub check before discarding the invocation budget, so a read that lags behind an earlier tick's own verified Blocked write can no longer silently reopen the cap (#1310)
+- Pending CI checks are detected again: an in-progress check with an empty-string conclusion (as gh reports it) no longer reads as finished, so a PR waiting on CI is deferred instead of burning its idle budget and being blocked (#1483)
 ### Changed
 ### Deprecated
 ### Removed
