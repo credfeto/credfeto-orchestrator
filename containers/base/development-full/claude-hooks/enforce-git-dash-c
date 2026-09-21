@@ -403,7 +403,7 @@ check_hook_bypass_flags() {
       "$ANSI_C_ESCAPE_MARKER")
         block "git ${sub}: an ANSI-C quoted (\$'...') argument with escape sequences cannot be checked for a hook-bypass flag - spell it out plainly instead"
         ;;
-      --no-verify)
+      --no-verify | --no-v | --no-ve | --no-ver | --no-veri | --no-verif)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
         ;;
       -m) case "$sub" in commit | merge | cherry-pick) k=$((k + 1)) ;; esac ;;
