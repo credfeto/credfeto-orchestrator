@@ -198,11 +198,13 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
 # HUSKY=0 override (#1399): the AST walk below only extracts each call's
 # Args, not its env-var Assigns, so this checks raw_cmd directly via a regex
-# anchored to a real assignment boundary (start/end of string or a shell
-# separator) rather than a substring match - see
+# anchored to a real assignment boundary (start/end of string, a shell
+# separator, or a `(`/`)` subshell boundary - #1399 code review round 3:
+# `(HUSKY=0 ...)` previously slipped past a boundary class that only
+# recognised `;`/`&`/`|`/whitespace) rather than a substring match - see
 # ai/local/claude-hooks.instructions.md for the full rationale and the one
 # known residual false-positive class this trades off.
-husky_re='(^|[;&|[:space:]])HUSKY=("0"|'\''0'\''|0)($|[;&|[:space:]])'
+husky_re='(^|[;&|()[:space:]])HUSKY=("0"|'\''0'\''|0)($|[;&|()[:space:]])'
 [[ "$raw_cmd" =~ $husky_re ]] && block 'HUSKY=0 is not permitted - hook bypass is blocked'
 
 command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
