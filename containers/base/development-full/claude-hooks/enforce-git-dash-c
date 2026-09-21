@@ -65,9 +65,10 @@
 #   * Hook-bypass flags and overrides (#1399): blocks `--no-verify` (and its
 #     unambiguous abbreviations, all of GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK)
 #     and short-form `-n`/bundles (commit only) via the AST walk - including
-#     a simple-quoted or split-quoted spelling of any of these, since the
-#     shell already strips quoting before git ever sees the argument - plus
-#     a `HUSKY=0` env-var override via a separate raw-text regex. Full
+#     a simple-quoted, split-quoted or unquoted-backslash-escaped spelling
+#     of any of these, since the shell already strips quoting/escaping
+#     before git ever sees the argument - plus a `HUSKY=0` env-var override
+#     via a separate raw-text regex. Full
 #     rationale: ai/local/claude-hooks.instructions.md.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
@@ -242,22 +243,35 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # hook" test relies on the words line staying conservative for the command-name/-C gate,
 # which must keep treating adjacent-quoted-literal splicing as opaque and deferring to
 # reject-obfuscated-commands upstream - only the hook-bypass argument scan benefits from the
+# richer resolution). A fourth quoting form - a bare backslash in an unquoted word, e.g.
+# --no-\verify - is decoded too (#1399 code review round 3): outside any quoting, bash's own
+# rule is simply "drop the backslash, keep the next character literally" for any character
+# (not just shell metacharacters), so shfmt's raw, undecoded Lit.Value (which keeps the
+# backslash - confirmed live via shfmt --tojson) is exactly one gsub away from the real
+# argument value, unlike the ANSI-C case above where decoding would mean reimplementing a
+# whole escape-sequence table. This decode applies only to a Lit part at the top level of an
+# arg's own Parts (resolve_parts' new `unquoted` flag, true only for that top-level call);
+# a Lit nested inside a DblQuoted keeps its raw text unchanged, since backslash inside double
+# quotes is special only before $, `, ", \ and newline - not before an arbitrary letter like
+# the unquoted case - so "--no-\verify" in quotes really does stay --no-\verify at runtime
+# and must not be decoded the same way.
 # richer resolution). Read below in two pure-bash passes over this same already-computed
 # string - no further jq forked per call: the first scans only the words lines to answer
 # "does cd appear anywhere in the command" (the auto-correction gate - see the header
 # comment), which must be known in full before the first block-or-rewrite decision, not
 # discovered mid-walk; the second is the real per-call processing loop.
 calls=$(printf '%s' "$ast" | jq -r '
-  def resolve_parts:
+  def resolve_parts(unquoted):
     if length == 0 then ""
     else
       reduce .[] as $p (
         "";
         if . == null then null
-        elif $p.Type == "Lit" then . + $p.Value
+        elif $p.Type == "Lit" then
+          . + (if unquoted then ($p.Value | gsub("\\\\(?<c>.)"; "\(.c)")) else $p.Value end)
         elif $p.Type == "SglQuoted" then . + ($p.Value // "")
         elif $p.Type == "DblQuoted" then
-          (($p.Parts // []) | resolve_parts) as $inner
+          (($p.Parts // []) | resolve_parts(false)) as $inner
           | (if $inner == null then null else . + $inner end)
         else null
         end
@@ -270,7 +284,7 @@ calls=$(printf '%s' "$ast" | jq -r '
      if (.Parts | any(.Type == "SglQuoted" and (.Dollar // false) and ((.Value // "") | test("\\\\")))) then
        ([2] | implode)
      else
-       (.Parts | resolve_parts) as $r |
+       (.Parts | resolve_parts(true)) as $r |
        if $r == null or ($r | explode | any(. == 9 or . == 10 or . == 13)) then
          ([1] | implode)
        else
