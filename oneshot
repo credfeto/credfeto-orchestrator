@@ -104,7 +104,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _wf_ensure_status_field_option, discover_or_create_workflow_project,
 # report_missing_workflow_project, _wf_invite_trusted_collaborators, _wf_create_project,
 # update_workflow_status, fetch_board_approved_items, fetch_board_item_statuses,
-# workflow_status_name_for_option_id, board_substatus_for_item, fetch_single_item_workflow_status,
+# workflow_status_name_for_option_id, board_substatus_for_item,
+# pr_review_pipeline_finished_without_auto_merge, fetch_single_item_workflow_status,
 # _wf_status_ordinal, sync_pr_workflow_status_from_linked_issues, coarse_status_for_substatus, and
 # priority_for_labels are declared in lib/workflow-board.
 
@@ -294,7 +295,7 @@ main() {
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_has_unaddressed_comment post_comment_seen
+    local pr_has_unaddressed_comment post_comment_seen review_pipeline_finished
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
@@ -541,7 +542,15 @@ main() {
                 clear_pr_ci_pending_state "${open_pr}"
 
                 if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
-                    if pr_json_is_terminal "${pr_json}"; then
+                    # Falls back to the Workflow Status board's "Human Review" substatus when
+                    # auto-merge itself couldn't be armed (unsupported on this repo) - see
+                    # pr_review_pipeline_finished_without_auto_merge's own header comment
+                    # (lib/workflow-board) for why that is still a reliable "pipeline finished"
+                    # signal (#1479).
+                    review_pipeline_finished=false
+                    pr_review_pipeline_finished_without_auto_merge "${pr_json}" "${open_pr}" \
+                        && review_pipeline_finished=true
+                    if pr_json_is_terminal "${pr_json}" "${review_pipeline_finished}"; then
                         # Discord's review-approval nudge fires regardless of
                         # pr_has_unaddressed_comment below — an unrelated trusted comment must not
                         # silently suppress it (#1307 review).
@@ -549,13 +558,13 @@ main() {
                             notify_discord_pr_needs_approval "${open_pr}" "${pr_json}"
                         fi
                         if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                            info "PR #${open_pr} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                            info "PR #${open_pr} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
                             # Same "waiting" notification as the direct-PR settled path above
                             # (#1375 review) — a pivoted PR going settled must be just as visible
                             # as one selected directly from the priorities feed.
                             notify_discord_pr_waiting "${open_pr}" "${pr_json}" "${item_priority}" "Waiting on human review"
                             count_unchanged=$((count_unchanged + 1))
-                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
+                            item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
                             continue
                         fi
                     fi
@@ -1031,7 +1040,15 @@ main() {
             clear_pr_ci_pending_state "${item_id}"
 
             if [ "${pr_is_draft}" != "true" ] && [ "${pr_merge_state}" != "BEHIND" ] && [ "${pr_merge_state}" != "DIRTY" ]; then
-                if pr_json_is_terminal "${pr_json}"; then
+                # Falls back to the Workflow Status board's "Human Review" substatus when
+                # auto-merge itself couldn't be armed (unsupported on this repo) - see
+                # pr_review_pipeline_finished_without_auto_merge's own header comment
+                # (lib/workflow-board) for why that is still a reliable "pipeline finished"
+                # signal (#1479).
+                review_pipeline_finished=false
+                pr_review_pipeline_finished_without_auto_merge "${pr_json}" "${item_id}" \
+                    && review_pipeline_finished=true
+                if pr_json_is_terminal "${pr_json}" "${review_pipeline_finished}"; then
                     # Discord's review-approval nudge fires regardless of
                     # pr_has_unaddressed_comment below — an unrelated trusted comment must not
                     # silently suppress it (#1307 review).
@@ -1039,7 +1056,7 @@ main() {
                         notify_discord_pr_needs_approval "${item_id}" "${pr_json}"
                     fi
                     if [ "${pr_has_unaddressed_comment}" != "true" ]; then
-                        info "PR #${item_id} in ${item_repo}: settled (auto-merge armed, nothing failed/pending) — no agent needed"
+                        info "PR #${item_id} in ${item_repo}: settled (ready to merge, nothing failed/pending) — no agent needed"
                         # Distinct from notify_discord_pr_needs_approval above (#1375): that alert
                         # is a dedicated, hourly-deduped nudge specifically for the review-required
                         # case; this is the general per-item status update the rest of this file
@@ -1048,7 +1065,7 @@ main() {
                         # substitute for the dedicated alert, both can and do fire together.
                         notify_discord_pr_waiting "${item_id}" "${pr_json}" "${item_priority}" "Waiting on human review"
                         count_unchanged=$((count_unchanged + 1))
-                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (auto-merge armed, nothing failed/pending) - no agent needed")")
+                        item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "settled (ready to merge, nothing failed/pending) - no agent needed")")
                         continue
                     fi
                 fi
