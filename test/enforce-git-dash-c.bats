@@ -846,3 +846,22 @@ make_writable_repo() {
 line two" && git -C . push'
     [ "${status}" -eq 0 ]
 }
+
+# Abbreviated --no-verify tests (#1399 code review): git's own option parser accepts any
+# unambiguous prefix of a long option, so an exact-only `--no-verify` case arm lets a shorter,
+# still-working spelling straight through. `--no-v`/`--no-ve`/`--no-ver` are genuine,
+# unambiguous, working spellings on `cherry-pick` (it has no colliding `--no-verbose` or
+# `--no-verify-signatures` flag); see ai/local/claude-hooks.instructions.md for the
+# per-subcommand ambiguity details.
+
+@test "an abbreviated --no-v is blocked on cherry-pick" {
+    run_hook_in_dir 'git -C . cherry-pick --no-v HEAD'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an abbreviated --no-verif is blocked on commit" {
+    run_hook_in_dir 'git -C . commit --no-verif -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
