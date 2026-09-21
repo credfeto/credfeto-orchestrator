@@ -781,3 +781,68 @@ make_writable_repo() {
     run_hook_in_dir 'HUSKY=01 git -C . commit -m "wip"'
     [ "${status}" -eq 0 ]
 }
+
+
+# Quoted-literal resolution tests (#1399 code review): the shell strips quoting before git
+# ever sees an argument, so a quoted "--no-verify" is identical to an unquoted --no-verify
+# from git's point of view. The words line used for command-name/-C detection stays
+# conservative (quoted text is opaque there, unchanged), but the hook-bypass scan now uses a
+# separate, richer resolution that unwraps simple literal quoting.
+
+@test "a double-quoted --no-verify is blocked" {
+    run_hook_in_dir 'git -C . commit "--no-verify" -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a single-quoted --no-verify is blocked" {
+    run_hook_in_dir "git -C . commit '--no-verify' -m 'wip'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a split-quoted --no-verify (adjacent quoted fragments) is blocked" {
+    run_hook_in_dir 'git -C . commit --no-ver"ify" -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a quoted --no-color is not falsely blocked by the resolved-value scan" {
+    run_hook_in_dir 'git -C . commit "--no-color" -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted -n consumed as -F's filename argument is not falsely blocked as the hook-bypass flag" {
+    run_hook_in_dir 'git -C . commit -F "-n"'
+    [ "${status}" -eq 0 ]
+}
+
+# ANSI-C quoting tests (#1399 code review): $'...' with a backslash escape stores its raw,
+# undecoded source text in the AST (shfmt does not perform bash's own ANSI-C decoding), so
+# resolve_parts cannot safely treat that source text as the argument's real value without
+# re-implementing bash's escape rules. Such a word fails closed via its own distinct marker
+# rather than being silently allowed through or misresolved. A $'...' with no escape has no
+# such gap (its source text already is its value) and resolves normally.
+
+@test "an ANSI-C quoted argument with a hex escape is blocked (cannot be checked for a hook-bypass flag)" {
+    run_hook_in_dir "git -C . commit \$'\x2d\x2dno-verify' -m \"wip\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'ANSI-C quoted'* ]]
+}
+
+@test "a plain ANSI-C quoted --no-verify with no escape is blocked normally (resolves like any other quoting)" {
+    run_hook_in_dir "git -C . commit \$'--no-verify' -m \"wip\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an ANSI-C quoted -m commit message with an escape is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -m \$'line one\nline two'"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a resolved value containing a raw embedded newline does not desync the chained-call parse (#1399 code review)" {
+    run_hook_in_dir 'git -C . commit -m "line one
+line two" && git -C . push'
+    [ "${status}" -eq 0 ]
+}
