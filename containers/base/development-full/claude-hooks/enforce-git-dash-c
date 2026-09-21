@@ -62,10 +62,13 @@
 #         --remove-section are blocked outright — interactive,
 #         arbitrary-file or whole-section forms this hook cannot classify
 #         as pure reads.
-#   * Hook-bypass flags and overrides (#1399): blocks `--no-verify` (all of
-#     GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK) and short-form `-n`/bundles (commit
-#     only) via the AST walk, plus a `HUSKY=0` env-var override via a
-#     separate raw-text regex. Full rationale: ai/local/claude-hooks.instructions.md.
+#   * Hook-bypass flags and overrides (#1399): blocks `--no-verify` (and its
+#     unambiguous abbreviations, all of GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK)
+#     and short-form `-n`/bundles (commit only) via the AST walk - including
+#     a simple-quoted or split-quoted spelling of any of these, since the
+#     shell already strips quoting before git ever sees the argument - plus
+#     a `HUSKY=0` env-var override via a separate raw-text regex. Full
+#     rationale: ai/local/claude-hooks.instructions.md.
 #
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
@@ -172,6 +175,21 @@ is_allowed_subcommand() {
 # ai/local/claude-hooks.instructions.md for why `am` is deliberately excluded.
 GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK=(cherry-pick commit merge push rebase)
 
+# Sentinel for an ANSI-C-quoted word ($'...') containing a backslash escape (#1399 code
+# review), used only by check_hook_bypass_flags below. Unlike a plain $'...' with no
+# escapes - whose source text already is its own value, safe to resolve like any other
+# quoting - a $'...' with an escape (\t, \x2d, \045, ...) decodes to a value this hook
+# cannot compute without re-implementing bash's ANSI-C escape rules in jq, so it is neither
+# resolved (that would silently trust unparsed escape syntax as if it were literal text,
+# which is worse than not resolving at all) nor treated as the ordinary opaque marker
+# (silently allowed through, same as a genuinely dynamic $VAR/$(...) - but this construct,
+# unlike those, is fully static and just not decoded here yet). It gets its own sentinel so
+# check_hook_bypass_flags can fail closed on it specifically instead. Built the same way as
+# the resolved-line's own opaque marker below (see the "calls" extraction comment) - a codepoint
+# via jq's implode, not a typed escape sequence - using a different codepoint so it can never
+# collide with that marker.
+ANSI_C_ESCAPE_MARKER=$(jq -rn '[2] | implode')
+
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 
@@ -190,23 +208,76 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# Two tab-joined lines per CallExpr, in a single AST walk: the words line (every word - a
+# Three tab-joined lines per CallExpr, in a single AST walk: the words line (every word - a
 # single plain literal emitted verbatim; anything else - quoted text, substitutions,
 # expansions - represented as a \u0001 marker, unambiguous since Layer 0 of
 # reject-obfuscated-commands, which runs before this hook, guarantees a real \x01 byte
 # can never appear in the input, so it can never equal "git"/"-C"/"-c" and is opaque to
 # the checks below), then the offsets line (each word's raw_cmd byte offset one past its
 # end - shfmt's own End.Offset - used by the auto-correction rewrite below to know
-# exactly where to splice "-C <dir>" in after a bare git token). Read below in two
-# pure-bash passes over this same already-computed string - no further jq forked per
-# call: the first scans only the words lines to answer "does cd appear anywhere in the
-# command" (the auto-correction gate - see the header comment), which must be known in
-# full before the first block-or-rewrite decision, not discovered mid-walk; the second
-# is the real per-call processing loop.
+# exactly where to splice "-C <dir>" in after a bare git token), then the resolved line
+# (#1399 - used only by check_hook_bypass_flags below, never for command-name/-C/subcommand
+# identification: a word built entirely from Lit/SglQuoted/DblQuoted-of-only-those pieces is
+# concatenated to its real literal value even when quoted - "--no-verify" or '--no-verify' is
+# indistinguishable from --no-verify to git itself, since the shell already stripped the
+# quoting before git ever saw the argument - while a word containing any real expansion
+# ($VAR, $(...), ...) still resolves to the same opaque marker value as the words line's own
+# (built via jq's own implode from the identical codepoint the words line spells as a typed
+# escape instead, so both lines agree on what "opaque" means despite the different spelling).
+# A resolved value is also folded back to that same opaque marker, even when resolve_parts did
+# produce one, if it contains a raw tab/newline/CR byte: a quoted argument may legitimately
+# embed one of these (a multi-line commit message, a tab-containing pathspec), and letting it
+# through as-is would corrupt the tab/newline-joined transport below - the words line never had
+# this risk, since quoted text was always opaque there - and
+# no flag this scan ever matches contains whitespace, so folding these to opaque costs nothing
+# real. A $'...' (ANSI-C quoted) word is a separate case: with no backslash escape its
+# source text already is its value, resolved like any other quoting, but with an escape
+# (\t, \x2d, \045, ...) the source text and the decoded value differ and this hook does not
+# implement bash's ANSI-C decoding rules, so it gets its own distinct sentinel instead
+# (ANSI_C_ESCAPE_MARKER, a different codepoint from the opaque marker so the two can never
+# collide, computed once above) rather than being silently resolved to raw, undecoded escape
+# syntax or folded into the opaque marker itself - check_hook_bypass_flags fails closed on it
+# explicitly rather than either. Kept as a separate line rather than
+# widening the words line's own resolution: the "an obfuscated git name is opaque to this
+# hook" test relies on the words line staying conservative for the command-name/-C gate,
+# which must keep treating adjacent-quoted-literal splicing as opaque and deferring to
+# reject-obfuscated-commands upstream - only the hook-bypass argument scan benefits from the
+# richer resolution). Read below in two pure-bash passes over this same already-computed
+# string - no further jq forked per call: the first scans only the words lines to answer
+# "does cd appear anywhere in the command" (the auto-correction gate - see the header
+# comment), which must be known in full before the first block-or-rewrite decision, not
+# discovered mid-walk; the second is the real per-call processing loop.
 calls=$(printf '%s' "$ast" | jq -r '
+  def resolve_parts:
+    if length == 0 then ""
+    else
+      reduce .[] as $p (
+        "";
+        if . == null then null
+        elif $p.Type == "Lit" then . + $p.Value
+        elif $p.Type == "SglQuoted" then . + ($p.Value // "")
+        elif $p.Type == "DblQuoted" then
+          (($p.Parts // []) | resolve_parts) as $inner
+          | (if $inner == null then null else . + $inner end)
+        else null
+        end
+      )
+    end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
   ([ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] | join("\t")),
-  ([ .Args[] | (.End.Offset | tostring) ] | join("\t"))
+  ([ .Args[] | (.End.Offset | tostring) ] | join("\t")),
+  ([ .Args[] |
+     if (.Parts | any(.Type == "SglQuoted" and (.Dollar // false) and ((.Value // "") | test("\\\\")))) then
+       ([2] | implode)
+     else
+       (.Parts | resolve_parts) as $r |
+       if $r == null or ($r | explode | any(. == 9 or . == 10 or . == 13)) then
+         ([1] | implode)
+       else
+         $r
+       end
+     end
+  ] | join("\t"))
 ')
 
 # Directory-changing command names that gate the auto-correction feature below - same
@@ -229,7 +300,7 @@ is_cd_name() {
 # command, so such a call earlier in program order means its own $PWD is no longer a safe
 # stand-in for what a later bare git call in the same command would actually see.
 HAS_CD=false
-while IFS= read -r words_line && IFS= read -r _ends_line; do
+while IFS= read -r words_line && IFS= read -r _ends_line && IFS= read -r _resolved_line; do
   [ -z "$words_line" ] && continue
   IFS=$'\t' read -ra cd_check_words <<< "$words_line"
   if is_cd_name "${cd_check_words[0]}"; then
@@ -317,16 +388,21 @@ check_config_call() {
 
 # Blocks the git-hook-bypass flag (#1399) on subcommands whose hooks it
 # actually skips (GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK above). Reads the
-# surrounding loop's state: words (tokens of the call), j (index of the
-# subcommand token), sub (subcommand name). See
+# surrounding loop's state: resolved (per-word values, quoted literals
+# unwrapped - see the "calls" extraction comment above; words/j/sub are left
+# untouched, only this scan benefits from the richer resolution), j (index
+# of the subcommand token), sub (subcommand name). See
 # ai/local/claude-hooks.instructions.md for why -n is scoped to commit only,
 # why -[!-]* avoids misreading long flags as bundles, why -F/-c/-C values
 # are skipped, and why -m consumes a value only on commit/merge/cherry-pick.
 check_hook_bypass_flags() {
   local k=$((j + 1)) tk
-  while [ "$k" -lt "${#words[@]}" ]; do
-    tk="${words[$k]}"
+  while [ "$k" -lt "${#resolved[@]}" ]; do
+    tk="${resolved[$k]}"
     case "$tk" in
+      "$ANSI_C_ESCAPE_MARKER")
+        block "git ${sub}: an ANSI-C quoted (\$'...') argument with escape sequences cannot be checked for a hook-bypass flag - spell it out plainly instead"
+        ;;
       --no-verify)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
         ;;
@@ -341,15 +417,18 @@ check_hook_bypass_flags() {
   done
 }
 
-while IFS= read -r words_line && IFS= read -r ends_line; do
+while IFS= read -r words_line && IFS= read -r ends_line && IFS= read -r resolved_line; do
   [ -z "$words_line" ] && continue
   IFS=$'\t' read -ra words <<< "$words_line"
   IFS=$'\t' read -ra ends <<< "$ends_line"
+  IFS=$'\t' read -ra resolved <<< "$resolved_line"
 
-  # Fails closed on a desync between the two paired lines (e.g. a future edit to the jq
-  # query above changing one line's word count but not the other's) rather than silently
-  # splicing at a wrong offset - consistent with this hook's fail-closed design throughout.
-  [ "${#words[@]}" -eq "${#ends[@]}" ] || block 'internal parse desync between words and offsets - failing closed'
+  # Fails closed on a desync between the three paired lines (e.g. a future edit to the jq
+  # query above changing one line's word count but not the others') rather than silently
+  # splicing at a wrong offset, or scanning the wrong resolved value against the wrong word -
+  # consistent with this hook's fail-closed design throughout.
+  { [ "${#words[@]}" -eq "${#ends[@]}" ] && [ "${#words[@]}" -eq "${#resolved[@]}" ]; } ||
+    block 'internal parse desync between words, offsets and resolved values - failing closed'
 
   case "${words[0]}" in
     eval | source | .)
