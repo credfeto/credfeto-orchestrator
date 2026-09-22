@@ -203,8 +203,18 @@ raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 # `(HUSKY=0 ...)` previously slipped past a boundary class that only
 # recognised `;`/`&`/`|`/whitespace) rather than a substring match - see
 # ai/local/claude-hooks.instructions.md for the full rationale and the one
-# known residual false-positive class this trades off.
-husky_re='(^|[;&|()[:space:]])HUSKY=("0"|'\''0'\''|0)($|[;&|()[:space:]])'
+# known residual false-positive class this trades off. The value alternation
+# also covers the two other spellings confirmed to decode to the same
+# literal "0" at real bash runtime - a no-escape ANSI-C quote (`$'0'`) and a
+# bare unquoted backslash (`\0`, bash's own "drop the backslash" rule for an
+# ordinary character) - #1399 code review round 7: neither was matched
+# before, so `HUSKY=$'0' git ...` or `HUSKY=\0 git ...` slipped through
+# unblocked despite being live-equivalent to the already-blocked spellings.
+# An escaped ANSI-C form (`$'\060'`, `$'\x30'`, ...) stays out of scope, same
+# as the AST-side ANSI_C_ESCAPE_MARKER case: decoding it would mean
+# reimplementing bash's whole escape-sequence table for this one raw-text
+# check, not just resolving already-equivalent source text.
+husky_re='(^|[;&|()[:space:]])HUSKY=("0"|'\''0'\''|0|\$'\''0'\''|\\0)($|[;&|()[:space:]])'
 [[ "$raw_cmd" =~ $husky_re ]] && block 'HUSKY=0 is not permitted - hook bypass is blocked'
 
 command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
