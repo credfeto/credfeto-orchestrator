@@ -177,11 +177,23 @@ is_allowed_subcommand() {
 GIT_SUBCOMMANDS_HOOK_BYPASS_CHECK=(cherry-pick commit merge pull push rebase)
 
 # Subcommands where -m takes a value: commit's own -m <msg>, merge's -m <msg>, and
-# cherry-pick's -m <parent-number> (#1399 code review round 8). Shared by both the
-# whole-token and bundle-walk arms of check_hook_bypass_flags below so the two case
-# statements can't independently drift out of sync with each other - they previously
-# spelled this same set out as two separate literals.
+# cherry-pick's -m <parent-number>. Shared by both the
+# whole-token and bundle-walk arms of check_hook_bypass_flags below (via
+# letter_consumes_value) so neither the subcommand set nor the value-consuming letter set
+# can drift out of sync between the two.
 GIT_SUBCOMMANDS_M_CONSUMES_VALUE=(commit merge cherry-pick)
+
+# Whether short-flag letter $1 consumes the next word as its value on subcommand $2 - F/c/C
+# always do, m only for GIT_SUBCOMMANDS_M_CONSUMES_VALUE - the single place both the
+# whole-token arm and the per-character bundle-walk arm of check_hook_bypass_flags below
+# consult, so which letters consume a value can't drift between the two.
+letter_consumes_value() {
+  case "$1" in
+    F | c | C) return 0 ;;
+    m) in_list "$2" "${GIT_SUBCOMMANDS_M_CONSUMES_VALUE[@]}" ;;
+    *) return 1 ;;
+  esac
+}
 
 # Sentinel for an ANSI-C-quoted word ($'...') containing a backslash escape (#1399 code
 # review), used only by check_hook_bypass_flags below. Unlike a plain $'...' with no
@@ -486,8 +498,9 @@ check_hook_bypass_flags() {
       --no-verify | --no-v | --no-ve | --no-ver | --no-veri | --no-verif)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
         ;;
-      -m) in_list "$sub" "${GIT_SUBCOMMANDS_M_CONSUMES_VALUE[@]}" && k=$((k + 1)) ;;
-      -F | -c | -C) k=$((k + 1)) ;;
+      -m | -F | -c | -C)
+        letter_consumes_value "${tk#-}" "$sub" && k=$((k + 1))
+        ;;
       -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
         # Walked one character at a time to match git's own short-option bundling rule
@@ -509,14 +522,8 @@ check_hook_bypass_flags() {
             n)
               [ "$sub" = "commit" ] && block 'git commit -n is not permitted - hook bypass is blocked'
               ;;
-            F | c | C)
-              [ "$((pos + 1))" -eq "${#bundle}" ] && k=$((k + 1))
-              break
-              ;;
-            m)
-              if in_list "$sub" "${GIT_SUBCOMMANDS_M_CONSUMES_VALUE[@]}"; then
-                [ "$((pos + 1))" -eq "${#bundle}" ] && k=$((k + 1))
-              fi
+            F | c | C | m)
+              letter_consumes_value "$bc" "$sub" && [ "$((pos + 1))" -eq "${#bundle}" ] && k=$((k + 1))
               break
               ;;
           esac
