@@ -211,7 +211,8 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# Three tab-joined lines per CallExpr, in a single AST walk: the words line (every word - a
+# Three lines per CallExpr (words/offsets tab-joined, resolved \x1f-joined - see that line's
+# own comment below for why), in a single AST walk: the words line (every word - a
 # single plain literal emitted verbatim; anything else - quoted text, substitutions,
 # expansions - represented as a \u0001 marker, unambiguous since Layer 0 of
 # reject-obfuscated-commands, which runs before this hook, guarantees a real \x01 byte
@@ -227,13 +228,20 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # ($VAR, $(...), ...) still resolves to the same opaque marker value as the words line's own
 # (built via jq's own implode from the identical codepoint the words line spells as a typed
 # escape instead, so both lines agree on what "opaque" means despite the different spelling).
-# A resolved value is also folded back to that same opaque marker, even when resolve_parts did
-# produce one, if it contains a raw tab/newline/CR byte: a quoted argument may legitimately
-# embed one of these (a multi-line commit message, a tab-containing pathspec), and letting it
-# through as-is would corrupt the tab/newline-joined transport below - the words line never had
-# this risk, since quoted text was always opaque there - and
-# no flag this scan ever matches contains whitespace, so folding these to opaque costs nothing
-# real. A $'...' (ANSI-C quoted) word is a separate case: with no backslash escape its
+# The resolved line is joined with \x1f (unit separator), not tab: unlike the words/ends
+# lines, an arg here can genuinely resolve to an empty string (e.g. a bare '' or "" literal),
+# and `IFS=$'\t' read -ra` collapses consecutive tabs - tab is "IFS whitespace" to bash,
+# so a real empty field between two tabs silently vanishes instead of surviving as an empty
+# array element, undercounting the resolved array against words/ends and tripping the
+# desync fail-close below on a completely unrelated, harmless command (confirmed live: a
+# bare `echo foo '' bar` was blocked by this before the fix). \x1f is not IFS whitespace, so
+# `read -ra` preserves empty fields between it. A resolved value is also folded back to the
+# opaque marker, even when resolve_parts did produce one, if it contains a raw tab/newline/CR/
+# \x1f byte: a quoted argument may legitimately embed one of these (a multi-line commit
+# message, a tab-containing pathspec), and letting it through as-is would corrupt this
+# \x1f-joined transport - the words line never had this risk, since quoted text was always
+# opaque there - and no flag this scan ever matches contains whitespace, so folding these to
+# opaque costs nothing real. A $'...' (ANSI-C quoted) word is a separate case: with no backslash escape its
 # source text already is its value, resolved like any other quoting, but with an escape
 # (\t, \x2d, \045, ...) the source text and the decoded value differ and this hook does not
 # implement bash's ANSI-C decoding rules, so it gets its own distinct sentinel instead
@@ -287,13 +295,13 @@ calls=$(printf '%s' "$ast" | jq -r '
        ([2] | implode)
      else
        (.Parts | resolve_parts(true)) as $r |
-       if $r == null or ($r | explode | any(. == 9 or . == 10 or . == 13)) then
+       if $r == null or ($r | explode | any(. == 9 or . == 10 or . == 13 or . == 31)) then
          ([1] | implode)
        else
          $r
        end
      end
-  ] | join("\t"))
+  ] | join(""))
 ')
 
 # Directory-changing command names that gate the auto-correction feature below - same
@@ -449,7 +457,7 @@ while IFS= read -r words_line && IFS= read -r ends_line && IFS= read -r resolved
   [ -z "$words_line" ] && continue
   IFS=$'\t' read -ra words <<< "$words_line"
   IFS=$'\t' read -ra ends <<< "$ends_line"
-  IFS=$'\t' read -ra resolved <<< "$resolved_line"
+  IFS=$'\x1f' read -ra resolved <<< "$resolved_line"
 
   # Fails closed on a desync between the three paired lines (e.g. a future edit to the jq
   # query above changing one line's word count but not the others') rather than silently

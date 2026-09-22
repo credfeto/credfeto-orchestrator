@@ -881,6 +881,23 @@ line two" && git -C . push'
     [ "${status}" -eq 0 ]
 }
 
+# A bare '' or "" argument resolves to a genuinely empty string, unlike the words line (which
+# always marks quoted text opaque instead). The resolved line is joined with \x1f rather than
+# tab specifically so this empty field survives `read -ra` intact: tab is "IFS whitespace" to
+# bash, so `IFS=$'\t' read -ra` collapses a real empty field between two tabs instead of
+# keeping it, undercounting the resolved array against words/ends and tripping the desync
+# fail-close below on a command with no hook-bypass flag at all - confirmed live before this
+# fix, on both a git call and a plain non-git command.
+@test "an empty-string argument does not desync the parse on a git call" {
+    run_hook_in_dir "git -C . commit -m '' -m done"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an empty-string argument does not desync the parse on a non-git command" {
+    run_hook_in_dir "echo foo '' bar"
+    [ "${status}" -eq 0 ]
+}
+
 # Abbreviated --no-verify tests (#1399 code review): git's own option parser accepts any
 # unambiguous prefix of a long option, so an exact-only `--no-verify` case arm lets a shorter,
 # still-working spelling straight through. `--no-v`/`--no-ve`/`--no-ver` are genuine,
