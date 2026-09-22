@@ -749,6 +749,27 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a bundled -aF value containing the letter n is not falsely blocked (F not first in the bundle still consumes the rest as its value)" {
+    run_hook_in_dir "git -C . commit -aFnotes.txt"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bundled -aC value containing the letter n is not falsely blocked (C not first in the bundle still consumes the rest as its value)" {
+    run_hook_in_dir "git -C . commit -aCsomenote"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bundled -aF value that is only the letter n is not falsely blocked (n is F's attached value, not a separate flag)" {
+    run_hook_in_dir "git -C . commit -aFn"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bare -n bundled before a later value-consuming letter is still blocked (e.g. -anF)" {
+    run_hook_in_dir "git -C . commit -anF"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
 @test "an unquoted attached-value -m form is not falsely blocked (trailing text never evaluated as a separate flag)" {
     run_hook_in_dir "git -C . commit -mwip-new"
     [ "${status}" -eq 0 ]
