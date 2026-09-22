@@ -419,8 +419,8 @@ check_config_call() {
 # ai/local/claude-hooks.instructions.md for why -n is scoped to commit only,
 # why -[!-]* avoids misreading long flags as bundles, why -F/-c/-C values
 # are skipped, why -m consumes a value only on commit/merge/cherry-pick, and
-# why a bundle's own trailing value-consuming letter (e.g. -am) also consumes
-# the next word (#1399 code review round 4).
+# why a bundle is walked character-by-character rather than scanned as a
+# whole (#1399 code review round 6).
 check_hook_bypass_flags() {
   local k=$((j + 1)) tk
   while [ "$k" -lt "${#resolved[@]}" ]; do
@@ -436,17 +436,40 @@ check_hook_bypass_flags() {
       -F | -c | -C) k=$((k + 1)) ;;
       -m* | -F* | -c* | -C*) : ;;
       -[!-]*)
-        [ "$sub" = "commit" ] && [[ "$tk" == *n* ]] && block 'git commit -n is not permitted - hook bypass is blocked'
-        # A bundle whose trailing letter is a value-consuming option with nothing attached
-        # after it in the same token (e.g. -am, -qm, -aC) takes its value from the *next*
-        # word, exactly like the bare -m/-F/-c/-C arms above - git's own short-option
-        # bundling rule, not just this token's own text. Without this, that next word (a
-        # real --no-verify) is silently swallowed as the bundle's value while an unrelated
-        # decoy word left in its place is scanned instead (#1399 code review round 4).
-        case "${tk: -1}" in
-          F | c | C) k=$((k + 1)) ;;
-          m) case "$sub" in commit | merge | cherry-pick) k=$((k + 1)) ;; esac ;;
-        esac
+        # Walked one character at a time to match git's own short-option bundling rule
+        # exactly: the instant a value-consuming letter (F/c/C anywhere, m only on
+        # commit/merge/cherry-pick) is hit, every character remaining in this token is
+        # its attached value - not a further flag - regardless of position (confirmed
+        # live: `git commit -aCbogusrev` and `git commit -Cbogusrev` fail identically,
+        # both resolving "bogusrev" as -C's value). Only when nothing remains after that
+        # letter does it fall through to consuming the *next* word instead (the
+        # bundle-trailing case, #1399 code review round 4). A whole-token substring test
+        # for the letter n (this scan's previous approach) got this wrong whenever such a
+        # letter appeared anywhere but first in the bundle: `-aFnotes.txt` is `-a -F
+        # notes.txt` with no -n flag at all, yet the old substring test matched the n
+        # inside "notes.txt" and falsely blocked it (#1399 code review round 6).
+        local bundle="${tk:1}" pos=0 bc
+        while [ "$pos" -lt "${#bundle}" ]; do
+          bc="${bundle:$pos:1}"
+          case "$bc" in
+            n)
+              [ "$sub" = "commit" ] && block 'git commit -n is not permitted - hook bypass is blocked'
+              ;;
+            F | c | C)
+              [ "$((pos + 1))" -eq "${#bundle}" ] && k=$((k + 1))
+              break
+              ;;
+            m)
+              case "$sub" in
+                commit | merge | cherry-pick)
+                  [ "$((pos + 1))" -eq "${#bundle}" ] && k=$((k + 1))
+                  ;;
+              esac
+              break
+              ;;
+          esac
+          pos=$((pos + 1))
+        done
         ;;
     esac
     k=$((k + 1))
