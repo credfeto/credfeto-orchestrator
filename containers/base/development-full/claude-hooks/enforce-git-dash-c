@@ -466,6 +466,17 @@ check_hook_bypass_flags() {
   while [ "$k" -lt "${#resolved[@]}" ]; do
     tk="${resolved[$k]}"
     case "$tk" in
+      --)
+        # git's own end-of-options marker (#1399 code review round 8): every argument
+        # after the first literal -- is an operand/pathspec, never a flag, regardless of
+        # spelling, so nothing past this point can be a hook-bypass flag - confirmed live
+        # via shfmt --tojson that -- and a following --no-verify are two separate literal
+        # Args, so without this arm the scan walked straight past -- and matched
+        # --no-verify's own arm below, falsely blocking a legitimate `git commit --
+        # --no-verify` (a path literally named --no-verify). Only the first -- matters,
+        # same as git itself.
+        return 0
+        ;;
       "$ANSI_C_ESCAPE_MARKER")
         block "git ${sub}: an ANSI-C quoted (\$'...') argument with escape sequences cannot be checked for a hook-bypass flag - spell it out plainly instead"
         ;;
