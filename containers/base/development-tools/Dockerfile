@@ -212,6 +212,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
 # Override per-spawn by exporting GH_HOST / GH_ENTERPRISE_TOKEN in the host
 # env — those take precedence over these defaults.
 ENV GH_HOST=github-api.markridgwell.com
+# hadolint ignore=DL3064
 ENV GH_ENTERPRISE_TOKEN=ghp_PLACEHOLDER_OneCLI_substitutes_this_at_egress
 
 # Force gh to use SSH for git operations on every host (including the proxy).
