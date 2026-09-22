@@ -1018,3 +1018,25 @@ line two" && git -C . push'
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
 }
+
+# git's own end-of-options marker (#1399 code review round 8): every argument after the
+# first literal -- is an operand/pathspec, never a flag, regardless of spelling - so a
+# legitimate `git commit -- --no-verify` (referencing a file literally named --no-verify)
+# was previously walked straight past this and matched --no-verify's own case arm below,
+# falsely blocking a fully legitimate commit. Only the first -- matters, same as git itself.
+
+@test "git commit -- --no-verify (a path literally named --no-verify) is not falsely blocked" {
+    run_hook_in_dir 'git -C . commit -- --no-verify'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hook-bypass flag before the -- end-of-options marker is still blocked" {
+    run_hook_in_dir 'git -C . commit --no-verify -- somefile'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a hook-bypass flag after a second -- is still not scanned (only the first -- matters, same as git itself)" {
+    run_hook_in_dir 'git -C . commit -- -- --no-verify'
+    [ "${status}" -eq 0 ]
+}
