@@ -192,11 +192,34 @@ GIT_SUBCOMMANDS_M_CONSUMES_VALUE=(commit merge cherry-pick)
 # which is worse than not resolving at all) nor treated as the ordinary opaque marker
 # (silently allowed through, same as a genuinely dynamic $VAR/$(...) - but this construct,
 # unlike those, is fully static and just not decoded here yet). It gets its own sentinel so
-# check_hook_bypass_flags can fail closed on it specifically instead. Built the same way as
-# the resolved-line's own opaque marker below (see the "calls" extraction comment) - a codepoint
-# via jq's implode, not a typed escape sequence - using a different codepoint so it can never
-# collide with that marker.
-ANSI_C_ESCAPE_MARKER=$(jq -rn '[2] | implode')
+# check_hook_bypass_flags can fail closed on it specifically instead. Codepoint 2, matching
+# the resolved-line's own jq-side sentinel (see the "calls" extraction comment) - built here
+# as a plain bash ANSI-C-quoted byte rather than forking jq for a static one-byte value
+# (#1399 code review round 8: this hook runs on every Bash tool call, so an unconditional
+# subprocess fork before the empty-command/non-git short circuits below has a real,
+# measurable per-call cost) - using a different codepoint from OPAQUE_MARKER below so the
+# two can never collide.
+ANSI_C_ESCAPE_MARKER=$'\x02'
+
+# Sentinel for a resolved argument that resolve_parts could not statically determine - a
+# genuine dynamic expansion ($VAR, $(...), arithmetic, ...) - identical in meaning to the
+# words line's own opaque marker (see the "calls" extraction comment below), just bound to
+# a bash variable here so check_hook_bypass_flags can fail closed on it by name (#1399 code
+# review round 8). Codepoint 1, built the same way as ANSI_C_ESCAPE_MARKER above (a plain
+# bash ANSI-C-quoted byte, not a jq fork) and matching the words/resolved lines' own jq-side
+# codepoint. Without this, an argument built by splicing a dynamic expansion against
+# adjacent literal text - e.g. -${x}n or -$(true)n, each expanding to an empty string at
+# real bash runtime and leaving a plain -n once git actually parses it - resolves to this
+# same opaque marker, but check_hook_bypass_flags's case statement had no arm for it at
+# all: it isn't a valid flag spelling, so no arm matched, and the case fell through as a
+# silent no-op instead of failing closed, letting the resulting -n bypass straight through
+# unblocked (confirmed live via shfmt --tojson: the composite argument's Parts contain a
+# ParamExp/CmdSubst alongside Lit pieces, so resolve_parts' reduce reaches its `else null`
+# branch and the whole argument folds to this marker for the same reason the words line
+# already does). A separate variable from ANSI_C_ESCAPE_MARKER, not a reuse of it, since the
+# two mean different things (a fully static but undecoded escape, vs. a genuinely dynamic
+# value) and must never collide.
+OPAQUE_MARKER=$'\x01'
 
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
@@ -445,6 +468,9 @@ check_hook_bypass_flags() {
     case "$tk" in
       "$ANSI_C_ESCAPE_MARKER")
         block "git ${sub}: an ANSI-C quoted (\$'...') argument with escape sequences cannot be checked for a hook-bypass flag - spell it out plainly instead"
+        ;;
+      "$OPAQUE_MARKER")
+        block "git ${sub}: an argument containing a dynamic expansion (\$VAR, \$(...), etc.) cannot be checked for a hook-bypass flag - spell it out plainly instead"
         ;;
       --no-verify | --no-v | --no-ve | --no-ver | --no-veri | --no-verif)
         block "git ${sub} --no-verify is not permitted - hook bypass is blocked"
