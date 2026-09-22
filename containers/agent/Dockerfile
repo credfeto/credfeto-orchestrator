@@ -57,6 +57,7 @@ FROM ghcr.io/credfeto/development-full:latest
 # Use bash with pipefail for all subsequent RUN instructions.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# hadolint ignore=DL3066
 USER root
 
 # ---- Remove package management and privilege escalation tools ----------------
@@ -227,6 +228,7 @@ RUN set -e; \
 # commit touches a matching file at runtime. `su` is removed in this stage, so the
 # check runs in a RUN after `USER developer` rather than via `su developer -c`.
 # Keep this wrapper list in sync with the development-full sanity check.
+# hadolint ignore=DL3066
 USER developer
 
 # hadolint ignore=DL3059
@@ -239,6 +241,7 @@ RUN set -e; \
 
 WORKDIR /workspace/repo
 
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD claude --version >/dev/null 2>&1 || claude --help >/dev/null 2>&1 || exit 1
 
