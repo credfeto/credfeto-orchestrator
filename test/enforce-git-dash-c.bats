@@ -615,3 +615,428 @@ make_writable_repo() {
     run_hook_in_dir '\cd '"${repo}"' && git status' "${repo}"
     [ "${status}" -eq 2 ]
 }
+
+# Hook-bypass flag tests (#1399): --no-verify (long form) on every subcommand
+# whose hooks it actually skips, -n (short form / bundle) scoped to commit
+# only, -c core.hooksPath=... on any subcommand, and the separate HUSKY=0
+# env-var override.
+
+@test "git commit --no-verify is blocked" {
+    run_hook_in_dir 'git -C . commit --no-verify -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git push --no-verify is blocked" {
+    run_hook_in_dir "git -C . push --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git merge --no-verify is blocked" {
+    run_hook_in_dir "git -C . merge --no-verify some-branch"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git cherry-pick --no-verify is blocked" {
+    run_hook_in_dir "git -C . cherry-pick --no-verify abc123"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git rebase --no-verify is blocked" {
+    run_hook_in_dir "git -C . rebase --no-verify main"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git pull --no-verify is blocked (#1399 code review - pull delegates to merge's hooks)" {
+    run_hook_in_dir "git -C . pull --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git pull -m --no-verify is blocked (pull has no -m flag, not value-consuming)" {
+    run_hook_in_dir "git -C . pull -m --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git pull -n is allowed (means no diffstat on pull, not hook bypass)" {
+    run_hook_in_dir "git -C . pull -n"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git rebase -m --no-verify is blocked (rebase's -m is a bare --merge flag, not value-consuming)" {
+    run_hook_in_dir "git -C . rebase -m --no-verify main"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git push -m --no-verify is blocked (push has no -m flag, not value-consuming)" {
+    run_hook_in_dir "git -C . push -m --no-verify"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git commit -n (short form) is blocked" {
+    run_hook_in_dir 'git -C . commit -n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
+@test "git commit -vn (short-flag bundle containing n) is blocked" {
+    run_hook_in_dir 'git -C . commit -vn -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
+@test "git commit -am -m --no-verify is blocked (bundle-trailing m still consumes the next word as its value)" {
+    run_hook_in_dir 'git -C . commit -am -m --no-verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git merge -qm -m --no-verify is blocked (bundle-trailing m still consumes the next word as its value)" {
+    run_hook_in_dir 'git -C . merge -qm -m --no-verify some-branch'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "git commit -am with a real message is still allowed" {
+    run_hook_in_dir 'git -C . commit -am "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "git push -n is allowed (means dry-run on push, not hook bypass)" {
+    run_hook_in_dir "git -C . push -n"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git merge -n is allowed (means no-stat on merge, not hook bypass)" {
+    run_hook_in_dir "git -C . merge -n some-branch"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git rebase -m alone is allowed (bare --merge flag, not a bypass)" {
+    run_hook_in_dir "git -C . rebase -m main"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a merge -m value containing --no-verify is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir 'git -C . merge -m "note: --no-verify is banned here" some-branch'
+    [ "${status}" -eq 0 ]
+}
+
+@test "git commit --no-color is not falsely blocked (long flag merely containing the letter n)" {
+    run_hook_in_dir 'git -C . commit --no-color -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted -m commit message merely mentioning --no-verify is not falsely blocked" {
+    run_hook_in_dir 'git -C . commit -m "note: --no-verify is banned here"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted -m value containing the letter n is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -m fixno"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an -F value containing the letter n is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -Fnotes.txt"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bundled -aF value containing the letter n is not falsely blocked (F not first in the bundle still consumes the rest as its value)" {
+    run_hook_in_dir "git -C . commit -aFnotes.txt"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bundled -aC value containing the letter n is not falsely blocked (C not first in the bundle still consumes the rest as its value)" {
+    run_hook_in_dir "git -C . commit -aCsomenote"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bundled -aF value that is only the letter n is not falsely blocked (n is F's attached value, not a separate flag)" {
+    run_hook_in_dir "git -C . commit -aFn"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a bare -n bundled before a later value-consuming letter is still blocked (e.g. -anF)" {
+    run_hook_in_dir "git -C . commit -anF"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'-n is not permitted'* ]]
+}
+
+@test "an unquoted attached-value -m form is not falsely blocked (trailing text never evaluated as a separate flag)" {
+    run_hook_in_dir "git -C . commit -mwip-new"
+    [ "${status}" -eq 0 ]
+}
+
+@test "-n consumed as -F's filename argument is not falsely blocked as the hook-bypass flag" {
+    run_hook_in_dir "git -C . commit -F -n"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git am --no-verify is still blocked, but via the pre-existing subcommand allowlist, not the new hook-bypass check" {
+    run_hook_in_dir "git -C . am --no-verify some.patch"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"subcommand 'am' is not permitted"* ]]
+    [[ "${output}" != *'--no-verify is not permitted'* ]]
+}
+
+@test "HUSKY=0 before a git command is blocked" {
+    run_hook_in_dir 'HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=\"0\" (double-quoted) before a git command is blocked" {
+    run_hook_in_dir 'HUSKY="0" git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY='0' (single-quoted) before a git command is blocked" {
+    run_hook_in_dir "HUSKY='0' git -C . commit -m 'wip'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=\$'0' (ANSI-C quoted, no escape) before a git command is blocked" {
+    run_hook_in_dir $'HUSKY=$\'0\' git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test 'HUSKY=\0 (unquoted backslash-escaped) before a git command is blocked' {
+    run_hook_in_dir 'HUSKY=\0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=0 after a ; separator is blocked" {
+    run_hook_in_dir 'true; HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "HUSKY=0 after a && separator is blocked" {
+    run_hook_in_dir 'true && HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test "a variable that merely ends with HUSKY=0 as a substring is not falsely blocked" {
+    run_hook_in_dir 'MYHUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "NOT_HUSKY=0 is not falsely blocked" {
+    run_hook_in_dir 'NOT_HUSKY=0 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "HUSKY=1 is not falsely blocked (value is not 0)" {
+    run_hook_in_dir 'HUSKY=1 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "HUSKY=01 is not falsely blocked (value is not exactly 0)" {
+    run_hook_in_dir 'HUSKY=01 git -C . commit -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+
+# Quoted-literal resolution tests (#1399 code review): the shell strips quoting before git
+# ever sees an argument, so a quoted "--no-verify" is identical to an unquoted --no-verify
+# from git's point of view. The words line used for command-name/-C detection stays
+# conservative (quoted text is opaque there, unchanged), but the hook-bypass scan now uses a
+# separate, richer resolution that unwraps simple literal quoting.
+
+@test "a double-quoted --no-verify is blocked" {
+    run_hook_in_dir 'git -C . commit "--no-verify" -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a single-quoted --no-verify is blocked" {
+    run_hook_in_dir "git -C . commit '--no-verify' -m 'wip'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a split-quoted --no-verify (adjacent quoted fragments) is blocked" {
+    run_hook_in_dir 'git -C . commit --no-ver"ify" -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a quoted --no-color is not falsely blocked by the resolved-value scan" {
+    run_hook_in_dir 'git -C . commit "--no-color" -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted -n consumed as -F's filename argument is not falsely blocked as the hook-bypass flag" {
+    run_hook_in_dir 'git -C . commit -F "-n"'
+    [ "${status}" -eq 0 ]
+}
+
+# ANSI-C quoting tests (#1399 code review): $'...' with a backslash escape stores its raw,
+# undecoded source text in the AST (shfmt does not perform bash's own ANSI-C decoding), so
+# resolve_parts cannot safely treat that source text as the argument's real value without
+# re-implementing bash's escape rules. Such a word fails closed via its own distinct marker
+# rather than being silently allowed through or misresolved. A $'...' with no escape has no
+# such gap (its source text already is its value) and resolves normally.
+
+@test "an ANSI-C quoted argument with a hex escape is blocked (cannot be checked for a hook-bypass flag)" {
+    run_hook_in_dir "git -C . commit \$'\x2d\x2dno-verify' -m \"wip\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'ANSI-C quoted'* ]]
+}
+
+@test "a plain ANSI-C quoted --no-verify with no escape is blocked normally (resolves like any other quoting)" {
+    run_hook_in_dir "git -C . commit \$'--no-verify' -m \"wip\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an ANSI-C quoted -m commit message with an escape is not falsely blocked (value is skipped, not scanned)" {
+    run_hook_in_dir "git -C . commit -m \$'line one\nline two'"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a resolved value containing a raw embedded newline does not desync the chained-call parse (#1399 code review)" {
+    run_hook_in_dir 'git -C . commit -m "line one
+line two" && git -C . push'
+    [ "${status}" -eq 0 ]
+}
+
+# A bare '' or "" argument resolves to a genuinely empty string, unlike the words line (which
+# always marks quoted text opaque instead). The resolved line is joined with \x1f rather than
+# tab specifically so this empty field survives `read -ra` intact: tab is "IFS whitespace" to
+# bash, so `IFS=$'\t' read -ra` collapses a real empty field between two tabs instead of
+# keeping it, undercounting the resolved array against words/ends and tripping the desync
+# fail-close below on a command with no hook-bypass flag at all - confirmed live before this
+# fix, on both a git call and a plain non-git command.
+@test "an empty-string argument does not desync the parse on a git call" {
+    run_hook_in_dir "git -C . commit -m '' -m done"
+    [ "${status}" -eq 0 ]
+}
+
+@test "an empty-string argument does not desync the parse on a non-git command" {
+    run_hook_in_dir "echo foo '' bar"
+    [ "${status}" -eq 0 ]
+}
+
+# Abbreviated --no-verify tests (#1399 code review): git's own option parser accepts any
+# unambiguous prefix of a long option, so an exact-only `--no-verify` case arm lets a shorter,
+# still-working spelling straight through. `--no-v`/`--no-ve`/`--no-ver` are genuine,
+# unambiguous, working spellings on `cherry-pick` (it has no colliding `--no-verbose` or
+# `--no-verify-signatures` flag); see ai/local/claude-hooks.instructions.md for the
+# per-subcommand ambiguity details.
+
+@test "an abbreviated --no-v is blocked on cherry-pick" {
+    run_hook_in_dir 'git -C . cherry-pick --no-v HEAD'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an abbreviated --no-verif is blocked on commit" {
+    run_hook_in_dir 'git -C . commit --no-verif -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+# Unquoted backslash-escape tests (#1399 code review round 3): outside any quoting, bash
+# drops a backslash and keeps the next character literally for any character, not just shell
+# metacharacters - so --no-\verify runs as --no-verify - but shfmt's AST keeps the raw,
+# undecoded source text (backslash included) in Lit.Value. resolve_parts now decodes a bare
+# backslash in a top-level (unquoted) Lit part; a Lit nested inside a DblQuoted is left alone,
+# since backslash inside double quotes is only special before $, `, ", \ and newline.
+
+@test "an unquoted backslash-escaped --no-\\verify is blocked on commit" {
+    run_hook_in_dir 'git -C . commit --no-\verify -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "an unquoted backslash-escaped -\\-no-verify is blocked on push" {
+    run_hook_in_dir 'git -C . push -\-no-verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a double-quoted --no-\\verify is not decoded (stays literal, not a bypass)" {
+    run_hook_in_dir 'git -C . commit "--no-\verify" -m "wip"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted backslash-escaped word with no bypass flag is not falsely blocked" {
+    run_hook_in_dir 'git -C . push origin refs/heads/a\bc'
+    [ "${status}" -eq 0 ]
+}
+
+# HUSKY=0 subshell-boundary test (#1399 code review round 3): the assignment-boundary
+# character class previously only recognised ;/&/|/whitespace as a separator immediately
+# before/after HUSKY=0, so a parenthesised subshell slipped past unblocked even though
+# reject-obfuscated-commands walks into subshells rather than rejecting them outright.
+
+@test "HUSKY=0 inside a subshell is blocked" {
+    run_hook_in_dir '(HUSKY=0 git -C . commit -m "wip")'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+# Opaque-marker fallthrough tests (#1399 code review round 8): an argument built by
+# splicing a dynamic expansion ($VAR or $(...)) against adjacent literal text - e.g.
+# -${x}n or -$(true)n, each expanding to an empty string at real bash runtime and leaving
+# a plain -n once git actually parses it - resolves to the same opaque marker resolve_parts
+# already uses for any other genuinely dynamic value. check_hook_bypass_flags previously had
+# no case arm for that marker at all, so it fell through as a silent no-op instead of failing
+# closed, letting the resulting -n bypass straight through unblocked.
+
+@test "a parameter expansion spliced into a bundle (e.g. -\${x}n) is blocked" {
+    # shellcheck disable=SC2016  # literal ${x} — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . commit -${x}n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
+
+@test "a command substitution spliced into a bundle (e.g. -\$(true)n) is blocked" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . commit -$(true)n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
+
+@test "a parameter expansion spliced into --no-verify is blocked" {
+    # shellcheck disable=SC2016  # literal ${x} — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . push --no-${x}verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
+
+# git's own end-of-options marker (#1399 code review round 8): every argument after the
+# first literal -- is an operand/pathspec, never a flag, regardless of spelling - so a
+# legitimate `git commit -- --no-verify` (referencing a file literally named --no-verify)
+# was previously walked straight past this and matched --no-verify's own case arm below,
+# falsely blocking a fully legitimate commit. Only the first -- matters, same as git itself.
+
+@test "git commit -- --no-verify (a path literally named --no-verify) is not falsely blocked" {
+    run_hook_in_dir 'git -C . commit -- --no-verify'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a hook-bypass flag before the -- end-of-options marker is still blocked" {
+    run_hook_in_dir 'git -C . commit --no-verify -- somefile'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+}
+
+@test "a hook-bypass flag after a second -- is still not scanned (only the first -- matters, same as git itself)" {
+    run_hook_in_dir 'git -C . commit -- -- --no-verify'
+    [ "${status}" -eq 0 ]
+}
