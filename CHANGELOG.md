@@ -15,6 +15,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
 - Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image
+- TBD - to be finalized after review
 ### Fixed
 - PR idle-invocation budget exhaustion now escalates to a Blocked label and explanatory comment even when CI is green and there is no changes-requested review, closing the one gap #1075's two escalation paths didn't cover - a healthy-looking PR sitting idle at a workflow phase boundary no longer silently rots forever with zero signal (#1463)
 - PR idle-invocation budget no longer counts a tick against the idle cap when a required CI check is still genuinely pending after the session ended - closes a race where the orchestrator's own pre-session pending-check missed a check that the agent's own later, slower check still found running, silently burning the idle budget on nothing but CI-wait time (#1463)
