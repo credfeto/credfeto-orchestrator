@@ -989,3 +989,32 @@ line two" && git -C . push'
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
 }
+
+# Opaque-marker fallthrough tests (#1399 code review round 8): an argument built by
+# splicing a dynamic expansion ($VAR or $(...)) against adjacent literal text - e.g.
+# -${x}n or -$(true)n, each expanding to an empty string at real bash runtime and leaving
+# a plain -n once git actually parses it - resolves to the same opaque marker resolve_parts
+# already uses for any other genuinely dynamic value. check_hook_bypass_flags previously had
+# no case arm for that marker at all, so it fell through as a silent no-op instead of failing
+# closed, letting the resulting -n bypass straight through unblocked.
+
+@test "a parameter expansion spliced into a bundle (e.g. -\${x}n) is blocked" {
+    # shellcheck disable=SC2016  # literal ${x} — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . commit -${x}n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
+
+@test "a command substitution spliced into a bundle (e.g. -\$(true)n) is blocked" {
+    # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . commit -$(true)n -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
+
+@test "a parameter expansion spliced into --no-verify is blocked" {
+    # shellcheck disable=SC2016  # literal ${x} — must reach the hook unexpanded
+    run_hook_in_dir 'git -C . push --no-${x}verify'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+}
