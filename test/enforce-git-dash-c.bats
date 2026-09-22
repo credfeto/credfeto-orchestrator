@@ -805,6 +805,18 @@ make_writable_repo() {
     [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
 }
 
+@test "HUSKY=\$'0' (ANSI-C quoted, no escape) before a git command is blocked" {
+    run_hook_in_dir $'HUSKY=$\'0\' git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
+@test 'HUSKY=\0 (unquoted backslash-escaped) before a git command is blocked' {
+    run_hook_in_dir 'HUSKY=\0 git -C . commit -m "wip"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'HUSKY=0 is not permitted'* ]]
+}
+
 @test "HUSKY=0 after a ; separator is blocked" {
     run_hook_in_dir 'true; HUSKY=0 git -C . commit -m "wip"'
     [ "${status}" -eq 2 ]
