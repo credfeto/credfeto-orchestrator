@@ -239,13 +239,9 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Installed cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
     [ -x "${CFWF_BIN_DIR}/cfwf" ]
+    [ ! -L "${CFWF_BIN_DIR}/cfwf" ]
     [ "$(stat -c '%a' "${CFWF_BIN_DIR}/cfwf")" = "755" ]
     diff "${SOURCE_CFWF}" "${CFWF_BIN_DIR}/cfwf"
-}
-
-@test "the installed cfwf is a copy, not a symlink into the repo" {
-    main
-    [ ! -L "${CFWF_BIN_DIR}/cfwf" ]
 }
 
 @test "re-running main replaces an older installed cfwf" {

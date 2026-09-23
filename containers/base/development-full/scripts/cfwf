@@ -21,7 +21,6 @@ PROJECT_ID=""
 PROJECT_NUMBER=""
 FIELD_ID=""
 OPTION_ID=""
-STATUS_NAME=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -175,7 +174,7 @@ resolve_project() {
         --jq '.projectsV2.Nodes[] | select(.title=="Workflow") | [.id, (.number|tostring), .resourcePath] | @tsv') \
         || die "could not read the projects of ${REPO}"
     [ -n "${projects}" ] || die "no project titled Workflow is linked to ${REPO}"
-    [ "$(printf '%s\n' "${projects}" | wc -l)" -eq 1 ] || die "more than one project titled Workflow is linked to ${REPO}"
+    [[ "${projects}" != *$'\n'* ]] || die "more than one project titled Workflow is linked to ${REPO}"
 
     IFS=$'\t' read -r PROJECT_ID PROJECT_NUMBER resource_path <<< "${projects}"
     [[ "${PROJECT_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected project id for ${REPO}: ${PROJECT_ID}"
@@ -187,7 +186,7 @@ resolve_project() {
 
 # Finds the project's "Workflow Status" field (never the built-in "Status" field, whose options
 # look plausible but map to nothing) and the option named STATUS, setting FIELD_ID, OPTION_ID
-# and STATUS_NAME (the option's canonical display name).
+# and rewrites STATUS to the option's canonical display name.
 resolve_status() {
     local rows field option name valid=""
     # $field below is a jq variable, not a shell one.
@@ -202,7 +201,7 @@ resolve_status() {
         valid+="${valid:+, }${name}"
         if [ -z "${OPTION_ID}" ] && [ "${name,,}" = "${STATUS,,}" ]; then
             OPTION_ID="${option}"
-            STATUS_NAME="${name}"
+            STATUS="${name}"
         fi
     done <<< "${rows}"
     [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
@@ -231,13 +230,13 @@ workflow_status_set() {
     for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
         actual=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
             --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]" || true)
-        if [ "${actual}" = "${STATUS_NAME}" ]; then
-            printf '%s is now %s\n' "${item_url}" "${STATUS_NAME}"
+        if [ "${actual}" = "${STATUS}" ]; then
+            printf '%s is now %s\n' "${item_url}" "${STATUS}"
             return 0
         fi
         [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
     done
-    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS_NAME}', last read '${actual}')"
+    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${actual}')"
 }
 
 workflow_status_check() {
@@ -283,10 +282,6 @@ cmd_closing_issue_labels() {
     done | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
 }
 
-cmd_help() {
-    usage_for "${1:-}"
-}
-
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -296,7 +291,7 @@ main() {
     local command="$1"
     shift
     case "${command}" in
-        help | -h | --help) cmd_help "$@" ;;
+        help | -h | --help) usage_for "${1:-}" ;;
         workflow-status) cmd_workflow_status "$@" ;;
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         *) usage_error "unknown command: ${command}" ;;

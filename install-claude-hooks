@@ -11,9 +11,10 @@
 #
 # It also installs the cfwf workflow helper into a shared bin directory
 # (/usr/local/bin by default, override with CFWF_BIN_DIR) with `install`, so
-# anyone on the host can run it. That needs write access there, so it uses sudo
-# when the directory is not writable; if that is unavailable or declined the step
-# prints the exact command to run and the rest of the install carries on.
+# anyone on the host can run it. If the plain install fails (typically because the
+# directory is not writable) it falls back to sudo; if that is unavailable or
+# declined the step prints the exact command to run and the rest of the install
+# carries on.
 #
 # Every tool the hooks shell out to must already be present: a hook whose tool
 # is missing fails closed and blocks every command, so this refuses to install
@@ -64,29 +65,27 @@ check_required_tools() {
     [ "${#missing[@]}" -eq 0 ] || die "Required tool(s) not found: ${missing[*]}"
 }
 
-# Installs cfwf with `install` (mode 0755) so it is runnable by every user. When
-# the target directory is not writable it retries under sudo, as root:root, which
-# prompts on the terminal; if sudo is missing or declined it prints the exact
-# command to run instead, rather than failing the rest of the install.
+# Installs cfwf with `install` (mode 0755) so it is runnable by every user. If that
+# fails it retries under sudo, as root:root, which prompts on the terminal; if sudo
+# is missing or declined it prints the exact command to run instead, rather than
+# failing the rest of the install.
 install_cfwf() {
     local target="${CFWF_BIN_DIR}/cfwf"
     local root_install=(install -m 0755 -o root -g root "${SOURCE_CFWF}" "${target}")
 
-    if [ "$(id -u)" -eq 0 ]; then
-        if "${root_install[@]}" 2>/dev/null; then
-            info "Installed cfwf to ${target}"
-            return 0
-        fi
-    elif install -m 0755 "${SOURCE_CFWF}" "${target}" 2>/dev/null; then
+    if install -m 0755 "${SOURCE_CFWF}" "${target}" 2>/dev/null; then
         info "Installed cfwf to ${target}"
         return 0
-    elif command -v sudo >/dev/null 2>&1; then
+    fi
+
+    if command -v sudo >/dev/null 2>&1; then
         info "Installing cfwf to ${target} needs elevated permissions, running sudo..."
         if sudo "${root_install[@]}"; then
             info "Installed cfwf to ${target} (with sudo)"
             return 0
         fi
     fi
+
     info "Could not install cfwf to ${target}. To make it available to every user, run: sudo ${root_install[*]}"
 }
 
