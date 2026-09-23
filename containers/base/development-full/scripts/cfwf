@@ -251,7 +251,7 @@ workflow_status_check() {
 
     local status
     status=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select((.content.repository | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
+        --jq ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
         || die "could not list the items of project ${PROJECT_NUMBER}"
     [ -n "${status}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
     printf '%s\n' "${status}"
@@ -276,20 +276,30 @@ cmd_closing_issue_labels() {
     require_gh
 
     # Each closing issue is read from its own repository: a PR can close an issue in another repo.
-    local references issue_repo number
+    local references issue_repo number failed=0 loop_status
     references=$(gh pr view "${PR}" --repo "${REPO}" --json closingIssuesReferences \
         --jq '.closingIssuesReferences[] | [(.repository.owner.login + "/" + .repository.name), (.number | tostring)] | @tsv') \
         || die "could not read the closing issues of ${REPO}#${PR}"
 
-    while IFS=$'\t' read -r issue_repo number; do
-        [ -n "${number}" ] || continue
-        if [[ "${issue_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${number}" =~ ^[0-9]+$ ]]; then
-            gh issue view "${number}" --repo "${issue_repo}" --json labels --jq '.labels[].name' \
-                || printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${issue_repo}" "${number}" >&2
-        else
-            printf 'cfwf: warning: unexpected closing issue reference: %s %s\n' "${issue_repo}" "${number}" >&2
-        fi
-    done <<< "${references}" | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
+    # The labels that could be read are still printed, but a failure to read any closing issue
+    # makes the command exit non-zero, so a caller never mistakes a partial list for a complete one.
+    {
+        while IFS=$'\t' read -r issue_repo number; do
+            [ -n "${number}" ] || continue
+            if [[ "${issue_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${number}" =~ ^[0-9]+$ ]]; then
+                gh issue view "${number}" --repo "${issue_repo}" --json labels --jq '.labels[].name' || {
+                    printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${issue_repo}" "${number}" >&2
+                    failed=1
+                }
+            else
+                printf 'cfwf: warning: unexpected closing issue reference: %s %s\n' "${issue_repo}" "${number}" >&2
+                failed=1
+            fi
+        done <<< "${references}"
+        [ "${failed}" -eq 0 ]
+    } | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
+    loop_status="${PIPESTATUS[0]}"
+    [ "${loop_status}" -eq 0 ] || exit 1
 }
 
 main() {

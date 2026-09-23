@@ -78,7 +78,8 @@ write_item_list() {
         {id: "PVTI_other", content: {number: 1346, repository: "credfeto/other-repo", type: "Issue"}, "workflow Status": "Human Review"},
         {id: "PVTI_target", content: {number: 1346, repository: "credfeto/credfeto-orchestrator", type: "Issue"}, "workflow Status": $s},
         {id: "PVTI_pr", content: {number: 1481, repository: "credfeto/credfeto-orchestrator", type: "PullRequest"}, "workflow Status": "AI Review"},
-        {id: "PVTI_nostatus", content: {number: 1500, repository: "credfeto/credfeto-orchestrator", type: "Issue"}}
+        {id: "PVTI_nostatus", content: {number: 1500, repository: "credfeto/credfeto-orchestrator", type: "Issue"}},
+        {id: "PVTI_draft", content: {type: "DraftIssue", title: "an idea with no repository"}}
     ]}' > "${file}"
 }
 
@@ -498,14 +499,16 @@ gh_line_of() {
     [ -z "${output}" ]
 }
 
-@test "closing-issue-labels warns about an issue it cannot read and still reports the others" {
+@test "closing-issue-labels warns about an issue it cannot read, still prints the others, and exits non-zero" {
     write_pr_view "${REPO} 10" "${REPO} 11"
     jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-11.json"
 
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>&1 >/dev/null' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
     [[ "${output}" == *"could not fetch the labels of credfeto/credfeto-orchestrator#10"* ]]
 
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>/dev/null' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
     [ "${output}" = "Medium" ]
 }
 
@@ -526,8 +529,10 @@ gh_line_of() {
     jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-11.json"
 
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>&1 >/dev/null' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
     [[ "${output}" == *"unexpected closing issue reference"* ]]
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>/dev/null' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
     [ "${output}" = "Medium" ]
 }
 
