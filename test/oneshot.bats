@@ -10367,9 +10367,15 @@ STUBEOF
     decoy_pid=$(ssh-agent -s -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
     [ -n "${decoy_pid}" ]
 
-    if ! ps -p "${decoy_pid}" > /dev/null 2>&1; then
+    if ! command -v pgrep > /dev/null 2>&1; then
         kill "${decoy_pid}" 2> /dev/null || true
-        skip "the decoy ssh-agent (pid ${decoy_pid}) is not visible to ps on this host, so this test cannot tell whether pkill would have found it"
+        echo "pgrep is required by this test but is not installed" >&2
+        return 1
+    fi
+
+    if ! pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}" | grep -qx "${decoy_pid}"; then
+        kill "${decoy_pid}" 2> /dev/null || true
+        skip "the decoy ssh-agent (pid ${decoy_pid}) is not visible to a user-scoped pgrep -f on this host, so this test cannot tell whether stop_ssh_agent's pkill would have found it"
     fi
 
     export SSH_AUTH_SOCK="${TEST_TMP}/this-run-agent.sock"
