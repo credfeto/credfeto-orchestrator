@@ -10362,9 +10362,10 @@ STUBEOF
     local decoy_sock="${TEST_TMP}/decoy-agent.sock"
     # The pid comes from ssh-agent's own output rather than pgrep: ssh-agent is not visible to
     # user-scoped ps/pgrep on every host (#1487). fd 3 is closed so a leaked decoy can never
-    # hold bats' output pipe open and hang the run.
+    # hold bats' output pipe open and hang the run. SHELL pins sh-style output without adding
+    # a flag, so the decoy's argv stays exactly what stop_ssh_agent's pkill pattern matches.
     local decoy_pid
-    decoy_pid=$(ssh-agent -s -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
+    decoy_pid=$(SHELL=/bin/sh ssh-agent -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
     [ -n "${decoy_pid}" ]
 
     if ! command -v pgrep > /dev/null 2>&1; then
