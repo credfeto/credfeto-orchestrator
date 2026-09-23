@@ -17,6 +17,11 @@ setup() {
     for tool in "${REQUIRED_TOOLS[@]}"; do
         command -v "${tool}" > /dev/null 2>&1 || make_stub "${tool}" 'exit 0'
     done
+
+    # No test may reach the real sudo (it would prompt for a password): by default it is declined.
+    export SUDO_LOG="${TEST_TMP}/sudo.log"
+    # shellcheck disable=SC2016
+    make_stub sudo 'printf "%s\n" "$*" >> "${SUDO_LOG}"; exit 1'
 }
 
 # Makes the named tools report as absent to the `command -v` presence check, deterministically and
@@ -251,15 +256,43 @@ teardown() {
     [ "$(stat -c '%a' "${CFWF_BIN_DIR}/cfwf")" = "755" ]
 }
 
-@test "when cfwf cannot be installed, main warns with the sudo command and still installs everything else" {
+@test "when the bin directory is not writable, main installs cfwf with sudo as root:root" {
+    CFWF_BIN_DIR="${TEST_TMP}/no/such/dir"
+    # shellcheck disable=SC2016
+    make_stub sudo 'printf "%s\n" "$*" >> "${SUDO_LOG}"; exit 0'
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"needs elevated permissions, running sudo"* ]]
+    [[ "${output}" == *"Installed cfwf to ${CFWF_BIN_DIR}/cfwf (with sudo)"* ]]
+    [ "$(cat "${SUDO_LOG}")" = "install -m 0755 -o root -g root ${SOURCE_CFWF} ${CFWF_BIN_DIR}/cfwf" ]
+}
+
+@test "main does not call sudo when the bin directory is writable" {
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${SUDO_LOG}" ]
+}
+
+@test "when sudo is declined, main prints the sudo command to run and still installs everything else" {
     CFWF_BIN_DIR="${TEST_TMP}/no/such/dir"
     run main
     [ "${status}" -eq 0 ]
+    [ -f "${SUDO_LOG}" ]
     [[ "${output}" == *"Could not install cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
     [[ "${output}" == *"sudo install -m 0755 -o root -g root ${SOURCE_CFWF} ${CFWF_BIN_DIR}/cfwf"* ]]
     [ -L "${HOME}/.claude/hooks/enforce-git-dash-c" ]
     run jq empty "${HOME}/.claude/settings.json"
     [ "${status}" -eq 0 ]
+}
+
+@test "when sudo is not installed, main prints the sudo command to run and still installs everything else" {
+    CFWF_BIN_DIR="${TEST_TMP}/no/such/dir"
+    hide_tools sudo
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -f "${SUDO_LOG}" ]
+    [[ "${output}" == *"Could not install cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
+    [ -L "${HOME}/.claude/hooks/enforce-git-dash-c" ]
 }
 
 @test "dies when the source cfwf script is missing" {
