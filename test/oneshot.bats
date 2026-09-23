@@ -10359,19 +10359,45 @@ STUBEOF
 }
 
 @test "stop_ssh_agent does not kill an unrelated ssh-agent bound to a different socket (#1122)" {
+    local required_tool
+    for required_tool in ssh-agent pgrep pkill; do
+        if ! command -v "${required_tool}" > /dev/null 2>&1; then
+            echo "${required_tool} is required by this test but is not installed" >&2
+            return 1
+        fi
+    done
+
     local decoy_sock="${TEST_TMP}/decoy-agent.sock"
-    ssh-agent -a "${decoy_sock}" > /dev/null
+    # The pid comes from ssh-agent's own output rather than pgrep: ssh-agent is not visible to
+    # user-scoped ps/pgrep on every host (#1487). fd 3 is closed so a leaked decoy can never
+    # hold bats' output pipe open and hang the run. SHELL pins sh-style output without adding
+    # a flag, so the decoy's argv stays exactly what stop_ssh_agent's pkill pattern matches.
     local decoy_pid
-    decoy_pid=$(pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}")
-    [ -n "${decoy_pid}" ]
+    decoy_pid=$(SHELL=/bin/sh ssh-agent -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
+    if [ -z "${decoy_pid}" ]; then
+        echo "ssh-agent did not report a pid for the decoy agent" >&2
+        return 1
+    fi
+
+    if ! pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}" | grep -qx "${decoy_pid}"; then
+        kill "${decoy_pid}" 2> /dev/null || true
+        skip "the decoy ssh-agent (pid ${decoy_pid}) is not visible to a user-scoped pgrep -f on this host, so this test cannot tell whether stop_ssh_agent's pkill would have found it"
+    fi
 
     export SSH_AUTH_SOCK="${TEST_TMP}/this-run-agent.sock"
     stop_ssh_agent
 
-    local still_alive=0
-    kill -0 "${decoy_pid}" 2>/dev/null || still_alive=1
-    kill "${decoy_pid}" 2>/dev/null || true
-    [ "${still_alive}" -eq 0 ]
+    # pkill only sends SIGTERM and returns, so give a wrongly-killed decoy a moment to actually exit.
+    local survived=1 attempt
+    for attempt in 1 2 3 4 5; do
+        if ! kill -0 "${decoy_pid}" 2> /dev/null; then
+            survived=0
+            break
+        fi
+        sleep 0.1
+    done
+    kill "${decoy_pid}" 2> /dev/null || true
+    [ "${survived}" -eq 1 ]
 }
 
 # --- cleanup_dangling_images unit tests ---------------------------------------
