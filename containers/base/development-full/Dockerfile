@@ -234,12 +234,13 @@ ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
 # Small standalone wrapper scripts maintained in this repo, installed next to
 # every other custom binary this image bakes in (agent-entrypoint, sqlcmd,
 # composite-action-lint all land under /usr/local/bin/ too). root:root 0755
-# per the Lock-Down Requirements. Neither script supports a --version probe,
-# so the Stage 1 sanity check below verifies presence + executable bit
-# instead. Both names are already anticipated on this image's
-# command-allowlist/enforce-background-for-long-running-commands hook.
+# per the Lock-Down Requirements. None of these scripts supports a --version
+# probe, so the Stage 1 sanity check below verifies presence + executable bit
+# instead. Every name is on this image's command-allowlist, and cfwf also has
+# a matching Bash(cfwf *) entry in claude-settings.json.
 COPY --chown=root:root --chmod=0755 scripts/pre-commit-check /usr/local/bin/pre-commit-check
 COPY --chown=root:root --chmod=0755 scripts/querydb /usr/local/bin/querydb
+COPY --chown=root:root --chmod=0755 scripts/cfwf /usr/local/bin/cfwf
 
 # ---- System-wide gitconfig (tamper-resistant) --------------------------------
 # Baked in at /etc/gitconfig as root:root mode 0444. The unprivileged
@@ -277,6 +278,7 @@ RUN { \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
       echo "pre-commit-check: present-only, no --version support"; \
       echo "querydb: present-only, no --version support"; \
+      echo "cfwf: present-only, no --version support"; \
     } > /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -335,7 +337,7 @@ RUN set -e; \
         echo "FATAL sanity: required binary 'ssh-add' is missing" >&2; exit 1; \
     fi; \
     echo "== repo-local bin/ scripts (no --version support, so presence + executable-bit only) =="; \
-    for script in pre-commit-check querydb; do \
+    for script in pre-commit-check querydb cfwf; do \
         [ -x "/usr/local/bin/$script" ] \
             || { echo "FATAL sanity: /usr/local/bin/$script is missing or not executable" >&2; exit 1; }; \
     done; \
