@@ -10387,8 +10387,15 @@ STUBEOF
     export SSH_AUTH_SOCK="${TEST_TMP}/this-run-agent.sock"
     stop_ssh_agent
 
-    local survived=0
-    kill -0 "${decoy_pid}" 2> /dev/null && survived=1
+    # pkill only sends SIGTERM and returns, so give a wrongly-killed decoy a moment to actually exit.
+    local survived=1 attempt
+    for attempt in 1 2 3 4 5; do
+        if ! kill -0 "${decoy_pid}" 2> /dev/null; then
+            survived=0
+            break
+        fi
+        sleep 0.1
+    done
     kill "${decoy_pid}" 2> /dev/null || true
     [ "${survived}" -eq 1 ]
 }
