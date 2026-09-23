@@ -9,15 +9,19 @@ readonly VERIFY_ATTEMPTS=3
 
 CURRENT_COMMAND=""
 MODE=""
-OWNER=""
-PROJECT_NUMBER=""
-PROJECT_ID=""
-FIELD_ID=""
-OPTION_ID=""
-ITEM_URL=""
 REPO=""
 PR=""
 ISSUE=""
+STATUS=""
+TARGET_NUMBER=""
+TARGET_TYPE=""
+TARGET_URL_KIND=""
+OWNER=""
+PROJECT_ID=""
+PROJECT_NUMBER=""
+FIELD_ID=""
+OPTION_ID=""
+STATUS_NAME=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -41,14 +45,17 @@ USAGE
 usage_workflow_status() {
     cat << 'USAGE'
 Usage:
-  cfwf workflow-status --set --owner <owner> --project-number <n> --project-id <id> \
-       --field-id <id> --option-id <id> --url <issue-or-pr-url>
-  cfwf workflow-status --check --owner <owner> --project-number <n> --repo <owner/repo> \
-       (--pr <n> | --issue <n>)
+  cfwf workflow-status --set --repo <owner/repo> (--pr <n> | --issue <n>) --status <name>
+  cfwf workflow-status --check --repo <owner/repo> (--pr <n> | --issue <n>)
+
+Both name the item the same way: --repo plus --pr or --issue. The board is looked up from
+the repository: the project titled "Workflow" linked to it, and that project's
+"Workflow Status" field. No ids are needed.
 
 --set adds the item to the board if it is not already there (idempotent), sets the
-Workflow Status field, then reads it back and retries up to 3 times. It exits 0 only
-once the new value is confirmed. The ids come from the generated CLAUDE.md WF_* block.
+Workflow Status to --status (the option's display name, for example Approved or
+"AI Review", matched without regard to case), then reads it back and retries up to 3
+times. It exits 0 only once the new value is confirmed.
 
 --check prints the item's current Workflow Status. It exits non-zero when the item is
 not on the board.
@@ -86,30 +93,6 @@ validate() {
 assign_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --owner)
-            validate "${value}" '^[A-Za-z0-9_.-]+$' "${flag}"
-            OWNER="${value}"
-            ;;
-        --project-number)
-            validate "${value}" '^[0-9]+$' "${flag}"
-            PROJECT_NUMBER="${value}"
-            ;;
-        --project-id)
-            validate "${value}" '^[A-Za-z0-9_=-]+$' "${flag}"
-            PROJECT_ID="${value}"
-            ;;
-        --field-id)
-            validate "${value}" '^[A-Za-z0-9_=-]+$' "${flag}"
-            FIELD_ID="${value}"
-            ;;
-        --option-id)
-            validate "${value}" '^[A-Za-z0-9_=-]+$' "${flag}"
-            OPTION_ID="${value}"
-            ;;
-        --url)
-            validate "${value}" '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(issues|pull)/[0-9]+$' "${flag}"
-            ITEM_URL="${value}"
-            ;;
         --repo)
             validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}"
             REPO="${value}"
@@ -121,6 +104,10 @@ assign_option() {
         --issue)
             validate "${value}" '^[0-9]+$' "${flag}"
             ISSUE="${value}"
+            ;;
+        --status)
+            validate "${value}" '^[A-Za-z0-9][A-Za-z0-9 _.-]*$' "${flag}"
+            STATUS="${value}"
             ;;
     esac
 }
@@ -135,7 +122,7 @@ parse_options() {
                 MODE="${1#--}"
                 shift
                 ;;
-            --owner | --project-number | --project-id | --field-id | --option-id | --url | --repo | --pr | --issue)
+            --repo | --pr | --issue | --status)
                 [ "$#" -ge 2 ] || usage_error "$1 needs a value"
                 assign_option "$1" "$2"
                 shift 2
@@ -156,8 +143,69 @@ require() {
     [ -n "${!variable}" ] || usage_error "missing required option ${flag}"
 }
 
+# Resolves --pr/--issue into the number, the content type the board reports for it, and the
+# URL path segment, so --set and --check name an item the same way.
+require_target() {
+    if [ -n "${PR}" ] && [ -n "${ISSUE}" ]; then
+        usage_error "--pr and --issue are mutually exclusive"
+    fi
+    [ -n "${PR}${ISSUE}" ] || usage_error "missing required option --pr or --issue"
+
+    if [ -n "${PR}" ]; then
+        TARGET_NUMBER="${PR}"
+        TARGET_TYPE="PullRequest"
+        TARGET_URL_KIND="pull"
+    else
+        TARGET_NUMBER="${ISSUE}"
+        TARGET_TYPE="Issue"
+        TARGET_URL_KIND="issues"
+    fi
+}
+
 require_gh() {
     command -v gh > /dev/null 2>&1 || die "gh is not installed"
+}
+
+# Finds the project titled "Workflow" linked to REPO and sets PROJECT_ID, PROJECT_NUMBER and
+# OWNER. The owner is read from the project's own path rather than assumed to be the
+# repository's owner.
+resolve_project() {
+    local projects resource_path
+    projects=$(gh repo view "${REPO}" --json projectsV2 \
+        --jq '.projectsV2.Nodes[] | select(.title=="Workflow") | [.id, (.number|tostring), .resourcePath] | @tsv') \
+        || die "could not read the projects of ${REPO}"
+    [ -n "${projects}" ] || die "no project titled Workflow is linked to ${REPO}"
+    [ "$(printf '%s\n' "${projects}" | wc -l)" -eq 1 ] || die "more than one project titled Workflow is linked to ${REPO}"
+
+    IFS=$'\t' read -r PROJECT_ID PROJECT_NUMBER resource_path <<< "${projects}"
+    [[ "${PROJECT_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected project id for ${REPO}: ${PROJECT_ID}"
+    [[ "${PROJECT_NUMBER}" =~ ^[0-9]+$ ]] || die "unexpected project number for ${REPO}: ${PROJECT_NUMBER}"
+    [[ "${resource_path}" =~ ^/(users|orgs)/([A-Za-z0-9_.-]+)/projects/[0-9]+$ ]] \
+        || die "unexpected project path for ${REPO}: ${resource_path}"
+    OWNER="${BASH_REMATCH[2]}"
+}
+
+# Finds the project's "Workflow Status" field (never the built-in "Status" field, whose options
+# look plausible but map to nothing) and the option named STATUS, setting FIELD_ID, OPTION_ID
+# and STATUS_NAME (the option's canonical display name).
+resolve_status() {
+    local rows field option name valid=""
+    # $field below is a jq variable, not a shell one.
+    # shellcheck disable=SC2016
+    rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json \
+        --jq '.fields[] | select(.name=="Workflow Status") | .id as $field | .options[] | [$field, .id, .name] | @tsv') \
+        || die "could not read the fields of project ${PROJECT_NUMBER}"
+    [ -n "${rows}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
+
+    while IFS=$'\t' read -r field option name; do
+        FIELD_ID="${field}"
+        valid+="${valid:+, }${name}"
+        if [ -z "${OPTION_ID}" ] && [ "${name,,}" = "${STATUS,,}" ]; then
+            OPTION_ID="${option}"
+            STATUS_NAME="${name}"
+        fi
+    done <<< "${rows}"
+    [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
 }
 
 board_status_of_item() {
@@ -168,63 +216,50 @@ board_status_of_item() {
 }
 
 workflow_status_set() {
-    require OWNER --owner
-    require PROJECT_NUMBER --project-number
-    require PROJECT_ID --project-id
-    require FIELD_ID --field-id
-    require OPTION_ID --option-id
-    require ITEM_URL --url
+    require REPO --repo
+    require STATUS --status
+    require_target
     require_gh
 
-    local option_name item_id actual attempt
-    option_name=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json \
-        --jq ".fields[] | select(.id==\"${FIELD_ID}\") | .options[] | select(.id==\"${OPTION_ID}\") | .name") \
-        || die "could not read the fields of project ${PROJECT_NUMBER}"
-    [ -n "${option_name}" ] || die "option ${OPTION_ID} was not found on field ${FIELD_ID} of project ${PROJECT_NUMBER}"
+    local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
+    local item_id actual attempt
 
-    item_id=$(gh project item-add "${PROJECT_NUMBER}" --owner "${OWNER}" --url "${ITEM_URL}" \
-        --format json --jq '.id') || die "could not add ${ITEM_URL} to project ${PROJECT_NUMBER}"
-    [[ "${item_id}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected item id returned for ${ITEM_URL}: ${item_id}"
+    resolve_project
+    resolve_status
+
+    item_id=$(gh project item-add "${PROJECT_NUMBER}" --owner "${OWNER}" --url "${item_url}" \
+        --format json --jq '.id') || die "could not add ${item_url} to project ${PROJECT_NUMBER}"
+    [[ "${item_id}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected item id returned for ${item_url}: ${item_id}"
 
     gh project item-edit --project-id "${PROJECT_ID}" --id "${item_id}" \
         --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
-        || die "could not set the Workflow Status of ${ITEM_URL}"
+        || die "could not set the Workflow Status of ${item_url}"
 
     actual=""
     for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
         actual=$(board_status_of_item "${item_id}")
-        if [ "${actual}" = "${option_name}" ]; then
-            printf '%s is now %s\n' "${ITEM_URL}" "${option_name}"
+        if [ "${actual}" = "${STATUS_NAME}" ]; then
+            printf '%s is now %s\n' "${item_url}" "${STATUS_NAME}"
             return 0
         fi
         [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
     done
-    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${option_name}', last read '${actual}')"
+    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS_NAME}', last read '${actual}')"
 }
 
 workflow_status_check() {
-    require OWNER --owner
-    require PROJECT_NUMBER --project-number
     require REPO --repo
-    if [ -n "${PR}" ] && [ -n "${ISSUE}" ]; then
-        usage_error "--pr and --issue are mutually exclusive"
-    fi
-    [ -n "${PR}${ISSUE}" ] || usage_error "missing required option --pr or --issue"
+    [ -z "${STATUS}" ] || usage_error "--status is only valid with --set"
+    require_target
     require_gh
 
-    local number content_type status
-    if [ -n "${PR}" ]; then
-        number="${PR}"
-        content_type="PullRequest"
-    else
-        number="${ISSUE}"
-        content_type="Issue"
-    fi
+    resolve_project
 
+    local status
     status=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(.content.repository==\"${REPO}\" and .content.number==${number} and .content.type==\"${content_type}\") | (.[\"workflow Status\"] // \"(unset)\")") \
+        --jq ".items[] | select(.content.repository==\"${REPO}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
         || die "could not list the items of project ${PROJECT_NUMBER}"
-    [ -n "${status}" ] || die "${REPO}#${number} is not on project ${PROJECT_NUMBER}"
+    [ -n "${status}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
     printf '%s\n' "${status}"
 }
 

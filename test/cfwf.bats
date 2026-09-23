@@ -4,9 +4,7 @@ load test_helper
 
 SCRIPT="${REPO_ROOT}/containers/base/development-full/scripts/cfwf"
 
-PROJECT_ID="PVT_proj"
-FIELD_ID="PVTSSF_wf"
-APPROVED_ID="63d36d28"
+REPO="credfeto/credfeto-orchestrator"
 ISSUE_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1346"
 
 setup() {
@@ -26,6 +24,7 @@ setup() {
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'case "$1 $2" in' \
+        '  "repo view") [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
@@ -37,10 +36,13 @@ setup() {
     # shellcheck disable=SC2016
     make_stub sleep 'printf "%s\n" "$*" >> "${SLEEP_LOG}"'
 
+    write_repo_view "/users/credfeto/projects/74"
     jq -n '{fields: [
         {id: "PVTF_title", name: "Title", type: "ProjectV2Field"},
-        {id: "PVTSSF_status", name: "Status", options: [{id: "f75ad846", name: "Todo"}], type: "ProjectV2SingleSelectField"},
-        {id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "c79045f6", name: "Planning"}, {id: "63d36d28", name: "Approved"}], type: "ProjectV2SingleSelectField"}
+        {id: "PVTSSF_status", name: "Status", options: [{id: "f75ad846", name: "Todo"}, {id: "47fc9ee4", name: "In Progress"}], type: "ProjectV2SingleSelectField"},
+        {id: "PVTSSF_wf", name: "Workflow Status", options: [
+            {id: "c79045f6", name: "Planning"}, {id: "63d36d28", name: "Approved"},
+            {id: "ba71dea0", name: "AI Security Review"}, {id: "ee456b74", name: "Human Review"}], type: "ProjectV2SingleSelectField"}
     ], totalCount: 3}' > "${GH_FIXTURES}/field-list.json"
     jq -n '{id: "PVTI_target"}' > "${GH_FIXTURES}/item-add.json"
     write_item_list "Approved"
@@ -48,6 +50,15 @@ setup() {
 
 teardown() {
     cleanup_stubs
+}
+
+# Writes the repo's linked-projects fixture: the Workflow project at the given path, plus a
+# decoy project that is not titled Workflow.
+write_repo_view() {
+    jq -n --arg path "$1" '{projectsV2: {Nodes: [
+        {id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9", closed: false},
+        {id: "PVT_proj", title: "Workflow", number: ($path | capture("/projects/(?<n>[0-9]+)$").n | tonumber), resourcePath: $path, closed: false}
+    ]}}' > "${GH_FIXTURES}/repo-view.json"
 }
 
 # Writes an item-list fixture whose target item (issue 1346 of this repo) has the given status.
@@ -63,12 +74,15 @@ write_item_list() {
 }
 
 set_args() {
-    SET_ARGS=(workflow-status --set --owner credfeto --project-number 74 --project-id "${PROJECT_ID}"
-        --field-id "${FIELD_ID}" --option-id "${APPROVED_ID}" --url "${ISSUE_URL}")
+    SET_ARGS=(workflow-status --set --repo "${REPO}" --issue 1346 --status "${1:-Approved}")
 }
 
 gh_call_count() {
     grep -cF "$1" "${GH_LOG}" || true
+}
+
+gh_line_of() {
+    grep -nF "$1" "${GH_LOG}" | head -1 | cut -d: -f1
 }
 
 # --- help and usage ------------------------------------------------------------
@@ -88,7 +102,7 @@ gh_call_count() {
 @test "help <command> prints the usage of that command" {
     run "${SCRIPT}" help workflow-status
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"--project-number <n> --project-id <id>"* ]]
+    [[ "${output}" == *"--repo <owner/repo> (--pr <n> | --issue <n>) --status <name>"* ]]
 
     run "${SCRIPT}" help closing-issue-labels
     [ "${status}" -eq 0 ]
@@ -120,7 +134,7 @@ gh_call_count() {
 }
 
 @test "workflow-status without --set or --check exits 2" {
-    run "${SCRIPT}" workflow-status --owner credfeto
+    run "${SCRIPT}" workflow-status --repo "${REPO}"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"needs --set or --check"* ]]
 }
@@ -136,59 +150,161 @@ gh_call_count() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"unknown option: --bogus"* ]]
 
-    run "${SCRIPT}" workflow-status --set --owner
+    run "${SCRIPT}" workflow-status --set --repo
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"--owner needs a value"* ]]
+    [[ "${output}" == *"--repo needs a value"* ]]
+}
+
+@test "the board ids and the URL are not options any more: they are derived from --repo and --status" {
+    local flag
+    for flag in --owner --project-number --project-id --field-id --option-id --url; do
+        run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Approved "${flag}" value
+        [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
+        [[ "${output}" == *"unknown option: ${flag}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
 }
 
 # --- workflow-status --set -----------------------------------------------------
 
-@test "--set names the first missing required option and never calls gh" {
-    run "${SCRIPT}" workflow-status --set --owner credfeto --project-number 74
+@test "--set needs --repo, --status and exactly one of --pr and --issue, and never calls gh without them" {
+    run "${SCRIPT}" workflow-status --set --issue 1346 --status Approved
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"missing required option --project-id"* ]]
+    [[ "${output}" == *"missing required option --repo"* ]]
+
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"missing required option --status"* ]]
+
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --status Approved
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--pr or --issue"* ]]
+
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --pr 1 --issue 2 --status Approved
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"mutually exclusive"* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "--set rejects values that could alter the jq filters or the URL, without calling gh" {
-    set_args
+@test "--set rejects values that could alter a jq filter or a URL, without calling gh" {
     local bad
-    for bad in 'x") | .id #' 'has space' 'a;b' ''; do
-        run "${SCRIPT}" workflow-status --set --owner credfeto --project-number 74 --project-id "${PROJECT_ID}" \
-            --field-id "${FIELD_ID}" --option-id "${bad}" --url "${ISSUE_URL}"
+    for bad in 'not-a-repo' 'a/b/c' 'cred feto/x' 'credfeto/x;y' ''; do
+        run "${SCRIPT}" workflow-status --set --repo "${bad}" --issue 1346 --status Approved
         [ "${status}" -eq 2 ]
     done
-    run "${SCRIPT}" workflow-status --set --owner credfeto --project-number 74 --project-id "${PROJECT_ID}" \
-        --field-id "${FIELD_ID}" --option-id "${APPROVED_ID}" --url "https://example.com/credfeto/x/issues/1"
-    [ "${status}" -eq 2 ]
-    run "${SCRIPT}" workflow-status --set --owner 'cred/feto' --project-number 74 --project-id "${PROJECT_ID}" \
-        --field-id "${FIELD_ID}" --option-id "${APPROVED_ID}" --url "${ISSUE_URL}"
-    [ "${status}" -eq 2 ]
-    run "${SCRIPT}" workflow-status --set --owner credfeto --project-number '74; rm' --project-id "${PROJECT_ID}" \
-        --field-id "${FIELD_ID}" --option-id "${APPROVED_ID}" --url "${ISSUE_URL}"
-    [ "${status}" -eq 2 ]
+    for bad in '13x46' '' '1;2'; do
+        run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue "${bad}" --status Approved
+        [ "${status}" -eq 2 ]
+    done
+    for bad in 'x") | .id #' 'a;b' '' ' leading'; do
+        run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "${bad}"
+        [ "${status}" -eq 2 ]
+    done
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "--set adds the item, sets the field to the option, then reads it back" {
+@test "--set finds the board from the repo, adds the item, sets the status, then reads it back" {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"${ISSUE_URL} is now Approved"* ]]
 
+    grep -qF "repo view ${REPO} --json projectsV2 " "${GH_LOG}"
+    grep -qF "project field-list 74 --owner credfeto --format json " "${GH_LOG}"
     grep -qxF "project item-add 74 --owner credfeto --url ${ISSUE_URL} --format json --jq .id" "${GH_LOG}"
-    grep -qxF "project item-edit --project-id ${PROJECT_ID} --id PVTI_target --field-id ${FIELD_ID} --single-select-option-id ${APPROVED_ID}" "${GH_LOG}"
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id 63d36d28" "${GH_LOG}"
     grep -qF "project item-list 74 --owner credfeto --format json -L 1000 " "${GH_LOG}"
 }
 
-@test "--set adds the item before editing it" {
+@test "--set resolves the board, then adds the item, then edits it, then reads it back, in that order" {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
-    local add_line edit_line
-    add_line=$(grep -nF "project item-add" "${GH_LOG}" | head -1 | cut -d: -f1)
-    edit_line=$(grep -nF "project item-edit" "${GH_LOG}" | head -1 | cut -d: -f1)
-    [ "${add_line}" -lt "${edit_line}" ]
+    local repo_view field_list add edit list
+    repo_view=$(gh_line_of "repo view")
+    field_list=$(gh_line_of "project field-list")
+    add=$(gh_line_of "project item-add")
+    edit=$(gh_line_of "project item-edit")
+    list=$(gh_line_of "project item-list")
+    [ "${repo_view}" -lt "${field_list}" ]
+    [ "${field_list}" -lt "${add}" ]
+    [ "${add}" -lt "${edit}" ]
+    [ "${edit}" -lt "${list}" ]
+}
+
+@test "--set names a pull request with --pr and builds its /pull/ URL" {
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --pr 1481 --status Approved
+    grep -qxF "project item-add 74 --owner credfeto --url https://github.com/credfeto/credfeto-orchestrator/pull/1481 --format json --jq .id" "${GH_LOG}"
+}
+
+@test "--set matches the status name without regard to case and handles names with spaces" {
+    write_item_list "AI Security Review"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "ai security review"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"is now AI Security Review"* ]]
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id ba71dea0" "${GH_LOG}"
+}
+
+@test "--set uses the Workflow Status field, never the built-in Status field" {
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Todo
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"unknown status 'Todo'"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+}
+
+@test "--set lists the valid statuses when the name is unknown, and writes nothing" {
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Nonsense
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"unknown status 'Nonsense' (valid: Planning, Approved, AI Security Review, Human Review)"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
+
+@test "--set takes the owner from the project's own path, so an org project uses the org" {
+    write_repo_view "/orgs/acme/projects/3"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    grep -qF "project field-list 3 --owner acme " "${GH_LOG}"
+    grep -qF "project item-add 3 --owner acme " "${GH_LOG}"
+    grep -qF "project item-list 3 --owner acme " "${GH_LOG}"
+}
+
+@test "--set fails when no project titled Workflow is linked to the repo" {
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9"}]}}' > "${GH_FIXTURES}/repo-view.json"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"no project titled Workflow is linked to ${REPO}"* ]]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+}
+
+@test "--set fails rather than guess when two projects titled Workflow are linked" {
+    jq -n '{projectsV2: {Nodes: [
+        {id: "PVT_a", title: "Workflow", number: 1, resourcePath: "/users/credfeto/projects/1"},
+        {id: "PVT_b", title: "Workflow", number: 2, resourcePath: "/users/credfeto/projects/2"}]}}' > "${GH_FIXTURES}/repo-view.json"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"more than one project titled Workflow"* ]]
+    [ "$(gh_call_count "project ")" -eq 0 ]
+}
+
+@test "--set fails when the project has no Workflow Status field" {
+    jq -n '{fields: [{id: "PVTSSF_status", name: "Status", options: [{id: "f75ad846", name: "Todo"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"has no Workflow Status field"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
+
+@test "--set fails when the repo's projects cannot be read" {
+    touch "${GH_FIXTURES}/repo-view.fail"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not read the projects of ${REPO}"* ]]
 }
 
 @test "--set reads the board with a limit above the default page size of 30" {
@@ -220,16 +336,6 @@ gh_call_count() {
     [ "$(gh_call_count "project item-list")" -eq 3 ]
 }
 
-@test "--set fails before writing anything when the option is not on the field" {
-    set_args
-    run "${SCRIPT}" workflow-status --set --owner credfeto --project-number 74 --project-id "${PROJECT_ID}" \
-        --field-id "${FIELD_ID}" --option-id "deadbeef" --url "${ISSUE_URL}"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"option deadbeef was not found"* ]]
-    [ "$(gh_call_count "project item-add")" -eq 0 ]
-    [ "$(gh_call_count "project item-edit")" -eq 0 ]
-}
-
 @test "--set does not edit when adding the item fails" {
     touch "${GH_FIXTURES}/item-add.fail"
     set_args
@@ -259,59 +365,59 @@ gh_call_count() {
 
 # --- workflow-status --check ---------------------------------------------------
 
-@test "--check prints the status of the item in the named repo, ignoring the same number elsewhere" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --issue 1346
+@test "--check finds the board from the repo and prints the item's status, ignoring the same number elsewhere" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
+    grep -qF "project item-list 74 --owner credfeto --format json -L 1000 " "${GH_LOG}"
 }
 
 @test "--check --pr finds a pull request item and --issue does not match it" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --pr 1481
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1481
     [ "${status}" -eq 0 ]
     [ "${output}" = "AI Review" ]
 
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --issue 1481
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1481
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"is not on project 74"* ]]
 }
 
 @test "--check exits non-zero when the item is not on the board" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --pr 99999
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 99999
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"credfeto/credfeto-orchestrator#99999 is not on project 74"* ]]
+    [[ "${output}" == *"${REPO}#99999 is not on project 74"* ]]
 }
 
 @test "--check reports (unset) for an item with no Workflow Status" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --issue 1500
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1500
     [ "${status}" -eq 0 ]
     [ "${output}" = "(unset)" ]
 }
 
-@test "--check needs exactly one of --pr and --issue, and a repo" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 --repo credfeto/credfeto-orchestrator
+@test "--check needs --repo and exactly one of --pr and --issue, and takes no --status" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"--pr or --issue"* ]]
 
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --pr 1 --issue 2
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1 --issue 2
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"mutually exclusive"* ]]
 
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 --pr 1
+    run "${SCRIPT}" workflow-status --check --pr 1
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --repo"* ]]
+
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1 --status Approved
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--status is only valid with --set"* ]]
+    [ ! -f "${GH_LOG}" ]
 }
 
-@test "--check reads the board with a limit above the default page size of 30" {
-    run "${SCRIPT}" workflow-status --check --owner credfeto --project-number 74 \
-        --repo credfeto/credfeto-orchestrator --pr 1481
-    [ "${status}" -eq 0 ]
-    grep -qF "project item-list 74 --owner credfeto --format json -L 1000 " "${GH_LOG}"
+@test "--check fails when no project titled Workflow is linked to the repo" {
+    jq -n '{projectsV2: {Nodes: []}}' > "${GH_FIXTURES}/repo-view.json"
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1481
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"no project titled Workflow is linked to ${REPO}"* ]]
 }
 
 # --- closing-issue-labels ------------------------------------------------------
