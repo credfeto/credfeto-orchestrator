@@ -10359,6 +10359,14 @@ STUBEOF
 }
 
 @test "stop_ssh_agent does not kill an unrelated ssh-agent bound to a different socket (#1122)" {
+    local required_tool
+    for required_tool in ssh-agent pgrep pkill; do
+        if ! command -v "${required_tool}" > /dev/null 2>&1; then
+            echo "${required_tool} is required by this test but is not installed" >&2
+            return 1
+        fi
+    done
+
     local decoy_sock="${TEST_TMP}/decoy-agent.sock"
     # The pid comes from ssh-agent's own output rather than pgrep: ssh-agent is not visible to
     # user-scoped ps/pgrep on every host (#1487). fd 3 is closed so a leaked decoy can never
@@ -10366,16 +10374,10 @@ STUBEOF
     # a flag, so the decoy's argv stays exactly what stop_ssh_agent's pkill pattern matches.
     local decoy_pid
     decoy_pid=$(SHELL=/bin/sh ssh-agent -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
-    [ -n "${decoy_pid}" ]
-
-    local required_tool
-    for required_tool in pgrep pkill; do
-        if ! command -v "${required_tool}" > /dev/null 2>&1; then
-            kill "${decoy_pid}" 2> /dev/null || true
-            echo "${required_tool} is required by this test but is not installed" >&2
-            return 1
-        fi
-    done
+    if [ -z "${decoy_pid}" ]; then
+        echo "ssh-agent did not report a pid for the decoy agent" >&2
+        return 1
+    fi
 
     if ! pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}" | grep -qx "${decoy_pid}"; then
         kill "${decoy_pid}" 2> /dev/null || true
