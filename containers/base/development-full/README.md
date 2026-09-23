@@ -155,6 +155,7 @@ Two standalone wrapper scripts maintained in this repo (`containers/base/develop
 
 - `pre-commit-check` — locates the active `pre-commit` hook (repo hooks folder, system `hooksPath`, then global `hooksPath`, tried in that order) and runs it with `--all-files`, so the full hook chain can be exercised on demand against the current checkout without a real commit. Ported verbatim from `credfeto/scripts`' `development/pre-commit-check`.
 - `querydb` — loads `$HOME/.database` and then a repo-local `.database` file (found by walking up from `$PWD`) for `SERVER`/`DB`/`USER`/`PASSWORD`, then runs `sqlcmd` against them, passing through any extra arguments. See [sql.examples.md](../../../ai/global/sql.examples.md) for the `.database` file format.
+- `cfwf` (Credfeto WorkFlow) — one flat command for each recurring multi-step `gh` pattern, so a single `command-allowlist`/`Bash(cfwf *)` entry covers it instead of the agent composing a fresh multi-statement script each time. `cfwf workflow-status --set` adds an issue or PR to the Workflow board, sets its Workflow Status and reads it back (retrying up to 3 times); `cfwf workflow-status --check` prints its current status; `cfwf closing-issue-labels` prints the labels of the issues a PR closes, without `Blocked`/`On-Hold`. Uses only native `gh project`/`gh pr`/`gh issue` subcommands, never `gh api graphql`. `cfwf help` lists the options; a bare `cfwf` prints the usage to stderr and exits 2. `install-claude-hooks` also installs it into `/usr/local/bin` on a host.
 
 Both names are already registered on `claude-hooks/command-allowlist` and `claude-settings.json`'s `permissions.allow`, and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
 
@@ -204,6 +205,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 | `/usr/local/bin/pre-commit-check` | root:root | 0755 | Repo-local wrapper script (from `scripts/pre-commit-check`); read/execute only |
 | `/usr/local/bin/querydb` | root:root | 0755 | Repo-local wrapper script (from `scripts/querydb`); read/execute only |
+| `/usr/local/bin/cfwf` | root:root | 0755 | Repo-local workflow helper (from `scripts/cfwf`); read/execute only |
 
 ---
 
@@ -229,7 +231,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 
 **sqlite3 self-check** — `sqlite3 :memory: "SELECT 1;"` must return `1`.
 
-**Repo-local `scripts/` scripts** — `pre-commit-check` and `querydb` support no `--version` probe, so `/usr/local/bin/pre-commit-check` and `/usr/local/bin/querydb` are instead checked for presence and the executable bit only.
+**Repo-local `scripts/` scripts** — `pre-commit-check`, `querydb` and `cfwf` support no `--version` probe, so `/usr/local/bin/pre-commit-check`, `/usr/local/bin/querydb` and `/usr/local/bin/cfwf` are instead checked for presence and the executable bit only.
 
 **HTTPS clone** — a sacrificial public repository (`github.com/dnyw4l3n13/scratch`) is cloned over HTTPS with `GIT_CONFIG_SYSTEM=/dev/null` to verify outbound TLS connectivity. The clone is removed immediately after.
 
