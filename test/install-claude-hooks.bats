@@ -5,7 +5,39 @@ load test_helper
 
 setup() {
     setup_isolated_env
+    # Read when the script is sourced, so it must be exported first: without it main would
+    # install cfwf into the real /usr/local/bin.
+    export CFWF_BIN_DIR="${TEST_TMP}/bin"
+    mkdir -p "${CFWF_BIN_DIR}"
     source_install_claude_hooks
+
+    # main refuses to run without every tool the hooks need; stand in for any the host lacks so
+    # these tests do not depend on what is installed where they run.
+    local tool
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        command -v "${tool}" > /dev/null 2>&1 || make_stub "${tool}" 'exit 0'
+    done
+}
+
+# main with PATH limited to one directory, so a required tool can be made to look missing.
+main_with_path() {
+    local PATH="$1"
+    main
+}
+
+# A directory holding an empty stand-in for every required tool except the ones named.
+tools_dir_without() {
+    local dir="${TEST_TMP}/tools" tool skip omit
+    rm -rf "${dir}"
+    mkdir -p "${dir}"
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        omit=0
+        for skip in "$@"; do [ "${tool}" = "${skip}" ] && omit=1; done
+        [ "${omit}" -eq 1 ] && continue
+        printf '#!/bin/sh\nexit 0\n' > "${dir}/${tool}"
+        chmod +x "${dir}/${tool}"
+    done
+    printf '%s' "${dir}"
 }
 
 teardown() {
@@ -201,4 +233,74 @@ teardown() {
     run main
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"Source settings not found"* ]]
+}
+
+@test "main installs cfwf into the shared bin directory, executable by everyone" {
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Installed cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
+    [ -x "${CFWF_BIN_DIR}/cfwf" ]
+    [ "$(stat -c '%a' "${CFWF_BIN_DIR}/cfwf")" = "755" ]
+    diff "${SOURCE_CFWF}" "${CFWF_BIN_DIR}/cfwf"
+}
+
+@test "the installed cfwf is a copy, not a symlink into the repo" {
+    main
+    [ ! -L "${CFWF_BIN_DIR}/cfwf" ]
+}
+
+@test "re-running main replaces an older installed cfwf" {
+    printf '#!/bin/sh\necho stale\n' > "${CFWF_BIN_DIR}/cfwf"
+    chmod 0644 "${CFWF_BIN_DIR}/cfwf"
+    main
+    diff "${SOURCE_CFWF}" "${CFWF_BIN_DIR}/cfwf"
+    [ "$(stat -c '%a' "${CFWF_BIN_DIR}/cfwf")" = "755" ]
+}
+
+@test "when cfwf cannot be installed, main warns with the sudo command and still installs everything else" {
+    CFWF_BIN_DIR="${TEST_TMP}/no/such/dir"
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Could not install cfwf to ${CFWF_BIN_DIR}/cfwf"* ]]
+    [[ "${output}" == *"sudo install -m 0755 -o root -g root ${SOURCE_CFWF} ${CFWF_BIN_DIR}/cfwf"* ]]
+    [ -L "${HOME}/.claude/hooks/enforce-git-dash-c" ]
+    run jq empty "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+}
+
+@test "dies when the source cfwf script is missing" {
+    SOURCE_CFWF="${TEST_TMP}/does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source cfwf script not found"* ]]
+}
+
+@test "main aborts naming any single missing required tool" {
+    local tool
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        run main_with_path "$(tools_dir_without "${tool}")"
+        [ "${status}" -eq 1 ] || { echo "did not abort without ${tool}" >&2; return 1; }
+        [[ "${output}" == *"Required tool(s) not found: ${tool}"* ]] || { echo "did not name ${tool}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "the required tools cover everything the hooks call" {
+    local tool
+    for tool in jq shfmt base64 realpath git gpg ssh-add sed grep; do
+        printf '%s\n' "${REQUIRED_TOOLS[@]}" | grep -qxF "${tool}" \
+            || { echo "REQUIRED_TOOLS is missing ${tool}" >&2; return 1; }
+    done
+}
+
+@test "main names every missing required tool at once" {
+    run main_with_path "$(tools_dir_without shfmt gpg)"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Required tool(s) not found: shfmt gpg"* ]]
+}
+
+@test "main installs nothing when a required tool is missing" {
+    run main_with_path "$(tools_dir_without shfmt)"
+    [ "${status}" -eq 1 ]
+    [ ! -e "${HOME}/.claude" ]
+    [ ! -e "${CFWF_BIN_DIR}/cfwf" ]
 }
