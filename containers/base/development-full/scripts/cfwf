@@ -208,13 +208,6 @@ resolve_status() {
     [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
 }
 
-board_status_of_item() {
-    local item_id="$1" actual
-    actual=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]") || actual=""
-    printf '%s' "${actual}"
-}
-
 workflow_status_set() {
     require REPO --repo
     require STATUS --status
@@ -235,9 +228,9 @@ workflow_status_set() {
         --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
         || die "could not set the Workflow Status of ${item_url}"
 
-    actual=""
     for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
-        actual=$(board_status_of_item "${item_id}")
+        actual=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
+            --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]" || true)
         if [ "${actual}" = "${STATUS_NAME}" ]; then
             printf '%s is now %s\n' "${item_url}" "${STATUS_NAME}"
             return 0
@@ -280,19 +273,14 @@ cmd_closing_issue_labels() {
     require PR --pr
     require_gh
 
-    local numbers number labels="" issue_labels
+    local numbers number
     numbers=$(gh pr view "${PR}" --repo "${REPO}" --json closingIssuesReferences \
         --jq '.closingIssuesReferences[].number') || die "could not read the closing issues of ${REPO}#${PR}"
 
     for number in ${numbers}; do
-        if issue_labels=$(gh issue view "${number}" --repo "${REPO}" --json labels --jq '.labels[].name'); then
-            labels+="${issue_labels}"$'\n'
-        else
-            printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${REPO}" "${number}" >&2
-        fi
-    done
-
-    printf '%s' "${labels}" | { grep -vE '^(Blocked|On-Hold|)$' || true; } | sort -u
+        gh issue view "${number}" --repo "${REPO}" --json labels --jq '.labels[].name' \
+            || printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${REPO}" "${number}" >&2
+    done | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
 }
 
 cmd_help() {

@@ -19,25 +19,19 @@ setup() {
     done
 }
 
-# main with PATH limited to one directory, so a required tool can be made to look missing.
-main_with_path() {
-    local PATH="$1"
-    main
-}
-
-# A directory holding an empty stand-in for every required tool except the ones named.
-tools_dir_without() {
-    local dir="${TEST_TMP}/tools" tool skip omit
-    rm -rf "${dir}"
-    mkdir -p "${dir}"
-    for tool in "${REQUIRED_TOOLS[@]}"; do
-        omit=0
-        for skip in "$@"; do [ "${tool}" = "${skip}" ] && omit=1; done
-        [ "${omit}" -eq 1 ] && continue
-        printf '#!/bin/sh\nexit 0\n' > "${dir}/${tool}"
-        chmod +x "${dir}/${tool}"
-    done
-    printf '%s' "${dir}"
+# Makes the named tools report as absent to the `command -v` presence check, deterministically and
+# without altering the real system (the same override the install-timer and setup-owner suites use).
+hide_tools() {
+    HIDDEN_TOOLS=("$@")
+    command() {
+        local hidden
+        if [ "$1" = "-v" ]; then
+            for hidden in "${HIDDEN_TOOLS[@]}"; do
+                [ "$2" = "${hidden}" ] && return 1
+            done
+        fi
+        builtin command "$@"
+    }
 }
 
 teardown() {
@@ -278,7 +272,8 @@ teardown() {
 @test "main aborts naming any single missing required tool" {
     local tool
     for tool in "${REQUIRED_TOOLS[@]}"; do
-        run main_with_path "$(tools_dir_without "${tool}")"
+        hide_tools "${tool}"
+        run main
         [ "${status}" -eq 1 ] || { echo "did not abort without ${tool}" >&2; return 1; }
         [[ "${output}" == *"Required tool(s) not found: ${tool}"* ]] || { echo "did not name ${tool}: ${output}" >&2; return 1; }
     done
@@ -293,13 +288,15 @@ teardown() {
 }
 
 @test "main names every missing required tool at once" {
-    run main_with_path "$(tools_dir_without shfmt gpg)"
+    hide_tools shfmt gpg
+    run main
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"Required tool(s) not found: shfmt gpg"* ]]
 }
 
 @test "main installs nothing when a required tool is missing" {
-    run main_with_path "$(tools_dir_without shfmt)"
+    hide_tools shfmt
+    run main
     [ "${status}" -eq 1 ]
     [ ! -e "${HOME}/.claude" ]
     [ ! -e "${CFWF_BIN_DIR}/cfwf" ]
