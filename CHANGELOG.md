@@ -27,7 +27,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - A PR that has finished its review pipeline but sits on a repo where auto-merge isn't supported is now correctly recognized as settled (via the Workflow Status board's Human Review substatus), so it stops burning agent invocations with nothing to do and correctly gets the review-needed notification (#1479)
 - The stop_ssh_agent decoy test no longer fails and hangs the test run on hosts where ssh-agent is not visible to pgrep; it takes the decoy's pid from ssh-agent's own output and skips with an explanation when the decoy cannot be seen (#1487)
 ### Changed
-- install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host (skipping with the sudo command to run when it cannot write there) and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
+- install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
 ### Deprecated
 ### Removed
 ### Deployment Changes
