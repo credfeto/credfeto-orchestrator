@@ -10360,18 +10360,25 @@ STUBEOF
 
 @test "stop_ssh_agent does not kill an unrelated ssh-agent bound to a different socket (#1122)" {
     local decoy_sock="${TEST_TMP}/decoy-agent.sock"
-    ssh-agent -a "${decoy_sock}" > /dev/null
+    # The pid comes from ssh-agent's own output rather than pgrep: ssh-agent is not visible to
+    # user-scoped ps/pgrep on every host (#1487). fd 3 is closed so a leaked decoy can never
+    # hold bats' output pipe open and hang the run.
     local decoy_pid
-    decoy_pid=$(pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}")
+    decoy_pid=$(ssh-agent -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
     [ -n "${decoy_pid}" ]
+
+    if ! ps -p "${decoy_pid}" > /dev/null 2>&1; then
+        kill "${decoy_pid}" 2> /dev/null || true
+        skip "the decoy ssh-agent (pid ${decoy_pid}) is not visible to ps on this host, so this test cannot tell whether pkill would have found it"
+    fi
 
     export SSH_AUTH_SOCK="${TEST_TMP}/this-run-agent.sock"
     stop_ssh_agent
 
-    local still_alive=0
-    kill -0 "${decoy_pid}" 2>/dev/null || still_alive=1
-    kill "${decoy_pid}" 2>/dev/null || true
-    [ "${still_alive}" -eq 0 ]
+    local survived=0
+    kill -0 "${decoy_pid}" 2> /dev/null && survived=1
+    kill "${decoy_pid}" 2> /dev/null || true
+    [ "${survived}" -eq 1 ]
 }
 
 # --- cleanup_dangling_images unit tests ---------------------------------------
