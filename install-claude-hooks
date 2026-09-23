@@ -73,7 +73,8 @@ install_cfwf() {
     local target="${CFWF_BIN_DIR}/cfwf"
     local root_install=(install -m 0755 -o root -g root "${SOURCE_CFWF}" "${target}")
 
-    if install -m 0755 "${SOURCE_CFWF}" "${target}" 2>/dev/null; then
+    local plain_error
+    if plain_error=$(install -m 0755 "${SOURCE_CFWF}" "${target}" 2>&1); then
         info "Installed cfwf to ${target}"
         return 0
     fi
@@ -86,7 +87,7 @@ install_cfwf() {
         fi
     fi
 
-    info "Could not install cfwf to ${target}. To make it available to every user, run: sudo ${root_install[*]}"
+    info "Could not install cfwf to ${target} (${plain_error}). To make it available to every user, run: sudo ${root_install[*]}"
 }
 
 # Symlinks every file directly under SOURCE_HOOKS_DIR into TARGET_HOOKS_DIR,
