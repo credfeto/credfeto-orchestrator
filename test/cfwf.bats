@@ -423,6 +423,21 @@ gh_line_of() {
     [[ "${output}" == *"${REPO}#99999 is not on project 74"* ]]
 }
 
+@test "--check matches the repository without regard to case, as GitHub does" {
+    run "${SCRIPT}" workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+}
+
+@test "a closed project titled Workflow is ignored, so a replaced board does not make discovery ambiguous" {
+    jq -n '{projectsV2: {Nodes: [
+        {id: "PVT_old", title: "Workflow", number: 2, resourcePath: "/users/credfeto/projects/2", closed: true},
+        {id: "PVT_proj", title: "Workflow", number: 74, resourcePath: "/users/credfeto/projects/74", closed: false}]}}' > "${GH_FIXTURES}/repo-view.json"
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    grep -qF "project item-list 74 --owner credfeto " "${GH_LOG}"
+}
+
 @test "--check reports (unset) for an item with no Workflow Status" {
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1500
     [ "${status}" -eq 0 ]

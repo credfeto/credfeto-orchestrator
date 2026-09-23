@@ -167,13 +167,13 @@ require_gh() {
     command -v gh > /dev/null 2>&1 || die "gh is not installed"
 }
 
-# Finds the project titled "Workflow" linked to REPO and sets PROJECT_ID, PROJECT_NUMBER and
-# OWNER. The owner is read from the project's own path rather than assumed to be the
-# repository's owner.
+# Finds the open project titled "Workflow" linked to REPO (a closed one left over from a
+# replaced board is ignored) and sets PROJECT_ID, PROJECT_NUMBER and OWNER. The owner is read
+# from the project's own path rather than assumed to be the repository's owner.
 resolve_project() {
     local projects resource_path
     projects=$(gh repo view "${REPO}" --json projectsV2 \
-        --jq '.projectsV2.Nodes[] | select(.title=="Workflow") | [.id, (.number|tostring), .resourcePath] | @tsv') \
+        --jq '.projectsV2.Nodes[] | select(.title=="Workflow" and .closed != true) | [.id, (.number|tostring), .resourcePath] | @tsv') \
         || die "could not read the projects of ${REPO}"
     [ -n "${projects}" ] || die "no project titled Workflow is linked to ${REPO}"
     [[ "${projects}" != *$'\n'* ]] || die "more than one project titled Workflow is linked to ${REPO}"
@@ -251,7 +251,7 @@ workflow_status_check() {
 
     local status
     status=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(.content.repository==\"${REPO}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
+        --jq ".items[] | select((.content.repository | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
         || die "could not list the items of project ${PROJECT_NUMBER}"
     [ -n "${status}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
     printf '%s\n' "${status}"

@@ -11,7 +11,8 @@
 #
 # It also installs the cfwf workflow helper into a shared bin directory
 # (/usr/local/bin by default, override with CFWF_BIN_DIR) with `install`, so
-# anyone on the host can run it. If the plain install fails (typically because the
+# anyone on the host can run it. Unlike the hooks that is a copy, not a symlink,
+# so re-run this after cfwf changes to refresh it. If the plain install fails (typically because the
 # directory is not writable) it falls back to sudo; if that is unavailable or
 # declined the step prints the exact command to run and the rest of the install
 # carries on.

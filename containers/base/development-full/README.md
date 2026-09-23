@@ -130,7 +130,8 @@ The repo-root `install-claude-hooks` script installs this same settings.json and
 current host user's `~/.claude`, so the hooks can be exercised directly outside the container: hook/data
 files are symlinked straight back into this repo, and settings.json is copied verbatim (no rewriting
 needed, since its hook paths are already the portable `$HOME` form). It also installs the `cfwf`
-helper into `/usr/local/bin` (`CFWF_BIN_DIR` overrides the directory) so anyone on the host can run it,
+helper into `/usr/local/bin` (`CFWF_BIN_DIR` overrides the directory) so anyone on the host can run it
+(a copy, not a symlink, so re-run the script after `cfwf` changes),
 falling back to `sudo install` if the plain install fails (typically because that directory is not writable), and it aborts before changing
 anything if a tool the hooks depend on (`jq`, `shfmt`, `base64`, `realpath`, `git`, `gpg`, `ssh-add`, `sed`,
 `grep`) is missing, since a hook whose tool is missing blocks every command. It refuses to
