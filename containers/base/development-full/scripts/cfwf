@@ -5,6 +5,7 @@
 # script every session. Run `cfwf help` for usage.
 
 readonly ITEM_LIMIT=1000
+readonly FIELD_LIMIT=100
 readonly VERIFY_ATTEMPTS=3
 
 CURRENT_COMMAND=""
@@ -105,7 +106,8 @@ assign_option() {
             ISSUE="${value}"
             ;;
         --status)
-            validate "${value}" '^[A-Za-z0-9][A-Za-z0-9 _.-]*$' "${flag}"
+            # Only ever compared against the board's own option names, never put in a filter.
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
             STATUS="${value}"
             ;;
     esac
@@ -191,7 +193,7 @@ resolve_status() {
     local rows field option name valid=""
     # $field below is a jq variable, not a shell one.
     # shellcheck disable=SC2016
-    rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json \
+    rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${FIELD_LIMIT}" \
         --jq '.fields[] | select(.name=="Workflow Status") | .id as $field | .options[] | [$field, .id, .name] | @tsv') \
         || die "could not read the fields of project ${PROJECT_NUMBER}"
     [ -n "${rows}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
@@ -268,18 +270,26 @@ cmd_workflow_status() {
 cmd_closing_issue_labels() {
     CURRENT_COMMAND="closing-issue-labels"
     parse_options "$@"
+    [ -z "${MODE}${STATUS}${ISSUE}" ] || usage_error "closing-issue-labels takes only --repo and --pr"
     require REPO --repo
     require PR --pr
     require_gh
 
-    local numbers number
-    numbers=$(gh pr view "${PR}" --repo "${REPO}" --json closingIssuesReferences \
-        --jq '.closingIssuesReferences[].number') || die "could not read the closing issues of ${REPO}#${PR}"
+    # Each closing issue is read from its own repository: a PR can close an issue in another repo.
+    local references issue_repo number
+    references=$(gh pr view "${PR}" --repo "${REPO}" --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[] | [(.repository.owner.login + "/" + .repository.name), (.number | tostring)] | @tsv') \
+        || die "could not read the closing issues of ${REPO}#${PR}"
 
-    for number in ${numbers}; do
-        gh issue view "${number}" --repo "${REPO}" --json labels --jq '.labels[].name' \
-            || printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${REPO}" "${number}" >&2
-    done | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
+    while IFS=$'\t' read -r issue_repo number; do
+        [ -n "${number}" ] || continue
+        if [[ "${issue_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${number}" =~ ^[0-9]+$ ]]; then
+            gh issue view "${number}" --repo "${issue_repo}" --json labels --jq '.labels[].name' \
+                || printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${issue_repo}" "${number}" >&2
+        else
+            printf 'cfwf: warning: unexpected closing issue reference: %s %s\n' "${issue_repo}" "${number}" >&2
+        fi
+    done <<< "${references}" | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
 }
 
 main() {

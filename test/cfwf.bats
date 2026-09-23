@@ -61,6 +61,15 @@ write_repo_view() {
     ]}}' > "${GH_FIXTURES}/repo-view.json"
 }
 
+# Writes the pr-view fixture: each argument is "owner/repo number" for one closing issue.
+write_pr_view() {
+    local ref
+    for ref in "$@"; do
+        jq -n --arg repo "${ref% *}" --arg number "${ref#* }" \
+            '{repository: {owner: {login: ($repo | split("/")[0])}, name: ($repo | split("/")[1])}, number: ($number | tonumber)}'
+    done | jq -s '{closingIssuesReferences: .}' > "${GH_FIXTURES}/pr-view.json"
+}
+
 # Writes an item-list fixture whose target item (issue 1346 of this repo) has the given status.
 # Includes decoys that share the number in another repo, a PR, and an item with no status.
 write_item_list() {
@@ -196,11 +205,37 @@ gh_line_of() {
         run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue "${bad}" --status Approved
         [ "${status}" -eq 2 ]
     done
-    for bad in 'x") | .id #' 'a;b' '' ' leading'; do
+    for bad in '' $'has\ttab' $'has\nnewline'; do
         run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "${bad}"
         [ "${status}" -eq 2 ]
     done
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "--set treats a status full of jq or shell characters as just an unknown name, and writes nothing" {
+    # shellcheck disable=SC2016  # literal characters: proving they are never interpreted
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status 'x") | .id # $(id)'
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"unknown status"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+}
+
+@test "--set accepts any status name the board has, including punctuation and non-ASCII characters" {
+    jq -n '{fields: [{id: "PVTSSF_wf", name: "Workflow Status", options: [
+        {id: "aaaa1111", name: "Review/QA (v2)"}, {id: "bbbb2222", name: "Done ✅"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
+    write_item_list "Done ✅"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "done ✅"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"is now Done ✅"* ]]
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id bbbb2222" "${GH_LOG}"
+}
+
+@test "--set reads the project's fields with a limit above the default page size of 30" {
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    grep -qF "project field-list 74 --owner credfeto --format json -L 100 " "${GH_LOG}"
 }
 
 @test "--set finds the board from the repo, adds the item, sets the status, then reads it back" {
@@ -423,7 +458,7 @@ gh_line_of() {
 # --- closing-issue-labels ------------------------------------------------------
 
 @test "closing-issue-labels prints the sorted, de-duplicated labels of every closing issue without Blocked or On-Hold" {
-    jq -n '{closingIssuesReferences: [{number: 10}, {number: 11}]}' > "${GH_FIXTURES}/pr-view.json"
+    write_pr_view "${REPO} 10" "${REPO} 11"
     jq -n '{labels: [{name: "Medium"}, {name: "AI-Work"}, {name: "Blocked"}]}' > "${GH_FIXTURES}/issue-view-10.json"
     jq -n '{labels: [{name: "AI-Work"}, {name: "Security"}, {name: "On-Hold"}]}' > "${GH_FIXTURES}/issue-view-11.json"
 
@@ -433,7 +468,7 @@ gh_line_of() {
 }
 
 @test "closing-issue-labels does not exclude labels that merely contain Blocked or On-Hold" {
-    jq -n '{closingIssuesReferences: [{number: 10}]}' > "${GH_FIXTURES}/pr-view.json"
+    write_pr_view "${REPO} 10"
     jq -n '{labels: [{name: "Blocked-by-upstream"}, {name: "Not-On-Hold"}]}' > "${GH_FIXTURES}/issue-view-10.json"
 
     run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481
@@ -449,7 +484,7 @@ gh_line_of() {
 }
 
 @test "closing-issue-labels warns about an issue it cannot read and still reports the others" {
-    jq -n '{closingIssuesReferences: [{number: 10}, {number: 11}]}' > "${GH_FIXTURES}/pr-view.json"
+    write_pr_view "${REPO} 10" "${REPO} 11"
     jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-11.json"
 
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>&1 >/dev/null' _ "${SCRIPT}"
@@ -457,6 +492,39 @@ gh_line_of() {
 
     run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>/dev/null' _ "${SCRIPT}"
     [ "${output}" = "Medium" ]
+}
+
+@test "closing-issue-labels reads each closing issue from its own repository, not the PR's" {
+    write_pr_view "${REPO} 10" "other-org/other-repo 11"
+    jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
+    jq -n '{labels: [{name: "Security"}]}' > "${GH_FIXTURES}/issue-view-11.json"
+
+    run "${SCRIPT}" closing-issue-labels --repo "${REPO}" --pr 1481
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(printf 'Medium\nSecurity')" ]
+    grep -qF "issue view 10 --repo ${REPO} " "${GH_LOG}"
+    grep -qF "issue view 11 --repo other-org/other-repo " "${GH_LOG}"
+}
+
+@test "closing-issue-labels skips a malformed closing issue reference with a warning" {
+    jq -n '{closingIssuesReferences: [{number: 10, repository: {owner: {login: "bad owner"}, name: "x"}}, {number: 11, repository: {owner: {login: "credfeto"}, name: "credfeto-orchestrator"}}]}' > "${GH_FIXTURES}/pr-view.json"
+    jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-11.json"
+
+    run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>&1 >/dev/null' _ "${SCRIPT}"
+    [[ "${output}" == *"unexpected closing issue reference"* ]]
+    run bash -c '"$1" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 2>/dev/null' _ "${SCRIPT}"
+    [ "${output}" = "Medium" ]
+}
+
+@test "closing-issue-labels rejects the options that belong to workflow-status" {
+    local flag
+    for flag in "--status Approved" "--issue 3" "--set" "--check"; do
+        # shellcheck disable=SC2086
+        run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481 ${flag}
+        [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
+        [[ "${output}" == *"takes only --repo and --pr"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
 }
 
 @test "closing-issue-labels exits non-zero when the PR itself cannot be read" {
