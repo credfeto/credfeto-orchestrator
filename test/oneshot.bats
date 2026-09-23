@@ -10368,11 +10368,14 @@ STUBEOF
     decoy_pid=$(SHELL=/bin/sh ssh-agent -a "${decoy_sock}" 3>&- | sed -n 's/^SSH_AGENT_PID=\([0-9][0-9]*\);.*/\1/p')
     [ -n "${decoy_pid}" ]
 
-    if ! command -v pgrep > /dev/null 2>&1; then
-        kill "${decoy_pid}" 2> /dev/null || true
-        echo "pgrep is required by this test but is not installed" >&2
-        return 1
-    fi
+    local required_tool
+    for required_tool in pgrep pkill; do
+        if ! command -v "${required_tool}" > /dev/null 2>&1; then
+            kill "${decoy_pid}" 2> /dev/null || true
+            echo "${required_tool} is required by this test but is not installed" >&2
+            return 1
+        fi
+    done
 
     if ! pgrep -u "$(id -un)" -f "ssh-agent -a ${decoy_sock}" | grep -qx "${decoy_pid}"; then
         kill "${decoy_pid}" 2> /dev/null || true
