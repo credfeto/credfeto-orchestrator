@@ -293,12 +293,11 @@ gh_line_of() {
     grep -qF -- "-f id=PVTI_target" "${GH_LOG}"
 }
 
-@test "no gh api graphql call ever carries a mutation, and every write is a native gh project command" {
+@test "no gh api graphql call ever carries a mutation" {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
     [ "$(gh_call_count "mutation")" -eq 0 ]
-    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id 63d36d28" "${GH_LOG}"
 }
 
 @test "--set resolves the board, then adds the item, then edits it, then reads it back, in that order" {
@@ -529,7 +528,7 @@ gh_line_of() {
     grep -qF -- "-f o=Credfeto -f r=CREDFETO-Orchestrator" "${GH_LOG}"
 }
 
-@test "--check falls back to listing the board when the direct read fails, warning on stderr only" {
+@test "--check falls back to listing the board when the direct read fails, ignoring the same number in another repo and a draft item, and warning on stderr only" {
     use_fallback
     run_quiet workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
@@ -538,13 +537,6 @@ gh_line_of() {
 
     run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [[ "${output}" == *"cfwf: warning: the direct GraphQL read failed (GraphQL: something went wrong); falling back to listing the board"* ]]
-}
-
-@test "--check, on the fallback, ignores the same number in another repo and a draft item with no repository" {
-    use_fallback
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "Approved" ]
 }
 
 @test "--check --pr finds a pull request item and --issue does not match it, on the fallback" {

@@ -46,7 +46,7 @@ USAGE
 }
 
 usage_workflow_status() {
-    cat << 'USAGE'
+    cat << USAGE
 Usage:
   cfwf workflow-status --set --repo <owner/repo> (--pr <n> | --issue <n>) --status <name>
   cfwf workflow-status --check --repo <owner/repo> (--pr <n> | --issue <n>)
@@ -63,11 +63,11 @@ times. It exits 0 only once the new value is confirmed.
 --check prints the item's current Workflow Status. It exits non-zero when the item is
 not on the board.
 
-Board reads use one read-only GraphQL query for the single item (gh api graphql), because
+Each board read is a read-only GraphQL query for the single item (gh api graphql), because
 gh project has no command that reads one item and listing the whole board is capped and can
 be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every write
-uses native gh project commands. If the query fails, cfwf warns on stderr and falls back to
-listing the board (up to 10000 items).
+uses native gh project commands. If a query fails, cfwf warns on stderr and falls back to
+listing the board (up to ${ITEM_LIMIT} items).
 USAGE
 }
 
@@ -231,6 +231,13 @@ warn_graphql_fallback() {
     printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
 }
 
+# Warns once about the failed direct read, then sets ITEM_STATUS from listing the board with the
+# given jq filter. Returns non-zero when the listing fails too.
+fall_back_to_listing() {
+    warn_graphql_fallback "$1"
+    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2") || return 1
+}
+
 # Sets ITEM_STATUS to the Workflow Status of the board item with the given id ("" when it has
 # none). Returns non-zero only when both the direct read and the board listing fail.
 read_item_status() {
@@ -245,9 +252,7 @@ read_item_status() {
         return 0
     fi
 
-    warn_graphql_fallback "${output}"
-    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]") || return 1
+    fall_back_to_listing "${output}" ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]"
 }
 
 # Sets ITEM_STATUS to the target's Workflow Status on the Workflow project, "(unset)" when it has
@@ -267,9 +272,7 @@ read_target_status() {
     fi
     [[ "${output}" != *"Could not resolve to"* ]] || return 0
 
-    warn_graphql_fallback "${output}"
-    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") || return 1
+    fall_back_to_listing "${output}" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")"
 }
 
 workflow_status_set() {
