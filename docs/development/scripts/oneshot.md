@@ -61,7 +61,8 @@ Where to make a common change:
 | To change | Look at |
 | --- | --- |
 | Whether an item is skipped or stood off | The Issue and PullRequest branches in `main` before the Work block, and the predicate they call (lib/github, lib/github-status). |
-| What counts as a settled PR | `pr_json_is_terminal` and `pr_review_pipeline_finished_without_auto_merge` (the board fallback when auto-merge cannot be armed, #1479). |
+| Which PR prompt is used | `pr_should_use_dependency_prompt` (lib/github): branch prefix `depends/` or `dependabot/` only, never a label, and never while changes are requested or `.deleteme.now` is present. |
+| What counts as a settled PR | `pr_json_is_terminal` (false while `.deleteme.now` is in the diff) and `pr_review_pipeline_finished_without_auto_merge` (the board fallback when auto-merge cannot be armed, #1479). |
 | What "changed" means | `fingerprint_issue_json` and `fingerprint_pr_json` (bump `FINGERPRINT_SCHEMA_VERSION`, see below). |
 | A budget or cap | The `MAX_*` defaults in `lib/globals`, the counters in lib/state, and the backstop blocks in the Work block. |
 | Putting an item in Blocked | `apply_blocked_label_with_reason` (verifies the label, comments, notifies Discord, marks for forgiveness). |

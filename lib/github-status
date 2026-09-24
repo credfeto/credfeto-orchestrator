@@ -3,6 +3,15 @@
 # checks, blocked-label detection) and the Blocked-label application/escalation machinery built
 # on top of them.
 
+# Whether the PR still carries the .deleteme.now placeholder a template repo's opening commit adds
+# (agent-roles.instructions.md, Changelog skip case): the real change has not landed, so the PR
+# must never be treated as ready or settled. Only the first 100 files are visible in pr_json, which
+# is enough because a placeholder-only PR has one.
+pr_json_has_placeholder_file() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '(.files // []) | any(.[]; .path == ".deleteme.now")' > /dev/null 2>&1
+}
+
 # Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
 # auto-merge is enabled and no required check has hard-failed (it will merge once the remaining
 # checks/approvals land).  Merged/closed PRs never reach here (filtered earlier as non-OPEN);
@@ -31,6 +40,7 @@ pr_json_is_terminal() {
     local pr_json="$1" review_pipeline_finished="${2:-false}"
     printf '%s' "${pr_json}" | jq -e --argjson finished "${review_pipeline_finished}" '
         .isDraft != true
+        and ((.files // []) | all(.[]; .path != ".deleteme.now"))
         and (.autoMergeRequest != null or $finished)
         and .reviewDecision != "CHANGES_REQUESTED"
         and (

@@ -42,6 +42,12 @@ never contain bot-authored commits by design, so they're recognised by their bra
 convention or a `dependencies` label instead, and are still allowed to flow through the
 lightweight "check CI, enable auto-merge" path rather than being treated as a human takeover.
 
+The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
+`pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because
+issue-label sync copies that label onto any bot PR. A dependency-prefixed PR still gets the full
+phase flow when a reviewer has requested changes or the branch still carries the `.deleteme.now`
+placeholder. A PR whose diff includes `.deleteme.now` is never treated as settled or ready.
+
 The trickiest case: an Issue whose linked Pull Request has been taken over by a human is
 otherwise *invisible* to the normal "does this repo already have an active PR" check (it has no
 bot-authored commits, so it doesn't look bot-driven at all) — which would make the Issue look
