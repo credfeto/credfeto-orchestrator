@@ -5,7 +5,9 @@ how a change goes from an issue to a merged PR, and the GitHub API behaviour tha
 us out. Start here, then read the guide for the script you are changing.
 
 Back to the [repository README](../../README.md). Contributors who are new to the project
-should read [CONTRIBUTING.md](../../CONTRIBUTING.md) first.
+should read [CONTRIBUTING.md](../../CONTRIBUTING.md) first. That file is rewritten from a
+template by an external sync (the "[Documentation] Updated CONTRIBUTING.md" commits), so edit
+this guide, not `CONTRIBUTING.md`; a change made there will be overwritten.
 
 ## The guides
 

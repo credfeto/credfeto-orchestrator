@@ -3,6 +3,8 @@
 # The development guides under docs/development only help if they exist for every script and
 # their links work, so this suite fails when a script has no guide, a lib module or hook is not
 # covered, a relative link is broken, or the local AI instructions stop pointing at the guides.
+# CONTRIBUTING.md is deliberately not checked: it is rewritten from a template by an external sync
+# (the "[Documentation] Updated CONTRIBUTING.md" commits), so nothing here can rely on its content.
 
 load test_helper
 
@@ -87,10 +89,10 @@ broken_links() {
     [ -z "${missing}" ] || { printf 'not covered in claude-hooks.md: %s\n' "${missing}" >&2; return 1; }
 }
 
-@test "every relative link in the development guides, CONTRIBUTING.md and the guides instruction file resolves" {
+@test "every relative link in the development guides and the guides instruction file resolves" {
     local broken
     broken=$(broken_links "${GUIDES}/README.md" "${GUIDES}/lib.md" "${GUIDES}/claude-hooks.md" "${GUIDES}"/scripts/*.md \
-        "${REPO_ROOT}/CONTRIBUTING.md" "${REPO_ROOT}/ai/local/development-guides.instructions.md")
+        "${REPO_ROOT}/ai/local/development-guides.instructions.md")
     [ -z "${broken}" ] || { printf 'broken links:\n%s\n' "${broken}" >&2; return 1; }
 }
 
@@ -104,9 +106,8 @@ broken_links() {
     [ "$(printf '%s\n' "${output}" | wc -l)" -eq 1 ]
 }
 
-@test "the local AI instructions index the guides instruction file, and the README and CONTRIBUTING.md point at the guides" {
+@test "the local AI instructions index the guides instruction file, and the README points at the guides" {
     grep -qF "(development-guides.instructions.md)" "${REPO_ROOT}/ai/local/index.md"
     grep -qF "docs/development/README.md" "${REPO_ROOT}/README.md"
-    grep -qF "docs/development/README.md" "${REPO_ROOT}/CONTRIBUTING.md"
     grep -qF "docs/development/README.md" "${REPO_ROOT}/ai/local/development-guides.instructions.md"
 }
