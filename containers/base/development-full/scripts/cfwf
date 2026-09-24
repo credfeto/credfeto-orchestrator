@@ -231,7 +231,7 @@ resolve_status() {
     # $kind and $field below are jq variables, not shell ones.
     # shellcheck disable=SC2016
     rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${FIELD_LIMIT}" \
-        --jq '.fields[] | select(.name=="Workflow Status" or .name=="Status") | .name as $kind | .id as $field | .options[] | [$kind, $field, .id, .name] | @tsv') \
+        --jq '.fields[] | select(.name=="Workflow Status" or .name=="Status") | .name as $kind | .id as $field | .options[]? | [$kind, $field, .id, .name] | @tsv') \
         || die "could not read the fields of project ${PROJECT_NUMBER}"
 
     while IFS=$'\t' read -r kind field option name; do
@@ -302,9 +302,8 @@ fall_back_to_listing() {
 # Sets ITEM_STATUS to the target's status on the Workflow project, written as
 # "<Workflow Status> (<built-in Status>)" with "(unset)" for a Workflow Status it does not have and
 # "unset" in the brackets for a built-in Status it does not have, or "" when it is not on that
-# project. issue(number:) resolves only an issue and
-# pullRequest(number:) only a pull request (chosen by --issue or --pr), so a number of the other
-# type comes back as not found. GitHub's "no such issue/pull request with that number" answer
+# project. issue(number:) resolves only an issue and pullRequest(number:) only a pull request
+# (chosen by --issue or --pr), so a number of the other type comes back as not found. GitHub's "no such issue/pull request with that number" answer
 # means "not found", not a failure (any other error, such as an unreadable repository, still
 # falls back). Returns non-zero only when both the direct read and the board listing fail.
 read_target_status() {

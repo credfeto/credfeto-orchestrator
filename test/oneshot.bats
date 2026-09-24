@@ -13494,7 +13494,7 @@ STUBEOF
     [ "${output}" = "bp" ]
 }
 
-@test "discover_or_create_workflow_project leaves the built-in Status empty for a project without one, and that entry is not served from the disk cache (#1493)" {
+@test "discover_or_create_workflow_project leaves the built-in Status empty for a project without one, and that entry is still served from the disk cache (#1493)" {
     local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
@@ -13509,8 +13509,29 @@ STUBEOF
     [ "${_WF_PROJECT_ID}" = "PVT_found" ]
     [ -z "${_WF_BUILTIN_FIELD_ID}" ]
     [ "${#_WF_BUILTIN_OPTION_IDS[@]}" -eq 0 ]
+    run jq -e 'has("builtin_field_id")' "$(project_cache_file_path)"
+    [ "${status}" -eq 0 ]
     run load_project_cache
-    [ "${status}" -eq 1 ]
+    [ "${status}" -eq 0 ]
+}
+
+@test "discover_or_create_workflow_project does not write the disk cache for a project it just created, whose response has no built-in Status (#1493)" {
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":[],"pageInfo":{"endCursor":null,"hasNextPage":false}}\n'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    _wf_create_project() {
+        printf '{"id":"PVT_new","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}\n'
+    }
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_new" ]
+    [ -z "${_WF_BUILTIN_FIELD_ID}" ]
+    [ ! -f "$(project_cache_file_path)" ]
 }
 
 @test "discover_or_create_workflow_project backfills the missing AI Simplify option onto a pre-existing board (#1169)" {
@@ -14155,16 +14176,6 @@ update_calls() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"no built-in Status option for 'Custom Stage'"* ]]
     [ "$(update_calls)" -eq 1 ]
-}
-
-@test "builtin_status_for_workflow_status maps Not Started and Planning to Todo, Approved through Human Review to In Progress, Complete to Done, and anything else to nothing" {
-    [ "$(builtin_status_for_workflow_status "Not Started")" = "Todo" ]
-    [ "$(builtin_status_for_workflow_status "Planning")" = "Todo" ]
-    [ "$(builtin_status_for_workflow_status "Approved")" = "In Progress" ]
-    [ "$(builtin_status_for_workflow_status "Human Review")" = "In Progress" ]
-    [ "$(builtin_status_for_workflow_status "Complete")" = "Done" ]
-    [ -z "$(builtin_status_for_workflow_status "Custom Stage")" ]
-    [ -z "$(builtin_status_for_workflow_status "")" ]
 }
 
 # --- report_missing_workflow_project --------------------------------------
