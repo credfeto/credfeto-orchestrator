@@ -23,6 +23,8 @@ FIELD_ID=""
 OPTION_ID=""
 ITEM_STATUS=""
 GRAPHQL_ERR_FILE=""
+GRAPHQL_OUTPUT=""
+GRAPHQL_ERROR=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -235,7 +237,7 @@ graphql_query() {
         trap 'rm -f "${GRAPHQL_ERR_FILE}"' EXIT
     fi
     GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GRAPHQL_ERR_FILE}") || status=$?
-    GRAPHQL_ERROR=$(cat "${GRAPHQL_ERR_FILE}")
+    GRAPHQL_ERROR=$(< "${GRAPHQL_ERR_FILE}")
     return "${status}"
 }
 
@@ -245,7 +247,7 @@ graphql_query() {
 graphql_failure_text() {
     local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
     text="${text%%$'\n'*}"
-    text=$(printf '%s' "${text}" | tr -cd '[:print:]')
+    text="${text//[![:print:]]/}"
     printf '%s' "${text:0:200}"
 }
 
@@ -253,7 +255,7 @@ graphql_failure_text() {
 # the given error text, then sets ITEM_STATUS from listing the board with the given jq filter.
 # Returns non-zero when the listing fails too.
 fall_back_to_listing() {
-    printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
+    printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "$1" >&2
     ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
 }
 
