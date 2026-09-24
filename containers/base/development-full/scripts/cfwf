@@ -225,17 +225,16 @@ resolve_status() {
 # (both seen in practice, #1491). Every write stays on native gh project commands and no query
 # here contains a mutation. If the GraphQL call fails for any reason the board listing is used
 # instead, with a warning so the failure is visible.
-warn_graphql_fallback() {
-    [ "${GRAPHQL_WARNED}" -eq 0 ] || return 0
-    GRAPHQL_WARNED=1
-    printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
-}
-
-# Warns once about the failed direct read, then sets ITEM_STATUS from listing the board with the
-# given jq filter. Returns non-zero when the listing fails too.
+#
+# fall_back_to_listing warns once (however many reads fail) about the failed direct read, quoting
+# the first line of its error, then sets ITEM_STATUS from listing the board with the given jq
+# filter. Returns non-zero when the listing fails too.
 fall_back_to_listing() {
-    warn_graphql_fallback "$1"
-    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2") || return 1
+    if [ "${GRAPHQL_WARNED}" -eq 0 ]; then
+        GRAPHQL_WARNED=1
+        printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
+    fi
+    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
 }
 
 # Sets ITEM_STATUS to the Workflow Status of the board item with the given id ("" when it has
