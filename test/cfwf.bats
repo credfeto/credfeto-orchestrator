@@ -347,15 +347,6 @@ gh_line_of() {
     done
 }
 
-@test "--set stops before the built-in Status when the Workflow Status write fails" {
-    touch "${GH_FIXTURES}/item-edit.fail"
-    set_args
-    run "${SCRIPT}" "${SET_ARGS[@]}"
-    [ "${status}" -eq 1 ]
-    [ "$(gh_call_count "project item-edit")" -eq 1 ]
-    [ "$(gh_call_count "--field-id PVTSSF_status ")" -eq 0 ]
-}
-
 @test "--set fails, saying which write it could not make, when only the built-in Status write fails" {
     printf 'PVTSSF_status' > "${GH_FIXTURES}/item-edit.failfield"
     set_args
@@ -372,17 +363,9 @@ gh_line_of() {
     [ "${status}" -eq 0 ]
     [ "${output}" = "Set ${ISSUE_URL} to Approved" ]
     [[ "${stderr}" == *"has no built-in Status option for 'Approved', so its built-in Status is left unchanged"* ]]
-    [ "$(gh_call_count "project item-edit")" -eq 1 ]
-    [ "$(gh_call_count "--field-id PVTSSF_status ")" -eq 0 ]
-}
-
-@test "--set warns once and writes only the Workflow Status when the project has no built-in Status field" {
-    jq -n '{fields: [{id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "63d36d28", name: "Approved"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
-    set_args
-    run --separate-stderr "${SCRIPT}" "${SET_ARGS[@]}"
-    [ "${status}" -eq 0 ]
     [ "$(printf '%s\n' "${stderr}" | grep -c 'built-in Status is left unchanged')" -eq 1 ]
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
+    [ "$(gh_call_count "--field-id PVTSSF_status ")" -eq 0 ]
 }
 
 @test "--set warns and writes only the Workflow Status for a status with no built-in mapping" {
@@ -492,6 +475,9 @@ gh_line_of() {
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"could not set the Workflow Status"* ]]
+    # the built-in Status is never attempted after a failed Workflow Status write
+    [ "$(gh_call_count "project item-edit")" -eq 1 ]
+    [ "$(gh_call_count "--field-id PVTSSF_status ")" -eq 0 ]
 }
 
 @test "--set refuses an unexpected item id rather than putting it in a jq filter" {
