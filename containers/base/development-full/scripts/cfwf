@@ -63,10 +63,10 @@ Workflow Status to --status (the option's display name, for example Approved or
 "AI Review", matched without regard to case). It also sets the project's built-in Status to
 match: Todo for Not Started and Planning, In Progress for Approved through Human Review,
 Done for Complete. If the project has no such built-in option it warns and leaves the
-built-in Status alone. It exits 0 when gh reports the writes succeeded and does not read
-the values back: the API can lag behind a write by seconds, so a
-read straight afterwards cannot tell a lost write from lag. To confirm, use --check after
-allowing for that lag.
+built-in Status alone. It exits 0 when gh reports the writes succeeded, and that is all: it
+does not read the values back. A write whose call succeeded is done, and GitHub can lag behind
+a write by seconds, so a read straight afterwards that disagrees is lag, not a failed write.
+Do not poll or repeat the write; if a later step reads the value, check again at that step.
 
 --check prints the item's current Workflow Status and built-in Status on one line, for
 example "Development (In Progress)", with (unset) or unset for a value it does not have.

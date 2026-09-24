@@ -158,6 +158,7 @@ gh_line_of() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"The fallback listing reads at most 10000 items."* ]]
     [[ "${output}" == *"does not read"*"values back"* ]]
+    [[ "${output}" == *"Do not poll or repeat the write"* ]]
     [[ "${output}" == *"read-only GraphQL query for the single item"* ]]
     [[ "${output}" == *"write uses native gh project commands"* ]]
 }
