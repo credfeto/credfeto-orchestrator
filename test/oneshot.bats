@@ -4987,6 +4987,22 @@ STUBEOF
     [ "${status}" -eq 1 ]
 }
 
+@test "pr_should_use_dependency_prompt never applies to a PR from a fork, whatever its branch is called" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","isCrossRepository":true,"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","isCrossRepository":false,"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "fetch_pr_json asks gh for isCrossRepository" {
+    local fields_log="${TEST_TMP}/fields.log"
+    fetch_pr_fields_json() { printf '%s\n' "$2" > "${fields_log}"; printf '{}'; }
+    fetch_pr_json 5
+    grep -q 'isCrossRepository' "${fields_log}"
+}
+
 @test "pr_should_use_dependency_prompt falls back to the full flow while .deleteme.now is present" {
     run pr_should_use_dependency_prompt '{"headRefName":"depends/x","files":[{"path":".deleteme.now"}]}'
     [ "${status}" -eq 1 ]

@@ -424,12 +424,16 @@ pr_has_dependency_update_branch() {
 }
 
 # Whether build_pr_claude_md should use its CI-verify-only dependency prompt. Falls back to the
-# full phase flow when a reviewer has requested changes (that prompt cannot make code changes) or
-# the branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on a
-# scaffold-only PR).
+# full phase flow when a reviewer has requested changes (that prompt cannot make code changes), the
+# branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on a
+# scaffold-only PR), or the PR comes from a fork: the head branch name is chosen freely by whoever
+# opens the PR, so only a same-repository branch (whose author has write access) is trusted to
+# select the weaker verify-only flow. isCrossRepository is only ever true when fetch_pr_json says
+# so, so a PR JSON without the field is treated as same-repository.
 pr_should_use_dependency_prompt() {
     local pr_json="$1"
     pr_has_dependency_update_branch "${pr_json}" || return 1
+    printf '%s' "${pr_json}" | jq -e '(.isCrossRepository // false) | not' > /dev/null 2>&1 || return 1
     printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
     pr_json_has_placeholder_file "${pr_json}" && return 1
     return 0
