@@ -67,7 +67,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _fetch_repo_collaborators, get_trusted_logins, require_trusted_logins, fetch_all_priorities,
 # resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_identity,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
-# resolve_resumable_issue_branch, pr_has_depends_branch, pr_has_dependency_label,
+# resolve_resumable_issue_branch, pr_has_dependency_label,
 # pr_has_dependency_update_branch, pr_should_use_dependency_prompt, and
 # pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
@@ -973,7 +973,7 @@ main() {
                 skip_repos+=("${item_repo}")
                 continue
             fi
-            if ! pr_has_depends_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
+            if ! pr_has_dependency_update_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
                 if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
                     '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
                     > /dev/null 2>&1; then
