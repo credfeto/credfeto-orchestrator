@@ -6,7 +6,6 @@
 
 readonly ITEM_LIMIT=10000
 readonly FIELD_LIMIT=100
-readonly VERIFY_ATTEMPTS=5
 
 CURRENT_COMMAND=""
 MODE=""
@@ -17,14 +16,12 @@ STATUS=""
 TARGET_NUMBER=""
 TARGET_TYPE=""
 TARGET_URL_KIND=""
-TARGET_FLAG=""
 OWNER=""
 PROJECT_ID=""
 PROJECT_NUMBER=""
 FIELD_ID=""
 OPTION_ID=""
 ITEM_STATUS=""
-GRAPHQL_WARNED=0
 GRAPHQL_ERR_FILE=""
 
 die() {
@@ -37,7 +34,7 @@ usage_general() {
 Usage: cfwf <command> [options]
 
 Commands:
-  workflow-status --set    Move an issue or PR to a Workflow board status and verify it persisted
+  workflow-status --set    Move an issue or PR to a Workflow board status
   workflow-status --check  Print the current Workflow Status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   help [command]           Show this help, or the help for one command
@@ -56,20 +53,21 @@ Both name the item the same way: --repo plus --pr or --issue. The board is looke
 the repository: the project titled "Workflow" linked to it, and that project's
 "Workflow Status" field. No ids are needed.
 
---set adds the item to the board if it is not already there (idempotent), sets the
+--set adds the item to the board if it is not already there (idempotent) and sets the
 Workflow Status to --status (the option's display name, for example Approved or
-"AI Review", matched without regard to case), then reads it back, retrying up to 5 times
-with a growing delay (about 10 seconds in all) because a change can take a few seconds to
-become visible. It exits 0 only once the new value is confirmed.
+"AI Review", matched without regard to case). It exits 0 when gh reports the write
+succeeded and does not read the value back: the API can lag behind a write by seconds, so a
+read straight afterwards cannot tell a lost write from lag. To confirm, use --check after
+allowing for that lag.
 
 --check prints the item's current Workflow Status. It exits non-zero when the item is
 not on the board.
 
-Each board read is a read-only GraphQL query for the single item (gh api graphql), because
-gh project has no command that reads one item and listing the whole board is capped and can
-be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every write
-uses native gh project commands. If a query fails, cfwf warns on stderr and falls back to
-listing the board.
+--check reads the board with a read-only GraphQL query for the single item (gh api graphql),
+because gh project has no command that reads one item and listing the whole board is capped
+and can be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every
+write uses native gh project commands. If the query fails, cfwf warns on stderr and falls
+back to listing the board.
 USAGE
     printf 'The listing reads at most %s items.\n' "${ITEM_LIMIT}"
 }
@@ -168,12 +166,10 @@ require_target() {
         TARGET_NUMBER="${PR}"
         TARGET_TYPE="PullRequest"
         TARGET_URL_KIND="pull"
-        TARGET_FLAG="pr"
     else
         TARGET_NUMBER="${ISSUE}"
         TARGET_TYPE="Issue"
         TARGET_URL_KIND="issues"
-        TARGET_FLAG="issue"
     fi
 }
 
@@ -223,10 +219,10 @@ resolve_status() {
     [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
 }
 
-# The two board reads below use read-only GraphQL: gh project has no command that reads one
+# The board read below uses read-only GraphQL: gh project has no command that reads one
 # item, and listing the whole board is capped and can be slow to show a freshly added item
-# (both seen in practice, #1491). Every write stays on native gh project commands and no query
-# here contains a mutation. If the GraphQL call fails for any reason the board listing is used
+# (both seen in practice, #1491). Every write stays on native gh project commands and the query
+# here contains no mutation. If the GraphQL call fails for any reason the board listing is used
 # instead, with a warning so the failure is visible.
 
 # Runs gh api graphql with the given arguments, keeping stdout in GRAPHQL_OUTPUT and stderr in
@@ -253,32 +249,12 @@ graphql_failure_text() {
     printf '%s' "${text:0:200}"
 }
 
-# fall_back_to_listing warns once (however many reads fail) about the failed direct read, quoting
+# fall_back_to_listing warns about the failed direct read, quoting
 # the given error text, then sets ITEM_STATUS from listing the board with the given jq filter.
 # Returns non-zero when the listing fails too.
 fall_back_to_listing() {
-    if [ "${GRAPHQL_WARNED}" -eq 0 ]; then
-        GRAPHQL_WARNED=1
-        printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
-    fi
+    printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "${1%%$'\n'*}" >&2
     ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
-}
-
-# Sets ITEM_STATUS to the Workflow Status of the board item with the given id ("" when it has
-# none). Returns non-zero only when both the direct read and the board listing fail.
-read_item_status() {
-    local item_id="$1"
-    ITEM_STATUS=""
-    # $id is a GraphQL variable, not a shell one.
-    # shellcheck disable=SC2016
-    if graphql_query \
-        -f query='query($id:ID!){node(id:$id){... on ProjectV2Item{fieldValueByName(name:"Workflow Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}' \
-        -f id="${item_id}" --jq '.data.node.fieldValueByName.name // ""'; then
-        ITEM_STATUS="${GRAPHQL_OUTPUT}"
-        return 0
-    fi
-
-    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(.id==\"${item_id}\") | (.[\"workflow Status\"] // \"\")"
 }
 
 # Sets ITEM_STATUS to the target's Workflow Status on the Workflow project, "(unset)" when it has
@@ -311,7 +287,7 @@ workflow_status_set() {
     require_gh
 
     local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
-    local item_id attempt read_failed=0 mismatch_seen=0 last_read=""
+    local item_id
 
     resolve_project
     resolve_status
@@ -324,25 +300,7 @@ workflow_status_set() {
         --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
         || die "could not set the Workflow Status of ${item_url}"
 
-    for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
-        if read_item_status "${item_id}"; then
-            read_failed=0
-            last_read="${ITEM_STATUS}"
-            if [ "${last_read}" = "${STATUS}" ]; then
-                printf '%s is now %s\n' "${item_url}" "${STATUS}"
-                return 0
-            fi
-            mismatch_seen=1
-        else
-            read_failed=1
-        fi
-        [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
-    done
-
-    if [ "${mismatch_seen}" -eq 0 ]; then
-        die "could not read ${item_url} back to confirm the write: both the direct query and the board listing failed (the write may have succeeded; check with: cfwf workflow-status --check --repo ${REPO} --${TARGET_FLAG} ${TARGET_NUMBER})"
-    fi
-    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${last_read}'$([ "${read_failed}" -eq 1 ] && echo ', and the final attempt could not read it'))"
+    printf 'Set %s to %s\n' "${item_url}" "${STATUS}"
 }
 
 workflow_status_check() {
