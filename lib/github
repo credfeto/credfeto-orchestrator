@@ -388,23 +388,25 @@ pr_has_dependency_label() {
 # A dependency-update PR is recognised by the branch its bump tooling pushed to ("depends/..."
 # from credfeto-batch-updates, "dependabot/..." from Dependabot), never by label: issue-label sync
 # copies a linked issue's "dependencies" label onto any bot PR, which used to put a bot-authored
-# feature PR into the CI-verify-only prompt that forbids code changes.
+# feature PR into the CI-verify-only prompt that forbids code changes. The branch name is chosen
+# freely by whoever opens a PR, so only a same-repository branch (whose author has write access)
+# counts: a PR from a fork never does, whatever it is called, and so is never exempted from the
+# human-driven and assignee stand-off checks or given the verify-only prompt. isCrossRepository is
+# only ever true when fetch_pr_json says so, so a PR JSON without the field is treated as
+# same-repository.
 pr_has_dependency_update_branch() {
     local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -e '(.headRefName // "") | test("^(depends|dependabot)/")' > /dev/null 2>&1
+    printf '%s' "${pr_json}" | jq -e '((.headRefName // "") | test("^(depends|dependabot)/")) and ((.isCrossRepository // false) | not)' > /dev/null 2>&1
 }
 
-# Whether build_pr_claude_md should use its CI-verify-only dependency prompt. Falls back to the
-# full phase flow when a reviewer has requested changes (that prompt cannot make code changes), the
-# branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on a
-# scaffold-only PR), or the PR comes from a fork: the head branch name is chosen freely by whoever
-# opens the PR, so only a same-repository branch (whose author has write access) is trusted to
-# select the weaker verify-only flow. isCrossRepository is only ever true when fetch_pr_json says
-# so, so a PR JSON without the field is treated as same-repository.
+# Whether build_pr_claude_md should use its CI-verify-only dependency prompt: a same-repository
+# dependency-update branch (pr_has_dependency_update_branch, which refuses a fork PR). Falls back to
+# the full phase flow when a reviewer has requested changes (that prompt cannot make code changes)
+# or the branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on a
+# scaffold-only PR).
 pr_should_use_dependency_prompt() {
     local pr_json="$1"
     pr_has_dependency_update_branch "${pr_json}" || return 1
-    printf '%s' "${pr_json}" | jq -e '(.isCrossRepository // false) | not' > /dev/null 2>&1 || return 1
     printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
     pr_json_has_placeholder_file "${pr_json}" && return 1
     return 0
