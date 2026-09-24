@@ -153,7 +153,7 @@ gh_line_of() {
 @test "the workflow-status help states the fallback listing limit and explains the GraphQL exception" {
     run "${SCRIPT}" help workflow-status
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"listing the board (up to 10000 items)."* ]]
+    [[ "${output}" == *"The listing reads at most 10000 items."* ]]
     [[ "${output}" == *"read-only GraphQL query for the single item"* ]]
     [[ "${output}" == *"every write"*"uses native gh project commands"* ]]
 }
@@ -596,6 +596,14 @@ gh_line_of() {
     [[ "${output}" == *"read failed ($(printf 'x%.0s' $(seq 1 200)));"* ]]
     [[ "${output}" != *"second line"* ]]
     [[ "${output}" != *"$(printf 'x%.0s' $(seq 1 201))"* ]]
+}
+
+@test "the fallback warning never carries terminal escape sequences from the error text" {
+    printf 'boom \033[31mred\033[0m and a bell\a\n' > "${GH_FIXTURES}/graphql.failout"
+    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${output}" == *"read failed (boom [31mred[0m and a bell);"* ]]
+    [[ "${output}" != *$'\033'* ]]
+    [[ "${output}" != *$'\a'* ]]
 }
 
 @test "--set reports a write that was seen not to persist even when the final attempt could not read it" {

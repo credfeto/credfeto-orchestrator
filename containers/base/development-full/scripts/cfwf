@@ -68,8 +68,9 @@ Each board read is a read-only GraphQL query for the single item (gh api graphql
 gh project has no command that reads one item and listing the whole board is capped and can
 be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every write
 uses native gh project commands. If a query fails, cfwf warns on stderr and falls back to
+listing the board.
 USAGE
-    printf 'listing the board (up to %s items).\n' "${ITEM_LIMIT}"
+    printf 'The listing reads at most %s items.\n' "${ITEM_LIMIT}"
 }
 
 usage_closing_issue_labels() {
@@ -242,10 +243,12 @@ graphql_query() {
 }
 
 # The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
-# so that is the fallback when stderr is empty. First line only, at most 200 characters.
+# so that is the fallback when stderr is empty. First line only, printable characters only (no
+# terminal escape sequences), at most 200 characters.
 graphql_failure_text() {
     local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
     text="${text%%$'\n'*}"
+    text=$(printf '%s' "${text}" | tr -cd '[:print:]')
     printf '%s' "${text:0:200}"
 }
 
