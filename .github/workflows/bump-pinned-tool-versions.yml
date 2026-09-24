@@ -78,7 +78,7 @@ jobs:
           NEW_VERSION: "${{steps.bump.outputs.new-version}}"
         run: |
           {
-            echo "branch=deps/${TOOL}/${NEW_VERSION}"
+            echo "branch=depends/${TOOL}/${NEW_VERSION}"
             echo "subject=[Dependencies] Bump ${TOOL} to ${NEW_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
