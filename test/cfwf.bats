@@ -368,6 +368,18 @@ gh_line_of() {
     [ "$(gh_call_count "--field-id PVTSSF_status ")" -eq 0 ]
 }
 
+@test "--set ignores a field named Status that has no options, and still sets the Workflow Status" {
+    jq -n '{fields: [
+        {id: "PVTF_text", name: "Status", type: "ProjectV2Field"},
+        {id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "63d36d28", name: "Approved"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
+    set_args
+    run --separate-stderr "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Set ${ISSUE_URL} to Approved" ]
+    [[ "${stderr}" == *"no built-in Status option for 'Approved'"* ]]
+    [ "$(gh_call_count "project item-edit")" -eq 1 ]
+}
+
 @test "--set warns and writes only the Workflow Status for a status with no built-in mapping" {
     jq -n '{fields: [
         {id: "PVTSSF_status", name: "Status", options: [{id: "f75ad846", name: "Todo"}], type: "ProjectV2SingleSelectField"},
@@ -378,7 +390,7 @@ gh_line_of() {
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
 }
 
-@test "--set matches the built-in Status option name without regard to case, and never picks it for the Workflow Status" {
+@test "--set matches the built-in Status option name without regard to case" {
     write_full_field_list todo "IN PROGRESS" "done"
     set_args
     run --separate-stderr "${SCRIPT}" "${SET_ARGS[@]}"

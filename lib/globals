@@ -369,7 +369,8 @@ declare -gA _WF_OPTION_IDS
 # The project's built-in "Status" field (Todo / In Progress / Done), which is set alongside the
 # Workflow Status so GitHub's own views and automation see a matching value (#1493). Its option
 # ids are keyed by lower-case option name. An empty _WF_BUILTIN_FIELD_ID means the project has no
-# such field, and the built-in write is skipped.
+# such field; its option map is then empty as well, and the built-in write is skipped for lack of
+# an option id.
 _WF_BUILTIN_FIELD_ID=""
 declare -gA _WF_BUILTIN_OPTION_IDS
 _WF_CACHED_REPO=""
