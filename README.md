@@ -253,6 +253,7 @@ Additional documentation is in the [docs/](docs/) folder:
 - [How GitHub integration works](docs/github-integration.md)
 - [How Discord notifications work](docs/discord-notifications.md)
 - [How deployment and setup work](docs/deployment-and-setup.md)
+- [Development guide](docs/development/README.md) — how the scripts are written, tested and changed, with a guide for each script.
 
 ## Operational tasks
 
@@ -266,7 +267,7 @@ Re-runnable prompts for operating the live fleet are in the [tasks/](tasks/) fol
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for reporting security issues.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, the [development guide](docs/development/README.md) for how to change the code, and [SECURITY.md](SECURITY.md) for reporting security issues.
 
 ## Contributors
 
