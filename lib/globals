@@ -366,11 +366,20 @@ _PARSED_COUNT_IDLE=0
 _WF_PROJECT_ID=""
 _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
+# The project's built-in "Status" field (Todo / In Progress / Done), which is set alongside the
+# Workflow Status so GitHub's own views and automation see a matching value (#1493). Its option
+# ids are keyed by lower-case option name. An empty _WF_BUILTIN_FIELD_ID means the project has no
+# such field; its option map is then empty as well, and the built-in write is skipped for lack of
+# an option id.
+_WF_BUILTIN_FIELD_ID=""
+declare -gA _WF_BUILTIN_OPTION_IDS
 _WF_CACHED_REPO=""
 # Per-repo discovery cache: keys are "REPO_FULL:discovered", "REPO_FULL:project_id",
 # "REPO_FULL:field_id", "REPO_FULL:opt_names" (newline-delimited option names), and
 # "REPO_FULL:opt:<name>" (one entry per status-field option, avoiding any separator
-# character that could collide with characters in option names).
+# character that could collide with characters in option names), plus the same for the built-in
+# Status field: "REPO_FULL:builtin_field_id", "REPO_FULL:builtin_opt_names" and
+# "REPO_FULL:builtin_opt:<name>".
 declare -gA _WF_CACHE
 
 # Space-delimited list of repos already issued a Workflow-project setup request this run.

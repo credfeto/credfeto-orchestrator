@@ -10,7 +10,7 @@
 - Tests live in the `test/` directory as `*.bats` files, with shared setup in `test/test_helper.bash`.
 - Run the whole suite with `bats test/` from the repository root.
 - Every behaviour added to a shell script must have a corresponding bats test before committing.
-- The suite covers `oneshot`, `loop`, `create-project`, `setup-owner`, `install-timer`, and `interactive`; the same conventions apply to all of them.
+- The suite covers every script in the repository (see [docs/development/README.md](../../docs/development/README.md) for the list, with a guide for each); the same conventions apply to all of them.
 
 ## `lib/` Layout (oneshot's function libraries)
 
@@ -80,7 +80,7 @@ Every `source "${SCRIPT_DIR}/lib/x"` line must be followed by a dependency-free 
 fallback, e.g. `|| { printf '<script>: FATAL: failed to source %s/lib/x\n' "${SCRIPT_DIR}" >&2;
 exit 1; }` — never a bare `source` with no failure check. Without it, a missing/unreadable
 `lib/*` file degrades silently: `source` fails but does not stop the script (there is no
-`set -e` anywhere in these scripts), so every function the failed file would have defined
+`set -e` in any of these scripts except `notify-unit-failure`), so every function the failed file would have defined
 (`die`, `info`, `warn`, ...) becomes a plain "command not found" no-op instead of behaving as
 expected — an early `... || die "..."` guard that is SUPPOSED to stop the script on a real
 failure just silently falls through into the code that follows it instead. Confirmed incident
@@ -167,7 +167,7 @@ path.
   `source`, shellcheck also stops flagging "possible misspelling" (SC2153) for globals assigned
   only in that source — if a *followed* rename ever reintroduces that check, disable SC2153
   file-wide with a one-line comment rather than renaming every local/global pair that collides.
-- `checkbashisms` does not apply because the scripts use `#!/bin/bash`.
+- `checkbashisms` does not apply to the scripts that use `#!/bin/bash`; it does apply to `pre-commit-check`, which is a POSIX `/bin/sh` script.
 - The commit-time pre-commit hook lints staged `*.bats` files with `shellcheck` too, separately
   from the top-level-scripts invocation above — a plain `shellcheck oneshot loop create-project
   setup-owner install-timer interactive` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.

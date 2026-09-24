@@ -35,6 +35,24 @@ happens.
 | Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to enable auto-merge — reaching this status does not by itself mean that has happened yet. |
 | Complete | (implicit — the PR merges) | Done. |
 
+Every GitHub Project also has a built-in **Status** field (Todo / In Progress / Done) that GitHub's own
+views and automation read. Whenever the Workflow Status is set, the built-in Status is set to a matching
+value straight afterwards, by both `oneshot` and `cfwf workflow-status --set` ([#1493](https://github.com/credfeto/credfeto-orchestrator/issues/1493)):
+
+| Workflow Status | Built-in Status |
+| --- | --- |
+| Not Started, Planning | Todo |
+| Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review | In Progress |
+| Complete | Done |
+
+The mapping is the one already used for the coarse status in Discord notifications (`coarse_status_for_substatus`).
+It exists twice, in `lib/workflow-board` and in `cfwf` (which is copied alone into a container image and cannot
+source `lib/`), and `test/status-mapping-parity.bats` fails if the two ever disagree. Neither writer reads the
+value back afterwards, since the API can lag behind a write by seconds. If a project admin has renamed or
+removed the built-in option that a status maps to, the built-in write is skipped with a warning and the
+Workflow Status stands. `cfwf workflow-status --check` prints both values, for example `Development (In Progress)`.
+GitHub's own automation (closing or merging sets Done) is left as it is and agrees with the mapping.
+
 Only one of these transitions is ever made by a human: **Approved**. Every other column is moved
 through entirely by the agent itself as it works. This is deliberately the single, simple, highly
 visible decision a human has to make — everything downstream of it is automatic.

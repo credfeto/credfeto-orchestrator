@@ -4,9 +4,8 @@
 # pattern that agents would otherwise re-derive as a fresh multi-statement
 # script every session. Run `cfwf help` for usage.
 
-readonly ITEM_LIMIT=1000
+readonly ITEM_LIMIT=10000
 readonly FIELD_LIMIT=100
-readonly VERIFY_ATTEMPTS=3
 
 CURRENT_COMMAND=""
 MODE=""
@@ -22,6 +21,13 @@ PROJECT_ID=""
 PROJECT_NUMBER=""
 FIELD_ID=""
 OPTION_ID=""
+BUILTIN_FIELD_ID=""
+BUILTIN_OPTION_ID=""
+BUILTIN_STATUS=""
+ITEM_STATUS=""
+GRAPHQL_ERR_FILE=""
+GRAPHQL_OUTPUT=""
+GRAPHQL_ERROR=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -33,7 +39,7 @@ usage_general() {
 Usage: cfwf <command> [options]
 
 Commands:
-  workflow-status --set    Move an issue or PR to a Workflow board status and verify it persisted
+  workflow-status --set    Move an issue or PR to a Workflow board status
   workflow-status --check  Print the current Workflow Status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   help [command]           Show this help, or the help for one command
@@ -52,14 +58,27 @@ Both name the item the same way: --repo plus --pr or --issue. The board is looke
 the repository: the project titled "Workflow" linked to it, and that project's
 "Workflow Status" field. No ids are needed.
 
---set adds the item to the board if it is not already there (idempotent), sets the
+--set adds the item to the board if it is not already there (idempotent) and sets the
 Workflow Status to --status (the option's display name, for example Approved or
-"AI Review", matched without regard to case), then reads it back and retries up to 3
-times. It exits 0 only once the new value is confirmed.
+"AI Review", matched without regard to case). It also sets the project's built-in Status to
+match: Todo for Not Started and Planning, In Progress for Approved through Human Review,
+Done for Complete. If the project has no such built-in option it warns and leaves the
+built-in Status alone. It exits 0 when gh reports the writes succeeded and does not read
+the values back: the API can lag behind a write by seconds, so a
+read straight afterwards cannot tell a lost write from lag. To confirm, use --check after
+allowing for that lag.
 
---check prints the item's current Workflow Status. It exits non-zero when the item is
-not on the board.
+--check prints the item's current Workflow Status and built-in Status on one line, for
+example "Development (In Progress)", with (unset) or unset for a value it does not have.
+It exits non-zero when the item is not on the board.
+
+--check reads the board with a read-only GraphQL query for the single item (gh api graphql),
+because gh project has no command that reads one item and listing the whole board is capped
+and can be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every
+write uses native gh project commands. If the query fails, cfwf warns on stderr and falls
+back to listing the board.
 USAGE
+    printf 'The fallback listing reads at most %s items.\n' "${ITEM_LIMIT}"
 }
 
 usage_closing_issue_labels() {
@@ -186,19 +205,42 @@ resolve_project() {
     OWNER="${BASH_REMATCH[2]}"
 }
 
-# Finds the project's "Workflow Status" field (never the built-in "Status" field, whose options
-# look plausible but map to nothing) and the option named STATUS, setting FIELD_ID, OPTION_ID
-# and rewrites STATUS to the option's canonical display name.
+# The built-in Status value that goes with a Workflow Status, printed as the option's display
+# name, or nothing for a status it does not know. It mirrors coarse_status_for_substatus in
+# lib/workflow-board (cfwf is copied alone into a container image and cannot source lib/, so
+# test/status-mapping-parity.bats keeps the two in step): Not Started and Planning are Todo,
+# Approved through Human Review are In Progress, Complete is Done.
+builtin_status_for() {
+    case "$1" in
+        "Not Started" | Planning) printf 'Todo' ;;
+        Approved | Development | "AI Simplify" | "AI Review" | "AI Security Review" | "AI Coverage" | "Human Review") printf 'In Progress' ;;
+        Complete) printf 'Done' ;;
+    esac
+}
+
+# Finds the project's "Workflow Status" field and the option named STATUS, setting FIELD_ID and
+# OPTION_ID and rewriting STATUS to the option's canonical display name; STATUS is only ever
+# matched against the Workflow Status options, never the built-in Status ones. Also finds the
+# built-in "Status" field and the option that goes with STATUS (see builtin_status_for), setting
+# BUILTIN_FIELD_ID, BUILTIN_OPTION_ID and BUILTIN_STATUS; when the project has no such option
+# (an admin renamed or removed it) it warns and leaves BUILTIN_OPTION_ID empty so --set skips
+# that write.
 resolve_status() {
-    local rows field option name valid=""
-    # $field below is a jq variable, not a shell one.
+    local rows kind field option name valid=""
+    local -A builtin_options=()
+    # $kind and $field below are jq variables, not shell ones.
     # shellcheck disable=SC2016
     rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${FIELD_LIMIT}" \
-        --jq '.fields[] | select(.name=="Workflow Status") | .id as $field | .options[] | [$field, .id, .name] | @tsv') \
+        --jq '.fields[] | select(.name=="Workflow Status" or .name=="Status") | .name as $kind | .id as $field | .options[]? | [$kind, $field, .id, .name] | @tsv') \
         || die "could not read the fields of project ${PROJECT_NUMBER}"
-    [ -n "${rows}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
 
-    while IFS=$'\t' read -r field option name; do
+    while IFS=$'\t' read -r kind field option name; do
+        [ -n "${kind}" ] || continue
+        if [ "${kind}" = "Status" ]; then
+            BUILTIN_FIELD_ID="${field}"
+            builtin_options["${name,,}"]="${option}"
+            continue
+        fi
         FIELD_ID="${field}"
         valid+="${valid:+, }${name}"
         if [ -z "${OPTION_ID}" ] && [ "${name,,}" = "${STATUS,,}" ]; then
@@ -206,7 +248,81 @@ resolve_status() {
             STATUS="${name}"
         fi
     done <<< "${rows}"
+    [ -n "${FIELD_ID}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
     [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
+
+    BUILTIN_STATUS=$(builtin_status_for "${STATUS}")
+    if [ -n "${BUILTIN_STATUS}" ]; then
+        BUILTIN_OPTION_ID="${builtin_options["${BUILTIN_STATUS,,}"]:-}"
+    fi
+    if [ -z "${BUILTIN_OPTION_ID}" ]; then
+        printf 'cfwf: warning: project %s has no built-in Status option for %s, so its built-in Status is left unchanged\n' \
+            "${PROJECT_NUMBER}" "'${STATUS}'" >&2
+    fi
+}
+
+# The board read below uses read-only GraphQL: gh project has no command that reads one
+# item, and listing the whole board is capped and can be slow to show a freshly added item
+# (both seen in practice, #1491). Every write stays on native gh project commands and the query
+# here contains no mutation. If the GraphQL call fails for any reason the board listing is used
+# instead, with a warning so the failure is visible.
+
+# Runs gh api graphql with the given arguments, keeping stdout in GRAPHQL_OUTPUT and stderr in
+# GRAPHQL_ERROR so that anything gh writes to stderr can never end up inside a value. Returns
+# gh's exit status.
+graphql_query() {
+    local status=0
+    if [ -z "${GRAPHQL_ERR_FILE}" ]; then
+        GRAPHQL_ERR_FILE=$(mktemp) || die "could not create a temporary file"
+        trap 'rm -f "${GRAPHQL_ERR_FILE}"' EXIT
+    fi
+    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GRAPHQL_ERR_FILE}") || status=$?
+    GRAPHQL_ERROR=$(< "${GRAPHQL_ERR_FILE}")
+    return "${status}"
+}
+
+# The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
+# so that is the fallback when stderr is empty. First line only, printable characters only (no
+# terminal escape sequences), at most 200 characters.
+graphql_failure_text() {
+    local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
+    text="${text%%$'\n'*}"
+    text="${text//[![:print:]]/}"
+    printf '%s' "${text:0:200}"
+}
+
+# fall_back_to_listing warns about the failed direct read, quoting the given error text, then
+# sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
+# listing fails too.
+fall_back_to_listing() {
+    printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "$1" >&2
+    ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
+}
+
+# Sets ITEM_STATUS to the target's status on the Workflow project, written as
+# "<Workflow Status> (<built-in Status>)" with "(unset)" for a Workflow Status it does not have and
+# "unset" in the brackets for a built-in Status it does not have, or "" when it is not on that
+# project. issue(number:) resolves only an issue and pullRequest(number:) only a pull request
+# (chosen by --issue or --pr), so a number of the other type comes back as not found. GitHub's
+# "no such issue/pull request with that number" answer means "not found", not a failure (any
+# other error, such as an unreadable repository, still falls back). Returns non-zero only when
+# both the direct read and the board listing fail.
+read_target_status() {
+    local accessor="issue"
+    [ "${TARGET_TYPE}" = "PullRequest" ] && accessor="pullRequest"
+    ITEM_STATUS=""
+    if graphql_query \
+        -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:100){nodes{project{id} fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} builtin:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
+        -f o="${REPO%%/*}" -f r="${REPO#*/}" -F n="${TARGET_NUMBER}" \
+        --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | ((.fieldValueByName.name // \"(unset)\") + \" (\" + (.builtin.name // \"unset\") + \")\")"; then
+        ITEM_STATUS="${GRAPHQL_OUTPUT}"
+        return 0
+    fi
+    case "${GRAPHQL_ERROR}${GRAPHQL_OUTPUT}" in
+        *"Could not resolve to an Issue with the number"* | *"Could not resolve to a PullRequest with the number"*) return 0 ;;
+    esac
+
+    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | ((.[\"workflow Status\"] // \"(unset)\") + \" (\" + (.status // \"unset\") + \")\")"
 }
 
 workflow_status_set() {
@@ -216,7 +332,7 @@ workflow_status_set() {
     require_gh
 
     local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
-    local item_id actual attempt
+    local item_id
 
     resolve_project
     resolve_status
@@ -229,16 +345,13 @@ workflow_status_set() {
         --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
         || die "could not set the Workflow Status of ${item_url}"
 
-    for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
-        actual=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-            --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]" || true)
-        if [ "${actual}" = "${STATUS}" ]; then
-            printf '%s is now %s\n' "${item_url}" "${STATUS}"
-            return 0
-        fi
-        [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
-    done
-    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${actual}')"
+    if [ -n "${BUILTIN_OPTION_ID}" ]; then
+        gh project item-edit --project-id "${PROJECT_ID}" --id "${item_id}" \
+            --field-id "${BUILTIN_FIELD_ID}" --single-select-option-id "${BUILTIN_OPTION_ID}" > /dev/null \
+            || die "set the Workflow Status of ${item_url} but could not set its built-in Status to ${BUILTIN_STATUS}"
+    fi
+
+    printf 'Set %s to %s\n' "${item_url}" "${STATUS}"
 }
 
 workflow_status_check() {
@@ -249,12 +362,9 @@ workflow_status_check() {
 
     resolve_project
 
-    local status
-    status=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
-        --jq ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
-        || die "could not list the items of project ${PROJECT_NUMBER}"
-    [ -n "${status}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
-    printf '%s\n' "${status}"
+    read_target_status || die "could not read the Workflow Status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
+    [ -n "${ITEM_STATUS}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
+    printf '%s\n' "${ITEM_STATUS}"
 }
 
 cmd_workflow_status() {
@@ -318,4 +428,7 @@ main() {
     esac
 }
 
-main "$@"
+# Sourced by test/status-mapping-parity.bats, which only needs builtin_status_for.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi
