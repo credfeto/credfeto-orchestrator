@@ -39,8 +39,9 @@ commits still on the branch, and either:
 
 Dependency-update Pull Requests (from tools like Dependabot) are a deliberate exception: they
 never contain bot-authored commits by design, so they're recognised by their branch-naming
-convention (`depends/` or `dependabot/`) or, for the human-takeover and assignee stand-off checks
-only, a `dependencies` label instead, and are not treated as a human takeover.
+convention (`depends/` or `dependabot/`, on a branch in the same repository: a fork PR is never
+recognised by its branch name) or, for the human-takeover and assignee stand-off checks only, a
+`dependencies` label instead, and are not treated as a human takeover.
 
 The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
 `pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because
