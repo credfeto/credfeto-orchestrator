@@ -4987,6 +4987,21 @@ STUBEOF
     [ "${status}" -eq 1 ]
 }
 
+@test "pr_has_dependency_update_branch never matches a PR from a fork, so a fork PR is not exempted from the human-driven check" {
+    run pr_has_dependency_update_branch '{"headRefName":"depends/x","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{"headRefName":"depends/x","isCrossRepository":false}'
+    [ "${status}" -eq 0 ]
+    _GH_ME="testuser"
+    local fork same
+    fork='{"headRefName":"depends/x","isCrossRepository":true,"author":{"login":"alice"},"commits":[{"authors":[{"login":"alice"}]}]}'
+    same='{"headRefName":"depends/x","isCrossRepository":false,"author":{"login":"alice"},"commits":[{"authors":[{"login":"alice"}]}]}'
+    run pr_is_human_driven "${fork}" '["alice"]'
+    [ "${status}" -eq 0 ]
+    run pr_is_human_driven "${same}" '["alice"]'
+    [ "${status}" -eq 1 ]
+}
+
 @test "pr_should_use_dependency_prompt never applies to a PR from a fork, whatever its branch is called" {
     run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","isCrossRepository":true,"files":[{"path":"global.json"}]}'
     [ "${status}" -eq 1 ]
