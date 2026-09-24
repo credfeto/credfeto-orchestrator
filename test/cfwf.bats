@@ -154,6 +154,7 @@ gh_line_of() {
     run "${SCRIPT}" help workflow-status
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"The listing reads at most 10000 items."* ]]
+    [[ "${output}" == *"retrying up to 5 times"* ]]
     [[ "${output}" == *"read-only GraphQL query for the single item"* ]]
     [[ "${output}" == *"every write"*"uses native gh project commands"* ]]
 }
@@ -409,14 +410,25 @@ gh_line_of() {
     [ "$(cat "${SLEEP_LOG}")" = "$(printf '1\n2')" ]
 }
 
-@test "--set gives up after 3 read-back attempts and exits non-zero" {
+@test "--set waits through a change that takes several seconds to become visible" {
+    local n
+    for n in 1 2 3 4; do write_graphql_node "Planning" "graphql-node.${n}.json"; done
+    write_graphql_node "Approved" graphql-node.5.json
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "api graphql")" -eq 5 ]
+    [ "$(cat "${SLEEP_LOG}")" = "$(printf '1\n2\n3\n4')" ]
+}
+
+@test "--set gives up after 5 read-back attempts and exits non-zero" {
     write_graphql_node "Planning"
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"did not persist after 3 attempts"* ]]
+    [[ "${output}" == *"did not persist after 5 attempts"* ]]
     [[ "${output}" == *"wanted 'Approved', last read 'Planning'"* ]]
-    [ "$(gh_call_count "api graphql")" -eq 3 ]
+    [ "$(gh_call_count "api graphql")" -eq 5 ]
 }
 
 @test "--set treats an item with no Workflow Status as not yet persisted" {
@@ -607,13 +619,13 @@ gh_line_of() {
 }
 
 @test "--set reports a write that was seen not to persist even when the final attempt could not read it" {
-    write_graphql_node "Planning" graphql-node.1.json
-    write_graphql_node "Planning" graphql-node.2.json
-    touch "${GH_FIXTURES}/graphql-node.3.fail" "${GH_FIXTURES}/item-list.fail"
+    local n
+    for n in 1 2 3 4; do write_graphql_node "Planning" "graphql-node.${n}.json"; done
+    touch "${GH_FIXTURES}/graphql-node.5.fail" "${GH_FIXTURES}/item-list.fail"
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"did not persist after 3 attempts (wanted 'Approved', last read 'Planning', and the final attempt could not read it)"* ]]
+    [[ "${output}" == *"did not persist after 5 attempts (wanted 'Approved', last read 'Planning', and the final attempt could not read it)"* ]]
     [[ "${output}" != *"could not read ${ISSUE_URL} back"* ]]
 }
 
