@@ -10,11 +10,13 @@ project_cache_file_path() {
     printf '%s/project-cache.json' "${SESSION_BASE_DIR}"
 }
 
-# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS, and
-# _WF_CACHED_REPO from the on-disk project cache for the current repo, without making any
+# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS, the built-in Status
+# field globals, and _WF_CACHED_REPO from the on-disk project cache for the current repo, without making any
 # network call. Returns 0 (hit) when a fresh (within PROJECT_CACHE_TTL seconds) cache entry
 # was found and loaded; returns 1 (miss) when the file is absent, unparseable, incomplete,
-# or stale, leaving the caller to perform a live discovery.
+# or stale, leaving the caller to perform a live discovery. An entry written before the built-in
+# Status field was recorded (#1493) has no built-in field id, so it counts as a miss and the board
+# is rediscovered once.
 load_project_cache() {
     local cache_file cached_json cached_at now_unix
     cache_file=$(project_cache_file_path)
@@ -37,11 +39,13 @@ load_project_cache() {
     now_unix=$(date +%s)
     (( now_unix - cached_at <= PROJECT_CACHE_TTL )) || return 1
 
-    local project_id status_field_id
+    local project_id status_field_id builtin_field_id
     project_id=$(printf '%s' "${cached_json}" | jq -r '.project_id // empty' 2>/dev/null)
     [ -n "${project_id}" ] || return 1
     status_field_id=$(printf '%s' "${cached_json}" | jq -r '.status_field_id // empty' 2>/dev/null)
     [ -n "${status_field_id}" ] || return 1
+    builtin_field_id=$(printf '%s' "${cached_json}" | jq -r '.builtin_field_id // empty' 2>/dev/null)
+    [ -n "${builtin_field_id}" ] || return 1
 
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
@@ -51,19 +55,27 @@ load_project_cache() {
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
     done < <(printf '%s' "${cached_json}" | jq -r '.option_ids // {} | to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
 
+    unset _WF_BUILTIN_OPTION_IDS
+    declare -gA _WF_BUILTIN_OPTION_IDS
+    while IFS=$'\t' read -r opt_name opt_id; do
+        [ -z "${opt_name}" ] && continue
+        _WF_BUILTIN_OPTION_IDS["${opt_name}"]="${opt_id}"
+    done < <(printf '%s' "${cached_json}" | jq -r '.builtin_option_ids // {} | to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
+
     _WF_PROJECT_ID="${project_id}"
     _WF_STATUS_FIELD_ID="${status_field_id}"
+    _WF_BUILTIN_FIELD_ID="${builtin_field_id}"
     _WF_CACHED_REPO="${REPO_FULL}"
     _WF_CREATION_FAILED=""
     return 0
 }
 
-# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS for the current
-# repo to disk so subsequent oneshot invocations can skip live discovery until
+# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS (and the built-in Status
+# field's id and option ids) for the current repo to disk so subsequent oneshot invocations can skip live discovery until
 # PROJECT_CACHE_TTL elapses. Best-effort: a failure to write just means every run
 # re-discovers, which is the pre-existing behaviour, so it only warns rather than dying.
 save_project_cache() {
-    local cache_file option_ids_json k
+    local cache_file option_ids_json builtin_option_ids_json k
     cache_file=$(project_cache_file_path)
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || {
         warn "Workflow project: failed to create ${SESSION_BASE_DIR} for disk cache"
@@ -79,13 +91,24 @@ save_project_cache() {
         ) || option_ids_json='{}'
     fi
 
+    builtin_option_ids_json='{}'
+    if [ "${#_WF_BUILTIN_OPTION_IDS[@]}" -gt 0 ]; then
+        builtin_option_ids_json=$(
+            for k in "${!_WF_BUILTIN_OPTION_IDS[@]}"; do
+                jq -n --arg k "${k}" --arg v "${_WF_BUILTIN_OPTION_IDS[${k}]}" '{($k): $v}'
+            done | jq -s 'add // {}'
+        ) || builtin_option_ids_json='{}'
+    fi
+
     jq -n \
         --arg repo "${REPO_FULL}" \
         --arg project_id "${_WF_PROJECT_ID}" \
         --arg status_field_id "${_WF_STATUS_FIELD_ID}" \
         --argjson option_ids "${option_ids_json}" \
+        --arg builtin_field_id "${_WF_BUILTIN_FIELD_ID}" \
+        --argjson builtin_option_ids "${builtin_option_ids_json}" \
         --argjson cached_at "$(date +%s)" \
-        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, cached_at: $cached_at}' \
+        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, builtin_field_id: $builtin_field_id, builtin_option_ids: $builtin_option_ids, cached_at: $cached_at}' \
         > "${cache_file}" 2>/dev/null \
         || warn "Workflow project: failed to write disk cache ${cache_file}"
 }
@@ -99,10 +122,14 @@ invalidate_project_cache() {
     rm -f "$(project_cache_file_path)" 2>/dev/null || true
 
     unset "_WF_CACHE[${REPO_FULL}:discovered]" "_WF_CACHE[${REPO_FULL}:project_id]" \
-        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]"
+        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]" \
+        "_WF_CACHE[${REPO_FULL}:builtin_field_id]" "_WF_CACHE[${REPO_FULL}:builtin_opt_names]"
     local k
     for k in "${!_WF_OPTION_IDS[@]}"; do
         unset "_WF_CACHE[${REPO_FULL}:opt:${k}]"
+    done
+    for k in "${!_WF_BUILTIN_OPTION_IDS[@]}"; do
+        unset "_WF_CACHE[${REPO_FULL}:builtin_opt:${k}]"
     done
 
     if [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]; then
@@ -111,6 +138,9 @@ invalidate_project_cache() {
         _WF_STATUS_FIELD_ID=""
         unset _WF_OPTION_IDS
         declare -gA _WF_OPTION_IDS
+        _WF_BUILTIN_FIELD_ID=""
+        unset _WF_BUILTIN_OPTION_IDS
+        declare -gA _WF_BUILTIN_OPTION_IDS
     fi
 }
 
@@ -190,6 +220,13 @@ discover_or_create_workflow_project() {
             [ -z "${opt_name}" ] && continue
             _WF_OPTION_IDS["${opt_name}"]="${_WF_CACHE["${REPO_FULL}:opt:${opt_name}"]}"
         done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:opt_names"]}")
+        _WF_BUILTIN_FIELD_ID="${_WF_CACHE["${REPO_FULL}:builtin_field_id"]:-}"
+        unset _WF_BUILTIN_OPTION_IDS
+        declare -gA _WF_BUILTIN_OPTION_IDS
+        while IFS= read -r opt_name; do
+            [ -z "${opt_name}" ] && continue
+            _WF_BUILTIN_OPTION_IDS["${opt_name}"]="${_WF_CACHE["${REPO_FULL}:builtin_opt:${opt_name}"]}"
+        done < <(printf '%s' "${_WF_CACHE["${REPO_FULL}:builtin_opt_names"]:-}")
         _WF_CACHED_REPO="${REPO_FULL}"
         _WF_CREATION_FAILED=""
         return 0
@@ -206,6 +243,11 @@ discover_or_create_workflow_project() {
         _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
         _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
         _WF_CACHE["${REPO_FULL}:opt_names"]=$(printf '%s\n' "${!_WF_OPTION_IDS[@]}")
+        for k in "${!_WF_BUILTIN_OPTION_IDS[@]}"; do
+            _WF_CACHE["${REPO_FULL}:builtin_opt:${k}"]="${_WF_BUILTIN_OPTION_IDS[${k}]}"
+        done
+        _WF_CACHE["${REPO_FULL}:builtin_field_id"]="${_WF_BUILTIN_FIELD_ID}"
+        _WF_CACHE["${REPO_FULL}:builtin_opt_names"]=$(printf '%s\n' "${!_WF_BUILTIN_OPTION_IDS[@]}")
         _WF_CACHE["${REPO_FULL}:discovered"]="1"
         return 0
     fi
@@ -216,6 +258,9 @@ discover_or_create_workflow_project() {
     _WF_CACHED_REPO=""
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
+    _WF_BUILTIN_FIELD_ID=""
+    unset _WF_BUILTIN_OPTION_IDS
+    declare -gA _WF_BUILTIN_OPTION_IDS
 
     # If Projects is disabled on the repo, repository.projectsV2 always returns empty, so
     # we would loop trying to create a project every run.  Enable it silently when needed.
@@ -307,14 +352,35 @@ discover_or_create_workflow_project() {
     done < <(printf '%s' "${status_field_node}" | \
         jq -r '.options[] | "\(.name)|\(.id)"' 2>/dev/null)
 
-    local cached_opts="" k
+    # The built-in "Status" field (Todo / In Progress / Done) comes back in the same fields query.
+    # It is optional: a project without it just skips the built-in write. Option ids are keyed by
+    # lower-case name so a differently-cased option still matches.
+    local builtin_field_node
+    builtin_field_node=$(printf '%s' "${project_json}" | \
+        jq -c '.fields.nodes[] | select(.name == "Status")' 2>/dev/null | head -1)
+    if [ -n "${builtin_field_node}" ]; then
+        _WF_BUILTIN_FIELD_ID=$(printf '%s' "${builtin_field_node}" | jq -r '.id // empty' 2>/dev/null)
+        while IFS='|' read -r opt_name opt_id; do
+            if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
+            _WF_BUILTIN_OPTION_IDS["${opt_name,,}"]="${opt_id}"
+        done < <(printf '%s' "${builtin_field_node}" | \
+            jq -r '.options[]? | "\(.name)|\(.id)"' 2>/dev/null)
+    fi
+
+    local cached_opts="" cached_builtin_opts="" k
     for k in "${!_WF_OPTION_IDS[@]}"; do
         _WF_CACHE["${REPO_FULL}:opt:${k}"]="${_WF_OPTION_IDS[${k}]}"
         cached_opts+="${k}"$'\n'
     done
+    for k in "${!_WF_BUILTIN_OPTION_IDS[@]}"; do
+        _WF_CACHE["${REPO_FULL}:builtin_opt:${k}"]="${_WF_BUILTIN_OPTION_IDS[${k}]}"
+        cached_builtin_opts+="${k}"$'\n'
+    done
     _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
     _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
     _WF_CACHE["${REPO_FULL}:opt_names"]="${cached_opts}"
+    _WF_CACHE["${REPO_FULL}:builtin_field_id"]="${_WF_BUILTIN_FIELD_ID}"
+    _WF_CACHE["${REPO_FULL}:builtin_opt_names"]="${cached_builtin_opts}"
     _WF_CACHE["${REPO_FULL}:discovered"]="1"
     save_project_cache
 
@@ -553,14 +619,45 @@ update_workflow_status() {
     }
     rm -f "${add_err}"
 
-    gh api graphql \
-        -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
+    local set_mutation="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}"
+    if gh api graphql \
+        -f query="${set_mutation}" \
         -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" \
         -f f="${_WF_STATUS_FIELD_ID}" -f v="${opt_id}" \
-        > /dev/null 2>&1 \
-    || warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
+        > /dev/null 2>&1; then
+        _wf_set_builtin_status "${item_type}" "${item_number}" "${status_name}" "${project_item_id}" "${set_mutation}"
+    else
+        warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
+    fi
 
     info "Workflow: ${item_type} #${item_number} added to board with status '${status_name}'"
+}
+
+# Sets the project's built-in "Status" field to the value that goes with a Workflow Status
+# (builtin_status_for_workflow_status), straight after update_workflow_status has set the Workflow
+# Status (#1493). Best-effort like everything else on the board: when the project has no built-in
+# Status field, or its Todo / In Progress / Done option was renamed or removed by a project admin,
+# or the mutation fails, it only warns and the Workflow Status stands.
+# Arguments: item_type, item_number, status_name, project_item_id, mutation (the shared
+# updateProjectV2ItemFieldValue mutation text)
+_wf_set_builtin_status() {
+    local item_type="$1" item_number="$2" status_name="$3" project_item_id="$4" mutation="$5"
+    local builtin_name builtin_opt_id=""
+    builtin_name=$(builtin_status_for_workflow_status "${status_name}")
+    if [ -n "${builtin_name}" ]; then
+        builtin_opt_id="${_WF_BUILTIN_OPTION_IDS["${builtin_name,,}"]:-}"
+    fi
+    if [ -z "${_WF_BUILTIN_FIELD_ID}" ] || [ -z "${builtin_opt_id}" ]; then
+        warn "Workflow: no built-in Status option for '${status_name}' — leaving the built-in Status of ${item_type} #${item_number} unchanged"
+        return 0
+    fi
+
+    gh api graphql \
+        -f query="${mutation}" \
+        -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" \
+        -f f="${_WF_BUILTIN_FIELD_ID}" -f v="${builtin_opt_id}" \
+        > /dev/null 2>&1 \
+    || warn "Workflow: failed to set built-in Status '${builtin_name}' for ${item_type} #${item_number}"
 }
 
 # Populate _WF_APPROVED_ITEMS with issue keys ("owner/repo/number") whose
@@ -859,6 +956,19 @@ coarse_status_for_substatus() {
             printf 'Done' ;;
         *)
             printf 'Unknown' ;;
+    esac
+}
+
+# Maps a Workflow-board status to the option name of the project's built-in "Status" field that is
+# set alongside it (#1493): Todo, In Progress or Done, printed as GitHub names them, or nothing for
+# a status it does not know. It is coarse_status_for_substatus under GitHub's own spelling, and
+# cfwf's builtin_status_for is the same mapping (test/status-mapping-parity.bats keeps the two in
+# step, since cfwf is copied alone into a container image and cannot source lib/).
+builtin_status_for_workflow_status() {
+    case "$(coarse_status_for_substatus "$1")" in
+        "To Do") printf 'Todo' ;;
+        "In Progress") printf 'In Progress' ;;
+        Done) printf 'Done' ;;
     esac
 }
 

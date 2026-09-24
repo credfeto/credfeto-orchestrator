@@ -13312,9 +13312,20 @@ EOF
     [ "${status}" -eq 1 ]
 }
 
-@test "load_project_cache populates _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS/_WF_CACHED_REPO on a fresh hit" {
+@test "load_project_cache returns 1 for an entry written before the built-in Status was recorded, so the board is rediscovered once (#1493)" {
     jq -n --arg repo "${REPO_FULL}" --argjson cached_at "$(date +%s)" \
-        '{repo: $repo, project_id: "PVT_hit", status_field_id: "PVTSSF_hit", option_ids: {"Planning":"oid1","Development":"oid2"}, cached_at: $cached_at}' \
+        '{repo: $repo, project_id: "PVT_old", status_field_id: "PVTSSF_old", option_ids: {"Planning":"oid1"}, cached_at: $cached_at}' \
+        > "$(project_cache_file_path)"
+    run load_project_cache
+    [ "${status}" -eq 1 ]
+    load_project_cache || true
+    [ -z "${_WF_PROJECT_ID}" ]
+    [ -z "${_WF_CACHED_REPO}" ]
+}
+
+@test "load_project_cache populates _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS/_WF_CACHED_REPO and the built-in Status globals on a fresh hit" {
+    jq -n --arg repo "${REPO_FULL}" --argjson cached_at "$(date +%s)" \
+        '{repo: $repo, project_id: "PVT_hit", status_field_id: "PVTSSF_hit", option_ids: {"Planning":"oid1","Development":"oid2"}, builtin_field_id: "PVTSSF_bhit", builtin_option_ids: {"todo":"b1","in progress":"b2"}, cached_at: $cached_at}' \
         > "$(project_cache_file_path)"
     run load_project_cache
     [ "${status}" -eq 0 ]
@@ -13323,6 +13334,9 @@ EOF
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_hit" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+    [ "${_WF_BUILTIN_FIELD_ID}" = "PVTSSF_bhit" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "b1" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[in progress]}" = "b2" ]
     [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]
 }
 
@@ -13333,22 +13347,37 @@ EOF
     declare -gA _WF_OPTION_IDS
     _WF_OPTION_IDS["Planning"]="oid1"
     _WF_OPTION_IDS["Development"]="oid2"
+    _WF_BUILTIN_FIELD_ID="PVTSSF_bsaved"
+    unset _WF_BUILTIN_OPTION_IDS
+    declare -gA _WF_BUILTIN_OPTION_IDS
+    _WF_BUILTIN_OPTION_IDS["todo"]="b1"
+    _WF_BUILTIN_OPTION_IDS["in progress"]="b2"
     save_project_cache
     [ -f "$(project_cache_file_path)" ]
     run jq -r '.repo' "$(project_cache_file_path)"
     [ "${output}" = "${REPO_FULL}" ]
     run jq -r '.project_id' "$(project_cache_file_path)"
     [ "${output}" = "PVT_saved" ]
+    run jq -r '.builtin_field_id' "$(project_cache_file_path)"
+    [ "${output}" = "PVTSSF_bsaved" ]
+    run jq -r '.builtin_option_ids["in progress"]' "$(project_cache_file_path)"
+    [ "${output}" = "b2" ]
 
     _WF_PROJECT_ID=""
     _WF_STATUS_FIELD_ID=""
+    _WF_BUILTIN_FIELD_ID=""
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
+    unset _WF_BUILTIN_OPTION_IDS
+    declare -gA _WF_BUILTIN_OPTION_IDS
     load_project_cache
     [ "${_WF_PROJECT_ID}" = "PVT_saved" ]
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_saved" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+    [ "${_WF_BUILTIN_FIELD_ID}" = "PVTSSF_bsaved" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "b1" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[in progress]}" = "b2" ]
 }
 
 @test "invalidate_project_cache removes the disk cache file and clears in-memory globals" {
@@ -13357,12 +13386,17 @@ EOF
     unset _WF_OPTION_IDS
     declare -gA _WF_OPTION_IDS
     _WF_OPTION_IDS["Planning"]="oid1"
+    _WF_BUILTIN_FIELD_ID="PVTSSF_bsaved"
+    _WF_BUILTIN_OPTION_IDS["todo"]="b1"
     save_project_cache
     _WF_CACHE["${REPO_FULL}:discovered"]="1"
     _WF_CACHE["${REPO_FULL}:project_id"]="PVT_saved"
     _WF_CACHE["${REPO_FULL}:field_id"]="PVTSSF_saved"
     _WF_CACHE["${REPO_FULL}:opt_names"]="Planning"$'\n'
     _WF_CACHE["${REPO_FULL}:opt:Planning"]="oid1"
+    _WF_CACHE["${REPO_FULL}:builtin_field_id"]="PVTSSF_bsaved"
+    _WF_CACHE["${REPO_FULL}:builtin_opt_names"]="todo"$'\n'
+    _WF_CACHE["${REPO_FULL}:builtin_opt:todo"]="b1"
     _WF_CACHED_REPO="${REPO_FULL}"
 
     invalidate_project_cache
@@ -13370,8 +13404,13 @@ EOF
     [ ! -f "$(project_cache_file_path)" ]
     [ -z "${_WF_CACHE["${REPO_FULL}:discovered"]:-}" ]
     [ -z "${_WF_CACHE["${REPO_FULL}:project_id"]:-}" ]
+    [ -z "${_WF_CACHE["${REPO_FULL}:builtin_field_id"]:-}" ]
+    [ -z "${_WF_CACHE["${REPO_FULL}:builtin_opt_names"]:-}" ]
+    [ -z "${_WF_CACHE["${REPO_FULL}:builtin_opt:todo"]:-}" ]
     [ -z "${_WF_CACHED_REPO}" ]
     [ -z "${_WF_PROJECT_ID}" ]
+    [ -z "${_WF_BUILTIN_FIELD_ID}" ]
+    [ "${#_WF_BUILTIN_OPTION_IDS[@]}" -eq 0 ]
 }
 
 # --- discover_or_create_workflow_project unit tests ---------------------------
@@ -13427,6 +13466,51 @@ STUBEOF
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_f1" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid2" ]
+}
+
+@test "discover_or_create_workflow_project records the built-in Status field and its options, keyed by lower-case name (#1493)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_b1","name":"Status","options":[{"id":"bt","name":"Todo"},{"id":"bp","name":"In Progress"},{"id":"bd","name":"Done"}]},{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_f1" ]
+    [ "${_WF_BUILTIN_FIELD_ID}" = "PVTSSF_b1" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "bt" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[in progress]}" = "bp" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[done]}" = "bd" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ -z "${_WF_OPTION_IDS[Todo]:-}" ]
+
+    run jq -r '.builtin_field_id' "$(project_cache_file_path)"
+    [ "${output}" = "PVTSSF_b1" ]
+    run jq -r '.builtin_option_ids["in progress"]' "$(project_cache_file_path)"
+    [ "${output}" = "bp" ]
+}
+
+@test "discover_or_create_workflow_project leaves the built-in Status empty for a project without one, and that entry is not served from the disk cache (#1493)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_PROJECT_ID}" = "PVT_found" ]
+    [ -z "${_WF_BUILTIN_FIELD_ID}" ]
+    [ "${#_WF_BUILTIN_OPTION_IDS[@]}" -eq 0 ]
+    run load_project_cache
+    [ "${status}" -eq 1 ]
 }
 
 @test "discover_or_create_workflow_project backfills the missing AI Simplify option onto a pre-existing board (#1169)" {
@@ -13519,14 +13603,17 @@ STUBEOF
 
 @test "discover_or_create_workflow_project reads from disk cache without invoking gh when in-memory cache is empty" {
     jq -n --arg repo "${REPO_FULL}" --argjson cached_at "$(date +%s)" \
-        '{repo: $repo, project_id: "PVT_disk", status_field_id: "PVTSSF_disk", option_ids: {"Planning":"oid1"}, cached_at: $cached_at}' \
+        '{repo: $repo, project_id: "PVT_disk", status_field_id: "PVTSSF_disk", option_ids: {"Planning":"oid1"}, builtin_field_id: "PVTSSF_bdisk", builtin_option_ids: {"todo":"b1"}, cached_at: $cached_at}' \
         > "$(project_cache_file_path)"
     make_stub gh 'exit 1'
     discover_or_create_workflow_project
     [ "${_WF_PROJECT_ID}" = "PVT_disk" ]
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_disk" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_BUILTIN_FIELD_ID}" = "PVTSSF_bdisk" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "b1" ]
     [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]
+    [ "${_WF_CACHE["${REPO_FULL}:builtin_field_id"]}" = "PVTSSF_bdisk" ]
 }
 
 @test "discover_or_create_workflow_project returns immediately on second call for same repo when first succeeded" {
@@ -13563,7 +13650,7 @@ STUBEOF
 }
 
 @test "discover_or_create_workflow_project restores cached globals without re-calling gh when switching back to a previously discovered repo" {
-    local project_json='[{"id":"PVT_repo_a","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_a1","name":"Workflow Status","options":[{"id":"oid_planning","name":"Planning"},{"id":"oid_dev","name":"Development"}]}]}}]'
+    local project_json='[{"id":"PVT_repo_a","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_ab","name":"Status","options":[{"id":"oid_todo","name":"Todo"}]},{"id":"PVTSSF_a1","name":"Workflow Status","options":[{"id":"oid_planning","name":"Planning"},{"id":"oid_dev","name":"Development"}]}]}}]'
     local call_count_file="${TEST_TMP}/gh_calls"
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
@@ -13596,6 +13683,8 @@ STUBEOF
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_a1" ]
     [ "${_WF_OPTION_IDS[Planning]}" = "oid_planning" ]
     [ "${_WF_OPTION_IDS[Development]}" = "oid_dev" ]
+    [ "${_WF_BUILTIN_FIELD_ID}" = "PVTSSF_ab" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "oid_todo" ]
 }
 
 @test "discover_or_create_workflow_project enables Projects when hasProjectsEnabled is false" {
@@ -13957,6 +14046,134 @@ STUBEOF
     run update_workflow_status "Issue" "42" "Planning"
     [ "${status}" -eq 0 ]
     [ ! -f "$(project_cache_file_path)" ]
+}
+
+# --- update_workflow_status sets the built-in Status too (#1493) -----------------------
+
+# A board with the ten Workflow Status options (ids wf_1 to wf_10, in board order) and a built-in
+# Status field with Todo / In Progress / Done, and a gh stand-in that logs every call. A file
+# named fail_field in TEST_TMP makes the update mutation for that field id fail.
+setup_builtin_board() {
+    _WF_PROJECT_ID="PVT_proj"
+    _WF_STATUS_FIELD_ID="PVTSSF_wf"
+    _WF_BUILTIN_FIELD_ID="PVTSSF_status"
+    unset _WF_OPTION_IDS _WF_BUILTIN_OPTION_IDS
+    declare -gA _WF_OPTION_IDS _WF_BUILTIN_OPTION_IDS
+    local n=0 name
+    for name in "Not Started" Planning Approved Development "AI Simplify" "AI Review" "AI Security Review" "AI Coverage" "Human Review" Complete; do
+        n=$((n + 1))
+        _WF_OPTION_IDS["${name}"]="wf_${n}"
+    done
+    _WF_BUILTIN_OPTION_IDS["todo"]="b_todo"
+    _WF_BUILTIN_OPTION_IDS["in progress"]="b_progress"
+    _WF_BUILTIN_OPTION_IDS["done"]="b_done"
+    GH_CALLS="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${GH_CALLS}"
+if [[ "\$*" == *"node_id"* ]]; then
+    printf 'NODE_abc\n'
+    exit 0
+fi
+if [[ "\$*" == *"addProjectV2ItemById"* ]]; then
+    printf 'PVTI_item1\n'
+    exit 0
+fi
+if [ -f "${TEST_TMP}/fail_field" ] && [[ "\$*" == *"updateProjectV2ItemFieldValue"* && "\$*" == *"-f f=\$(cat "${TEST_TMP}/fail_field") "* ]]; then
+    exit 1
+fi
+exit 0
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+}
+
+update_calls() {
+    grep -c 'updateProjectV2ItemFieldValue' "${GH_CALLS}" || true
+}
+
+@test "update_workflow_status sets the built-in Status that goes with each of the ten Workflow Statuses" {
+    setup_builtin_board
+    local row name expected n=0
+    for row in "Not Started|b_todo" "Planning|b_todo" "Approved|b_progress" "Development|b_progress" "AI Simplify|b_progress" \
+        "AI Review|b_progress" "AI Security Review|b_progress" "AI Coverage|b_progress" "Human Review|b_progress" "Complete|b_done"; do
+        n=$((n + 1))
+        name="${row%|*}"
+        expected="${row#*|}"
+        : > "${GH_CALLS}"
+        run update_workflow_status "Issue" "42" "${name}"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" != *"warning"* ]]
+        [ "$(update_calls)" -eq 2 ]
+        grep -qF -- "-f i=PVTI_item1 -f f=PVTSSF_wf -f v=wf_${n}" "${GH_CALLS}"
+        grep -qF -- "-f i=PVTI_item1 -f f=PVTSSF_status -f v=${expected}" "${GH_CALLS}"
+    done
+}
+
+@test "update_workflow_status sets the Workflow Status first and the built-in Status straight after" {
+    setup_builtin_board
+    update_workflow_status "PullRequest" "7" "Human Review"
+    local wf_line builtin_line
+    wf_line=$(grep -nF -- "-f f=PVTSSF_wf " "${GH_CALLS}" | head -1 | cut -d: -f1)
+    builtin_line=$(grep -nF -- "-f f=PVTSSF_status " "${GH_CALLS}" | head -1 | cut -d: -f1)
+    [ "${wf_line}" -lt "${builtin_line}" ]
+    [ "${builtin_line}" -eq "$(wc -l < "${GH_CALLS}")" ]
+}
+
+@test "update_workflow_status does not touch the built-in Status when the Workflow Status write fails" {
+    setup_builtin_board
+    printf 'PVTSSF_wf' > "${TEST_TMP}/fail_field"
+    run update_workflow_status "Issue" "42" "Approved"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"failed to set status 'Approved'"* ]]
+    [ "$(update_calls)" -eq 1 ]
+    [ "$(grep -cF -- "-f f=PVTSSF_status " "${GH_CALLS}" || true)" -eq 0 ]
+}
+
+@test "update_workflow_status only warns, and keeps the Workflow Status, when the built-in Status write fails" {
+    setup_builtin_board
+    printf 'PVTSSF_status' > "${TEST_TMP}/fail_field"
+    run update_workflow_status "Issue" "42" "Approved"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"failed to set built-in Status 'In Progress' for Issue #42"* ]]
+    [[ "${output}" == *"added to board with status 'Approved'"* ]]
+    grep -qF -- "-f f=PVTSSF_wf -f v=wf_3" "${GH_CALLS}"
+}
+
+@test "update_workflow_status skips the built-in write with a warning when its mapped option was renamed or removed" {
+    setup_builtin_board
+    unset "_WF_BUILTIN_OPTION_IDS[in progress]"
+    run update_workflow_status "Issue" "42" "Approved"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no built-in Status option for 'Approved'"* ]]
+    [ "$(update_calls)" -eq 1 ]
+}
+
+@test "update_workflow_status skips the built-in write with a warning when the project has no built-in Status field" {
+    setup_builtin_board
+    _WF_BUILTIN_FIELD_ID=""
+    run update_workflow_status "Issue" "42" "Approved"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no built-in Status option for 'Approved'"* ]]
+    [ "$(update_calls)" -eq 1 ]
+}
+
+@test "update_workflow_status skips the built-in write for a status with no built-in mapping" {
+    setup_builtin_board
+    _WF_OPTION_IDS["Custom Stage"]="wf_custom"
+    run update_workflow_status "Issue" "42" "Custom Stage"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no built-in Status option for 'Custom Stage'"* ]]
+    [ "$(update_calls)" -eq 1 ]
+}
+
+@test "builtin_status_for_workflow_status maps Not Started and Planning to Todo, Approved through Human Review to In Progress, Complete to Done, and anything else to nothing" {
+    [ "$(builtin_status_for_workflow_status "Not Started")" = "Todo" ]
+    [ "$(builtin_status_for_workflow_status "Planning")" = "Todo" ]
+    [ "$(builtin_status_for_workflow_status "Approved")" = "In Progress" ]
+    [ "$(builtin_status_for_workflow_status "Human Review")" = "In Progress" ]
+    [ "$(builtin_status_for_workflow_status "Complete")" = "Done" ]
+    [ -z "$(builtin_status_for_workflow_status "Custom Stage")" ]
+    [ -z "$(builtin_status_for_workflow_status "")" ]
 }
 
 # --- report_missing_workflow_project --------------------------------------
