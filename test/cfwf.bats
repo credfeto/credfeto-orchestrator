@@ -29,7 +29,7 @@ setup() {
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; n=$(( $(cat "${GH_FIXTURES}/item-list.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/item-list.count"; f="${GH_FIXTURES}/item-list.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/item-list.json"; emit "${f}" ;;' \
-        '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; case "${query}" in *"node(id"*) n=$(( $(cat "${GH_FIXTURES}/graphql-node.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/graphql-node.count"; f="${GH_FIXTURES}/graphql-node.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/graphql-node.json" ;; *) f="${GH_FIXTURES}/graphql-target.json" ;; esac; emit "${f}" ;;' \
+        '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; case "${query}" in *"node(id"*) n=$(( $(cat "${GH_FIXTURES}/graphql-node.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/graphql-node.count"; [ -f "${GH_FIXTURES}/graphql-node.${n}.fail" ] && { echo "boom" >&2; exit 1; }; f="${GH_FIXTURES}/graphql-node.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/graphql-node.json" ;; *) f="${GH_FIXTURES}/graphql-target.json" ;; esac; emit "${f}" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
@@ -554,6 +554,51 @@ gh_line_of() {
     run_quiet workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
+}
+
+@test "--check only treats GitHub's no-such-issue or no-such-pull-request answer as not found; any other error falls back" {
+    use_fallback "GraphQL: Could not resolve to a Repository with the name 'credfeto/credfeto-orchestrator'."
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    [ "$(gh_call_count "project item-list")" -ge 1 ]
+}
+
+@test "--check asks for the item's first 100 project items" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    grep -qF 'projectItems(first:100)' "${GH_LOG}"
+}
+
+@test "anything gh writes to stderr on a successful read never ends up in the value" {
+    printf '%s\n' "A new release of gh is available: 2.99.0" > "${GH_FIXTURES}/graphql.stderr"
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+
+    set_args
+    run_quiet "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "${ISSUE_URL} is now Approved" ]]
+}
+
+@test "the fallback warning quotes only the first line of an error body gh printed on stdout, at most 200 characters" {
+    { printf 'x%.0s' $(seq 1 300); printf '\nsecond line\n'; } > "${GH_FIXTURES}/graphql.failout"
+    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${output}" == *"read failed ($(printf 'x%.0s' $(seq 1 200)));"* ]]
+    [[ "${output}" != *"second line"* ]]
+    [[ "${output}" != *"$(printf 'x%.0s' $(seq 1 201))"* ]]
+}
+
+@test "--set reports a write that was seen not to persist even when the final attempt could not read it" {
+    write_graphql_node "Planning" graphql-node.1.json
+    write_graphql_node "Planning" graphql-node.2.json
+    touch "${GH_FIXTURES}/graphql-node.3.fail" "${GH_FIXTURES}/item-list.fail"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"did not persist after 3 attempts (wanted 'Approved', last read 'Planning', and the final attempt could not read it)"* ]]
+    [[ "${output}" != *"could not read ${ISSUE_URL} back"* ]]
 }
 
 @test "--check reports when neither the direct read nor the listing works" {
