@@ -20,15 +20,16 @@ setup() {
     # shellcheck disable=SC2016
     make_stub_multiline gh \
         'printf "%s\n" "$*" >> "${GH_LOG}"' \
-        'jq_expr=""; prev=""' \
-        'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
+        'jq_expr=""; query=""; prev=""' \
+        'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; [ "${prev}" = "-f" ] && case "${arg}" in query=*) query="${arg#query=}" ;; esac; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'case "$1 $2" in' \
         '  "repo view") [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
-        '  "project item-list") n=$(( $(cat "${GH_FIXTURES}/item-list.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/item-list.count"; f="${GH_FIXTURES}/item-list.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/item-list.json"; emit "${f}" ;;' \
+        '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; n=$(( $(cat "${GH_FIXTURES}/item-list.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/item-list.count"; f="${GH_FIXTURES}/item-list.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/item-list.json"; emit "${f}" ;;' \
+        '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; case "${query}" in *"node(id"*) n=$(( $(cat "${GH_FIXTURES}/graphql-node.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/graphql-node.count"; f="${GH_FIXTURES}/graphql-node.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/graphql-node.json" ;; *) f="${GH_FIXTURES}/graphql-target.json" ;; esac; emit "${f}" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
@@ -46,6 +47,8 @@ setup() {
     ], totalCount: 3}' > "${GH_FIXTURES}/field-list.json"
     jq -n '{id: "PVTI_target"}' > "${GH_FIXTURES}/item-add.json"
     write_item_list "Approved"
+    write_graphql_node "Approved"
+    write_graphql_target
 }
 
 teardown() {
@@ -81,6 +84,34 @@ write_item_list() {
         {id: "PVTI_nostatus", content: {number: 1500, repository: "credfeto/credfeto-orchestrator", type: "Issue"}},
         {id: "PVTI_draft", content: {type: "DraftIssue", title: "an idea with no repository"}}
     ]}' > "${file}"
+}
+
+# Writes the answer to the single-item read-back query: the item's Workflow Status is the given
+# value, or has none when the argument is empty.
+write_graphql_node() {
+    local status="$1" file="${GH_FIXTURES}/${2:-graphql-node.json}"
+    jq -n --arg s "${status}" '{data: {node: {fieldValueByName: (if $s == "" then null else {name: $s} end)}}}' > "${file}"
+}
+
+# Writes the answer to the by-number query for an issue and for a pull request. Each has an item on
+# a decoy project as well as one on the Workflow project (PVT_proj), so the project filter matters.
+write_graphql_target() {
+    jq -n '{data: {repository: {
+        issue: {projectItems: {nodes: [
+            {project: {id: "PVT_other"}, fieldValueByName: {name: "Human Review"}},
+            {project: {id: "PVT_proj"}, fieldValueByName: {name: "Approved"}}]}},
+        pullRequest: {projectItems: {nodes: [
+            {project: {id: "PVT_proj"}, fieldValueByName: {name: "AI Review"}}]}}}}}' > "${GH_FIXTURES}/graphql-target.json"
+}
+
+# Makes every gh api graphql call fail with the given error text, so cfwf falls back to listing the board.
+use_fallback() {
+    printf '%s\n' "${1:-GraphQL: something went wrong}" > "${GH_FIXTURES}/graphql.fail"
+}
+
+# run, but with stderr discarded, for tests that compare stdout exactly while a warning is expected.
+run_quiet() {
+    run bash -c '"$@" 2>/dev/null' _ "${SCRIPT}" "$@"
 }
 
 set_args() {
@@ -225,7 +256,7 @@ gh_line_of() {
 @test "--set accepts any status name the board has, including punctuation and non-ASCII characters" {
     jq -n '{fields: [{id: "PVTSSF_wf", name: "Workflow Status", options: [
         {id: "aaaa1111", name: "Review/QA (v2)"}, {id: "bbbb2222", name: "Done ✅"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
-    write_item_list "Done ✅"
+    write_graphql_node "Done ✅"
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "done ✅"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"is now Done ✅"* ]]
@@ -249,23 +280,41 @@ gh_line_of() {
     grep -qF "project field-list 74 --owner credfeto --format json " "${GH_LOG}"
     grep -qxF "project item-add 74 --owner credfeto --url ${ISSUE_URL} --format json --jq .id" "${GH_LOG}"
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id 63d36d28" "${GH_LOG}"
-    grep -qF "project item-list 74 --owner credfeto --format json -L 1000 " "${GH_LOG}"
+}
+
+@test "--set reads the item back directly, with one query for that item and no listing of the board" {
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+    [ "$(gh_call_count "api graphql")" -eq 1 ]
+    # shellcheck disable=SC2016  # literal GraphQL variable syntax as logged by the stand-in
+    grep -qF 'node(id:$id)' "${GH_LOG}"
+    grep -qF -- "-f id=PVTI_target" "${GH_LOG}"
+}
+
+@test "no gh api graphql call ever carries a mutation, and every write is a native gh project command" {
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "mutation")" -eq 0 ]
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id 63d36d28" "${GH_LOG}"
 }
 
 @test "--set resolves the board, then adds the item, then edits it, then reads it back, in that order" {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
-    local repo_view field_list add edit list
+    local repo_view field_list add edit read
     repo_view=$(gh_line_of "repo view")
     field_list=$(gh_line_of "project field-list")
     add=$(gh_line_of "project item-add")
     edit=$(gh_line_of "project item-edit")
-    list=$(gh_line_of "project item-list")
+    read=$(gh_line_of "api graphql")
     [ "${repo_view}" -lt "${field_list}" ]
     [ "${field_list}" -lt "${add}" ]
     [ "${add}" -lt "${edit}" ]
-    [ "${edit}" -lt "${list}" ]
+    [ "${edit}" -lt "${read}" ]
 }
 
 @test "--set names a pull request with --pr and builds its /pull/ URL" {
@@ -274,7 +323,7 @@ gh_line_of() {
 }
 
 @test "--set matches the status name without regard to case and handles names with spaces" {
-    write_item_list "AI Security Review"
+    write_graphql_node "AI Security Review"
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "ai security review"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"is now AI Security Review"* ]]
@@ -303,7 +352,6 @@ gh_line_of() {
     [ "${status}" -eq 0 ]
     grep -qF "project field-list 3 --owner acme " "${GH_LOG}"
     grep -qF "project item-add 3 --owner acme " "${GH_LOG}"
-    grep -qF "project item-list 3 --owner acme " "${GH_LOG}"
 }
 
 @test "--set fails when no project titled Workflow is linked to the repo" {
@@ -343,33 +391,67 @@ gh_line_of() {
     [[ "${output}" == *"could not read the projects of ${REPO}"* ]]
 }
 
-@test "--set reads the board with a limit above the default page size of 30" {
-    set_args
-    run "${SCRIPT}" "${SET_ARGS[@]}"
-    [ "${status}" -eq 0 ]
-    [ "$(gh_call_count "project item-list")" -ge 1 ]
-    [ "$(gh_call_count "project item-list 74 --owner credfeto --format json -L 1000 ")" -eq "$(gh_call_count "project item-list")" ]
-}
-
 @test "--set retries the read-back with backoff until the value persists" {
-    write_item_list "Planning" item-list.1.json
-    write_item_list "Planning" item-list.2.json
-    write_item_list "Approved" item-list.3.json
+    write_graphql_node "Planning" graphql-node.1.json
+    write_graphql_node "Planning" graphql-node.2.json
+    write_graphql_node "Approved" graphql-node.3.json
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
-    [ "$(gh_call_count "project item-list")" -eq 3 ]
+    [ "$(gh_call_count "api graphql")" -eq 3 ]
     [ "$(cat "${SLEEP_LOG}")" = "$(printf '1\n2')" ]
 }
 
 @test "--set gives up after 3 read-back attempts and exits non-zero" {
-    write_item_list "Planning"
+    write_graphql_node "Planning"
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"did not persist after 3 attempts"* ]]
     [[ "${output}" == *"wanted 'Approved', last read 'Planning'"* ]]
+    [ "$(gh_call_count "api graphql")" -eq 3 ]
+}
+
+@test "--set treats an item with no Workflow Status as not yet persisted" {
+    write_graphql_node ""
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"wanted 'Approved', last read ''"* ]]
+}
+
+@test "--set falls back to listing the board, with a limit far above the default page size, when the direct read fails" {
+    use_fallback
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"${ISSUE_URL} is now Approved"* ]]
+    [ "$(gh_call_count "project item-list")" -ge 1 ]
+    [ "$(gh_call_count "project item-list 74 --owner credfeto --format json -L 10000 ")" -eq "$(gh_call_count "project item-list")" ]
+}
+
+@test "--set warns once, on stderr, that it fell back, quoting the error, however many attempts it needs" {
+    use_fallback "GraphQL: permission denied for this query"
+    write_item_list "Planning" item-list.1.json
+    write_item_list "Planning" item-list.2.json
+    write_item_list "Approved" item-list.3.json
+    set_args
+    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "$(printf '%s\n' "${output}" | grep -c "falling back to listing the board")" -eq 1 ]
+    [[ "${output}" == *"permission denied for this query"* ]]
     [ "$(gh_call_count "project item-list")" -eq 3 ]
+}
+
+@test "--set says the write may have succeeded when neither the direct read nor the listing works" {
+    use_fallback
+    touch "${GH_FIXTURES}/item-list.fail"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not read ${ISSUE_URL} back to confirm the write"* ]]
+    [[ "${output}" == *"the write may have succeeded"* ]]
+    [[ "${output}" == *"cfwf workflow-status --check --repo ${REPO} --issue 1346"* ]]
+    [[ "${output}" != *"did not persist"* ]]
 }
 
 @test "--set does not edit when adding the item fails" {
@@ -388,6 +470,7 @@ gh_line_of() {
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"could not set the Workflow Status"* ]]
     [ "$(gh_call_count "project item-list")" -eq 0 ]
+    [ "$(gh_call_count "api graphql")" -eq 0 ]
 }
 
 @test "--set refuses an unexpected item id rather than putting it in a jq filter" {
@@ -401,33 +484,92 @@ gh_line_of() {
 
 # --- workflow-status --check ---------------------------------------------------
 
-@test "--check finds the board from the repo and prints the item's status, ignoring the same number elsewhere" {
+@test "--check reads the item directly and prints its Workflow status, ignoring an item on another project" {
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
-    grep -qF "project item-list 74 --owner credfeto --format json -L 1000 " "${GH_LOG}"
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+    grep -qF -- "-f o=credfeto -f r=credfeto-orchestrator -F n=1346" "${GH_LOG}"
+    grep -qF 'select(.project.id=="PVT_proj")' "${GH_LOG}"
 }
 
-@test "--check --pr finds a pull request item and --issue does not match it" {
+@test "--check --issue asks for issue(number:) and --pr asks for pullRequest(number:)" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal GraphQL variable syntax as logged by the stand-in
+    grep -qF 'issue(number:$n)' "${GH_LOG}"
+
+    : > "${GH_LOG}"
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1481
     [ "${status}" -eq 0 ]
     [ "${output}" = "AI Review" ]
-
-    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1481
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"is not on project 74"* ]]
+    # shellcheck disable=SC2016
+    grep -qF 'pullRequest(number:$n)' "${GH_LOG}"
 }
 
-@test "--check exits non-zero when the item is not on the board" {
+@test "--check treats a number that is not that type, or does not exist, as not on the board, without a fallback or a warning" {
+    use_fallback "GraphQL: Could not resolve to an Issue with the number of 1481."
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1481
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "cfwf: ${REPO}#1481 is not on project 74" ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+}
+
+@test "--check exits non-zero when the item is on no Workflow project item" {
+    jq -n '{data: {repository: {pullRequest: {projectItems: {nodes: [{project: {id: "PVT_other"}, fieldValueByName: {name: "Human Review"}}]}}}}}' > "${GH_FIXTURES}/graphql-target.json"
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 99999
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"${REPO}#99999 is not on project 74"* ]]
 }
 
-@test "--check matches the repository without regard to case, as GitHub does" {
+@test "--check passes the repository through as given, since GitHub matches it without regard to case" {
     run "${SCRIPT}" workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
+    grep -qF -- "-f o=Credfeto -f r=CREDFETO-Orchestrator" "${GH_LOG}"
+}
+
+@test "--check falls back to listing the board when the direct read fails, warning on stderr only" {
+    use_fallback
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    grep -qF "project item-list 74 --owner credfeto --format json -L 10000 " "${GH_LOG}"
+
+    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${output}" == *"cfwf: warning: the direct GraphQL read failed (GraphQL: something went wrong); falling back to listing the board"* ]]
+}
+
+@test "--check, on the fallback, ignores the same number in another repo and a draft item with no repository" {
+    use_fallback
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+}
+
+@test "--check --pr finds a pull request item and --issue does not match it, on the fallback" {
+    use_fallback
+    run_quiet workflow-status --check --repo "${REPO}" --pr 1481
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "AI Review" ]
+
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1481
+    [ "${status}" -eq 1 ]
+}
+
+@test "--check, on the fallback, matches the repository without regard to case" {
+    use_fallback
+    run_quiet workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+}
+
+@test "--check reports when neither the direct read nor the listing works" {
+    use_fallback
+    touch "${GH_FIXTURES}/item-list.fail"
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not read the Workflow Status of ${REPO}#1346: both the direct query and the listing of project 74 failed"* ]]
 }
 
 @test "a closed project titled Workflow is ignored, so a replaced board does not make discovery ambiguous" {
@@ -436,11 +578,19 @@ gh_line_of() {
         {id: "PVT_proj", title: "Workflow", number: 74, resourcePath: "/users/credfeto/projects/74", closed: false}]}}' > "${GH_FIXTURES}/repo-view.json"
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
-    grep -qF "project item-list 74 --owner credfeto " "${GH_LOG}"
+    grep -qF 'select(.project.id=="PVT_proj")' "${GH_LOG}"
 }
 
 @test "--check reports (unset) for an item with no Workflow Status" {
+    jq -n '{data: {repository: {issue: {projectItems: {nodes: [{project: {id: "PVT_proj"}, fieldValueByName: null}]}}}}}' > "${GH_FIXTURES}/graphql-target.json"
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1500
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "(unset)" ]
+}
+
+@test "--check, on the fallback, reports (unset) for an item with no Workflow Status" {
+    use_fallback
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1500
     [ "${status}" -eq 0 ]
     [ "${output}" = "(unset)" ]
 }
