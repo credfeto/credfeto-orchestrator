@@ -8,6 +8,18 @@
 # command strings use the literal "$HOME" token (shell-expanded by whichever
 # shell Claude Code invokes the hook through, both in the container as
 # developer and here as the host user), so no path rewriting is needed.
+#
+# It also installs the cfwf workflow helper into a shared bin directory
+# (/usr/local/bin by default, override with CFWF_BIN_DIR) with `install`, so
+# anyone on the host can run it. Unlike the hooks that is a copy, not a symlink,
+# so re-run this after cfwf changes to refresh it. If the plain install fails (typically because the
+# directory is not writable) it falls back to sudo; if that is unavailable or
+# declined the step prints the exact command to run and the rest of the install
+# carries on.
+#
+# Every tool the hooks shell out to must already be present: a hook whose tool
+# is missing fails closed and blocks every command, so this refuses to install
+# rather than leave a session where nothing can run.
 
 die() {
     printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
@@ -35,9 +47,48 @@ esac
 SOURCE_DIR="${REPO_DIR}/containers/base/development-full"
 SOURCE_SETTINGS="${SOURCE_DIR}/claude-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
+SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
+CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
+
+# Every external tool the hooks in claude-hooks/ call: jq and shfmt (payload and
+# command parsing, used by nearly every hook), base64 (word transport), realpath
+# (enforce-allowed-dirs), git and gpg (enforce-git-dash-c, enforce-git-identity),
+# ssh-add (enforce-ssh-host-and-key), and sed/grep (enforce-git-identity,
+# reject-obfuscated-commands).
+REQUIRED_TOOLS=(jq shfmt base64 realpath git gpg ssh-add sed grep)
 
 check_required_tools() {
-    command -v jq >/dev/null 2>&1 || die "Required tool not found: jq"
+    local tool
+    local missing=()
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        command -v "${tool}" >/dev/null 2>&1 || missing+=("${tool}")
+    done
+    [ "${#missing[@]}" -eq 0 ] || die "Required tool(s) not found: ${missing[*]}"
+}
+
+# Installs cfwf with `install` (mode 0755) so it is runnable by every user. If that
+# fails it retries under sudo, as root:root, which prompts on the terminal; if sudo
+# is missing or declined it prints the exact command to run instead, rather than
+# failing the rest of the install.
+install_cfwf() {
+    local target="${CFWF_BIN_DIR}/cfwf"
+    local root_install=(install -m 0755 -o root -g root "${SOURCE_CFWF}" "${target}")
+
+    local plain_error
+    if plain_error=$(install -m 0755 "${SOURCE_CFWF}" "${target}" 2>&1); then
+        info "Installed cfwf to ${target}"
+        return 0
+    fi
+
+    if command -v sudo >/dev/null 2>&1; then
+        info "Installing cfwf to ${target} needs elevated permissions, running sudo..."
+        if sudo "${root_install[@]}"; then
+            info "Installed cfwf to ${target} (with sudo)"
+            return 0
+        fi
+    fi
+
+    info "Could not install cfwf to ${target} (${plain_error}). To make it available to every user, run: sudo ${root_install[*]}"
 }
 
 # Symlinks every file directly under SOURCE_HOOKS_DIR into TARGET_HOOKS_DIR,
@@ -97,6 +148,7 @@ main() {
 
     [ -f "${SOURCE_SETTINGS}" ] || die "Source settings not found: ${SOURCE_SETTINGS}"
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
+    [ -f "${SOURCE_CFWF}" ] || die "Source cfwf script not found: ${SOURCE_CFWF}"
 
     check_required_tools
 
@@ -109,6 +161,7 @@ main() {
     mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
     install_hook_symlinks "${target_hooks_dir}"
     install_settings "${target_claude_dir}"
+    install_cfwf
     warn_if_no_allowed_dirs_override "${target_hooks_dir}"
 
     success "Claude Code settings/hooks installed for local testing outside the container"

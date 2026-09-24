@@ -15,6 +15,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
 - Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image
+- cfwf, a workflow helper baked into the development-full image, replaces the multi-step gh scripts agents kept re-deriving with single flat commands (one allowlist entry covers them): workflow-status --set moves an issue or PR on the Workflow board and confirms the change persisted, workflow-status --check reads its status, and closing-issue-labels lists the labels of the issues a PR closes (#1346)
 ### Fixed
 - PR idle-invocation budget exhaustion now escalates to a Blocked label and explanatory comment even when CI is green and there is no changes-requested review, closing the one gap #1075's two escalation paths didn't cover - a healthy-looking PR sitting idle at a workflow phase boundary no longer silently rots forever with zero signal (#1463)
 - PR idle-invocation budget no longer counts a tick against the idle cap when a required CI check is still genuinely pending after the session ended - closes a race where the orchestrator's own pre-session pending-check missed a check that the agent's own later, slower check still found running, silently burning the idle budget on nothing but CI-wait time (#1463)
@@ -26,6 +27,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - A PR that has finished its review pipeline but sits on a repo where auto-merge isn't supported is now correctly recognized as settled (via the Workflow Status board's Human Review substatus), so it stops burning agent invocations with nothing to do and correctly gets the review-needed notification (#1479)
 - The stop_ssh_agent decoy test no longer fails and hangs the test run on hosts where ssh-agent is not visible to pgrep; it takes the decoy's pid from ssh-agent's own output and skips with an explanation when the decoy cannot be seen (#1487)
 ### Changed
+- install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
 ### Deprecated
 ### Removed
 ### Deployment Changes

@@ -99,6 +99,7 @@ cfn-lint
 testdb
 testdocker
 querydb
+cfwf
 
 # credfeto-global-pre-commit: repo-bundled wrapper scripts, invoked by
 # basename via a PATH prepend from src/hooks/pre-commit

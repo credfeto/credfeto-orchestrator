@@ -1,0 +1,321 @@
+#!/bin/bash
+
+# cfwf (Credfeto WorkFlow): one flat command for each recurring multi-step gh
+# pattern that agents would otherwise re-derive as a fresh multi-statement
+# script every session. Run `cfwf help` for usage.
+
+readonly ITEM_LIMIT=1000
+readonly FIELD_LIMIT=100
+readonly VERIFY_ATTEMPTS=3
+
+CURRENT_COMMAND=""
+MODE=""
+REPO=""
+PR=""
+ISSUE=""
+STATUS=""
+TARGET_NUMBER=""
+TARGET_TYPE=""
+TARGET_URL_KIND=""
+OWNER=""
+PROJECT_ID=""
+PROJECT_NUMBER=""
+FIELD_ID=""
+OPTION_ID=""
+
+die() {
+    printf 'cfwf: %s\n' "$*" >&2
+    exit 1
+}
+
+usage_general() {
+    cat << 'USAGE'
+Usage: cfwf <command> [options]
+
+Commands:
+  workflow-status --set    Move an issue or PR to a Workflow board status and verify it persisted
+  workflow-status --check  Print the current Workflow Status of an issue or PR
+  closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
+  help [command]           Show this help, or the help for one command
+
+Run 'cfwf help <command>' for the options of a command.
+USAGE
+}
+
+usage_workflow_status() {
+    cat << 'USAGE'
+Usage:
+  cfwf workflow-status --set --repo <owner/repo> (--pr <n> | --issue <n>) --status <name>
+  cfwf workflow-status --check --repo <owner/repo> (--pr <n> | --issue <n>)
+
+Both name the item the same way: --repo plus --pr or --issue. The board is looked up from
+the repository: the project titled "Workflow" linked to it, and that project's
+"Workflow Status" field. No ids are needed.
+
+--set adds the item to the board if it is not already there (idempotent), sets the
+Workflow Status to --status (the option's display name, for example Approved or
+"AI Review", matched without regard to case), then reads it back and retries up to 3
+times. It exits 0 only once the new value is confirmed.
+
+--check prints the item's current Workflow Status. It exits non-zero when the item is
+not on the board.
+USAGE
+}
+
+usage_closing_issue_labels() {
+    cat << 'USAGE'
+Usage: cfwf closing-issue-labels --repo <owner/repo> --pr <n>
+
+Prints the sorted, de-duplicated labels across every issue the PR closes, one per line,
+with Blocked and On-Hold left out.
+USAGE
+}
+
+usage_for() {
+    case "$1" in
+        workflow-status) usage_workflow_status ;;
+        closing-issue-labels) usage_closing_issue_labels ;;
+        *) usage_general ;;
+    esac
+}
+
+usage_error() {
+    printf 'cfwf: %s\n\n' "$1" >&2
+    usage_for "${CURRENT_COMMAND}" >&2
+    exit 2
+}
+
+validate() {
+    local value="$1" pattern="$2" flag="$3"
+    [[ "${value}" =~ ${pattern} ]] || usage_error "invalid value for ${flag}: ${value}"
+}
+
+assign_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}"
+            REPO="${value}"
+            ;;
+        --pr)
+            validate "${value}" '^[0-9]+$' "${flag}"
+            PR="${value}"
+            ;;
+        --issue)
+            validate "${value}" '^[0-9]+$' "${flag}"
+            ISSUE="${value}"
+            ;;
+        --status)
+            # Only ever compared against the board's own option names, never put in a filter.
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
+            STATUS="${value}"
+            ;;
+    esac
+}
+
+parse_options() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --set | --check)
+                if [ -n "${MODE}" ] && [ "${MODE}" != "${1#--}" ]; then
+                    usage_error "--set and --check are mutually exclusive"
+                fi
+                MODE="${1#--}"
+                shift
+                ;;
+            --repo | --pr | --issue | --status)
+                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+                assign_option "$1" "$2"
+                shift 2
+                ;;
+            -h | --help)
+                usage_for "${CURRENT_COMMAND}"
+                exit 0
+                ;;
+            *)
+                usage_error "unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+require() {
+    local variable="$1" flag="$2"
+    [ -n "${!variable}" ] || usage_error "missing required option ${flag}"
+}
+
+# Resolves --pr/--issue into the number, the content type the board reports for it, and the
+# URL path segment, so --set and --check name an item the same way.
+require_target() {
+    if [ -n "${PR}" ] && [ -n "${ISSUE}" ]; then
+        usage_error "--pr and --issue are mutually exclusive"
+    fi
+    [ -n "${PR}${ISSUE}" ] || usage_error "missing required option --pr or --issue"
+
+    if [ -n "${PR}" ]; then
+        TARGET_NUMBER="${PR}"
+        TARGET_TYPE="PullRequest"
+        TARGET_URL_KIND="pull"
+    else
+        TARGET_NUMBER="${ISSUE}"
+        TARGET_TYPE="Issue"
+        TARGET_URL_KIND="issues"
+    fi
+}
+
+require_gh() {
+    command -v gh > /dev/null 2>&1 || die "gh is not installed"
+}
+
+# Finds the open project titled "Workflow" linked to REPO (a closed one left over from a
+# replaced board is ignored) and sets PROJECT_ID, PROJECT_NUMBER and OWNER. The owner is read
+# from the project's own path rather than assumed to be the repository's owner.
+resolve_project() {
+    local projects resource_path
+    projects=$(gh repo view "${REPO}" --json projectsV2 \
+        --jq '.projectsV2.Nodes[] | select(.title=="Workflow" and .closed != true) | [.id, (.number|tostring), .resourcePath] | @tsv') \
+        || die "could not read the projects of ${REPO}"
+    [ -n "${projects}" ] || die "no project titled Workflow is linked to ${REPO}"
+    [[ "${projects}" != *$'\n'* ]] || die "more than one project titled Workflow is linked to ${REPO}"
+
+    IFS=$'\t' read -r PROJECT_ID PROJECT_NUMBER resource_path <<< "${projects}"
+    [[ "${PROJECT_ID}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected project id for ${REPO}: ${PROJECT_ID}"
+    [[ "${PROJECT_NUMBER}" =~ ^[0-9]+$ ]] || die "unexpected project number for ${REPO}: ${PROJECT_NUMBER}"
+    [[ "${resource_path}" =~ ^/(users|orgs)/([A-Za-z0-9_.-]+)/projects/[0-9]+$ ]] \
+        || die "unexpected project path for ${REPO}: ${resource_path}"
+    OWNER="${BASH_REMATCH[2]}"
+}
+
+# Finds the project's "Workflow Status" field (never the built-in "Status" field, whose options
+# look plausible but map to nothing) and the option named STATUS, setting FIELD_ID, OPTION_ID
+# and rewrites STATUS to the option's canonical display name.
+resolve_status() {
+    local rows field option name valid=""
+    # $field below is a jq variable, not a shell one.
+    # shellcheck disable=SC2016
+    rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${FIELD_LIMIT}" \
+        --jq '.fields[] | select(.name=="Workflow Status") | .id as $field | .options[] | [$field, .id, .name] | @tsv') \
+        || die "could not read the fields of project ${PROJECT_NUMBER}"
+    [ -n "${rows}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
+
+    while IFS=$'\t' read -r field option name; do
+        FIELD_ID="${field}"
+        valid+="${valid:+, }${name}"
+        if [ -z "${OPTION_ID}" ] && [ "${name,,}" = "${STATUS,,}" ]; then
+            OPTION_ID="${option}"
+            STATUS="${name}"
+        fi
+    done <<< "${rows}"
+    [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
+}
+
+workflow_status_set() {
+    require REPO --repo
+    require STATUS --status
+    require_target
+    require_gh
+
+    local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
+    local item_id actual attempt
+
+    resolve_project
+    resolve_status
+
+    item_id=$(gh project item-add "${PROJECT_NUMBER}" --owner "${OWNER}" --url "${item_url}" \
+        --format json --jq '.id') || die "could not add ${item_url} to project ${PROJECT_NUMBER}"
+    [[ "${item_id}" =~ ^[A-Za-z0-9_=-]+$ ]] || die "unexpected item id returned for ${item_url}: ${item_id}"
+
+    gh project item-edit --project-id "${PROJECT_ID}" --id "${item_id}" \
+        --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
+        || die "could not set the Workflow Status of ${item_url}"
+
+    for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
+        actual=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
+            --jq ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]" || true)
+        if [ "${actual}" = "${STATUS}" ]; then
+            printf '%s is now %s\n' "${item_url}" "${STATUS}"
+            return 0
+        fi
+        [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
+    done
+    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${actual}')"
+}
+
+workflow_status_check() {
+    require REPO --repo
+    [ -z "${STATUS}" ] || usage_error "--status is only valid with --set"
+    require_target
+    require_gh
+
+    resolve_project
+
+    local status
+    status=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" \
+        --jq ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")") \
+        || die "could not list the items of project ${PROJECT_NUMBER}"
+    [ -n "${status}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
+    printf '%s\n' "${status}"
+}
+
+cmd_workflow_status() {
+    CURRENT_COMMAND="workflow-status"
+    parse_options "$@"
+    case "${MODE}" in
+        set) workflow_status_set ;;
+        check) workflow_status_check ;;
+        *) usage_error "workflow-status needs --set or --check" ;;
+    esac
+}
+
+cmd_closing_issue_labels() {
+    CURRENT_COMMAND="closing-issue-labels"
+    parse_options "$@"
+    [ -z "${MODE}${STATUS}${ISSUE}" ] || usage_error "closing-issue-labels takes only --repo and --pr"
+    require REPO --repo
+    require PR --pr
+    require_gh
+
+    # Each closing issue is read from its own repository: a PR can close an issue in another repo.
+    local references issue_repo number failed=0 loop_status
+    references=$(gh pr view "${PR}" --repo "${REPO}" --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[] | [(.repository.owner.login + "/" + .repository.name), (.number | tostring)] | @tsv') \
+        || die "could not read the closing issues of ${REPO}#${PR}"
+
+    # The labels that could be read are still printed, but a failure to read any closing issue
+    # makes the command exit non-zero, so a caller never mistakes a partial list for a complete one.
+    {
+        while IFS=$'\t' read -r issue_repo number; do
+            [ -n "${number}" ] || continue
+            if [[ "${issue_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "${number}" =~ ^[0-9]+$ ]]; then
+                gh issue view "${number}" --repo "${issue_repo}" --json labels --jq '.labels[].name' || {
+                    printf 'cfwf: warning: could not fetch the labels of %s#%s\n' "${issue_repo}" "${number}" >&2
+                    failed=1
+                }
+            else
+                printf 'cfwf: warning: unexpected closing issue reference: %s %s\n' "${issue_repo}" "${number}" >&2
+                failed=1
+            fi
+        done <<< "${references}"
+        [ "${failed}" -eq 0 ]
+    } | { grep -vE '^(Blocked|On-Hold)$' || true; } | sort -u
+    loop_status="${PIPESTATUS[0]}"
+    [ "${loop_status}" -eq 0 ] || exit 1
+}
+
+main() {
+    if [ "$#" -eq 0 ]; then
+        usage_general >&2
+        exit 2
+    fi
+
+    local command="$1"
+    shift
+    case "${command}" in
+        help | -h | --help) usage_for "${1:-}" ;;
+        workflow-status) cmd_workflow_status "$@" ;;
+        closing-issue-labels) cmd_closing_issue_labels "$@" ;;
+        *) usage_error "unknown command: ${command}" ;;
+    esac
+}
+
+main "$@"

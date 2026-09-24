@@ -42,6 +42,7 @@
       "Bash(cd * && dotnet tool *)",
       "Bash(cd * && dotnet tsqllint *)",
       "Bash(cfn-lint *)",
+      "Bash(cfwf *)",
       "Bash(check-added-large-files *)",
       "Bash(check-case-conflict *)",
       "Bash(check-executables-have-shebangs *)",
