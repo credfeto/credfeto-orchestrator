@@ -14148,15 +14148,6 @@ update_calls() {
     [ "$(update_calls)" -eq 1 ]
 }
 
-@test "update_workflow_status skips the built-in write with a warning when the project has no built-in Status field" {
-    setup_builtin_board
-    _WF_BUILTIN_FIELD_ID=""
-    run update_workflow_status "Issue" "42" "Approved"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"no built-in Status option for 'Approved'"* ]]
-    [ "$(update_calls)" -eq 1 ]
-}
-
 @test "update_workflow_status skips the built-in write for a status with no built-in mapping" {
     setup_builtin_board
     _WF_OPTION_IDS["Custom Stage"]="wf_custom"

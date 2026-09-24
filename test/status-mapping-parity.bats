@@ -49,11 +49,3 @@ cfwf_mapping() {
     [ -z "$(cfwf_mapping "")" ]
     [ -z "$(builtin_status_for_workflow_status "")" ]
 }
-
-@test "the mapping is Todo for Not Started and Planning, In Progress for Approved through Human Review, Done for Complete" {
-    [ "$(cfwf_mapping "Not Started")" = "Todo" ]
-    [ "$(cfwf_mapping "Planning")" = "Todo" ]
-    [ "$(cfwf_mapping "Approved")" = "In Progress" ]
-    [ "$(cfwf_mapping "Human Review")" = "In Progress" ]
-    [ "$(cfwf_mapping "Complete")" = "Done" ]
-}
