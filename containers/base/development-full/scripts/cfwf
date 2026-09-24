@@ -25,6 +25,7 @@ FIELD_ID=""
 OPTION_ID=""
 ITEM_STATUS=""
 GRAPHQL_WARNED=0
+GRAPHQL_ERR_FILE=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -46,7 +47,7 @@ USAGE
 }
 
 usage_workflow_status() {
-    cat << USAGE
+    cat << 'USAGE'
 Usage:
   cfwf workflow-status --set --repo <owner/repo> (--pr <n> | --issue <n>) --status <name>
   cfwf workflow-status --check --repo <owner/repo> (--pr <n> | --issue <n>)
@@ -67,8 +68,8 @@ Each board read is a read-only GraphQL query for the single item (gh api graphql
 gh project has no command that reads one item and listing the whole board is capped and can
 be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every write
 uses native gh project commands. If a query fails, cfwf warns on stderr and falls back to
-listing the board (up to ${ITEM_LIMIT} items).
 USAGE
+    printf 'listing the board (up to %s items).\n' "${ITEM_LIMIT}"
 }
 
 usage_closing_issue_labels() {
@@ -230,11 +231,13 @@ resolve_status() {
 # GRAPHQL_ERROR so that anything gh writes to stderr can never end up inside a value. Returns
 # gh's exit status.
 graphql_query() {
-    local err_file status=0
-    err_file=$(mktemp) || die "could not create a temporary file"
-    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${err_file}") || status=$?
-    GRAPHQL_ERROR=$(cat "${err_file}")
-    rm -f "${err_file}"
+    local status=0
+    if [ -z "${GRAPHQL_ERR_FILE}" ]; then
+        GRAPHQL_ERR_FILE=$(mktemp) || die "could not create a temporary file"
+        trap 'rm -f "${GRAPHQL_ERR_FILE}"' EXIT
+    fi
+    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GRAPHQL_ERR_FILE}") || status=$?
+    GRAPHQL_ERROR=$(cat "${GRAPHQL_ERR_FILE}")
     return "${status}"
 }
 
@@ -271,7 +274,7 @@ read_item_status() {
         return 0
     fi
 
-    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]"
+    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(.id==\"${item_id}\") | (.[\"workflow Status\"] // \"\")"
 }
 
 # Sets ITEM_STATUS to the target's Workflow Status on the Workflow project, "(unset)" when it has

@@ -150,6 +150,14 @@ gh_line_of() {
     [[ "${output}" == *"cfwf closing-issue-labels --repo <owner/repo> --pr <n>"* ]]
 }
 
+@test "the workflow-status help states the fallback listing limit and explains the GraphQL exception" {
+    run "${SCRIPT}" help workflow-status
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"listing the board (up to 10000 items)."* ]]
+    [[ "${output}" == *"read-only GraphQL query for the single item"* ]]
+    [[ "${output}" == *"every write"*"uses native gh project commands"* ]]
+}
+
 @test "a command's --help prints its usage and exits 0 without calling gh" {
     run "${SCRIPT}" workflow-status --help
     [ "${status}" -eq 0 ]
@@ -599,6 +607,30 @@ gh_line_of() {
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"did not persist after 3 attempts (wanted 'Approved', last read 'Planning', and the final attempt could not read it)"* ]]
     [[ "${output}" != *"could not read ${ISSUE_URL} back"* ]]
+}
+
+@test "cfwf leaves no temporary file behind, whether the direct read works or fails" {
+    export TMPDIR="${TEST_TMP}/tmp"
+    mkdir -p "${TMPDIR}"
+
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${TMPDIR}")" ]
+
+    use_fallback
+    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${TMPDIR}")" ]
+}
+
+@test "--set, on the fallback, reads an item with no Workflow Status as empty, not the word null" {
+    use_fallback
+    jq 'del(.items[1]["workflow Status"])' "${GH_FIXTURES}/item-list.json" > "${GH_FIXTURES}/item-list.tmp" && mv "${GH_FIXTURES}/item-list.tmp" "${GH_FIXTURES}/item-list.json"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"wanted 'Approved', last read ''"* ]]
+    [[ "${output}" != *"null"* ]]
 }
 
 @test "--check reports when neither the direct read nor the listing works" {
