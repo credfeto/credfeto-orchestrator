@@ -6,7 +6,7 @@
 
 readonly ITEM_LIMIT=10000
 readonly FIELD_LIMIT=100
-readonly VERIFY_ATTEMPTS=3
+readonly VERIFY_ATTEMPTS=5
 
 CURRENT_COMMAND=""
 MODE=""
@@ -58,8 +58,9 @@ the repository: the project titled "Workflow" linked to it, and that project's
 
 --set adds the item to the board if it is not already there (idempotent), sets the
 Workflow Status to --status (the option's display name, for example Approved or
-"AI Review", matched without regard to case), then reads it back and retries up to 3
-times. It exits 0 only once the new value is confirmed.
+"AI Review", matched without regard to case), then reads it back, retrying up to 5 times
+with a growing delay (about 10 seconds in all) because a change can take a few seconds to
+become visible. It exits 0 only once the new value is confirmed.
 
 --check prints the item's current Workflow Status. It exits non-zero when the item is
 not on the board.
