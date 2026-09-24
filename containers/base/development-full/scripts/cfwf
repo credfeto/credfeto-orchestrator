@@ -225,10 +225,30 @@ resolve_status() {
 # (both seen in practice, #1491). Every write stays on native gh project commands and no query
 # here contains a mutation. If the GraphQL call fails for any reason the board listing is used
 # instead, with a warning so the failure is visible.
-#
+
+# Runs gh api graphql with the given arguments, keeping stdout in GRAPHQL_OUTPUT and stderr in
+# GRAPHQL_ERROR so that anything gh writes to stderr can never end up inside a value. Returns
+# gh's exit status.
+graphql_query() {
+    local err_file status=0
+    err_file=$(mktemp) || die "could not create a temporary file"
+    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${err_file}") || status=$?
+    GRAPHQL_ERROR=$(cat "${err_file}")
+    rm -f "${err_file}"
+    return "${status}"
+}
+
+# The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
+# so that is the fallback when stderr is empty. First line only, at most 200 characters.
+graphql_failure_text() {
+    local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
+    text="${text%%$'\n'*}"
+    printf '%s' "${text:0:200}"
+}
+
 # fall_back_to_listing warns once (however many reads fail) about the failed direct read, quoting
-# the first line of its error, then sets ITEM_STATUS from listing the board with the given jq
-# filter. Returns non-zero when the listing fails too.
+# the given error text, then sets ITEM_STATUS from listing the board with the given jq filter.
+# Returns non-zero when the listing fails too.
 fall_back_to_listing() {
     if [ "${GRAPHQL_WARNED}" -eq 0 ]; then
         GRAPHQL_WARNED=1
@@ -240,38 +260,41 @@ fall_back_to_listing() {
 # Sets ITEM_STATUS to the Workflow Status of the board item with the given id ("" when it has
 # none). Returns non-zero only when both the direct read and the board listing fail.
 read_item_status() {
-    local item_id="$1" output
+    local item_id="$1"
     ITEM_STATUS=""
     # $id is a GraphQL variable, not a shell one.
     # shellcheck disable=SC2016
-    if output=$(gh api graphql \
+    if graphql_query \
         -f query='query($id:ID!){node(id:$id){... on ProjectV2Item{fieldValueByName(name:"Workflow Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}' \
-        -f id="${item_id}" --jq '.data.node.fieldValueByName.name // ""' 2>&1); then
-        ITEM_STATUS="${output}"
+        -f id="${item_id}" --jq '.data.node.fieldValueByName.name // ""'; then
+        ITEM_STATUS="${GRAPHQL_OUTPUT}"
         return 0
     fi
 
-    fall_back_to_listing "${output}" ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]"
+    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(.id==\"${item_id}\") | .[\"workflow Status\"]"
 }
 
 # Sets ITEM_STATUS to the target's Workflow Status on the Workflow project, "(unset)" when it has
 # none, or "" when it is not on that project. issue(number:) or pullRequest(number:) is chosen by
-# --issue or --pr, so the type check is kept; a number that is not that type is "not found", not
-# a failure. Returns non-zero only when both the direct read and the board listing fail.
+# --issue or --pr, so the type check is kept; GitHub's "no such issue/pull request with that number"
+# answer means "not found", not a failure (any other error, such as an unreadable repository,
+# still falls back). Returns non-zero only when both the direct read and the board listing fail.
 read_target_status() {
-    local accessor="issue" output
+    local accessor="issue"
     [ "${TARGET_TYPE}" = "PullRequest" ] && accessor="pullRequest"
     ITEM_STATUS=""
-    if output=$(gh api graphql \
-        -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:50){nodes{project{id} fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
+    if graphql_query \
+        -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:100){nodes{project{id} fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
         -f o="${REPO%%/*}" -f r="${REPO#*/}" -F n="${TARGET_NUMBER}" \
-        --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | (.fieldValueByName.name // \"(unset)\")" 2>&1); then
-        ITEM_STATUS="${output}"
+        --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | (.fieldValueByName.name // \"(unset)\")"; then
+        ITEM_STATUS="${GRAPHQL_OUTPUT}"
         return 0
     fi
-    [[ "${output}" != *"Could not resolve to"* ]] || return 0
+    case "${GRAPHQL_ERROR}${GRAPHQL_OUTPUT}" in
+        *"Could not resolve to an Issue with the number"* | *"Could not resolve to a PullRequest with the number"*) return 0 ;;
+    esac
 
-    fall_back_to_listing "${output}" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")"
+    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // \"(unset)\")"
 }
 
 workflow_status_set() {
@@ -281,7 +304,7 @@ workflow_status_set() {
     require_gh
 
     local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
-    local item_id attempt read_failed=0
+    local item_id attempt read_failed=0 mismatch_seen=0 last_read=""
 
     resolve_project
     resolve_status
@@ -295,16 +318,24 @@ workflow_status_set() {
         || die "could not set the Workflow Status of ${item_url}"
 
     for ((attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++)); do
-        read_failed=0
-        read_item_status "${item_id}" || read_failed=1
-        if [ "${read_failed}" -eq 0 ] && [ "${ITEM_STATUS}" = "${STATUS}" ]; then
-            printf '%s is now %s\n' "${item_url}" "${STATUS}"
-            return 0
+        if read_item_status "${item_id}"; then
+            read_failed=0
+            last_read="${ITEM_STATUS}"
+            if [ "${last_read}" = "${STATUS}" ]; then
+                printf '%s is now %s\n' "${item_url}" "${STATUS}"
+                return 0
+            fi
+            mismatch_seen=1
+        else
+            read_failed=1
         fi
         [ "${attempt}" -lt "${VERIFY_ATTEMPTS}" ] && sleep "${attempt}"
     done
-    [ "${read_failed}" -eq 0 ] || die "could not read ${item_url} back to confirm the write: both the direct query and the board listing failed (the write may have succeeded; check with: cfwf workflow-status --check --repo ${REPO} --${TARGET_FLAG} ${TARGET_NUMBER})"
-    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${ITEM_STATUS}')"
+
+    if [ "${mismatch_seen}" -eq 0 ]; then
+        die "could not read ${item_url} back to confirm the write: both the direct query and the board listing failed (the write may have succeeded; check with: cfwf workflow-status --check --repo ${REPO} --${TARGET_FLAG} ${TARGET_NUMBER})"
+    fi
+    die "the Workflow board write did not persist after ${VERIFY_ATTEMPTS} attempts (wanted '${STATUS}', last read '${last_read}'$([ "${read_failed}" -eq 1 ] && echo ', and the final attempt could not read it'))"
 }
 
 workflow_status_check() {
