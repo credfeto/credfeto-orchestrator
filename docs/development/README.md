@@ -144,9 +144,12 @@ These have all been seen in practice. Where a script has to cope with one, its g
   listing can leave out a newly added item for minutes. That includes the project board
   (`gh project item-list`), PR lists just after a push, an issue body just after an edit, and
   issue timelines. A read straight after a write therefore cannot tell a lost write from lag.
-  Do not read back to verify a write inside a script (`cfwf workflow-status --set` deliberately
-  does not); trust the exit status of the write, and if a later step needs the value, allow for
-  the delay or read it from something that does not lag.
+  The shared rule
+  ([GitHub State Lags Behind Writes](../../ai/global/github-cli.instructions.md#github-state-lags-behind-writes-mandatory))
+  applies: a write whose call succeeded is done, so do not read it back to confirm
+  (`cfwf workflow-status --set` deliberately does not), do not poll or repeat a write because a
+  read has not caught up, and treat a read that disagrees with a write just made as lag: carry
+  on, check again at a later step, and repeat the write only if the value is still wrong then.
 - **`gh project` cannot read one item.** There is no command for a single project item, so
   finding one means listing the whole board. Listing pages at 100 items per request and stops
   at the `-L` limit (30 by default), so a board larger than the limit silently loses items.
