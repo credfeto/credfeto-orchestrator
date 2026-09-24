@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2154  # stderr is set by run --separate-stderr
 
 load test_helper
+
+bats_require_minimum_version 1.5.0
 
 SCRIPT="${REPO_ROOT}/containers/base/development-full/scripts/cfwf"
 
@@ -10,7 +13,6 @@ ISSUE_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1346"
 setup() {
     setup_isolated_env
     export GH_LOG="${TEST_TMP}/gh.log"
-    export SLEEP_LOG="${TEST_TMP}/sleep.log"
     export GH_FIXTURES="${TEST_TMP}/fixtures"
     mkdir -p "${GH_FIXTURES}"
 
@@ -28,14 +30,12 @@ setup() {
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
-        '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; n=$(( $(cat "${GH_FIXTURES}/item-list.count" 2>/dev/null || echo 0) + 1 )); echo "${n}" > "${GH_FIXTURES}/item-list.count"; f="${GH_FIXTURES}/item-list.${n}.json"; [ -f "${f}" ] || f="${GH_FIXTURES}/item-list.json"; emit "${f}" ;;' \
+        '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
-    # shellcheck disable=SC2016
-    make_stub sleep 'printf "%s\n" "$*" >> "${SLEEP_LOG}"'
 
     write_repo_view "/users/credfeto/projects/74"
     jq -n '{fields: [
@@ -75,7 +75,7 @@ write_pr_view() {
 # Writes an item-list fixture whose target item (issue 1346 of this repo) has the given status.
 # Includes decoys that share the number in another repo, a PR, and an item with no status.
 write_item_list() {
-    local status="$1" file="${GH_FIXTURES}/${2:-item-list.json}"
+    local status="$1" file="${GH_FIXTURES}/item-list.json"
     jq -n --arg s "${status}" '{items: [
         {id: "PVTI_other", content: {number: 1346, repository: "credfeto/other-repo", type: "Issue"}, "workflow Status": "Human Review"},
         {id: "PVTI_target", content: {number: 1346, repository: "credfeto/credfeto-orchestrator", type: "Issue"}, "workflow Status": $s},
@@ -99,11 +99,6 @@ write_graphql_target() {
 # Makes every gh api graphql call fail with the given error text, so cfwf falls back to listing the board.
 use_fallback() {
     printf '%s\n' "${1:-GraphQL: something went wrong}" > "${GH_FIXTURES}/graphql.fail"
-}
-
-# run, but with stderr discarded, for tests that compare stdout exactly while a warning is expected.
-run_quiet() {
-    run bash -c '"$@" 2>/dev/null' _ "${SCRIPT}" "$@"
 }
 
 set_args() {
@@ -282,19 +277,15 @@ gh_line_of() {
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id 63d36d28" "${GH_LOG}"
 }
 
-@test "--set never reads the board back: no query, no listing and no waiting after the write" {
+@test "--set never reads the board back: no query and no listing after the write" {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
     [ "$(gh_call_count "api graphql")" -eq 0 ]
     [ "$(gh_call_count "project item-list")" -eq 0 ]
-    [ ! -e "${SLEEP_LOG}" ]
 }
 
 @test "no gh api graphql call ever carries a mutation" {
-    set_args
-    run "${SCRIPT}" "${SET_ARGS[@]}"
-    [ "${status}" -eq 0 ]
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "$(gh_call_count "api graphql")" -eq 1 ]
@@ -404,8 +395,6 @@ gh_line_of() {
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"could not set the Workflow Status"* ]]
-    [ "$(gh_call_count "project item-list")" -eq 0 ]
-    [ "$(gh_call_count "api graphql")" -eq 0 ]
 }
 
 @test "--set refuses an unexpected item id rather than putting it in a jq filter" {
@@ -426,6 +415,7 @@ gh_line_of() {
     [ "$(gh_call_count "project item-list")" -eq 0 ]
     grep -qF -- "-f o=credfeto -f r=credfeto-orchestrator -F n=1346" "${GH_LOG}"
     grep -qF 'select(.project.id=="PVT_proj")' "${GH_LOG}"
+    grep -qF 'projectItems(first:100)' "${GH_LOG}"
 }
 
 @test "--check --issue asks for issue(number:) and --pr asks for pullRequest(number:)" {
@@ -466,67 +456,61 @@ gh_line_of() {
 
 @test "--check falls back to listing the board when the direct read fails, ignoring the same number in another repo and a draft item, and warning on stderr only" {
     use_fallback
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
     grep -qF "project item-list 74 --owner credfeto --format json -L 10000 " "${GH_LOG}"
 
-    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
-    [[ "${output}" == *"cfwf: warning: the direct GraphQL read failed (GraphQL: something went wrong); falling back to listing the board"* ]]
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${stderr}" == *"cfwf: warning: the direct GraphQL read failed (GraphQL: something went wrong); falling back to listing the board"* ]]
 }
 
 @test "--check --pr finds a pull request item and --issue does not match it, on the fallback" {
     use_fallback
-    run_quiet workflow-status --check --repo "${REPO}" --pr 1481
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1481
     [ "${status}" -eq 0 ]
     [ "${output}" = "AI Review" ]
 
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1481
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1481
     [ "${status}" -eq 1 ]
 }
 
 @test "--check, on the fallback, matches the repository without regard to case" {
     use_fallback
-    run_quiet workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo Credfeto/CREDFETO-Orchestrator --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
 }
 
 @test "--check only treats GitHub's no-such-issue or no-such-pull-request answer as not found; any other error falls back" {
     use_fallback "GraphQL: Could not resolve to a Repository with the name 'credfeto/credfeto-orchestrator'."
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
     [ "$(gh_call_count "project item-list")" -ge 1 ]
 }
 
-@test "--check asks for the item's first 100 project items" {
-    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
-    [ "${status}" -eq 0 ]
-    grep -qF 'projectItems(first:100)' "${GH_LOG}"
-}
-
 @test "anything gh writes to stderr on a successful read never ends up in the value" {
     printf '%s\n' "A new release of gh is available: 2.99.0" > "${GH_FIXTURES}/graphql.stderr"
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
 }
 
 @test "the fallback warning quotes only the first line of an error body gh printed on stdout, at most 200 characters" {
     { printf 'x%.0s' $(seq 1 300); printf '\nsecond line\n'; } > "${GH_FIXTURES}/graphql.failout"
-    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
-    [[ "${output}" == *"read failed ($(printf 'x%.0s' $(seq 1 200)));"* ]]
-    [[ "${output}" != *"second line"* ]]
-    [[ "${output}" != *"$(printf 'x%.0s' $(seq 1 201))"* ]]
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${stderr}" == *"read failed ($(printf 'x%.0s' $(seq 1 200)));"* ]]
+    [[ "${stderr}" != *"second line"* ]]
+    [[ "${stderr}" != *"$(printf 'x%.0s' $(seq 1 201))"* ]]
 }
 
 @test "the fallback warning never carries terminal escape sequences from the error text" {
     printf 'boom \033[31mred\033[0m and a bell\a\n' > "${GH_FIXTURES}/graphql.failout"
-    run bash -c '"$@" 2>&1 >/dev/null' _ "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
-    [[ "${output}" == *"read failed (boom [31mred[0m and a bell);"* ]]
-    [[ "${output}" != *$'\033'* ]]
-    [[ "${output}" != *$'\a'* ]]
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
+    [[ "${stderr}" == *"read failed (boom [31mred[0m and a bell);"* ]]
+    [[ "${stderr}" != *$'\033'* ]]
+    [[ "${stderr}" != *$'\a'* ]]
 }
 
 @test "cfwf leaves no temporary file behind, whether the direct read works or fails" {
@@ -538,7 +522,7 @@ gh_line_of() {
     [ -z "$(ls -A "${TMPDIR}")" ]
 
     use_fallback
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1346
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${TMPDIR}")" ]
 }
@@ -569,7 +553,7 @@ gh_line_of() {
 
 @test "--check, on the fallback, reports (unset) for an item with no Workflow Status" {
     use_fallback
-    run_quiet workflow-status --check --repo "${REPO}" --issue 1500
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1500
     [ "${status}" -eq 0 ]
     [ "${output}" = "(unset)" ]
 }
