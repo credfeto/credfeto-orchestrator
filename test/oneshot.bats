@@ -4952,6 +4952,74 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+# --- dependency-prompt selection by branch, not label ---------------------------------------
+# Issue-label sync copies a linked issue's "dependencies" label onto any bot PR, so the label must
+# never select the CI-verify-only prompt that forbids code changes.
+
+@test "pr_has_dependency_update_branch matches depends/ and dependabot/ prefixes" {
+    run pr_has_dependency_update_branch '{"headRefName":"depends/dotnet/10.0.1"}'
+    [ "${status}" -eq 0 ]
+    run pr_has_dependency_update_branch '{"headRefName":"dependabot/github_actions/foo-1.2.3"}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_has_dependency_update_branch does not match other branches or a mid-name depends" {
+    run pr_has_dependency_update_branch '{"headRefName":"chore/982-update-github-actions-version-pins"}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{"headRefName":"fix/depends/thing"}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt ignores a dependencies label on a non-dependency branch" {
+    run pr_should_use_dependency_prompt '{"headRefName":"chore/982-update-github-actions-version-pins","labels":[{"name":"dependencies"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt accepts a depends/ branch" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","labels":[],"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow when changes are requested" {
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","reviewDecision":"CHANGES_REQUESTED"}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow while .deleteme.now is present" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/x","files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_has_placeholder_file detects .deleteme.now only" {
+    run pr_json_has_placeholder_file '{"files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 0 ]
+    run pr_json_has_placeholder_file '{"files":[{"path":"src/a.cs"}]}'
+    [ "${status}" -eq 1 ]
+    run pr_json_has_placeholder_file '{}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_is_terminal is false for a placeholder-only PR even with auto-merge armed and green CI" {
+    run pr_json_is_terminal '{"isDraft":false,"autoMergeRequest":{"enabledAt":"x"},"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_is_terminal is still true once the placeholder is gone" {
+    run pr_json_is_terminal '{"isDraft":false,"autoMergeRequest":{"enabledAt":"x"},"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"files":[{"path":"a.yml"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "build_pr_claude_md guards auto-merge and ready against a leftover .deleteme.now in both flows" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"If .deleteme.now is listed"* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"If .deleteme.now is listed"* ]]
+}
+
 @test "pr_is_human_driven returns 1 when the bot has authored a commit" {
     _GH_ME="testuser"
     run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"testuser"}]}]}' '["credfeto"]'

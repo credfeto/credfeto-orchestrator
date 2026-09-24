@@ -414,6 +414,27 @@ pr_has_dependency_label() {
     printf '%s' "${pr_json}" | jq -e '[(.labels // [])[] | .name | ascii_downcase] | any(contains("dependencies"))' > /dev/null 2>&1
 }
 
+# A dependency-update PR is recognised by the branch its bump tooling pushed to ("depends/..."
+# from credfeto-batch-updates, "dependabot/..." from Dependabot), never by label: issue-label sync
+# copies a linked issue's "dependencies" label onto any bot PR, which used to put a bot-authored
+# feature PR into the CI-verify-only prompt that forbids code changes.
+pr_has_dependency_update_branch() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '(.headRefName // "") | test("^(depends|dependabot)/")' > /dev/null 2>&1
+}
+
+# Whether build_pr_claude_md should use its CI-verify-only dependency prompt. Falls back to the
+# full phase flow when a reviewer has requested changes (that prompt cannot make code changes) or
+# the branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on a
+# scaffold-only PR).
+pr_should_use_dependency_prompt() {
+    local pr_json="$1"
+    pr_has_dependency_update_branch "${pr_json}" || return 1
+    printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
+    pr_json_has_placeholder_file "${pr_json}" && return 1
+    return 0
+}
+
 pr_is_human_driven() {
     local pr_json="$1" trusted_logins="$2"
 
