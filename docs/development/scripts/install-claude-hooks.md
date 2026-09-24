@@ -45,7 +45,7 @@ The script does not source `lib/core`. It defines its own `die`, `success`, `inf
 
 The settings file is copied unchanged: its hook commands use the literal `$HOME` token, which the shell that runs the hook expands, so no path rewriting is needed.
 
-External tools: those in `REQUIRED_TOOLS`, plus `install`, `find`, `sort`, `ln`, `cp`, `mv`, `mktemp`, `basename` and optionally `sudo` (not checked).
+External tools: those in `REQUIRED_TOOLS`, plus `install`, `find`, `sort`, `ln`, `cp`, `mv`, `mkdir`, `mktemp`, `basename`, `dirname` and optionally `sudo` (not checked).
 
 ## Tests
 
@@ -53,7 +53,7 @@ External tools: those in `REQUIRED_TOOLS`, plus `install`, `find`, `sort`, `ln`,
 
 Tests call `main` directly (or `run main` when they check status and output) in the same shell. They therefore override script globals such as `SOURCE_HOOKS_DIR`, `SOURCE_SETTINGS`, `SOURCE_CFWF` and `CFWF_BIN_DIR` by plain assignment. Missing-tool tests use the local `hide_tools` helper, which redefines the `command` builtin as a shell function so `command -v <tool>` fails for chosen names without touching the system. The sudo test replaces the stub with `make_stub sudo '... exit 0'`.
 
-Unusual: the first test calls a `fail` function that nothing in `test/` defines (no bats-support is loaded), so if a symlink were missing the failure would surface as "command not found" rather than the intended message. The tests also read the real repository files, so they pin the shipped settings: hook order in the `PreToolUse` chain, the `$HOME` token, the paired `permissions.deny` entries and the `EnterWorktree` matcher.
+Unusual: the first test calls a `fail` function that nothing in `test/` defines (no bats-support is loaded), so if a symlink were missing the failure would surface as "command not found" rather than the intended message. The tests also read the real repository files, so they pin the shipped settings: which hooks are in the `PreToolUse` chain (`block-git-worktree`, `block-dotnet-tool-install`, `cache-gh-lookups`), the single position of `enforce-allowed-dirs` at index 1, the `$HOME` token, the paired `permissions.deny` entries and the `EnterWorktree` matcher. The relative order of the other hooks is not tested.
 
 Run just this file with `bats test/install-claude-hooks.bats`.
 

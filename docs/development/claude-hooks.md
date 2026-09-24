@@ -12,11 +12,11 @@ The rules for changing them (the extension process, the widening rules, the deny
 - `claude-settings.json` wires the hooks under `hooks.PreToolUse` and holds `permissions.allow` and `permissions.deny` (with `defaultMode` set to `dontAsk`).
 - The Dockerfile copies each file into `/home/developer/.claude/`: hooks as `root:root 0755`, data files and settings as `root:root 0444`, and its sanity block fails the build if any is missing, if the hook commands contain a hard-coded `/home/developer`, or if an `allowed-dirs.local` was baked in.
 - `install-claude-hooks` installs the same set on a host. It symlinks every file directly under `claude-hooks/` into `~/.claude/hooks/` (so an edit takes effect immediately), copies `claude-settings.json` verbatim to `~/.claude/settings.json` (keeping the old one as `settings.json.bak`), and installs `cfwf`. It refuses to run inside a Claude Code session (`CLAUDECODE=1`) or if `jq`, `shfmt`, `base64`, `realpath`, `git`, `gpg`, `ssh-add`, `sed` or `grep` is missing, because a hook whose tool is missing blocks every command. The baked `allowed-dirs` lists the container mounts, so on a host it warns until you write your own `~/.claude/hooks/allowed-dirs.local`.
-- `block-no-verify` also appears in `hooks.PreToolUse` (for `Bash` and for `mcp__github__.*`). It is an npm tool installed by the `development-node` and `development-python` images, not a file in `claude-hooks/`.
+- `block-no-verify` also appears in `hooks.PreToolUse` (for `Bash` and for `mcp__github__.*`). It is an npm tool installed by the `development-node` image (inherited by the images above it), not a file in `claude-hooks/`.
 
 ## What a hook sees
 
-A `PreToolUse` hook receives the tool call as JSON on stdin. The Bash hooks read `.tool_input.command` and nothing else about the work; only `enforce-background-for-long-running-commands` reads `.tool_input.run_in_background`, and `block-git-worktree` also reads `.tool_name`.
+A `PreToolUse` hook receives the tool call as JSON on stdin. The Bash hooks read `.tool_input.command` and nothing else about the work (for an `EnterWorktree` call, `block-git-worktree` reads `.tool_input.path` and `.tool_input.name`); only `enforce-background-for-long-running-commands` reads `.tool_input.run_in_background`, and `block-git-worktree` also reads `.tool_name`.
 
 The hook sees only the command string the agent typed. It does not see what a script or program does when it runs. `reject-obfuscated-commands` states this as an accepted gap: writing a script file and running it under an allowlisted name cannot be closed by a command-string filter. In practice:
 
@@ -31,11 +31,11 @@ A blocking hook exits 2 and writes its reason to stderr. Nearly all of them use 
 
 A hook that exits 0 with no output allows the call. A hook can also exit 0 and print JSON with `hookSpecificOutput.permissionDecision: "allow"` and an `updatedInput`, which rewrites the command. `reject-obfuscated-commands`, `enforce-git-dash-c` and `cache-gh-lookups` do this. The rewrite is merged into the original `tool_input`, so fields such as `run_in_background` and `timeout` survive (#1367).
 
-Most hooks fail closed: a missing `jq` or `shfmt`, or a command that does not parse as shell, is a block. `cache-gh-lookups` is the exception and never blocks.
+Every hook except `enforce-git-identity` and `cache-gh-lookups` blocks when `shfmt` is missing or the command does not parse as shell. Only `enforce-allowed-dirs`, `block-git-worktree`, `enforce-ssh-host-and-key` and `enforce-curl-host` check for `jq` themselves; the others treat a missing `jq` as an empty command and allow it, so the chain relies on `enforce-allowed-dirs` (second) blocking. `cache-gh-lookups` never blocks. This was read from the code, not probed.
 
 ## The hooks
 
-In chain order. Behaviour below was checked against the scripts and their tests.
+In chain order. Behaviour below was checked against the scripts (and their tests, except `enforce-git-identity`, which has none).
 
 ### reject-obfuscated-commands
 
@@ -55,11 +55,11 @@ It restricts the path arguments of `cd`, `pushd`, `git -C`, `npm --prefix`, `fin
 
 ### enforce-git-identity
 
-It blocks `git commit`, `fetch`, `pull`, `rebase`, `merge`, `cherry-pick`, `revert` and `am` unless the global git identity is set and is not the banned one, `commit.gpgsign` is true, and a GPG secret key matches `user.email` and `user.signingkey`. It matches with a regex on the command text after stripping heredocs, and `git` must start a line or follow `;`, `&&` or `||`. A probe run with an empty global config blocked `git -C . commit` and `cd /x && git -C . fetch` but let `echo hi | git -C . commit` and `x=$(git -C . commit -m y)` through, so pipes and substitutions are not covered by this hook.
+It blocks `git commit`, `fetch`, `pull`, `rebase`, `merge`, `cherry-pick`, `revert` and `am` unless the global git identity is set and is not the banned one, `commit.gpgsign` is true, and a GPG secret key matches `user.email` and `user.signingkey`. It matches with a regex on the command text after stripping heredocs, and `git` must start a line or follow `;`, `&&` or `||`. Because the gate only matches `git` at the start of a line or after `;`, `&&` or `||`, `echo hi | git -C . commit` and `x=$(git -C . commit -m y)` are not gated by this hook; nothing tests this.
 
 ### enforce-git-dash-c
 
-It requires every `git` call to use `git -C <dir>` and only allows the subcommands in its `GIT_ALLOWED_SUBCOMMANDS` array (for example `remote` is refused). It blocks `eval`, `source` and `.`, all `git config` writes at any scope, `--no-verify` (and its abbreviations, and `-n` on `commit`) and a `HUSKY=0` override. A bare `git` call is rewritten to `-C "$PWD"` when the command contains no `cd`/`pushd`/`popd` and `$PWD` is inside a writable git checkout; otherwise it is blocked.
+It requires every `git` call to use `git -C <dir>` (except `clone` and `config`, which have their own policy) and only allows the subcommands in its `GIT_ALLOWED_SUBCOMMANDS` array (for example `remote` is refused). It blocks `eval`, `source` and `.`, all `git config` writes at any scope, `--no-verify` (and its abbreviations, and `-n` on `commit`) and a `HUSKY=0` override. A bare `git` call is rewritten to `-C "$PWD"` when the command contains no `cd`/`pushd`/`popd` and `$PWD` is inside a writable git checkout; otherwise it is blocked.
 
 ### block-git-worktree
 
@@ -71,11 +71,11 @@ It blocks `dotnet tool install` and `dotnet new tool-manifest` (also behind a wr
 
 ### enforce-ssh-host-and-key
 
-It allows only `ssh user@host command...` with no flags, where the target matches `^[A-Za-z0-9._-]+@...\.lan$`, and only when `SSH_AUTH_SOCK` is set and `ssh-add -l` succeeds. It also inspects the one word after the target, because ssh would parse a flag there.
+It allows only `ssh user@host command...` with no flags, where the target matches `^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.lan$`, and only when `SSH_AUTH_SOCK` is set and `ssh-add -l` succeeds. It also inspects the one word after the target, because ssh would parse a flag there.
 
 ### enforce-curl-host
 
-It allows curl only with the flags in `ALLOWED_NOARG_FLAGS` and `ALLOWED_ARG_FLAGS` and one literal URL whose host is not `api.github.com`, `github.com`, `registry.npmjs.org`, `raw.githubusercontent.com` or `api.nuget.org`. Any other flag (a probe with `-X` was blocked), a non-literal word, or an unquoted brace, tilde, glob or backslash character is blocked. The header records that `-L` redirects to a denied host are an accepted gap.
+It allows curl only with the flags in `ALLOWED_NOARG_FLAGS` and `ALLOWED_ARG_FLAGS` and one literal URL whose host is not `api.github.com`, `github.com`, `registry.npmjs.org`, `raw.githubusercontent.com` or `api.nuget.org`. Any flag not in those arrays (for example `-X`) is blocked, and so are a non-literal word and an unquoted brace, tilde, glob or backslash character. The header records that `-L` redirects to a denied host are an accepted gap.
 
 ### enforce-background-for-long-running-commands
 
@@ -93,7 +93,7 @@ It rewrites exactly `gh api user --jq '.login'` (one bare call, no pipe, redirec
 - a bare non-Bash tool such as `Monitor`, `Edit` or `WebFetch` is missing from `permissions.allow`.
 - a `Read(**/...)` or `Edit(**/...)` deny is added, or the `~/.database` rules change.
 
-Other tests hold copies together: `test/enforce-curl-host.bats` checks `DENIED_HOSTS` against the `WebFetch(domain:...)` denies, `test/entrypoint-cache-path-parity.bats` checks the cache path in `cache-gh-lookups` against `entrypoint.sh`, and `test/install-claude-hooks.bats` checks the chain order, the `EnterWorktree` matcher, the verbatim settings copy and the required-tools list. The shared hook list `WRAPPERS`, `block()` and `in_list` are copied into each hook rather than sourced, so a change must be repeated in each.
+Other tests hold copies together: `test/enforce-curl-host.bats` checks `DENIED_HOSTS` against the `WebFetch(domain:...)` denies, `test/entrypoint-cache-path-parity.bats` checks the cache path in `cache-gh-lookups` against `entrypoint.sh`, and `test/install-claude-hooks.bats` checks that `enforce-allowed-dirs` sits immediately after `reject-obfuscated-commands`, that `block-git-worktree`, `block-dotnet-tool-install` and `cache-gh-lookups` are wired in, the `EnterWorktree` matcher, the verbatim settings copy and the required-tools list. `WRAPPERS` (seven hooks), `block()` (nine) and `in_list` (`enforce-git-dash-c`, `enforce-allowed-dirs`) are copied into each hook that needs them rather than sourced, so a change must be repeated in each.
 
 ## Adding a hook
 
@@ -110,9 +110,9 @@ Follow the process in [ai/local/claude-hooks.instructions.md](../../ai/local/cla
 ## Gotchas
 
 - Non-ASCII anywhere in the command blocks it, including heredoc bodies and quoted arguments such as a commit message. Only the fixed table (dashes, curly quotes, non-breaking space, arrows, ellipsis) is rewritten. Put real Unicode in a file written with the `Write` tool and pass `--body-file`.
-- `command -v` is blocked because `command` is on the blocklist; `which jq` passes (probed). `type`, `read`, `exit`, `continue` and `break` are not on the allowlist, so a loop that uses them is blocked even when the loop itself is fine.
+- `command -v` is blocked because `command` is on the blocklist; `which jq` passes (`which` is on `command-allowlist`). `type`, `read`, `exit`, `continue` and `break` are not on the allowlist, so a loop that uses them is blocked even when the loop itself is fine.
 - A variable as the command name (`x=git; $x status`) is blocked as "quoted, escaped, or dynamically substituted". Variables and substitutions in argument position are fine for this hook (`ls $(pwd)` passed).
 - Compound commands are walked, so every call in a pipeline, `&&`/`||` list, loop, `{ ...; }` group or subshell is checked separately. In `enforce-allowed-dirs`, `cd a || cd b` and any `cd` that is not the first call make later relative paths unresolvable, so use absolute paths.
-- Per-command assignments such as `FOO=bar git push` pass, unless `FOO` matches `env-var-blocklist`.
+- Per-command assignments such as `FOO=bar ls` pass, unless `FOO` matches `env-var-blocklist`.
 - Passing the hooks does not grant permission. `permissions.allow` still applies, and under `dontAsk` an unlisted command is denied without a hook name.
 - Tests that expect a bare `git` to be blocked by `enforce-git-dash-c` must use `run_hook_in_dir` with its default directory. Bats runs from this repository's own checkout, so plain `run_hook` would take the auto-correct path instead.

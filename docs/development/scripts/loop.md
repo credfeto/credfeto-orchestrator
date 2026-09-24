@@ -6,7 +6,7 @@ Back to the [development guide](../README.md).
 
 ## Purpose
 
-`loop` is for running the orchestrator continuously from a terminal or a process supervisor without the systemd timer that `install-timer` sets up. A person (or a supervisor) starts it, and it never returns on its own. It is not used by the production timer units: `install-timer` does not reference it, and neither the README nor the other docs pages describe it. Its only documentation is the header comment in the script itself.
+`loop` is for running the orchestrator continuously from a terminal or a process supervisor without the systemd timer that `install-timer` sets up. A person (or a supervisor) starts it, and it never returns on its own. It is not used by the production timer units: `install-timer` does not reference it, The root README does not describe it, and `docs/` mentions it only in passing (`docs/development/README.md`, `docs/discord-notifications.md`). Besides this guide, its documentation is the header comment in the script.
 
 ## Running it
 
@@ -57,7 +57,7 @@ Not covered: the `while true` body itself (the iteration counter, running `onesh
 - [ ] `shellcheck loop` is clean, and `shellcheck test/loop.bats` too.
 - [ ] Run `bats test/loop.bats`.
 - [ ] Mutation-check any new test: break the code it covers, see the test fail, then restore it.
-- [ ] Update `ai/local/shell-testing.instructions.md` if the sourcing or source-guard conventions change, and this guide. The README and `docs/` do not currently describe `loop`.
+- [ ] Update `ai/local/shell-testing.instructions.md` if the sourcing or source-guard conventions change, and this guide. The root README does not describe `loop`; `docs/development/README.md` links to this guide.
 - [ ] Add a changelog entry with `dotnet changelog`; never edit `CHANGELOG.md` by hand.
 - [ ] The pre-commit hooks run the whole bats suite, so a commit or push takes minutes: run them in the background and poll for completion.
 
@@ -67,6 +67,6 @@ Not covered: the `while true` body itself (the iteration counter, running `onesh
 - There is no `set -e`. That is why the `source` line has an explicit `|| { ...; exit 1; }`, why `git switch` is followed by `|| die`, and why a failing `oneshot` is silently ignored: the loop prints "complete" and sleeps as normal. If you want a failure to stop the loop, that is a behaviour change.
 - The two `git` failure modes are deliberately different. A failed switch dies (the checkout is in an unexpected state, and running stale or wrong-branch code is worse than stopping); a failed or hung pull only warns (`#1104`), because a network stall must not stop the loop and there is no timer to recover it.
 - `SCRIPT_DIR` must come from `BASH_SOURCE[0]`, not `$0`, or `source_loop` in the tests resolves the bats runner's directory instead.
-- The `git pull` is a plain `git pull` with whatever configuration the checkout has; how it behaves with a diverged `main` is not covered by any test and is not verified here.
+- The `git pull` is a plain `git pull` with whatever configuration the checkout has; behaviour with a diverged `main` depends on the checkout's git config (`pull.rebase` / `pull.ff`): on git 2.33+ with neither set a non-fast-forward `git pull` fails, which `loop` reports with the 'git pull failed or timed out' warning before carrying on; the container's system gitconfig sets `pull.rebase = true` but `loop` normally runs on the host. No test covers it and it was not probed.
 - `loop` runs `oneshot` with no arguments. `oneshot` takes a per-owner `flock` lock (`_global.lock` when no owner is given) and exits 0 if another instance holds it. Its stale-checkout refusal (`git_commits_behind`) only applies when `ORCHESTRATOR_SELF_UPDATE_MANAGED` is set, which `install-timer`'s unit does and `loop` does not; a comment in `oneshot` says this looser policy for `loop` is deliberate.
 - GitHub API behaviour (list lag after writes, `gh project` having no single-item read, `gh ... -L` paging at 100 items and being capped) does not affect `loop`. It makes no GitHub API calls: it runs only `git` against the checkout's remote and starts `oneshot`, which is where those points apply.

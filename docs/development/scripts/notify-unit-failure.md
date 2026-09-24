@@ -14,13 +14,13 @@ Back to the [development guide](../README.md).
 ./notify-unit-failure credfeto-orchestrator-alice-alice.service
 ```
 
-- One positional argument, the failed unit name. It is the only input besides the config file below.
+- One positional argument, the failed unit name. It is the only command-line input.
 - Config: `${XDG_CONFIG_HOME:-${HOME}/.config}/orchestrator/.env`, the same file `oneshot` uses. It reads the `DISCORD_WEBHOOK` key only, without sourcing the file: the last matching line wins, surrounding whitespace and one layer of quotes are stripped. The category webhooks (`DISCORD_WEBHOOK_BLOCKED` and so on) are ignored. Inline trailing comments on the line are not stripped.
 - Other inputs: `journalctl -u <unit> -n 15 --no-pager` and `HOSTNAME`.
 - Output: one HTTP POST of a Discord embed, made with `curl -sf --max-time 5`. Diagnostics go to stderr, where systemd captures them.
 - Exit codes:
   - 1 only when no unit name is given.
-  - 0 in every other case, deliberately: missing `.env`, missing `DISCORD_WEBHOOK`, a webhook that is not `https://`, and a failed POST each print a `notify-unit-failure:` message on stderr and exit 0.
+  - 0 in every handled case, deliberately (only an unguarded command failing under `set -e`, for example `jq` present but failing, see Gotchas, exits non-zero): missing `.env`, missing `DISCORD_WEBHOOK`, a webhook that is not `https://`, and a failed POST each print a `notify-unit-failure:` message on stderr and exit 0.
 
 ## How it works
 

@@ -34,7 +34,7 @@ reported. Then open an issue that says:
   image tag if it happens in the agent container);
 - for a Workflow board problem, the repository, the item number and the status you saw.
 
-A maintainer will label it, try to reproduce it, and mark it `needs-repro` if they cannot.
+A maintainer will label it, try to reproduce it, and ask for more detail if they cannot.
 
 ## Suggesting enhancements
 
@@ -51,9 +51,11 @@ human-approved plan.
    assumptions) is posted there and work starts once it is approved.
 3. Work on a branch, add tests with the change and mutation-check them, and update the guide,
    README and docs pages that describe the behaviour you changed.
-4. Add a changelog entry with `dotnet changelog` (never edit `CHANGELOG.md` by hand).
-5. Open a pull request that says what changed and why, and how you tested it. The pre-commit
-   hooks run the whole test suite, so expect commits and pushes to take a few minutes.
+4. Add a changelog entry with `dotnet changelog -f CHANGELOG.md -a <Type> -m "<message>"` (from
+   the `Credfeto.ChangeLog.Cmd` dotnet tool; never edit `CHANGELOG.md` by hand).
+5. Open a pull request that says what changed and why, and how you tested it. CI runs the whole
+   test suite (`bats test/`) on every pull request. If you use the credfeto global pre-commit
+   hooks, they also run it when a `.bats` file is staged, which takes a few minutes.
 
 ## Legal notice
 
