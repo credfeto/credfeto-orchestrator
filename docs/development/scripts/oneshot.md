@@ -6,7 +6,7 @@ Back to the [development guide](../README.md).
 
 ## Purpose
 
-`oneshot` is a thin script (`main()`, argument parsing and a `source` block) over the function libraries in `lib/`. A run fetches the priorities feed, walks it in order, and stops after the first item for which it actually invoked the agent. All durable state lives in GitHub (branch, commits, PR comments, labels, Workflow board) plus small files under `ORCHESTRATOR_STATE_DIR`, so every session re-derives its context. For the user-level story read [oneshot.md](../../oneshot.md), [architecture.md](../../architecture.md), [fingerprinting.md](../../fingerprinting.md), [github-integration.md](../../github-integration.md) and [workflow-board.md](../../workflow-board.md); this page is a map for changing the code.
+`oneshot` is a script whose logic is one very long `main()` (about 1,400 lines: argument parsing and the per-item decision tree) over the function libraries in `lib/`. A run fetches the priorities feed, walks it in order, and stops after the first item for which it actually invoked the agent. All durable state lives in GitHub (branch, commits, PR comments, labels, Workflow board) plus small files under `ORCHESTRATOR_STATE_DIR`, so every session re-derives its context. For the user-level story read [oneshot.md](../../oneshot.md), [architecture.md](../../architecture.md), [fingerprinting.md](../../fingerprinting.md), [github-integration.md](../../github-integration.md) and [workflow-board.md](../../workflow-board.md); this page is a map for changing the code.
 
 ## Running it
 
@@ -21,7 +21,7 @@ Back to the [development guide](../README.md).
   - Retries: `GH_USER_`, `PRIORITIES_FETCH_`, `GH_ITEM_FETCH_` and `GH_COLLABORATORS_` `RETRY_ATTEMPTS` and `RETRY_DELAY_SECS` (tests set the delays to 0).
   - Board: `PROJECT_CACHE_TTL` (default 3600 seconds). `ORCHESTRATOR_SELF_UPDATE_MANAGED` enables the stale-checkout refusal.
   - Not overridable from the environment: `PRIORITIES_URL`, `MAX_PROMPT_CHARS`, `FINGERPRINT_SCHEMA_VERSION`, `PRUNE_DANGLING_IMAGES`, `PODMAN_REPLACE_CONTAINER`.
-- Exit codes: `die` exits 1. Exit 0 for: another instance holds the lock, low disk space, no items, and every path after the agent ran (`exit 0` at the end of the loop body). Exit 1 when `ORCHESTRATOR_SELF_UPDATE_MANAGED` is set and the checkout is behind `origin/main` (#1298), and when any item hit a pre-flight container failure this run (`count_infra_failure`, `return 1` at the end of `main`, #1361). A per-item infra failure `continue`s, so a run can try later items after one.
+- Exit codes: `die` exits 1. Exit 0 for: another instance holds the lock, low disk space, no items, and every path after the agent ran (`exit 0` at the end of the loop body). Exit 1 when `ORCHESTRATOR_SELF_UPDATE_MANAGED` is set and the checkout is behind `origin/main` (#1298), and when the run scans every item without invoking the agent and at least one item hit a pre-flight container failure (`count_infra_failure`, `return 1` at the end of `main`, #1361); if a later item does run the agent, `main` exits 0 at that point (`oneshot`:~1510).
 - Locking: one exclusive `flock` on fd 9 of `ORCHESTRATOR_STATE_DIR/locks/<owner>.lock` (`_global.lock` without `--owner`); see the test "main exits cleanly when another instance holds the lock".
 
 ## How it works
@@ -66,7 +66,7 @@ Where to make a common change:
 | A budget or cap | The `MAX_*` defaults in `lib/globals`, the counters in lib/state, and the backstop blocks in the Work block. |
 | Putting an item in Blocked | `apply_blocked_label_with_reason` (verifies the label, comments, notifies Discord, marks for forgiveness). |
 | What the agent is told | `build_issue_claude_md` and `build_pr_claude_md`. |
-| Container flags, mounts, secrets | `prepare_claude_container_args`, shared with `interactive` through `ensure_agent_container_ready`. |
+| Container flags, mounts, secrets | `prepare_claude_container_args` and `ensure_agent_container_ready`, both shared with `interactive` via `invoke_claude_interactive`. |
 | Workflow Status names or order | `_WF_STATUS_ORDER` (lib/globals); the mapping also exists in `cfwf`, guarded by `test/status-mapping-parity.bats`. |
 | A Discord message | The `notify_discord_*` function in lib/discord and [discord-notifications.md](../../discord-notifications.md). |
 
@@ -87,7 +87,7 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 - Faking: `gh` is the most stubbed command (`make_stub gh`, a `case "$*"` on the arguments, in the `fetch_single_item_workflow_status` tests for instance); `podman` and `curl` use PATH stubs; `main()` integration tests call `setup_main_mocks` (defined near the "main() skip_repos integration tests" heading, used by about 190 tests) and then override functions such as `fetch_pr_json` and `invoke_claude` with plain function definitions. Some tests use real `git`. Time is faked with `make_stub date "echo 1700000000"`; there is no `sleep` stub here, tests set the `*_RETRY_DELAY_SECS` variables to 0 instead.
 - Source guard: `oneshot` ends with `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` and finds its libraries from `BASH_SOURCE`, so a test can `source` it. See [shell-testing.instructions.md](../../../ai/local/shell-testing.instructions.md).
 - Subset: `bats -f '<pattern>' test/oneshot.bats`. Bats still parses the whole file: five tests matched by `fetch_single_item_workflow_status` took about 13 seconds when measured for this guide, so batch your patterns.
-- The full suite takes minutes (I did not time it here): more than a thousand tests, each sourcing `oneshot` and eleven libraries in `setup()`, plus tests that run real git. CI runs it as `shell-tests`.
+- The full suite takes minutes (not timed for this guide; `docs/development/README.md` says the same): more than a thousand tests, each sourcing `oneshot` and eleven libraries in `setup()`, plus tests that run real git. CI runs it as `shell-tests`.
 
 ## Changing it safely
 
@@ -107,7 +107,7 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 - `prepare_claude_container_args` installs its own `EXIT` trap, which replaces `main`'s; that is why `stop_ssh_agent` is passed in as `extra_exit_cmd`.
 - `gh api --paginate` prints arrays back to back: `fetch_pr_review_comments` and `fetch_pr_issue_comments` use `--slurp` and `flatten(1)`. Large JSON goes to `jq` with `--rawfile`, not `--argjson` (argument limit, #1254). `gh --jq` takes one filter string with no `--arg`.
 - `gh pr list --author @me` is avoided (broke in gh 2.93.0); `list_bot_created_open_prs` filters on `_GH_ME` client-side.
-- Inconsistent default: `CI_CHECK_TIMEOUT_MINUTES` defaults to 1440 in `lib/globals` but an invalid value falls back to 120. Unclear whether that is intended.
+- Inconsistent default: `CI_CHECK_TIMEOUT_MINUTES` defaults to 1440 in `lib/globals` but an invalid value falls back to 120. The default was raised (240 to 1440, commit 4c71e91) without changing the fallback, and no test pins the fallback, so it looks like an oversight rather than a decision. An invalid value in `.env` is different: `load_env_config` warns and ignores it.
 - Caches and invalidation:
   - `_TRUSTED_LOGINS_JSON` resets in `set_repo_context`; `_GH_ME` lasts the process.
   - `_WF_CACHE` and the `_WF_*` globals are in memory; `project-cache.json` expires after `PROJECT_CACHE_TTL`, and `invalidate_project_cache` clears both when `addProjectV2ItemById` is rejected.

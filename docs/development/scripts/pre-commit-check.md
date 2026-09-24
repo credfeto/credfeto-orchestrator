@@ -67,7 +67,7 @@ bats test/pre-commit-check.bats
 
 - The fetch, `@{upstream}` and default-branch checks are not covered by any test, because the test repo has no `origin`. To add one, `setup_local_git_remote` and `advance_remote_main` in `test/test_helper.bash` build a local bare remote and move it on.
 - Arguments are ignored, so a typo such as `pre-commit-check --all` still runs the whole check.
-- Without a network the script dies at the fetch, before looking for a hook.
+- Without a network, and with an origin remote, the script dies at the fetch, before looking for a hook (the fetch only runs when an origin remote exists).
 - The hook is always run with `--all-files`, on every file, not only the ones changed.
 - Hook order is repo, then system, then global: a repo-level hook hides the global one entirely. A hook that exists but is not executable is skipped silently (test "a non-executable repo hook is skipped in favour of the global hooksPath").
 - GitHub API behaviour: not affected. It only uses `git fetch` and local git plumbing, and never calls `gh` or the GitHub API.

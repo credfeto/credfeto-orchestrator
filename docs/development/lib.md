@@ -1,6 +1,6 @@
 # The lib/ function libraries
 
-The eleven sourced-only files in `lib/` hold all the logic that `oneshot` (and, for a few helpers, `loop`, `interactive`, `create-project` and `setup-owner`) runs.
+The eleven sourced-only files in `lib/` hold all the logic that `oneshot` and `interactive` run (both source all eleven); `loop`, `create-project` and `setup-owner` source only `lib/core`.
 
 Back to the [development guide](README.md).
 
@@ -16,11 +16,11 @@ The `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` source guard lives
 
 ### globals
 
-Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Numeric overrides are checked with regexes and fall back to the default. Depends on: nothing.
+Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back to the default (`CI_CHECK_TIMEOUT_MINUTES` falls back to 120 rather than its default of 1440, and `PROJECT_CACHE_TTL` is not validated). Depends on: nothing.
 
 ### core
 
-`die`, `success`, `info`, `warn`, `is_ai_agent`, `require_tools`, `check_required_tools`, `hash_sha256`, token loading (`read_token_if_safe`, `load_token_for_owner`, token files must be mode 600), `load_env_config` and `validate_config`, `check_disk_space`, and the first-run set-up of `$XDG_CONFIG_HOME/orchestrator` (`bootstrap_orchestrator_config`, `migrate_legacy_orchestrator_state`). Depends on: nothing. Most other libraries use it.
+`die`, `success`, `info`, `warn`, `is_ai_agent`, `require_tools`, `check_required_tools`, `hash_sha256`, token loading (`read_token_if_safe`, `load_token_for_owner`, token files must be mode 600 or 400), `load_env_config` and `validate_config`, `check_disk_space`, and the first-run set-up of `$XDG_CONFIG_HOME/orchestrator` (`bootstrap_orchestrator_config`, `migrate_legacy_orchestrator_state`). Depends on: nothing. Most other libraries use it.
 
 ### git
 
@@ -50,6 +50,8 @@ Builds the CLAUDE.md and launch prompts (`build_issue_claude_md`, `build_pr_clau
 
 The GitHub Projects v2 "Workflow" board. Discovery and creation (`discover_or_create_workflow_project`), the disk cache (`load_project_cache`, `save_project_cache`, `invalidate_project_cache`), writes (`update_workflow_status`, `_wf_set_builtin_status`), reads (`fetch_board_item_statuses`, `fetch_board_approved_items`, `fetch_single_item_workflow_status`, `board_substatus_for_item`), the forward-only PR mirror (`sync_pr_workflow_status_from_linked_issues`), and the status mappings (`coarse_status_for_substatus`, `builtin_status_for_workflow_status`, `priority_for_labels`). Depends on: `core`, `github`.
 
+The option maps (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`) are copied between the live globals, the in-memory `_WF_CACHE` and the on-disk cache by helpers written once, which take the array by name (a nameref): `_wf_reset_assoc`, `_wf_assoc_to_json`, `_wf_assoc_from_json`, `_wf_cache_store_assoc`, `_wf_cache_load_assoc` and `_wf_cache_forget_assoc`. `update_workflow_status` writes a field through `_wf_set_item_field` (Workflow Status first, then `_wf_set_builtin_status` for the built-in Status, which uses the same helper).
+
 ### discord
 
 Webhook notifications (`notify_discord_work_item`, `notify_discord_blocked_item`, `notify_discord_no_work` and the rest), the URL builder `build_item_url`, and per-owner dedup files (`_discord_dedup_allowed`). Depends on: `core`, `github-status`, `state`, `workflow-board`.
@@ -58,14 +60,14 @@ Webhook notifications (`notify_discord_work_item`, `notify_discord_blocked_item`
 
 Launching the agent container. `invoke_claude` and `invoke_claude_interactive` share `ensure_agent_container_ready` and `prepare_claude_container_args`. Also `run_claude_fresh`, cgroup, SSH and GPG set-up, `validate_bind_mounts` and `current_agent_image_sha`. Depends on: `core`, `discord`, `state`.
 
-`lib/discord` and `lib/podman` each declare a few plain top-level variables of their own (`DISCORD_RESOLVED_WEBHOOK_URL`, and `CLAUDE_MD_TMPFILE`, `CLAUDE_PROMPT`, `GPG_PUBKEY_TMPDIR`, `PODMAN_SECRET_NAME`, `GH_ENTERPRISE_SECRET_NAME`). They are invocation-scoped scratch values assigned to `""`, so they are an existing exception to the "globals live in `lib/globals`" rule below rather than a pattern to copy.
+`lib/discord` and `lib/podman` each declare a few plain top-level variables of their own (`DISCORD_RESOLVED_WEBHOOK_URL`, and `CLAUDE_MD_TMPFILE`, `CLAUDE_PROMPT`, `GPG_PUBKEY_TMPDIR`, `PODMAN_SECRET_NAME`, `GH_ENTERPRISE_SECRET_NAME`, `CLAUDE_SCRATCH_TMPDIR`). They are invocation-scoped scratch values assigned to `""`, so they are an existing exception to the "globals live in `lib/globals`" rule below rather than a pattern to copy.
 
 ## Adding to a module
 
 - Put a function in the library whose concern dominates it, not in `oneshot`, which should only hold `main()`, argument parsing and the source block. When it spans concerns, use its main concern (`_build_wf_section` is in `prompts` because it emits prompt text, although it reads board state).
 - A new global, default or counter goes in `lib/globals`, and an associative array must be declared there with `declare -gA`. Do not add another top-level variable in a library.
 - Sourcing a library must have no side effects: no function calls, no I/O, no `gh`, `git` or network calls. Only function definitions (and, in `globals`, declarations and default computation).
-- A new library file needs a source line in `oneshot` with the shellcheck directive and the `|| { printf ...; exit 1; }` fallback. Lint with `shellcheck oneshot loop create-project setup-owner install-timer interactive`, not the `lib/` file alone, which gives false SC2034 warnings. `oneshot` also carries a comment block listing which functions are declared in which library; keep it in step.
+- A new library file needs a source line in `oneshot` with the shellcheck directive and the `|| { printf ...; exit 1; }` fallback. Lint with `shellcheck oneshot loop create-project setup-owner install-timer interactive`, not the `lib/` file alone, which gives false SC2034 warnings; also run `shellcheck test/*.bats` when you add or change a test. `oneshot` also carries a comment block listing which functions are declared in which library; keep it in step.
 - Unit-test every function by sourcing `oneshot` in a bats test: `load test_helper`, then `setup_isolated_env` and `source_oneshot` in `setup()`, and `cleanup_stubs` in `teardown()`. `source_oneshot` sources `oneshot` (the guard skips `main`) and `seed_test_repo_context` sets the repo context to `credfeto/credfeto-orchestrator` with state directories inside the test's temporary directory. Stub `gh`, `git`, `curl` and `sleep` with `make_stub`, or redefine the function after sourcing. Most of these tests are in `test/oneshot.bats`; run a subset with `bats -f '<pattern>' test/oneshot.bats`.
 - Mutation-check each new test: break the line the test is about, watch it fail, restore it. See the [development guide](README.md).
 - If you add, remove or change what `fingerprint_issue_json` or `fingerprint_pr_json` hash, bump `FINGERPRINT_SCHEMA_VERSION` (currently 2) by exactly 1 in the same change, and update the field list in [fingerprinting.instructions.md](../../ai/local/fingerprinting.instructions.md). The two functions share one counter. No test checks that you did; reviewers must.
@@ -89,7 +91,7 @@ A list, a search or a field value can return the old state for seconds to minute
 
 ### The board has no single-item read
 
-`gh project` has no command that reads one item, and `lib/` does not use `gh project` at all. It uses `gh api graphql` instead. `fetch_board_item_statuses` and `fetch_board_approved_items` walk the whole board with `items(first:100)` and a cursor, once per repo per process. `fetch_single_item_workflow_status` is the one-item alternative. The queries also fix `fieldValues(first:50)` (items) and `fields(first:30)` (project) with no paging, so more than that is silently not seen. A failed page warns and stops the walk, but the "already fetched" flag was set before it started, so the partial result stands for the rest of the process. `cfwf` makes the same choice for its own `--check`.
+`gh project` has no command that reads one item, and `lib/` does not use `gh project` at all. It uses `gh api graphql` instead. `fetch_board_item_statuses` and `fetch_board_approved_items` walk the whole board with `items(first:100)` and a cursor, once per repo per process. `fetch_single_item_workflow_status` is the one-item alternative. The queries also fix `fieldValues(first:50)` (items) and `fields(first:30)` (project) with no paging, so more than that is silently not seen. A failed page warns and stops the walk, but the "already fetched" flag was set before it started, so the partial result stands for the rest of the process. `cfwf --check` also reads the single item with `gh api graphql`, but falls back to `gh project item-list` with a raised limit, and its writes use native `gh project` commands.
 
 ### Capped list commands
 
@@ -103,8 +105,8 @@ A list, a search or a field value can return the old state for seconds to minute
 - `invalidate_project_cache` deletes the file and clears the repo's `_WF_CACHE` keys and live globals. It is called from exactly one place: when `addProjectV2ItemById` fails in `update_workflow_status` (a deleted or recreated project). A failed field write, a failed board read or a renamed option does not invalidate anything; the stale ids stay until the TTL runs out.
 - `_WF_ITEM_STATUS_OPTION_ID` and `_WF_APPROVED_ITEMS` are filled once per repo per process and never invalidated, and `update_workflow_status` does not update them. Within one process `board_substatus_for_item` and `issue_plan_approved` therefore report the state before that process's own writes, or "Unknown" for an item added after the fetch.
 
-### The built-in Status field (this branch)
+### The built-in Status field (#1493)
 
 `update_workflow_status` adds the item to the board, sets the Workflow Status, and only if that succeeds calls `_wf_set_builtin_status`. That maps the status with `builtin_status_for_workflow_status` (Todo for Not Started and Planning, In Progress for Approved through Human Review, Done for Complete) and looks the option up in `_WF_BUILTIN_OPTION_IDS`, whose keys are lower-cased names. A project with no `Status` field, a renamed or removed option, or a failed mutation gets a warning and the Workflow Status stands.
 
-Discovery reads the field named `Status` from the same fields query and records `_WF_BUILTIN_FIELD_ID` and the option ids in the `builtin_*` keys of `_WF_CACHE` and in the disk cache. `load_project_cache` treats an entry without `builtin_field_id` as a miss (#1493), so caches written before this change are rediscovered once. Reading the code, the same rule means a project that has no built-in `Status` field at all never gets a disk cache hit and is rediscovered on every run; nothing in the code or tests states whether that is intended.
+Discovery reads the field named `Status` from the same fields query and records `_WF_BUILTIN_FIELD_ID` and the option ids in the `builtin_*` keys of `_WF_CACHE` and in the disk cache. `load_project_cache` treats an entry without `builtin_field_id` as a miss (#1493), so caches written before #1493 are rediscovered once. Reading the code, the same rule means a project that has no built-in `Status` field at all never gets a disk cache hit and is rediscovered on every run; nothing in the code or tests states whether that is intended.

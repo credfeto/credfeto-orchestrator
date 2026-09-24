@@ -25,7 +25,7 @@ Back to the [development guide](../README.md).
 
 It sources nothing from `lib/`; `die`, `success`, `info` and `is_ai_agent` are local copies. `check_required_tools` needs `id`, `sudo` and `systemctl`.
 
-1. At load time it computes and validates `CURRENT_USER`, `SERVICE_NAME` (`credfeto-orchestrator-<user>`) and `UNIT_DIR`.
+1. At load time it computes and validates `CURRENT_USER` and `SERVICE_NAME` (`credfeto-orchestrator-<user>`) and sets the constant `UNIT_DIR` (not validated).
 2. `main` parses `--owner`, rejects AI-agent invocation, then runs `check_required_tools`.
 3. With `--owner`, `main` appends it to `SERVICE_NAME` and re-validates.
 4. `sudo systemctl stop <name>.timer` and `sudo systemctl disable <name>.timer`, each with `2>/dev/null || true`, so a timer that was never installed is not an error.

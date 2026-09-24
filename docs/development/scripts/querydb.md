@@ -6,7 +6,7 @@ Back to the [development guide](../README.md).
 
 ## Purpose
 
-`sqlcmd` is denied to the agent directly (`Bash(sqlcmd *)` is in the `permissions.deny` list of `claude-settings.json`, as are `cat`/`grep`/`find` of `*/.database*` and `Read`/`Edit` of `~/.database`), so the credentials in `.database` never appear on an agent-typed command line. `querydb` is the sanctioned route: it sources the settings files itself and invokes `sqlcmd` as its own subprocess. `ai/global/sql.examples.md` describes this route and the `.database` file format.
+`sqlcmd` is denied to the agent directly (`Bash(sqlcmd *)` is in the `permissions.deny` list of `claude-settings.json`, as are `cat`/`grep`/`find` of `*/.database*` and `Read`/`Edit` of `~/.database`), so the credentials in `.database` never appear on an agent-typed command line. `querydb` is the sanctioned route: it sources the settings files itself and invokes `sqlcmd` as its own subprocess. `ai/global/sql.examples.md` describes this route (a repo-local wrapper such as `testdb`, or an equivalent such as `querydb`) and the `.database` file format.
 
 ## Running it
 
@@ -75,7 +75,7 @@ bats test/querydb.bats
 
 - Untested paths: `DB not set` and `USER not set` have no test, and neither does the "repo-local file is the same file as `$HOME/.database`" skip. A change to either is not protected.
 - `.database` files are sourced as shell, so anything in them runs. Keep them to `KEY=value` lines.
-- The walk-up loop stops when the path becomes empty, so a `.database` in `/` is never found. It also picks the nearest file only; it does not merge several.
+- The walk-up loop stops when the path becomes empty, so a `.database` in `/` is only found when run with `PWD=/`, never from a subdirectory. It also picks the nearest file only; it does not merge several.
 - The password goes on the `sqlcmd` command line (`-P`), so it is visible in the process list while the query runs.
 - The log name is `testdb-last.log` (from the older `testdb` wrapper), it is shared between runs, and it holds whatever `sqlcmd` printed, including query results. Concurrent runs overwrite each other. `/tmp/**` is denied for `Read` in `claude-settings.json`, so when `TMPBASE` is `/tmp` the agent cannot read the log back with `Read`.
 - stdout and stderr are merged, so a caller cannot separate them.

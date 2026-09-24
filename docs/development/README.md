@@ -44,6 +44,8 @@ link in these pages is broken.
 | `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure` | Setup, install and support scripts. |
 | `lib/` | The function libraries `oneshot` sources (see [lib.md](lib.md)). |
 | `containers/base/` | The agent container image chain and, in `development-full`, the scripts and Claude Code hooks baked into it. |
+| `containers/agent/` | The agent image itself: its `Dockerfile` and `entrypoint.sh` (tested by `test/entrypoint.bats`). |
+| `tasks/` | Task notes (`healthcheck.md`). |
 | `test/` | The bats suites, one per script plus the hook and parity tests, and `test_helper.bash`. |
 | `docs/` | User-level documentation and these guides. |
 | `ai/local/`, `ai/global/` | Instructions for AI agents working on this repository; local ones are ours, global ones come from `cs-template`. |
@@ -51,14 +53,15 @@ link in these pages is broken.
 
 ## Writing the shell scripts
 
-- Scripts are bash, run by a shebang line, and have no file extension. They are checked with
-  `shellcheck` and by the repository's pre-commit hooks; keep them clean rather than adding
-  disables, and explain any disable that is unavoidable.
-- None of the scripts use `set -e`. Errors are handled where they can happen, with an explicit
-  `|| die "message"`, so a failure always says what failed. Quote every expansion and prefer
-  `local` variables in functions.
-- The big scripts (`oneshot`, `loop`, `create-project`, `interactive`) put all their logic in
-  functions and end with a source guard, so a test can `source` them without running them:
+- Scripts are bash (`#!/bin/bash`), run by a shebang line, and have no file extension, except
+  `pre-commit-check`, which is POSIX `#! /bin/sh` (so it is also checked with `checkbashisms`).
+  They are checked with `shellcheck`, locally by the global pre-commit hooks and in CI; keep
+  them clean rather than adding disables, and explain any disable that is unavoidable.
+- Only `notify-unit-failure` uses `set -e`. Everywhere else errors are handled where they can
+  happen, with an explicit `|| die "message"`, so a failure always says what failed. Quote every
+  expansion and prefer `local` variables in functions.
+- Every script except `notify-unit-failure`, `pre-commit-check` and `querydb` puts its logic in
+  functions and ends with a source guard, so a test can `source` it without running it:
 
   ```bash
   if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
@@ -74,7 +77,9 @@ link in these pages is broken.
 - Prefer native `gh <noun> <verb>` subcommands to `gh api graphql`. The exceptions are
   documented where they are made, for example the read-only single-item query in `cfwf`
   (see [cfwf](scripts/cfwf.md)). A GraphQL mutation typed as a command is blocked by the agent
-  sandbox, and long hand-built `gh` pipelines are the kind of thing its command checks reject:
+  sandbox (the shared rules in `ai/global/agent-roles.instructions.md` say so; it is the outer
+  sandbox, not `claude-settings.json`), and long hand-built `gh` pipelines are the kind of thing
+  its command checks reject:
   put a recurring multi-step `gh` pattern behind a script (that is what `cfwf` is) rather than
   asking agents to compose it each time.
 - Help text, README text and the guides describe behaviour; when the behaviour changes, change
@@ -89,8 +94,10 @@ link in these pages is broken.
   guide for each script says which helpers and stubs its tests use.
 - Every behaviour has a test, written with the change. Tests run offline and in isolation:
   `setup_isolated_env` redirects `HOME`, the XDG directories and the session directory into a
-  temporary directory, and every external command (`gh`, `podman`, `git`, `sleep`, `sudo`)
-  is replaced by a stub on `PATH`. A test must never reach the network or the real machine.
+  temporary directory and puts an empty stub directory first on `PATH`; each test then stubs the
+  external commands it uses (`gh`, `podman`, `git`, `sleep`, `sudo`) with `make_stub`. A few tests
+  use the real `git` against a local `file://` remote, and `GIT_ALLOW_PROTOCOL=file` stops any
+  network transport. A test must never reach the network or the real machine.
 - Fake `gh` faithfully. The `cfwf` suite uses a `gh` stand-in that applies each call's `--jq`
   filter to a fixture with the real `jq`, so the filters the script hands to `gh` are exercised
   against real-shaped JSON instead of only being recorded.
@@ -99,25 +106,30 @@ link in these pages is broken.
   glue mistake such as a missing space between two arguments is exactly what this catches.
 - Run one file with `bats test/<name>.bats`, or a subset of the very large
   `test/oneshot.bats` with `bats -f '<pattern>' test/oneshot.bats`. The whole suite takes
-  minutes; CI runs it as `shell-tests`, and the pre-commit hook runs it on every commit.
-- Because the hook runs the whole suite, `git commit` and `git push` take minutes. Run them in
-  the background and do not edit files while a commit is running: pre-commit stashes unstaged
-  changes for the duration, and an edit made meanwhile can make its linters fail.
+  minutes; CI runs it as `shell-tests`. The global pre-commit hooks (the hooks are not in this
+  repository; they come from the developer's global `core.hooksPath`) also run it when a `.bats`
+  file is staged, and always under `pre-commit-check`, so such a commit takes minutes.
+- Run `git commit` in the background when it will run the suite, and do not edit files while it
+  runs: pre-commit stashes unstaged changes for the duration, and an edit made meanwhile can
+  make its linters fail. `git push` runs no tests.
 
 ## Making a change
 
-1. An issue describes the goal. For anything beyond a trivial fix, the plan (files to change,
-   approach, tests, assumptions, open questions) is posted on the issue and work starts when it is
-   approved.
+1. An issue describes the goal. The plan (files to change, approach, tests, assumptions, open
+   questions) is posted on the issue and work starts when it is approved.
 2. Work on a branch, never on `main`. Run the pre-commit checks before starting so you know the
    baseline is green.
 3. Add a placeholder changelog entry and correct it once there is a real diff. Use
-   `dotnet changelog` (`-a` to add, `-r` to remove an exact message); never edit `CHANGELOG.md`
+   `dotnet changelog -f CHANGELOG.md -a <Type> -m "<message>"` to add and
+   `dotnet changelog -f CHANGELOG.md -r <Type> -m "<exact message>"` to remove (types: Added,
+   Changed, Deprecated, Removed, Fixed, Security, Deployment Changes); never edit `CHANGELOG.md`
    by hand. There is no in-place edit: remove the old entry and add the corrected one.
 4. Open a draft PR and keep the Workflow board status in step as the work moves through it.
 5. Once CI is green, run the review passes: simplify, code review, security review, and the
-   coverage ratchet (skipped for shell, Docker, docs and dependency-only changes). Fix what they
-   find in separate commits and re-run each pass until it finds nothing new.
+   coverage ratchet (skipped when every changed file is a dependency manifest or version pin, a
+   workflow, SQL, a shell script, a Dockerfile or documentation). Fix what they find in separate
+   commits and re-run each pass until it finds nothing new, its round cap is reached, or its
+   convergence rule ends it (see `ai/local/interactive-session.instructions.md`).
 6. Mark the PR ready and enable auto-merge; a human reviews before it merges.
 
 The interactive-session rules in
@@ -148,11 +160,13 @@ These have all been seen in practice. Where a script has to cope with one, its g
   are separate fields with separate option ids. Both writers set the built-in one to match the
   Workflow Status; see [the workflow-board page](../workflow-board.md).
 - **Ids are per project.** Field and option ids are looked up from the board each time (or from
-  a cache with a time limit that is cleared when a write is rejected), never hard-coded.
+  a cache with a time limit, `PROJECT_CACHE_TTL`, that is cleared only when adding the item to
+  the board is rejected), never hard-coded.
 - **Project owner is not always the repository owner.** Read the owner from the project's own
   path. Repository names compare case-insensitively.
-- **Auth and scopes.** Project reads and writes need the `project` scope on the token; a
-  failure that mentions scope, permission or authorisation is reported with that hint.
+- **Auth and scopes.** Project reads and writes need the `project` scope on the token. Only the
+  orchestrator's project discovery reports a scope, permission or authorisation failure with a
+  `gh auth refresh -s project` hint; `cfwf` and the board writes pass `gh`'s error through.
 
 ## Adding a script
 
