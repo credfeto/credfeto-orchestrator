@@ -12,7 +12,7 @@ pr_fingerprint_file_path() {
 # returns 1 (does not die) once retries are exhausted, so a single blip on this frequently-called
 # fetch skips just the current item rather than killing the whole run (#1090).
 fetch_pr_json() {
-    fetch_pr_fields_json "$1" state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits,files
+    fetch_pr_fields_json "$1" state,title,body,isDraft,labels,headRefOid,headRefName,baseRefName,comments,reviews,reviewDecision,reviewRequests,assignees,milestone,statusCheckRollup,mergeable,mergeStateStatus,autoMergeRequest,author,commits,files,isCrossRepository
 }
 
 # Fetches inline (diff-level) PR review comments via the REST comments endpoint — a separate
