@@ -376,11 +376,12 @@ discover_or_create_workflow_project() {
     }
 
     local opt_name opt_id
-    while IFS='|' read -r opt_name opt_id; do
+    # The id comes first: ids never contain "|", so a "|" in an option name stays in the name.
+    while IFS='|' read -r opt_id opt_name; do
         if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
         _WF_OPTION_IDS["${opt_name}"]="${opt_id}"
     done < <(printf '%s' "${status_field_node}" | \
-        jq -r '.options[] | "\(.name)|\(.id)"' 2>/dev/null)
+        jq -r '.options[] | "\(.id)|\(.name)"' 2>/dev/null)
 
     # The built-in "Status" field (Todo / In Progress / Done) comes back in the same fields query.
     # It is optional: a project without it just skips the built-in write. Option ids are keyed by
@@ -390,11 +391,11 @@ discover_or_create_workflow_project() {
         jq -c '.fields.nodes[] | select(.name == "Status")' 2>/dev/null | head -1)
     if [ -n "${builtin_field_node}" ]; then
         _WF_BUILTIN_FIELD_ID=$(printf '%s' "${builtin_field_node}" | jq -r '.id // empty' 2>/dev/null)
-        while IFS='|' read -r opt_name opt_id; do
+        while IFS='|' read -r opt_id opt_name; do
             if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
             _WF_BUILTIN_OPTION_IDS["${opt_name,,}"]="${opt_id}"
         done < <(printf '%s' "${builtin_field_node}" | \
-            jq -r '.options[]? | "\(.name)|\(.id)"' 2>/dev/null)
+            jq -r '.options[]? | "\(.id)|\(.name)"' 2>/dev/null)
     fi
 
     _wf_cache_store_assoc opt _WF_OPTION_IDS

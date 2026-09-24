@@ -13494,6 +13494,24 @@ STUBEOF
     [ "${output}" = "bp" ]
 }
 
+@test "discover_or_create_workflow_project keeps an option name containing a pipe whole and does not let it overwrite another option (#1493)" {
+    local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_b1","name":"Status","options":[{"id":"bt","name":"Todo"},{"id":"bx","name":"To|do"}]},{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"},{"id":"oid2","name":"Plan|ning"}]}]}}]'
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+if [[ "\$*" == *"projectsV2"* ]]; then
+    printf '{"nodes":%s,"pageInfo":{"endCursor":null,"hasNextPage":false}}\n' '${project_json}'
+    exit 0
+fi
+exit 1
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    discover_or_create_workflow_project
+    [ "${_WF_BUILTIN_OPTION_IDS[todo]}" = "bt" ]
+    [ "${_WF_BUILTIN_OPTION_IDS[to|do]}" = "bx" ]
+    [ "${_WF_OPTION_IDS[Planning]}" = "oid1" ]
+    [ "${_WF_OPTION_IDS[Plan|ning]}" = "oid2" ]
+}
+
 @test "discover_or_create_workflow_project leaves the built-in Status empty for a project without one, and that entry is still served from the disk cache (#1493)" {
     local project_json='[{"id":"PVT_found","title":"Workflow","fields":{"nodes":[{"id":"PVTSSF_f1","name":"Workflow Status","options":[{"id":"oid1","name":"Planning"}]}]}}]'
     cat > "${STUB_BIN}/gh" << STUBEOF
