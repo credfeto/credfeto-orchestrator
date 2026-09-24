@@ -432,7 +432,8 @@ pr_should_use_dependency_prompt() {
 # label, the "depends/" and "dependabot/" prefixes (pr_has_dependency_update_branch) are set once
 # at push time by the bump tooling and are never retroactively applied by label-sync, so checking
 # them ahead of the author check cannot reopen the #1134 hole: human/bot feature branches use
-# "fix/", "feat/", "perf/", etc., never these prefixes.
+# "fix/", "feat/", "perf/", etc., never these prefixes. A fork PR never counts (the branch name is
+# the fork author's choice); see pr_has_dependency_update_branch.
 # Operates entirely on the caller's pr_json — fetch_pr_json already includes author, commits and
 # headRefName (#1134) — so the only remote failure mode is the identity lookup.
 # Returns 0 (human-driven — stand off), 1 (not human-driven — process normally), or 2 when the
