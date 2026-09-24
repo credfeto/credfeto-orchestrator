@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2154  # stderr is set by run --separate-stderr
 
-load test_helper
-
 bats_require_minimum_version 1.5.0
+
+load test_helper
 
 SCRIPT="${REPO_ROOT}/containers/base/development-full/scripts/cfwf"
 
@@ -140,7 +140,7 @@ gh_line_of() {
 @test "the workflow-status help states that --set does not read back, the fallback listing limit and the GraphQL exception" {
     run "${SCRIPT}" help workflow-status
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"The listing reads at most 10000 items."* ]]
+    [[ "${output}" == *"The fallback listing reads at most 10000 items."* ]]
     [[ "${output}" == *"does not read the value back"* ]]
     [[ "${output}" == *"read-only GraphQL query for the single item"* ]]
     [[ "${output}" == *"write uses native gh project commands"* ]]
@@ -432,7 +432,7 @@ gh_line_of() {
     grep -qF 'pullRequest(number:$n)' "${GH_LOG}"
 }
 
-@test "--check treats a number that is not that type, or does not exist, as not on the board, without a fallback or a warning" {
+@test "--check treats GitHub's no-such-issue answer as not on the board, without a fallback or a warning" {
     use_fallback "GraphQL: Could not resolve to an Issue with the number of 1481."
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1481
     [ "${status}" -eq 1 ]
@@ -460,8 +460,6 @@ gh_line_of() {
     [ "${status}" -eq 0 ]
     [ "${output}" = "Approved" ]
     grep -qF "project item-list 74 --owner credfeto --format json -L 10000 " "${GH_LOG}"
-
-    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 1346
     [[ "${stderr}" == *"cfwf: warning: the direct GraphQL read failed (GraphQL: something went wrong); falling back to listing the board"* ]]
 }
 

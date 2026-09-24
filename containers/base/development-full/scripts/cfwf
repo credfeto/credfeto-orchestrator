@@ -71,7 +71,7 @@ and can be slow to show a freshly added item. This is the only place cfwf uses G
 write uses native gh project commands. If the query fails, cfwf warns on stderr and falls
 back to listing the board.
 USAGE
-    printf 'The listing reads at most %s items.\n' "${ITEM_LIMIT}"
+    printf 'The fallback listing reads at most %s items.\n' "${ITEM_LIMIT}"
 }
 
 usage_closing_issue_labels() {
@@ -251,19 +251,20 @@ graphql_failure_text() {
     printf '%s' "${text:0:200}"
 }
 
-# fall_back_to_listing warns about the failed direct read, quoting
-# the given error text, then sets ITEM_STATUS from listing the board with the given jq filter.
-# Returns non-zero when the listing fails too.
+# fall_back_to_listing warns about the failed direct read, quoting the given error text, then
+# sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
+# listing fails too.
 fall_back_to_listing() {
     printf 'cfwf: warning: the direct GraphQL read failed (%s); falling back to listing the board\n' "$1" >&2
     ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
 }
 
 # Sets ITEM_STATUS to the target's Workflow Status on the Workflow project, "(unset)" when it has
-# none, or "" when it is not on that project. issue(number:) or pullRequest(number:) is chosen by
-# --issue or --pr, so the type check is kept; GitHub's "no such issue/pull request with that number"
-# answer means "not found", not a failure (any other error, such as an unreadable repository,
-# still falls back). Returns non-zero only when both the direct read and the board listing fail.
+# none, or "" when it is not on that project. issue(number:) resolves only an issue and
+# pullRequest(number:) only a pull request (chosen by --issue or --pr), so a number of the other
+# type comes back as not found. GitHub's "no such issue/pull request with that number" answer
+# means "not found", not a failure (any other error, such as an unreadable repository, still
+# falls back). Returns non-zero only when both the direct read and the board listing fail.
 read_target_status() {
     local accessor="issue"
     [ "${TARGET_TYPE}" = "PullRequest" ] && accessor="pullRequest"
