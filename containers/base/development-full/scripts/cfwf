@@ -80,7 +80,6 @@ GRAPHQL_OUTPUT=""
 GRAPHQL_ERROR=""
 TITLE=""
 BODY_FILE=""
-BODY_PATH=""
 PRIORITY=""
 LABELS=()
 CREATED_URL=""
@@ -604,19 +603,18 @@ parse_issue_options() {
     done
 }
 
-# Points BODY_PATH at the file holding the body (a copy of stdin when BODY_FILE is -) and
+# Points BODY_FILE at the file holding the body (a copy of stdin when it was -) and
 # refuses a missing, unreadable or blank one.
 resolve_body() {
     if [ "${BODY_FILE}" = "-" ]; then
         BODY_PATH_TMP=$(mktemp) || die "could not create a temporary file"
         cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
-        BODY_PATH="${BODY_PATH_TMP}"
+        BODY_FILE="${BODY_PATH_TMP}"
     else
         [ -f "${BODY_FILE}" ] && [ -r "${BODY_FILE}" ] || die "cannot read the body file: ${BODY_FILE}"
-        BODY_PATH="${BODY_FILE}"
     fi
-    grep -q '[^[:space:]]' "${BODY_PATH}" || die "the issue body is empty"
-    [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_PATH}")" -le "${BODY_LIMIT}" ] \
+    grep -q '[^[:space:]]' "${BODY_FILE}" || die "the issue body is empty"
+    [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_FILE}")" -le "${BODY_LIMIT}" ] \
         || die "the issue body is longer than ${BODY_LIMIT} characters"
 }
 
@@ -689,7 +687,7 @@ issue_create() {
     resolve_status
     ensure_labels_exist
 
-    local args=(issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_PATH}")
+    local args=(issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_FILE}")
     local label url
     for label in "${ISSUE_LABELS[@]}"; do
         args+=(--label "${label}")
