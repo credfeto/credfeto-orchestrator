@@ -296,8 +296,11 @@ MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
-CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-1440}"
-[[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES=120
+# An invalid value falls back to the same default, from one constant so the two cannot diverge
+# (the default was raised from 240 to 1440 once without the fallback, which stayed at 120, #1504).
+CI_CHECK_TIMEOUT_DEFAULT_MINUTES=1440
+CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}}"
+[[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}"
 
 # How many times to retry the `gh api user` identity lookup, and how long to wait between
 # attempts, before giving up. The lookup is cheap and cached for the rest of the run once it

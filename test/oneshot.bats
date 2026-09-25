@@ -6725,6 +6725,29 @@ ENVEOF
     [ -z "${WHITELISTED_USERS}" ]
 }
 
+@test "CI_CHECK_TIMEOUT_MINUTES defaults to 1440 minutes when it is not set (#1504)" {
+    unset CI_CHECK_TIMEOUT_MINUTES
+    source_oneshot
+    [ "${CI_CHECK_TIMEOUT_MINUTES}" -eq 1440 ]
+    [ "${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}" -eq 1440 ]
+}
+
+@test "CI_CHECK_TIMEOUT_MINUTES keeps a valid override (#1504)" {
+    CI_CHECK_TIMEOUT_MINUTES=30
+    source_oneshot
+    [ "${CI_CHECK_TIMEOUT_MINUTES}" -eq 30 ]
+}
+
+@test "CI_CHECK_TIMEOUT_MINUTES falls back to the default, not a different number, for an invalid override (#1504)" {
+    local value
+    for value in abc 0 -5 "" 1.5 " 30"; do
+        CI_CHECK_TIMEOUT_MINUTES="${value}"
+        source_oneshot
+        [ "${CI_CHECK_TIMEOUT_MINUTES}" -eq "${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}" ]
+        [ "${CI_CHECK_TIMEOUT_MINUTES}" -eq 1440 ]
+    done
+}
+
 @test "load_env_config reads CI_CHECK_TIMEOUT_MINUTES from env file" {
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator"
     printf 'CI_CHECK_TIMEOUT_MINUTES=30\n' > "${XDG_CONFIG_HOME}/orchestrator/.env"
