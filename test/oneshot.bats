@@ -8481,32 +8481,90 @@ ENVEOF
     [ "${status}" -ne 0 ]
 }
 
-@test "report_unparseable_rate_limit creates a new issue when no open tracking issue exists" {
-    local gh_log="${TEST_TMP}/gh_args"
-    # Stub: gh issue list outputs nothing (no open tracker found after jq filtering).
-    # All other gh calls (issue create) have their args logged.
+# A gh stand-in good enough for the in-repo cfwf to create an issue through: every call's arguments
+# are logged one per line to $1, `gh issue list` finds no open tracker, and the rest answer the way a
+# repo with a Workflow board and no labels would. The file cfwf passes as --body-file is copied to
+# ${TEST_TMP}/cfwf_fixtures/issue-body.txt. Pass "fail" as $2 to make `gh issue create` fail.
+make_cfwf_gh_stub() {
+    local gh_log="$1" issue_create_result="${2:-ok}"
+    local fixtures="${TEST_TMP}/cfwf_fixtures"
+    mkdir -p "${fixtures}"
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_proj", title: "Workflow", number: 74, resourcePath: "/users/credfeto/projects/74", closed: false}]}}' > "${fixtures}/repo-view.json"
+    jq -n '{fields: [
+        {id: "PVTSSF_status", name: "Status", options: [{id: "todo", name: "Todo"}], type: "ProjectV2SingleSelectField"},
+        {id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "ns", name: "Not Started"}], type: "ProjectV2SingleSelectField"}]}' > "${fixtures}/field-list.json"
+    jq -n '[]' > "${fixtures}/label-list.json"
+    jq -n '{id: "PVTI_new"}' > "${fixtures}/item-add.json"
     cat > "${STUB_BIN}/gh" << STUBEOF
 #!/usr/bin/env bash
-if [ "\$1" = "issue" ] && [ "\$2" = "list" ]; then
-    exit 0
-fi
 printf '%s\n' "\$@" >> '${gh_log}'
+jq_expr=""; prev=""
+for arg in "\$@"; do [ "\${prev}" = "--jq" ] && jq_expr="\${arg}"; prev="\${arg}"; done
+emit() { if [ -n "\${jq_expr}" ]; then jq -r "\${jq_expr}" < "\$1"; else cat "\$1"; fi; }
+case "\$1 \$2" in
+  "issue list") exit 0 ;;
+  "repo view") emit '${fixtures}/repo-view.json' ;;
+  "project field-list") emit '${fixtures}/field-list.json' ;;
+  "label list") emit '${fixtures}/label-list.json' ;;
+  "issue create")
+    prev=""
+    for arg in "\$@"; do [ "\${prev}" = "--body-file" ] && cp "\${arg}" '${fixtures}/issue-body.txt'; prev="\${arg}"; done
+    [ '${issue_create_result}' = "fail" ] && exit 1
+    echo "https://github.com/credfeto/credfeto-orchestrator/issues/1600" ;;
+  "project item-add") emit '${fixtures}/item-add.json' ;;
+  *) exit 0 ;;
+esac
 STUBEOF
     chmod +x "${STUB_BIN}/gh"
+}
 
-    local raw_msg="Rate limit reached — unknown format with no reset time"
+@test "CFWF_SCRIPT is the cfwf in this repository" {
+    [ "${CFWF_SCRIPT}" = "${REPO_ROOT}/containers/base/development-full/scripts/cfwf" ]
+    [ -x "${CFWF_SCRIPT}" ]
+}
+
+@test "report_unparseable_rate_limit creates a new issue, on the Workflow board, when no open tracking issue exists" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_cfwf_gh_stub "${gh_log}"
+
+    local raw_msg="Rate limit reached - unknown format with no reset time"
     report_unparseable_rate_limit "Issue" "7" "${raw_msg}"
 
     [ -f "${gh_log}" ]
-    # gh issue create must have been called with the expected flags.
+    # gh issue create must have been called with the expected flags, through cfwf.
     grep -q "^create$" "${gh_log}"
     grep -q "^${RATE_LIMIT_ISSUE_TITLE}$" "${gh_log}"
     grep -q "^AI-Work$" "${gh_log}"
+    grep -q "^Medium$" "${gh_log}"
     grep -q "^${RATE_LIMIT_ISSUE_REPO}$" "${gh_log}"
-    # The verbatim raw message must appear in the body.
-    grep -q "${raw_msg}" "${gh_log}"
+    # The issue is put on the board.
+    grep -q "^item-add$" "${gh_log}"
+    # The verbatim raw message must appear in the body cfwf handed to gh.
+    grep -q "${raw_msg}" "${TEST_TMP}/cfwf_fixtures/issue-body.txt"
     # gh issue comment must NOT have been called.
     run grep -q "^comment$" "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "report_unparseable_rate_limit runs the cfwf in this repository and ignores one on PATH" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_cfwf_gh_stub "${gh_log}"
+    make_stub cfwf "touch '${TEST_TMP}/decoy_cfwf_ran'"
+
+    report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
+
+    [ ! -f "${TEST_TMP}/decoy_cfwf_ran" ]
+    grep -q "^create$" "${gh_log}"
+}
+
+@test "report_unparseable_rate_limit warns and carries on when the issue cannot be created" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_cfwf_gh_stub "${gh_log}" fail
+
+    run report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to create unparseable rate-limit tracking issue"* ]]
+    run grep -q "^item-add$" "${gh_log}"
     [ "${status}" -ne 0 ]
 }
 

@@ -445,6 +445,8 @@ report_missing_workflow_project() {
     body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
         "${REPO_FULL}")
 
+    # Deliberately plain gh issue create, not cfwf issue create: this runs only when the repo has
+    # no usable Workflow board, and cfwf refuses to create an issue without one. To be reviewed.
     if gh issue create --repo "${REPO_FULL}" \
         --title "${WF_SETUP_ISSUE_TITLE}" --label "AI-Work" --body "${body}" 2>/dev/null; then
         _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"
