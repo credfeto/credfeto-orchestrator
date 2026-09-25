@@ -325,17 +325,12 @@ read_target_status() {
     fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | ((.[\"workflow Status\"] // \"(unset)\") + \" (\" + (.status // \"unset\") + \")\")"
 }
 
-workflow_status_set() {
-    require REPO --repo
-    require STATUS --status
-    require_target
-    require_gh
-
-    local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
+# Adds the item at the given URL to the board (idempotent) and sets its Workflow Status and
+# built-in Status. resolve_project and resolve_status must already have run. Never reads the
+# values back.
+put_item_on_board() {
+    local item_url="$1"
     local item_id
-
-    resolve_project
-    resolve_status
 
     item_id=$(gh project item-add "${PROJECT_NUMBER}" --owner "${OWNER}" --url "${item_url}" \
         --format json --jq '.id') || die "could not add ${item_url} to project ${PROJECT_NUMBER}"
@@ -350,6 +345,19 @@ workflow_status_set() {
             --field-id "${BUILTIN_FIELD_ID}" --single-select-option-id "${BUILTIN_OPTION_ID}" > /dev/null \
             || die "set the Workflow Status of ${item_url} but could not set its built-in Status to ${BUILTIN_STATUS}"
     fi
+}
+
+workflow_status_set() {
+    require REPO --repo
+    require STATUS --status
+    require_target
+    require_gh
+
+    local item_url="https://github.com/${REPO}/${TARGET_URL_KIND}/${TARGET_NUMBER}"
+
+    resolve_project
+    resolve_status
+    put_item_on_board "${item_url}"
 
     printf 'Set %s to %s\n' "${item_url}" "${STATUS}"
 }
