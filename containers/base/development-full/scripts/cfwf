@@ -85,12 +85,16 @@ BODY_PATH_TMP=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
-    [ -z "${CREATED_URL}" ] || printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
     exit 1
 }
 
-# Removes every temporary file cfwf may have made; installed once as the EXIT trap in main.
+# The EXIT trap, installed once in main: removes every temporary file cfwf may have made, and,
+# when it exits non-zero after an issue was created, names that issue so it is never lost.
 cleanup() {
+    local exit_status=$?
+    if [ "${exit_status}" -ne 0 ] && [ -n "${CREATED_URL}" ]; then
+        printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
+    fi
     rm -f "${GRAPHQL_ERR_FILE}" "${BODY_PATH_TMP}"
 }
 
@@ -539,8 +543,7 @@ assign_issue_option() {
     local flag="$1" value="$2"
     case "${flag}" in
         --repo)
-            validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}"
-            REPO="${value}"
+            assign_option "${flag}" "${value}"
             ;;
         --priority)
             [ -z "${PRIORITY}" ] || usage_error "--priority can only be given once: an issue has exactly one priority"
@@ -622,6 +625,7 @@ collect_issue_labels() {
 # turns up between the listing and the create ("already exists") is not an error.
 ensure_labels_exist() {
     local existing_names label output
+    local -a create
     local -A existing=()
     existing_names=$(gh label list --repo "${REPO}" --limit "${LABEL_LIMIT}" --json name --jq '.[].name') \
         || die "could not read the labels of ${REPO}"
@@ -631,12 +635,11 @@ ensure_labels_exist() {
 
     for label in "${ISSUE_LABELS[@]}"; do
         [ -z "${existing["${label,,}"]:-}" ] || continue
+        create=(label create "${label}" --repo "${REPO}")
         if standard_label "${label}"; then
-            output=$(gh label create "${label}" --repo "${REPO}" \
-                --color "${STANDARD_COLOUR}" --description "${STANDARD_DESCRIPTION}" 2>&1) || label_create_failed "${label}" "${output}"
-        else
-            output=$(gh label create "${label}" --repo "${REPO}" 2>&1) || label_create_failed "${label}" "${output}"
+            create+=(--color "${STANDARD_COLOUR}" --description "${STANDARD_DESCRIPTION}")
         fi
+        output=$(gh "${create[@]}" 2>&1) || label_create_failed "${label}" "${output}"
     done
 }
 
@@ -648,12 +651,11 @@ label_create_failed() {
 }
 
 issue_create() {
-    CURRENT_COMMAND="issue"
     parse_issue_options "$@"
-    [ -n "${REPO}" ] || usage_error "missing required option --repo"
+    require REPO --repo
     [ -n "${PRIORITY}" ] || usage_error "--priority is required (${PRIORITY_LIST})"
-    [ -n "${TITLE}" ] || usage_error "missing required option --title"
-    [ -n "${BODY_FILE}" ] || usage_error "missing required option --body-file"
+    require TITLE --title
+    require BODY_FILE --body-file
     collect_issue_labels
     require_gh
     resolve_body
@@ -720,7 +722,8 @@ main() {
     esac
 }
 
-# Sourced by test/status-mapping-parity.bats, which only needs builtin_status_for.
+# Sourced by test/status-mapping-parity.bats (builtin_status_for) and test/standard-labels-parity.bats
+# (STANDARD_LABELS, PRIORITIES and standard_label).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     main "$@"
 fi

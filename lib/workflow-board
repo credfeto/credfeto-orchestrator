@@ -446,7 +446,7 @@ report_missing_workflow_project() {
         "${REPO_FULL}")
 
     # Deliberately plain gh issue create, not cfwf issue create: this runs only when the repo has
-    # no usable Workflow board, and cfwf refuses to create an issue without one. To be reviewed.
+    # no usable Workflow board, and cfwf refuses to create an issue without one. To be reviewed (#1514).
     if gh issue create --repo "${REPO_FULL}" \
         --title "${WF_SETUP_ISSUE_TITLE}" --label "AI-Work" --body "${body}" 2>/dev/null; then
         _WF_REPORTED_REPOS="${_WF_REPORTED_REPOS} ${REPO_FULL}"

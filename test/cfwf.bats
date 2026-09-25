@@ -875,10 +875,14 @@ assert_nothing_created() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "issue create takes --repo only as given: it is never read from the current directory" {
+@test "issue create rejects a --repo that is not owner/repo, without calling gh" {
     prepare_issue_create
-    run "${SCRIPT}" issue create --priority High --title T --body-file "${TEST_TMP}/body.md"
-    [ "${status}" -eq 2 ]
+    local bad
+    for bad in "no-slash" "a/b/c" "a b/c" 'a/b;rm' ""; do
+        run "${SCRIPT}" issue create --repo "${bad}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+        [ "${status}" -eq 2 ] || { echo "--repo '${bad}' was accepted" >&2; return 1; }
+        [[ "${output}" == *"invalid value for --repo"* ]]
+    done
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -1158,6 +1162,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"could not read the labels of ${REPO}"* ]]
+    [[ "${output}" != *"already created"* ]]
     assert_nothing_created
 }
 
@@ -1211,15 +1216,6 @@ assert_nothing_created() {
     run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${stderr}" == *"the issue was already created: ${NEW_ISSUE_URL}"* ]]
-}
-
-@test "a failure before the issue exists never claims an issue was created" {
-    prepare_issue_create
-    create_args
-    touch "${GH_FIXTURES}/label-list.fail"
-    run "${SCRIPT}" "${CREATE_ARGS[@]}"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" != *"already created"* ]]
 }
 
 @test "issue create warns and still succeeds, writing only the Workflow Status, when the built-in Todo option is missing" {

@@ -51,9 +51,6 @@ cfwf_lines() {
 }
 
 @test "every priority label cfwf issue create accepts is a standard label" {
-    local priority
-    for priority in Security Urgent High Medium Low; do
-        run bash -c 'source "$1"; standard_label "$2" && [ "${STANDARD_NAME}" = "$2" ]' _ "${CFWF}" "${priority}"
-        [ "${status}" -eq 0 ] || { echo "${priority} is not a standard label" >&2; return 1; }
-    done
+    run bash -c 'source "$1"; [ "${#PRIORITIES[@]}" -gt 0 ] || exit 2; for p in "${PRIORITIES[@]}"; do standard_label "$p" && [ "${STANDARD_NAME}" = "$p" ] || { echo "$p is not a standard label" >&2; exit 1; }; done' _ "${CFWF}"
+    [ "${status}" -eq 0 ] || { echo "${output}" >&2; return 1; }
 }

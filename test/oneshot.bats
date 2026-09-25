@@ -8518,11 +8518,6 @@ STUBEOF
     chmod +x "${STUB_BIN}/gh"
 }
 
-@test "CFWF_SCRIPT is the cfwf in this repository" {
-    [ "${CFWF_SCRIPT}" = "${REPO_ROOT}/containers/base/development-full/scripts/cfwf" ]
-    [ -x "${CFWF_SCRIPT}" ]
-}
-
 @test "report_unparseable_rate_limit creates a new issue, on the Workflow board, when no open tracking issue exists" {
     local gh_log="${TEST_TMP}/gh_args"
     make_cfwf_gh_stub "${gh_log}"
@@ -8553,6 +8548,8 @@ STUBEOF
 
     report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
 
+    [ -x "${CFWF_SCRIPT}" ]
+    [ "${CFWF_SCRIPT}" = "${REPO_ROOT}/containers/base/development-full/scripts/cfwf" ]
     [ ! -f "${TEST_TMP}/decoy_cfwf_ran" ]
     grep -q "^create$" "${gh_log}"
 }
@@ -8563,9 +8560,31 @@ STUBEOF
 
     run report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to create unparseable rate-limit tracking issue"* ]]
+    [[ "${output}" == *"Failed to create unparseable rate-limit tracking issue: cfwf: could not create the issue in ${RATE_LIMIT_ISSUE_REPO}"* ]]
     run grep -q "^item-add$" "${gh_log}"
     [ "${status}" -ne 0 ]
+}
+
+@test "report_unparseable_rate_limit warns, saying why, when cfwf cannot find a Workflow board" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_cfwf_gh_stub "${gh_log}"
+    jq -n '{projectsV2: {Nodes: []}}' > "${TEST_TMP}/cfwf_fixtures/repo-view.json"
+
+    run report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no project titled Workflow is linked to ${RATE_LIMIT_ISSUE_REPO}"* ]]
+    run grep -q "^create$" "${gh_log}"
+    [ "${status}" -ne 0 ]
+}
+
+@test "report_unparseable_rate_limit warns, naming the path, when the cfwf script is missing" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_cfwf_gh_stub "${gh_log}"
+    CFWF_SCRIPT="${TEST_TMP}/no-such-cfwf"
+
+    run report_unparseable_rate_limit "Issue" "7" "Rate limit reached - unknown format"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf not found at ${TEST_TMP}/no-such-cfwf"* ]]
 }
 
 @test "report_unparseable_rate_limit appends to existing open tracking issue" {

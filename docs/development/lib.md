@@ -40,7 +40,7 @@ The "did this item change" state. `fetch_pr_json`, `fetch_issue_json`, `fingerpr
 
 ### state
 
-File-backed bookkeeping between ticks. Invocation guard files (`load_pr_invocation_counts`, `save_issue_invocation_counts`, the `MAX_*_INVOCATIONS` backstops), environment-block auto-unblocking (`try_auto_unblock_env_diagnosed_pr`), rate limiting (`save_rate_limit`, `is_owner_rate_limited`, `parse_reset_time`), pull-duration history, and the `.blocked`, plan-block, background-stall and last-diagnostic markers. `report_unparseable_rate_limit` files its tracking issue with the in-repo `cfwf issue create` (`${CFWF_SCRIPT}`, never a `cfwf` found on `PATH`), so the issue is on the Workflow board as `Not Started`; the body goes in on stdin (`--body-file -`) and the priority is `Medium`. Depends on: `core`, `github-status`, `podman`.
+File-backed bookkeeping between ticks. Invocation guard files (`load_pr_invocation_counts`, `save_issue_invocation_counts`, the `MAX_*_INVOCATIONS` backstops), environment-block auto-unblocking (`try_auto_unblock_env_diagnosed_pr`), rate limiting (`save_rate_limit`, `is_owner_rate_limited`, `parse_reset_time`), pull-duration history, and the `.blocked`, plan-block, background-stall and last-diagnostic markers. `report_unparseable_rate_limit` files its tracking issue with the in-repo `cfwf issue create` (`${CFWF_SCRIPT}`, never a `cfwf` found on `PATH`), so the issue is on the Workflow board as `Not Started`; the body goes in on stdin (`--body-file -`) and the priority is `Medium`. A failure is a warning that carries cfwf's own message (or says `cfwf` was not found), because cfwf refuses to create an issue when the repository's Workflow board cannot be resolved. Depends on: `core`, `github-status`, `podman`.
 
 ### prompts
 
