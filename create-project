@@ -140,7 +140,8 @@ ensure_project_description() {
 # Ensures the project has the "Workflow Status" single-select field, creating it when absent.
 # project_json is the discovery JSON ("" for a freshly created project).  Populates the globals
 # WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board bootstrap can set
-# item statuses without an extra round-trip.
+# item statuses without an extra round-trip.  Exits 1 when a field create or option update
+# fails, and dies when it ends with no field id, so a caller never carries on with a missing field.
 ensure_status_field() {
     local project_id="$1" project_json="$2"
     WF_FIELD_ID=""

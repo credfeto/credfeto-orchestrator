@@ -22,7 +22,7 @@ install_gh_stub() {
 op="$*"
 log="${CREATE_PROJECT_GH_LOG}"
 fail="${CREATE_PROJECT_GH_FAIL:-}"
-if [ -n "${fail}" ] && [[ "${op}" == *"${fail}"* ]] && [[ "${op}" != *--input* ]]; then
+if [ -n "${fail}" ] && [[ "${op}" == *"${fail}"* ]]; then
     echo "boom: ${fail}" >&2
     exit 1
 fi
@@ -155,6 +155,7 @@ teardown() {
 
     run provision_project credfeto scripts
     [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Status field added"* ]]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"createProjectV2 "* ]]
@@ -222,15 +223,6 @@ teardown() {
     [[ "${output}" == *"Failed to add \"AI Coverage\" option"* ]]
     [[ "${output}" != *"Could not find or create the"* ]]
     [[ "${output}" != *"Workflow project ready"* ]]
-}
-
-@test "provision_project says the status field was added only once it has an id" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
-
-    run provision_project credfeto scripts
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Status field added"* ]]
 }
 
 @test "ensure_status_field_option adds a missing option to an existing field" {
