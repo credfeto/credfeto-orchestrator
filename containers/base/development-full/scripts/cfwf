@@ -606,7 +606,7 @@ resolve_body() {
 ISSUE_LABELS=()
 collect_issue_labels() {
     local label canonical
-    local -A seen=(["${PRIORITY,,}"]=1)
+    local -A seen=()
     ISSUE_LABELS=("${PRIORITY}")
     for label in "${LABELS[@]}"; do
         if canonical=$(canonical_priority "${label}"); then
