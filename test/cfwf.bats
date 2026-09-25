@@ -915,6 +915,37 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
 }
 
+@test "issue create counts characters, not bytes, against the title and label limits, in any locale" {
+    prepare_issue_create
+    local accented
+    accented=$(printf '\303\251%.0s' {1..200})
+    LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); [ "${#v}" -eq 1 ]' || skip "no C.UTF-8 locale on this host"
+    LC_ALL=C run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${accented}" --body-file "${TEST_TMP}/body.md" --label "$(printf '\303\251%.0s' {1..50})"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue create refuses a body over GitHub's 65536 characters before creating anything, and accepts exactly that many" {
+    prepare_issue_create
+    head -c 65537 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/long.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/long.md"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the issue body is longer than 65536 characters"* ]]
+    [ ! -f "${GH_LOG}" ]
+
+    head -c 65536 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/limit.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/limit.md"
+    [ "${status}" -eq 0 ]
+}
+
+@test "issue create refuses --repo given twice, so a second one can never redirect the issue" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --repo credfeto/other-repo
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--repo can only be given once"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
 @test "issue create rejects a --repo that is not owner/repo, without calling gh" {
     prepare_issue_create
     local bad
