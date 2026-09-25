@@ -22,7 +22,7 @@ Environment variables: the script reads none of its own. The bot login, project 
 
 Inputs and outputs: it reads and writes only through `gh` (GraphQL, `gh repo view`, `gh repo edit`, `gh issue list`, `gh pr list`); it touches no local files apart from a temporary stderr capture file inside `gh_graphql`. Progress goes to stdout through `info` and `success`, warnings to stderr through `warn`.
 
-Exit codes: 0 on success, including when granting the bot access fails (that only warns) and, because of the swallowed dies described under Gotchas, when the status field cannot be created or updated. A `die` that is not swallowed exits 1. There is no other non-zero code.
+Exit codes: 0 on success, including when granting the bot access fails (that only warns). Any `die`, and any failed field-create or option-update mutation, exits 1, and so does a run that ends with no Workflow Status field id. There is no other non-zero code.
 
 ## How it works
 
@@ -33,7 +33,7 @@ The script sources `lib/core` (`die`, `success`, `info`, `warn`) with a `BASH_SO
 3. `ensure_projects_enabled` reads `hasProjectsEnabled` and runs `gh repo edit --enable-projects` when it is not `true`.
 4. `discover_linked_project` queries `repository.projectsV2` and picks the project titled "Workflow". If found, create and link are skipped.
 5. Otherwise `resolve_owner_node_id` (organisation query, then user query) and `create_project` (`createProjectV2` with `repositoryId`, which also links the project) run, and the run is marked as created.
-6. `ensure_status_field` creates the field with all ten options, or, if present, calls `ensure_status_field_option` for "AI Simplify" (after "Development") and "AI Coverage" (after "AI Security Review"). It sets the globals `WF_FIELD_ID` and `WF_NOT_STARTED_OPT`.
+6. `ensure_status_field` creates the field with all ten options, or, if present, calls `ensure_status_field_option` for "AI Simplify" (after "Development") and "AI Coverage" (after "AI Security Review"). It sets the globals `WF_FIELD_ID` and `WF_NOT_STARTED_OPT`, and dies if it has no field id at the end, so "Status field added" is only printed for a field that exists.
 7. `ensure_project_description` sets the short description to `Workflow for <owner>/<repo>` unless already correct.
 8. `ensure_bot_collaborator` resolves the bot's node ID and calls `updateProjectV2Collaborators` with role WRITER; both failure paths only warn.
 9. If the project was just created or `--force-bootstrap` was given, `bootstrap_board_items` adds every open issue and PR and sets each to "Not Started".
@@ -61,7 +61,7 @@ Run just this file with `bats test/create-project.bats`, or one test with `bats 
 
 ## Gotchas
 
-- There is no `set -e`, `set -u` or `pipefail`. Functions that call `die` inside `$(...)` lose the exit; callers write `|| exit 1` (see `provision_project` and `ai/local/github-projects.instructions.md`). `ensure_projects_enabled` is called without a substitution so its `die` works. `ensure_status_field` is also called directly (it communicates through the globals `WF_FIELD_ID` and `WF_NOT_STARTED_OPT`), but inside it `field_node=$(ensure_status_field_option ...)` and `resp=$(gh_graphql ...)` are unguarded substitutions with no `|| exit 1`. A failed field-create or option-update mutation is therefore swallowed: the script carries on with an empty field ID, prints "Status field added" after a failed create, and can still exit 0. Only `bootstrap_board_items` notices, and only when seeding runs. This breaks the `|| exit 1` rule in `ai/local/github-projects.instructions.md`. It is existing behaviour, not something this guide changes.
+- There is no `set -e`, `set -u` or `pipefail`. Functions that call `die` inside `$(...)` lose the exit; callers write `|| exit 1` (see `provision_project` and `ai/local/github-projects.instructions.md`). `ensure_projects_enabled` is called without a substitution so its `die` works. `ensure_status_field` is also called directly (it communicates through the globals `WF_FIELD_ID` and `WF_NOT_STARTED_OPT`), and inside it each substitution that wraps a `die`-calling function has `|| exit 1`: the two `ensure_status_field_option` migrations and the `gh_graphql` create call (#1503, tests "provision_project exits non-zero when ..."). Before that fix a failed field-create or option-update mutation was swallowed and the script could exit 0. The deliberate warn-and-continue path is separate: `ensure_status_field_option` returns the original field unchanged, with a warning, when its mutation succeeds but returns no field data.
 - `resolve_owner_node_id` guards against `gh api graphql --jq` printing a raw JSON error body (`[[ "${id}" == \{* ]]`).
 - Discovery is scoped to the repository, so a "Workflow" project that exists but is not linked to it is not found and a second one is created.
 - `discover_linked_project` asks for `projectsV2(first:20)` and `fields(first:30)` with no pagination. A repository with more than 20 linked projects could hide the Workflow project. This is read from the query, not tested.
