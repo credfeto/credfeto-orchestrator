@@ -616,7 +616,7 @@ resolve_body() {
         BODY_PATH="${BODY_FILE}"
     fi
     grep -q '[^[:space:]]' "${BODY_PATH}" || die "the issue body is empty"
-    [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_PATH}")" -lt "${BODY_LIMIT}" ] \
+    [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_PATH}")" -le "${BODY_LIMIT}" ] \
         || die "the issue body is longer than ${BODY_LIMIT} characters"
 }
 
