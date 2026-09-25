@@ -4952,6 +4952,165 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+# --- dependency-prompt selection by branch, not label ---------------------------------------
+# Issue-label sync copies a linked issue's "dependencies" label onto any bot PR, so the label must
+# never select the CI-verify-only prompt that forbids code changes.
+
+@test "pr_has_dependency_update_branch matches depends/ and dependabot/ prefixes" {
+    run pr_has_dependency_update_branch '{"headRefName":"depends/dotnet/10.0.1"}'
+    [ "${status}" -eq 0 ]
+    run pr_has_dependency_update_branch '{"headRefName":"dependabot/github_actions/foo-1.2.3"}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_has_dependency_update_branch does not match other branches or a mid-name depends" {
+    run pr_has_dependency_update_branch '{"headRefName":"chore/982-update-github-actions-version-pins"}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{"headRefName":"fix/depends/thing"}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt ignores a dependencies label on a non-dependency branch" {
+    run pr_should_use_dependency_prompt '{"headRefName":"chore/982-update-github-actions-version-pins","labels":[{"name":"dependencies"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt accepts a depends/ branch" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","labels":[],"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow when changes are requested" {
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","reviewDecision":"CHANGES_REQUESTED"}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_has_dependency_update_branch never matches a PR from a fork, so a fork PR is not exempted from the human-driven check" {
+    run pr_has_dependency_update_branch '{"headRefName":"depends/x","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+    run pr_has_dependency_update_branch '{"headRefName":"depends/x","isCrossRepository":false}'
+    [ "${status}" -eq 0 ]
+    _GH_ME="testuser"
+    local fork same
+    fork='{"headRefName":"depends/x","isCrossRepository":true,"author":{"login":"alice"},"commits":[{"authors":[{"login":"alice"}]}]}'
+    same='{"headRefName":"depends/x","isCrossRepository":false,"author":{"login":"alice"},"commits":[{"authors":[{"login":"alice"}]}]}'
+    run pr_is_human_driven "${fork}" '["alice"]'
+    [ "${status}" -eq 0 ]
+    run pr_is_human_driven "${same}" '["alice"]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt never applies to a PR from a fork, whatever its branch is called" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","isCrossRepository":true,"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/npm_and_yarn/x-1.0.0","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/dotnet/10.0.1","isCrossRepository":false,"files":[{"path":"global.json"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "fetch_pr_json asks gh for isCrossRepository" {
+    local fields_log="${TEST_TMP}/fields.log"
+    fetch_pr_fields_json() { printf '%s\n' "$2" > "${fields_log}"; printf '{}'; }
+    fetch_pr_json 5
+    grep -q 'isCrossRepository' "${fields_log}"
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow while .deleteme.now is present" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/x","files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_has_placeholder_file detects .deleteme.now only" {
+    run pr_json_has_placeholder_file '{"files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 0 ]
+    run pr_json_has_placeholder_file '{"files":[{"path":"src/a.cs"}]}'
+    [ "${status}" -eq 1 ]
+    run pr_json_has_placeholder_file '{}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_is_terminal is false for a placeholder-only PR even with auto-merge armed and green CI" {
+    run pr_json_is_terminal '{"isDraft":false,"autoMergeRequest":{"enabledAt":"x"},"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"files":[{"path":".deleteme.now"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_is_terminal is still true once the placeholder is gone" {
+    run pr_json_is_terminal '{"isDraft":false,"autoMergeRequest":{"enabledAt":"x"},"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[],"files":[{"path":"a.yml"}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "build_pr_claude_md guards auto-merge and ready against a leftover .deleteme.now in both flows" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"If .deleteme.now is listed"* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"If .deleteme.now is listed"* ]]
+}
+
+@test "build_pr_claude_md's full flow removes a placeholder left next to the real change, and the dependency flow only stops" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"remove it in its own commit (git rm .deleteme.now)"* ]]
+    [[ "${output}" == *"If .deleteme.now is the only file listed, the real change has not landed"* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"git rm .deleteme.now"* ]]
+    [[ "${output}" == *"If .deleteme.now is listed, the real change has not landed"* ]]
+}
+
+@test "build_pr_claude_md tells the agent to disarm auto-merge on a placeholder-only PR in both flows" {
+    local flag
+    for flag in true false; do
+        run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "${flag}"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"gh pr merge --disable-auto 7 --repo ${REPO_FULL}"* ]]
+    done
+}
+
+# Runs main once over a single feed PR with the given head branch, files JSON and isCrossRepository
+# value, and prints the is_dependency_pr argument main passed to build_pr_claude_md.
+main_dependency_flag() {
+    local head="$1" files="$2" cross="$3"
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    PR_HEAD="${head}" PR_FILES="${files}" PR_CROSS="${cross}"
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"dependencies"}],"headRefOid":"abc","headRefName":"%s","comments":[],"reviews":[],"statusCheckRollup":[],"files":%s,"isCrossRepository":%s}\n' "${PR_HEAD}" "${PR_FILES}" "${PR_CROSS}"; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    _GH_ME="testuser"
+    build_pr_claude_md() { printf '%s\n' "$7" > "${TEST_TMP}/is_dependency_pr"; printf 'mock-pr-claude-md\n'; }
+    run main
+    [ "${status}" -eq 0 ]
+    cat "${TEST_TMP}/is_dependency_pr"
+}
+
+@test "main gives a same-repo depends/ PR without the placeholder the dependency prompt" {
+    main_dependency_flag "depends/dotnet/10.0.1" '[{"path":"global.json"}]' false > "${TEST_TMP}/flag"
+    [ "$(tail -1 "${TEST_TMP}/flag")" = "true" ]
+}
+
+@test "main gives a PR that only carries the dependencies label, on a feature branch, the full flow" {
+    main_dependency_flag "chore/982-update-github-actions-version-pins" '[{"path":"a.cs"}]' false > "${TEST_TMP}/flag"
+    [ "$(tail -1 "${TEST_TMP}/flag")" = "false" ]
+}
+
+@test "main gives a depends/ PR that still has the placeholder the full flow" {
+    main_dependency_flag "depends/dotnet/10.0.1" '[{"path":".deleteme.now"}]' false > "${TEST_TMP}/flag"
+    [ "$(tail -1 "${TEST_TMP}/flag")" = "false" ]
+}
+
+@test "main gives a depends/ PR from a fork the full flow" {
+    main_dependency_flag "depends/dotnet/10.0.1" '[{"path":"global.json"}]' true > "${TEST_TMP}/flag"
+    [ "$(tail -1 "${TEST_TMP}/flag")" = "false" ]
+}
+
 @test "pr_is_human_driven returns 1 when the bot has authored a commit" {
     _GH_ME="testuser"
     run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"testuser"}]}]}' '["credfeto"]'

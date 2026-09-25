@@ -39,8 +39,18 @@ commits still on the branch, and either:
 
 Dependency-update Pull Requests (from tools like Dependabot) are a deliberate exception: they
 never contain bot-authored commits by design, so they're recognised by their branch-naming
-convention or a `dependencies` label instead, and are still allowed to flow through the
-lightweight "check CI, enable auto-merge" path rather than being treated as a human takeover.
+convention (`depends/` or `dependabot/`, on a branch in the same repository: a fork PR is never
+recognised by its branch name) or, for the human-takeover and assignee stand-off checks only, a
+`dependencies` label instead, and are not treated as a human takeover.
+
+The prompt itself is chosen by branch prefix only (`depends/` or `dependabot/`, see
+`pr_should_use_dependency_prompt` in lib/github), never by the `dependencies` label, because
+issue-label sync copies that label onto any bot PR. A dependency-prefixed PR still gets the full
+phase flow when a reviewer has requested changes or the branch still carries the `.deleteme.now`
+placeholder, and a PR from a fork never gets that prompt whatever its branch is called. A PR
+whose diff includes `.deleteme.now` is never treated as settled, and the prompts refuse to enable
+auto-merge or mark it ready while it is listed (the full flow removes the placeholder when the real
+change has landed next to it; an auto-merge already armed on a placeholder-only PR is disarmed).
 
 The trickiest case: an Issue whose linked Pull Request has been taken over by a human is
 otherwise *invisible* to the normal "does this repo already have an active PR" check (it has no

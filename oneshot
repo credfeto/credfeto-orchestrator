@@ -67,7 +67,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # _fetch_repo_collaborators, get_trusted_logins, require_trusted_logins, fetch_all_priorities,
 # resolve_gh_me, list_bot_created_open_prs, fetch_pr_fields_json, json_has_commit_author_identity,
 # find_open_nonblocked_pr_for_repo, pr_has_bot_authored_commit, find_human_taken_over_pr_for_issue,
-# resolve_resumable_issue_branch, pr_has_depends_branch, pr_has_dependency_label, and
+# resolve_resumable_issue_branch, pr_has_dependency_label,
+# pr_has_dependency_update_branch, pr_should_use_dependency_prompt, and
 # pr_is_human_driven are declared in lib/github. ensure_rules_current,
 # clean_local_git_url_rewrites, ensure_repo_current,
 # recover_orphaned_branch, find_stale_issue_branch, and try_nonagentic_rebase are declared in
@@ -84,7 +85,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # load_issue_invocation_counts, save_issue_invocation_counts, and
 # reset_issue_invocation_counts_if_capped are declared in lib/state.
 
-# pr_json_is_terminal, pr_json_has_failed_required_check, gh_noun_for_item_type,
+# pr_json_is_terminal, pr_json_has_placeholder_file, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, item_confirmed_not_blocked_live,
 # block_pr_for_idle_exhausted_failure,
 # pr_json_has_unaddressed_review_request, block_pr_for_idle_exhausted_review,
@@ -972,7 +973,7 @@ main() {
                 skip_repos+=("${item_repo}")
                 continue
             fi
-            if ! pr_has_depends_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
+            if ! pr_has_dependency_update_branch "${pr_json}" && ! pr_has_dependency_label "${pr_json}"; then
                 if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" \
                     '((.assignees // []) | length > 0) and ([(.assignees // [])[].login] | index($me) == null)' \
                     > /dev/null 2>&1; then
@@ -1304,7 +1305,11 @@ main() {
             claude_md_content=$(build_issue_claude_md "${item_id}" "${container_ai_instructions}" "${CONTAINER_REPO_PATH}" "${plan_approved_or_later}" "${trusted_logins}" "${DIRTY_BRANCH}" "${stale_issue_branch}" "${background_stall}")
         else
             local is_dependency_pr
-            is_dependency_pr=$(printf '%s' "${pr_json}" | jq -r '[.labels[].name] | contains(["dependencies"])')
+            if pr_should_use_dependency_prompt "${pr_json}"; then
+                is_dependency_pr=true
+            else
+                is_dependency_pr=false
+            fi
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
             claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}")
         fi
