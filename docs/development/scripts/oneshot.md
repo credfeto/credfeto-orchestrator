@@ -108,7 +108,7 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 - `prepare_claude_container_args` installs its own `EXIT` trap, which replaces `main`'s; that is why `stop_ssh_agent` is passed in as `extra_exit_cmd`.
 - `gh api --paginate` prints arrays back to back: `fetch_pr_review_comments` and `fetch_pr_issue_comments` use `--slurp` and `flatten(1)`. Large JSON goes to `jq` with `--rawfile`, not `--argjson` (argument limit, #1254). `gh --jq` takes one filter string with no `--arg`.
 - `gh pr list --author @me` is avoided (broke in gh 2.93.0); `list_bot_created_open_prs` filters on `_GH_ME` client-side.
-- Inconsistent default: `CI_CHECK_TIMEOUT_MINUTES` defaults to 1440 in `lib/globals` but an invalid value falls back to 120. The default was raised (240 to 1440, commit 4c71e91) without changing the fallback, and no test pins the fallback, so it looks like an oversight rather than a decision. An invalid value in `.env` is different: `load_env_config` warns and ignores it.
+- `CI_CHECK_TIMEOUT_MINUTES` defaults to 1440, and an invalid value in the environment falls back to the same default (`CI_CHECK_TIMEOUT_DEFAULT_MINUTES` in `lib/globals`; it used to fall back to 120, #1504). The fallback is silent because `lib/globals` runs before `lib/core`, so `warn` does not exist yet. An invalid value in `.env` warns and is ignored by `load_env_config`.
 - Caches and invalidation:
   - `_TRUSTED_LOGINS_JSON` resets in `set_repo_context`; `_GH_ME` lasts the process.
   - `_WF_CACHE` and the `_WF_*` globals are in memory; `project-cache.json` expires after `PROJECT_CACHE_TTL`, and `invalidate_project_cache` clears both when `addProjectV2ItemById` is rejected.

@@ -16,7 +16,7 @@ The `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` source guard lives
 
 ### globals
 
-Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back to the default (`CI_CHECK_TIMEOUT_MINUTES` falls back to 120 rather than its default of 1440, and `PROJECT_CACHE_TTL` is not validated). Depends on: nothing.
+Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back silently to the default (`warn` does not exist yet when this file runs); `PROJECT_CACHE_TTL` is not validated. Depends on: nothing.
 
 ### core
 
