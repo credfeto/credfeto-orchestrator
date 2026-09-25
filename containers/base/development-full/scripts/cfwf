@@ -7,6 +7,8 @@
 readonly ITEM_LIMIT=10000
 readonly FIELD_LIMIT=100
 readonly LABEL_LIMIT=1000
+readonly TITLE_LIMIT=256
+readonly LABEL_NAME_LIMIT=50
 readonly PRIORITIES=(Security Urgent High Medium Low)
 readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
 readonly NEW_ISSUE_STATUS="Not Started"
@@ -166,7 +168,8 @@ Creates an issue and puts it on the repository's Workflow board in one step, as 
 --priority   Always required, exactly once: Security, Urgent, High, Medium or Low (matched
              without regard to case). It is applied as the issue's priority label.
 --title      The issue title.
---body-file  The issue body: a file, or - to read it from stdin. An empty body is an error.
+--body-file  The issue body: a regular file, or - to read it from stdin (a pipe or /dev/stdin is
+             not a regular file; use -). An empty body is an error.
 --label      Optional and repeatable; one label per option (a comma is not accepted). A priority
              label is rejected here: use --priority.
 
@@ -539,6 +542,14 @@ standard_label() {
     return 1
 }
 
+# Refuses a value that is only whitespace or longer than GitHub accepts, so the call fails here and
+# not half way through creating things.
+validate_visible_text() {
+    local value="$1" limit="$2" flag="$3"
+    [[ "${value}" =~ [^[:space:]] && "${#value}" -le "${limit}" ]] \
+        || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
+}
+
 assign_issue_option() {
     local flag="$1" value="$2"
     case "${flag}" in
@@ -553,6 +564,7 @@ assign_issue_option() {
         --title)
             [ -z "${TITLE}" ] || usage_error "--title can only be given once"
             validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
+            validate_visible_text "${value}" "${TITLE_LIMIT}" "${flag}"
             TITLE="${value}"
             ;;
         --body-file)
@@ -563,6 +575,7 @@ assign_issue_option() {
         --label)
             # gh splits a --label value on commas, so a comma could never be part of a name.
             validate "${value}" '^[^[:cntrl:],]+$' "${flag}"
+            validate_visible_text "${value}" "${LABEL_NAME_LIMIT}" "${flag}"
             LABELS+=("${value}")
             ;;
     esac
@@ -677,10 +690,10 @@ issue_create() {
     done
     url=$(gh "${args[@]}") || die "could not create the issue in ${REPO}"
     url="${url##*$'\n'}"
-    [[ "${url}" =~ ^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/[0-9]+$ ]] \
+    # The repository in the URL is not compared with --repo: a renamed or transferred repository
+    # answers with its new name, and the issue exists by now.
+    [[ "${url}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$ ]] \
         || die "gh returned an unexpected result for the new issue, which may have been created: ${url}"
-    [ "${BASH_REMATCH[1],,}" = "${REPO,,}" ] \
-        || die "gh created the issue in a different repository: ${url}"
     CREATED_URL="${url}"
 
     put_item_on_board "${url}"

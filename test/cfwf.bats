@@ -893,6 +893,28 @@ assert_nothing_created() {
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "issue create rejects a blank or over-long title or label, without calling gh" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "   " --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --title: it must not be blank or longer than 256 characters"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..257})" --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label " "
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --label: it must not be blank or longer than 50 characters"* ]]
+
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "$(printf 'x%.0s' {1..51})"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..256})" --body-file "${TEST_TMP}/body.md" --label "$(printf 'y%.0s' {1..50})"
+    [ "${status}" -eq 0 ]
+}
+
 @test "issue create rejects a --repo that is not owner/repo, without calling gh" {
     prepare_issue_create
     local bad
@@ -1194,7 +1216,7 @@ assert_nothing_created() {
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
-@test "issue create refuses a result that is not an issue URL, or is in another repository" {
+@test "issue create refuses a result that is not an issue URL" {
     prepare_issue_create
     create_args
     printf 'something odd\n' > "${GH_FIXTURES}/issue-create.out"
@@ -1203,11 +1225,16 @@ assert_nothing_created() {
     [[ "${output}" == *"unexpected result for the new issue, which may have been created: something odd"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 
-    printf 'https://github.com/credfeto/other-repo/issues/5\n' > "${GH_FIXTURES}/issue-create.out"
+}
+
+@test "issue create puts a new issue on the board even when a renamed repository answers with its new name" {
+    prepare_issue_create
+    printf 'https://github.com/credfeto/renamed-repo/issues/5\n' > "${GH_FIXTURES}/issue-create.out"
+    create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"created the issue in a different repository"* ]]
-    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "https://github.com/credfeto/renamed-repo/issues/5" ]
+    grep -qF "project item-add 74 --owner credfeto --url https://github.com/credfeto/renamed-repo/issues/5 " "${GH_LOG}"
 }
 
 @test "issue create accepts the repository in a different case in the returned URL, and uses the last line of gh's output" {
