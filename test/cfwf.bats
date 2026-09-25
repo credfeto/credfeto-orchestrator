@@ -33,6 +33,9 @@ setup() {
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
+        '  "label list") [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
+        '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
+        '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
@@ -140,6 +143,7 @@ gh_line_of() {
         [[ "${output}" == *"workflow-status --set"* ]]
         [[ "${output}" == *"workflow-status --check"* ]]
         [[ "${output}" == *"closing-issue-labels"* ]]
+        [[ "${output}" == *"issue create"* ]]
     done
 }
 
@@ -151,6 +155,12 @@ gh_line_of() {
     run "${SCRIPT}" help closing-issue-labels
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"cfwf closing-issue-labels --repo <owner/repo> --pr <n>"* ]]
+
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf issue create --repo <owner/repo> --priority <priority> --title <title> --body-file <file> [--label <label> ...]"* ]]
+    [[ "${output}" == *"there is no --status"* ]]
+    [[ "${output}" == *"a bad call leaves no issue behind"* ]]
 }
 
 @test "the workflow-status help states that --set does not read back, the fallback listing limit and the GraphQL exception" {
@@ -795,4 +805,449 @@ gh_line_of() {
     run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --pr"* ]]
+}
+
+# --- issue create --------------------------------------------------------------
+
+NEW_ISSUE_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1600"
+
+# The fixtures "issue create" needs on top of setup: a board with all ten Workflow Statuses (the
+# default fixture has no Not Started option), a body file, the labels the repo already has, and
+# the URL gh prints for a new issue.
+prepare_issue_create() {
+    write_full_field_list Todo "In Progress" Done
+    printf 'The body of the issue.\n\nWith a second paragraph and a trailing line.\n' > "${TEST_TMP}/body.md"
+    jq -n '[{name: "High"}, {name: "cfwf"}]' > "${GH_FIXTURES}/label-list.json"
+    printf '%s\n' "${NEW_ISSUE_URL}" > "${GH_FIXTURES}/issue-create.out"
+}
+
+create_args() {
+    CREATE_ARGS=(issue create --repo "${REPO}" --priority "${1:-High}" --title "A new issue" --body-file "${TEST_TMP}/body.md")
+}
+
+# Nothing was written: no label, no issue and no board item.
+assert_nothing_created() {
+    [ "$(gh_call_count "label create")" -eq 0 ]
+    [ "$(gh_call_count "issue create")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+}
+
+@test "issue needs a subcommand, and an unknown one is refused" {
+    run "${SCRIPT}" issue
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"issue needs a subcommand (create)"* ]]
+
+    run "${SCRIPT}" issue frobnicate
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"unknown issue subcommand: frobnicate"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue --help and issue create --help print the usage without calling gh" {
+    run "${SCRIPT}" issue --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue create"* ]]
+
+    run "${SCRIPT}" issue create --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue create"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create needs --repo, --priority, --title and --body-file, and never calls gh without them" {
+    prepare_issue_create
+    run "${SCRIPT}" issue create --priority High --title T --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"missing required option --repo"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --title T --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--priority is required (Security, Urgent, High, Medium or Low)"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"missing required option --title"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"missing required option --body-file"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create takes --repo only as given: it is never read from the current directory" {
+    prepare_issue_create
+    run "${SCRIPT}" issue create --priority High --title T --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create rejects an unknown priority and lists the valid ones, without calling gh" {
+    prepare_issue_create
+    create_args Critical
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"unknown priority 'Critical' (expected Security, Urgent, High, Medium or Low)"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create refuses --priority given twice, because an issue has one priority" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --priority Low
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--priority can only be given once"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create accepts each of the five priorities in any case and applies the canonical label" {
+    prepare_issue_create
+    local given canonical
+    for row in "security|Security" "URGENT|Urgent" "High|High" "mEdIuM|Medium" "low|Low"; do
+        given="${row%|*}"
+        canonical="${row#*|}"
+        : > "${GH_LOG}"
+        create_args "${given}"
+        run "${SCRIPT}" "${CREATE_ARGS[@]}"
+        [ "${status}" -eq 0 ]
+        grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label ${canonical}" "${GH_LOG}"
+    done
+}
+
+@test "a priority given as --label is refused in any case, pointing at --priority, and nothing is created" {
+    prepare_issue_create
+    local row given canonical
+    for row in "Urgent|Urgent" "urgent|Urgent" "HIGH|High" "security|Security" "Medium|Medium" "low|Low"; do
+        given="${row%|*}"
+        canonical="${row#*|}"
+        create_args Low
+        run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "${given}"
+        [ "${status}" -eq 2 ] || { echo "--label ${given} was accepted" >&2; return 1; }
+        [[ "${output}" == *"'${given}' is a priority; use --priority ${canonical}, not --label"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a priority label is refused among other labels too, whatever its position" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label Bug --label Urgent --label cfwf
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"'Urgent' is a priority; use --priority Urgent, not --label"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create rejects a label with a comma or a control character, and an empty title, without calling gh" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "a,b"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --label: a,b"* ]]
+
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label $'a\nb'
+    [ "${status}" -eq 2 ]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "" --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --title"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title $'a\tb' --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create rejects the options that belong to workflow-status, and unknown ones" {
+    prepare_issue_create
+    create_args
+    local flag
+    for flag in --status --pr --issue --set --check --bogus; do
+        run "${SCRIPT}" "${CREATE_ARGS[@]}" "${flag}" 1
+        [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
+        [[ "${output}" == *"unknown option: ${flag}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "an option that workflow-status does not have is not accepted there either" {
+    local flag
+    for flag in --priority --title --body-file --label; do
+        run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Approved "${flag}" value
+        [ "${status}" -eq 2 ]
+        [[ "${output}" == *"unknown option: ${flag}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create refuses a missing, unreadable, empty or blank body, without calling gh" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/nope.md"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"cannot read the body file: ${TEST_TMP}/nope.md"* ]]
+
+    : > "${TEST_TMP}/empty.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/empty.md"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the issue body is empty"* ]]
+
+    printf ' \n\t\n' > "${TEST_TMP}/blank.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/blank.md"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the issue body is empty"* ]]
+
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}"
+    [ "${status}" -eq 1 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create reads the body from stdin for --body-file -, and an empty stdin is refused" {
+    prepare_issue_create
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - <<< "A body from stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${NEW_ISSUE_URL}" ]
+    [ "$(cat "${GH_FIXTURES}/issue-body.txt")" = "A body from stdin" ]
+
+    : > "${GH_LOG}"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - < /dev/null
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the issue body is empty"* ]]
+    assert_nothing_created
+}
+
+@test "issue create hands the body file to gh unchanged" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/body.md" "${GH_FIXTURES}/issue-body.txt"
+}
+
+@test "issue create fails, creating nothing, when no project titled Workflow is linked to the repo" {
+    prepare_issue_create
+    jq -n '{projectsV2: {Nodes: [{id: "PVT_other", title: "Roadmap", number: 9, resourcePath: "/users/credfeto/projects/9", closed: false}]}}' > "${GH_FIXTURES}/repo-view.json"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"no project titled Workflow is linked to ${REPO}"* ]]
+    assert_nothing_created
+    [ "$(gh_call_count "label list")" -eq 0 ]
+}
+
+@test "issue create fails, creating nothing, when the board has no Not Started option" {
+    prepare_issue_create
+    jq -n '{fields: [{id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "c79045f6", name: "Planning"}], type: "ProjectV2SingleSelectField"}], totalCount: 1}' > "${GH_FIXTURES}/field-list.json"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"unknown status 'Not Started'"* ]]
+    assert_nothing_created
+}
+
+@test "issue create makes the issue, puts it on the board as Not Started and prints only the URL" {
+    prepare_issue_create
+    create_args
+    run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${NEW_ISSUE_URL}" ]
+    [ -z "${stderr}" ]
+
+    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High" "${GH_LOG}"
+    grep -qxF "project item-add 74 --owner credfeto --url ${NEW_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id wf_1" "${GH_LOG}"
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id b_todo" "${GH_LOG}"
+}
+
+@test "issue create checks everything first: board, then labels, then the issue, then the board writes, and never reads back" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    local repo_view field_list label_list issue add edit_wf edit_builtin
+    repo_view=$(gh_line_of "repo view")
+    field_list=$(gh_line_of "project field-list")
+    label_list=$(gh_line_of "label list")
+    issue=$(gh_line_of "issue create")
+    add=$(gh_line_of "project item-add")
+    edit_wf=$(gh_line_of "--field-id PVTSSF_wf ")
+    edit_builtin=$(gh_line_of "--field-id PVTSSF_status ")
+    [ "${repo_view}" -lt "${field_list}" ]
+    [ "${field_list}" -lt "${label_list}" ]
+    [ "${label_list}" -lt "${issue}" ]
+    [ "${issue}" -lt "${add}" ]
+    [ "${add}" -lt "${edit_wf}" ]
+    [ "${edit_wf}" -lt "${edit_builtin}" ]
+    [ "${edit_builtin}" -eq "$(wc -l < "${GH_LOG}")" ]
+    [ "$(gh_call_count "api graphql")" -eq 0 ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+}
+
+@test "issue create reads the labels of the repo with a limit above gh's default of 30" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    grep -qF "label list --repo ${REPO} --limit 1000 --json name" "${GH_LOG}"
+}
+
+@test "issue create applies the priority and each given label, once each, and creates none that exist" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label cfwf --label CFWF
+    [ "${status}" -eq 0 ]
+    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label cfwf" "${GH_LOG}"
+    [ "$(gh_call_count "label create")" -eq 0 ]
+}
+
+@test "issue create creates a missing standard label with its standard colour and description" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label AI-Work --label "on hold"
+    [ "${status}" -eq 0 ]
+    grep -qxF "label create AI-Work --repo ${REPO} --color ffa500 --description Work for an AI Agent" "${GH_LOG}"
+    grep -qxF "label create On Hold --repo ${REPO} --color ff0000 --description Do not work on this" "${GH_LOG}"
+    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label AI-Work --label On Hold" "${GH_LOG}"
+}
+
+@test "issue create creates any other missing label with the colour gh picks, passing no colour or description" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
+    [ "${status}" -eq 0 ]
+    grep -qxF "label create brand new --repo ${REPO}" "${GH_LOG}"
+    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label brand new" "${GH_LOG}"
+}
+
+@test "issue create creates a missing priority label with its standard colour and description" {
+    prepare_issue_create
+    create_args Medium
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    grep -qxF "label create Medium --repo ${REPO} --color ffff00 --description Medium Priority" "${GH_LOG}"
+}
+
+@test "issue create does not create a label that exists in another case" {
+    prepare_issue_create
+    jq -n '[{name: "high"}, {name: "bug"}]' > "${GH_FIXTURES}/label-list.json"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label Bug
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "label create")" -eq 0 ]
+}
+
+@test "issue create treats an already-exists answer to a label create as done, and any other failure as fatal before the issue" {
+    prepare_issue_create
+    printf 'HTTP 422: Validation Failed (already_exists)\n' > "${GH_FIXTURES}/label-create.fail"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
+    [ "${status}" -eq 0 ]
+
+    : > "${GH_LOG}"
+    printf 'HTTP 403: Resource not accessible\nsecond line\n' > "${GH_FIXTURES}/label-create.fail"
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not create the label 'brand new' in ${REPO}: HTTP 403: Resource not accessible"* ]]
+    [[ "${output}" != *"second line"* ]]
+    [ "$(gh_call_count "issue create")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
+
+@test "issue create fails, creating nothing, when the labels of the repo cannot be read" {
+    prepare_issue_create
+    touch "${GH_FIXTURES}/label-list.fail"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not read the labels of ${REPO}"* ]]
+    assert_nothing_created
+}
+
+@test "issue create exits 1 without touching the board when gh cannot create the issue" {
+    prepare_issue_create
+    touch "${GH_FIXTURES}/issue-create.fail"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"could not create the issue in ${REPO}"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
+
+@test "issue create refuses a result that is not an issue URL, or is in another repository" {
+    prepare_issue_create
+    create_args
+    printf 'something odd\n' > "${GH_FIXTURES}/issue-create.out"
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"unexpected result for the new issue, which may have been created: something odd"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+
+    printf 'https://github.com/credfeto/other-repo/issues/5\n' > "${GH_FIXTURES}/issue-create.out"
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"created the issue in a different repository"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
+
+@test "issue create accepts the repository in a different case in the returned URL, and uses the last line of gh's output" {
+    prepare_issue_create
+    printf 'Creating issue in repo\nhttps://github.com/CredFeto/Credfeto-Orchestrator/issues/1600\n' > "${GH_FIXTURES}/issue-create.out"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "https://github.com/CredFeto/Credfeto-Orchestrator/issues/1600" ]
+}
+
+@test "issue create exits 1 and names the issue URL on stderr when the board write is rejected, printing nothing on stdout" {
+    prepare_issue_create
+    create_args
+    touch "${GH_FIXTURES}/item-edit.fail"
+    run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"could not set the Workflow Status of ${NEW_ISSUE_URL}"* ]]
+    [[ "${stderr}" == *"the issue was already created: ${NEW_ISSUE_URL}"* ]]
+
+    rm "${GH_FIXTURES}/item-edit.fail"
+    touch "${GH_FIXTURES}/item-add.fail"
+    run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"the issue was already created: ${NEW_ISSUE_URL}"* ]]
+}
+
+@test "a failure before the issue exists never claims an issue was created" {
+    prepare_issue_create
+    create_args
+    touch "${GH_FIXTURES}/label-list.fail"
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" != *"already created"* ]]
+}
+
+@test "issue create warns and still succeeds, writing only the Workflow Status, when the built-in Todo option is missing" {
+    prepare_issue_create
+    write_full_field_list "In Progress" Done
+    create_args
+    run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${NEW_ISSUE_URL}" ]
+    [[ "${stderr}" == *"has no built-in Status option for 'Not Started'"* ]]
+    [ "$(gh_call_count "project item-edit")" -eq 1 ]
+}
+
+@test "issue create leaves no temporary file behind, for a stdin body, a failed run and a run that succeeds" {
+    prepare_issue_create
+    local scratch="${TEST_TMP}/tmp"
+    mkdir -p "${scratch}"
+
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    touch "${GH_FIXTURES}/issue-create.fail"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - < /dev/null
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
 }

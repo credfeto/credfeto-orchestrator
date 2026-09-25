@@ -6,6 +6,53 @@
 
 readonly ITEM_LIMIT=10000
 readonly FIELD_LIMIT=100
+readonly LABEL_LIMIT=1000
+readonly PRIORITIES=(Security Urgent High Medium Low)
+readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
+readonly NEW_ISSUE_STATUS="Not Started"
+
+# The labels the repositories share, copied from .github/labels.yml as name|colour|description
+# (cfwf is installed alone and cannot read that file; test/standard-labels-parity.bats fails
+# when this copy and the file differ). A label created by "issue create" that is listed here
+# gets this colour and description.
+readonly STANDARD_LABELS='.NET update|a870c9|Update to .net global.json
+AI-Work|ffa500|Work for an AI Agent
+auto-pr|0000aa|Pull request created automatically
+Blocked|ff0000|Blocked by a dependency or external factor
+Bug|d73a4a|Generic bug fix
+C#|db6baa|C# Source Files
+C# Project|db6baa|C# Project Files
+C# Solution|db6baa|C# Solutions
+Change Log|53fcd4|Changelog tracking file
+Changelog Not Required|08f5f8|No changelog entry required for this pull request
+Config Change|d8bb50|Configuration files changes
+dependencies|0366d6|Updates to dependencies
+DO NOT MERGE|ff0000|This pull request should not be merged yet
+dotnet|db6baa|Dotnet package updates
+Editorconfig|00dead|Editor config file change
+Enhancement|a2eeef|Enhancement to project
+github-actions|e09cf4|Github actions workflow files
+High|ffa500|High Priority
+Low|cc8899|Low Priority
+Markdown|5319e7|Markdown files
+Medium|ffff00|Medium Priority
+Migration Script|b680e5|SQL Migration scripts
+never-close|1d76db|This issue should never be closed — it is a permanent tracking issue
+no-pr-activity|ffff00|Pull Request has had no activity for a long time
+npm|e99695|npm package update
+On Hold|ff0000|Do not work on this
+Performance|0075ca|Performance enhancement or issue
+Powershell|23bc12|Powershell Source Files
+Read Me|5319e7|Repository readme file
+Refactor|30027a|Code refactoring
+Security|ee0701|Security issue, e.g. use of insecure packages, or security fix
+Setup|5319e7|Setup instructions
+Solidity|413cd1|Solidity Source Files
+SQL|413cd1|SQL Source Files
+Static Code Analysis Rules|00dead|Ruleset for static code analysis files
+Tech Debt|30027a|Technical debt
+Unit Tests|0e8a16|Unit test and integration test projects
+Urgent|ff0000|Urgent Priority'
 
 CURRENT_COMMAND=""
 MODE=""
@@ -28,10 +75,23 @@ ITEM_STATUS=""
 GRAPHQL_ERR_FILE=""
 GRAPHQL_OUTPUT=""
 GRAPHQL_ERROR=""
+TITLE=""
+BODY_FILE=""
+BODY_PATH=""
+PRIORITY=""
+LABELS=()
+CREATED_URL=""
+BODY_PATH_TMP=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
+    [ -z "${CREATED_URL}" ] || printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
     exit 1
+}
+
+# Removes every temporary file cfwf may have made; installed once as the EXIT trap in main.
+cleanup() {
+    rm -f "${GRAPHQL_ERR_FILE}" "${BODY_PATH_TMP}"
 }
 
 usage_general() {
@@ -42,6 +102,7 @@ Commands:
   workflow-status --set    Move an issue or PR to a Workflow board status
   workflow-status --check  Print the current Workflow Status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
+  issue create             Create an issue and put it on the Workflow board as Not Started
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -90,10 +151,34 @@ with Blocked and On-Hold left out.
 USAGE
 }
 
+usage_issue() {
+    cat << 'USAGE'
+Usage: cfwf issue create --repo <owner/repo> --priority <priority> --title <title> --body-file <file> [--label <label> ...]
+
+Creates an issue and puts it on the repository's Workflow board in one step, as Not Started
+(there is no --status), then prints the issue URL and nothing else.
+
+--repo       Always required; never taken from the current directory.
+--priority   Always required, exactly once: Security, Urgent, High, Medium or Low (matched
+             without regard to case). It is applied as the issue's priority label.
+--title      The issue title.
+--body-file  The issue body: a file, or - to read it from stdin. An empty body is an error.
+--label      Optional and repeatable; one label per option (a comma is not accepted). A priority
+             label is rejected here: use --priority.
+
+Everything is checked before anything is created, including that a Workflow board is linked to
+the repository, so a bad call leaves no issue behind. A label that does not exist in the
+repository is created first: a standard label gets its standard colour and description, any
+other label gets the colour gh picks. If the issue is created but the board write fails, cfwf
+exits 1 and the error carries the issue URL. The board write is never read back.
+USAGE
+}
+
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
         closing-issue-labels) usage_closing_issue_labels ;;
+        issue) usage_issue ;;
         *) usage_general ;;
     esac
 }
@@ -274,7 +359,6 @@ graphql_query() {
     local status=0
     if [ -z "${GRAPHQL_ERR_FILE}" ]; then
         GRAPHQL_ERR_FILE=$(mktemp) || die "could not create a temporary file"
-        trap 'rm -f "${GRAPHQL_ERR_FILE}"' EXIT
     fi
     GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GRAPHQL_ERR_FILE}") || status=$?
     GRAPHQL_ERROR=$(< "${GRAPHQL_ERR_FILE}")
@@ -420,11 +504,210 @@ cmd_closing_issue_labels() {
     [ "${loop_status}" -eq 0 ] || exit 1
 }
 
+# Prints the canonical spelling of the priority named by $1 (matched without regard to case),
+# or nothing when it is not one of PRIORITIES.
+canonical_priority() {
+    local candidate
+    for candidate in "${PRIORITIES[@]}"; do
+        if [ "${candidate,,}" = "${1,,}" ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Looks the label named by $1 (matched without regard to case) up in STANDARD_LABELS and sets
+# STANDARD_NAME, STANDARD_COLOUR and STANDARD_DESCRIPTION. Returns non-zero for any other label.
+STANDARD_NAME=""
+STANDARD_COLOUR=""
+STANDARD_DESCRIPTION=""
+standard_label() {
+    local name colour description
+    while IFS='|' read -r name colour description; do
+        if [ "${name,,}" = "${1,,}" ]; then
+            STANDARD_NAME="${name}"
+            STANDARD_COLOUR="${colour}"
+            STANDARD_DESCRIPTION="${description}"
+            return 0
+        fi
+    done <<< "${STANDARD_LABELS}"
+    return 1
+}
+
+assign_issue_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}"
+            REPO="${value}"
+            ;;
+        --priority)
+            [ -z "${PRIORITY}" ] || usage_error "--priority can only be given once: an issue has exactly one priority"
+            PRIORITY=$(canonical_priority "${value}") \
+                || usage_error "unknown priority '${value}' (expected ${PRIORITY_LIST})"
+            ;;
+        --title)
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
+            TITLE="${value}"
+            ;;
+        --body-file)
+            [ -z "${BODY_FILE}" ] || usage_error "--body-file can only be given once"
+            validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
+            BODY_FILE="${value}"
+            ;;
+        --label)
+            # gh splits a --label value on commas, so a comma could never be part of a name.
+            validate "${value}" '^[^[:cntrl:],]+$' "${flag}"
+            LABELS+=("${value}")
+            ;;
+    esac
+}
+
+parse_issue_options() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --repo | --priority | --title | --body-file | --label)
+                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+                assign_issue_option "$1" "$2"
+                shift 2
+                ;;
+            -h | --help)
+                usage_issue
+                exit 0
+                ;;
+            *)
+                usage_error "unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+# Points BODY_PATH at the file holding the body (a copy of stdin when BODY_FILE is -) and
+# refuses a missing, unreadable or blank one.
+resolve_body() {
+    if [ "${BODY_FILE}" = "-" ]; then
+        BODY_PATH_TMP=$(mktemp) || die "could not create a temporary file"
+        cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
+        BODY_PATH="${BODY_PATH_TMP}"
+    else
+        [ -f "${BODY_FILE}" ] && [ -r "${BODY_FILE}" ] || die "cannot read the body file: ${BODY_FILE}"
+        BODY_PATH="${BODY_FILE}"
+    fi
+    grep -q '[^[:space:]]' "${BODY_PATH}" || die "the issue body is empty"
+}
+
+# Sets ISSUE_LABELS to the labels to put on the issue: the priority first, then each --label
+# with a standard label written in its standard spelling and a repeat (in any case) dropped.
+# A priority label given as a --label is refused, pointing at --priority.
+ISSUE_LABELS=()
+collect_issue_labels() {
+    local label canonical
+    local -A seen=(["${PRIORITY,,}"]=1)
+    ISSUE_LABELS=("${PRIORITY}")
+    for label in "${LABELS[@]}"; do
+        if canonical=$(canonical_priority "${label}"); then
+            usage_error "'${label}' is a priority; use --priority ${canonical}, not --label"
+        fi
+        if standard_label "${label}"; then
+            label="${STANDARD_NAME}"
+        fi
+        [ -z "${seen["${label,,}"]:-}" ] || continue
+        seen["${label,,}"]=1
+        ISSUE_LABELS+=("${label}")
+    done
+}
+
+# Creates every label in ISSUE_LABELS that the repository does not have yet. A label that
+# turns up between the listing and the create ("already exists") is not an error.
+ensure_labels_exist() {
+    local existing_names label output
+    local -A existing=()
+    existing_names=$(gh label list --repo "${REPO}" --limit "${LABEL_LIMIT}" --json name --jq '.[].name') \
+        || die "could not read the labels of ${REPO}"
+    while IFS= read -r label; do
+        [ -n "${label}" ] && existing["${label,,}"]=1
+    done <<< "${existing_names}"
+
+    for label in "${ISSUE_LABELS[@]}"; do
+        [ -z "${existing["${label,,}"]:-}" ] || continue
+        if standard_label "${label}"; then
+            output=$(gh label create "${label}" --repo "${REPO}" \
+                --color "${STANDARD_COLOUR}" --description "${STANDARD_DESCRIPTION}" 2>&1) || label_create_failed "${label}" "${output}"
+        else
+            output=$(gh label create "${label}" --repo "${REPO}" 2>&1) || label_create_failed "${label}" "${output}"
+        fi
+    done
+}
+
+label_create_failed() {
+    case "$2" in
+        *"already exists"* | *already_exists*) return 0 ;;
+    esac
+    die "could not create the label '$1' in ${REPO}: ${2%%$'\n'*}"
+}
+
+issue_create() {
+    CURRENT_COMMAND="issue"
+    parse_issue_options "$@"
+    [ -n "${REPO}" ] || usage_error "missing required option --repo"
+    [ -n "${PRIORITY}" ] || usage_error "--priority is required (${PRIORITY_LIST})"
+    [ -n "${TITLE}" ] || usage_error "missing required option --title"
+    [ -n "${BODY_FILE}" ] || usage_error "missing required option --body-file"
+    collect_issue_labels
+    require_gh
+    resolve_body
+
+    # The board is resolved before anything is written, so a repository with no Workflow
+    # board fails here and leaves no issue behind.
+    STATUS="${NEW_ISSUE_STATUS}"
+    resolve_project
+    resolve_status
+    ensure_labels_exist
+
+    local args=(issue create --repo "${REPO}" --title "${TITLE}" --body-file "${BODY_PATH}")
+    local label url
+    for label in "${ISSUE_LABELS[@]}"; do
+        args+=(--label "${label}")
+    done
+    url=$(gh "${args[@]}") || die "could not create the issue in ${REPO}"
+    url="${url##*$'\n'}"
+    [[ "${url}" =~ ^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the new issue, which may have been created: ${url}"
+    [ "${BASH_REMATCH[1],,}" = "${REPO,,}" ] \
+        || die "gh created the issue in a different repository: ${url}"
+    CREATED_URL="${url}"
+
+    put_item_on_board "${url}"
+    printf '%s\n' "${url}"
+}
+
+cmd_issue() {
+    CURRENT_COMMAND="issue"
+    case "${1:-}" in
+        create)
+            shift
+            issue_create "$@"
+            ;;
+        -h | --help)
+            usage_issue
+            ;;
+        "")
+            usage_error "issue needs a subcommand (create)"
+            ;;
+        *)
+            usage_error "unknown issue subcommand: $1"
+            ;;
+    esac
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
         exit 2
     fi
+
+    trap cleanup EXIT
 
     local command="$1"
     shift
@@ -432,6 +715,7 @@ main() {
         help | -h | --help) usage_for "${1:-}" ;;
         workflow-status) cmd_workflow_status "$@" ;;
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
+        issue) cmd_issue "$@" ;;
         *) usage_error "unknown command: ${command}" ;;
     esac
 }
