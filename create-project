@@ -140,29 +140,34 @@ ensure_project_description() {
 # Ensures the project has the "Workflow Status" single-select field, creating it when absent.
 # project_json is the discovery JSON ("" for a freshly created project).  Populates the globals
 # WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board bootstrap can set
-# item statuses without an extra round-trip.
+# item statuses without an extra round-trip.  Exits 1 when a field create or option update
+# fails, and dies when it ends with no field id, so a caller never carries on with a missing field.
 ensure_status_field() {
     local project_id="$1" project_json="$2"
     WF_FIELD_ID=""
     WF_NOT_STARTED_OPT=""
 
-    local field_node
+    # Every substitution below wraps a function that can die, and a die inside $(...) only ends the
+    # subshell, so each needs an explicit || exit 1 (ai/local/github-projects.instructions.md).
+    local field_node created_field=0
     field_node=$(printf '%s' "${project_json}" | \
         jq -c --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n)' 2>/dev/null | head -1)
     if [ -n "${field_node}" ]; then
         info "Status field \"${STATUS_FIELD_NAME}\" already present — checking its options are up to date"
-        field_node=$(ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development")
-        field_node=$(ensure_status_field_option "${field_node}" "AI Coverage" RED "AI Security Review")
+        field_node=$(ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development") || exit 1
+        field_node=$(ensure_status_field_option "${field_node}" "AI Coverage" RED "AI Security Review") || exit 1
     else
         info "Adding \"${STATUS_FIELD_NAME}\" field with its ten options..."
         local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"AI Coverage\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
         local resp
-        resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}")
+        resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}") || exit 1
         field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)
-        success "Status field added"
+        created_field=1
     fi
 
     WF_FIELD_ID=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
+    [ -n "${WF_FIELD_ID}" ] || die "Could not find or create the \"${STATUS_FIELD_NAME}\" field on the project"
+    [ "${created_field}" -eq 0 ] || success "Status field added"
     WF_NOT_STARTED_OPT=$(printf '%s' "${field_node}" | \
         jq -r '(.options // [])[] | select(.name=="Not Started") | .id' 2>/dev/null | head -1)
 }

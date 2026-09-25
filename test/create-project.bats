@@ -8,6 +8,8 @@ load test_helper
 # the operation in the call and emits the already-jq-filtered value the script expects, while
 # appending every mutation to ${CREATE_PROJECT_GH_LOG} so tests can assert which steps ran.
 # ${DISCOVERY_RESULT} controls what the repo-scoped "Workflow" project lookup returns.
+# ${CREATE_PROJECT_GH_FAIL} names a mutation (a substring of the call, or of the JSON body for
+# --input calls) whose gh call should fail with "boom: <name>" on stderr and exit status 1.
 install_gh_stub() {
     export CREATE_PROJECT_GH_LOG="${TEST_TMP}/gh.log"
     export CREATE_PROJECT_GH_INPUT_LOG="${TEST_TMP}/gh-input.log"
@@ -19,10 +21,19 @@ install_gh_stub() {
     make_stub gh '
 op="$*"
 log="${CREATE_PROJECT_GH_LOG}"
+fail="${CREATE_PROJECT_GH_FAIL:-}"
+if [ -n "${fail}" ] && [[ "${op}" == *"${fail}"* ]]; then
+    echo "boom: ${fail}" >&2
+    exit 1
+fi
 case "${op}" in
     *--input*)
         body=$(cat)
         printf "%s" "${body}" >> "${CREATE_PROJECT_GH_INPUT_LOG}"
+        if [ -n "${fail}" ] && [[ "${body}" == *"${fail}"* ]]; then
+            echo "boom: ${fail}" >&2
+            exit 1
+        fi
         case "${body}" in
             *updateProjectV2Field*)   echo "updateProjectV2FieldOptions" >> "${log}"; printf "%s" "${FIELD_OPTION_UPDATE_RESULT}" ;;
             *)                        echo "updateProjectV2Collaborators" >> "${log}"; printf "{}" ;;
@@ -144,11 +155,74 @@ teardown() {
 
     run provision_project credfeto scripts
     [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Status field added"* ]]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"createProjectV2 "* ]]
     [[ "${output}" == *"createProjectV2Field"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
+}
+
+@test "provision_project exits non-zero when creating the status field fails, and does not go on" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
+    export CREATE_PROJECT_GH_FAIL=createProjectV2Field
+
+    run provision_project credfeto scripts true
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"GitHub GraphQL call failed"* ]]
+    [[ "${output}" == *"boom: createProjectV2Field"* ]]
+    # the call's own failure ends the script, not the empty-field check further down
+    [[ "${output}" != *"Could not find or create the"* ]]
+    [[ "${output}" != *"Status field added"* ]]
+    [[ "${output}" != *"Workflow project ready"* ]]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" != *"updateProjectV2Collaborators"* ]]
+    [[ "${output}" != *"addProjectV2ItemById"* ]]
+}
+
+@test "provision_project exits non-zero when adding a missing option to the status field fails, and does not go on" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}]}}'
+    export CREATE_PROJECT_GH_FAIL=updateProjectV2Field
+
+    run provision_project credfeto scripts true
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to add \"AI Simplify\" option"* ]]
+    [[ "${output}" != *"Could not find or create the"* ]]
+    [[ "${output}" != *"Workflow project ready"* ]]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" != *"updateProjectV2Collaborators"* ]]
+    [[ "${output}" != *"addProjectV2ItemById"* ]]
+}
+
+@test "provision_project exits non-zero, without claiming the field was added, when the create mutation returns no field" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
+    export FIELD_CREATE_RESULT='{"data":{"createProjectV2Field":{"projectV2Field":null}}}'
+
+    run provision_project credfeto scripts true
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Could not find or create the"* ]]
+    [[ "${output}" != *"Status field added"* ]]
+    [[ "${output}" != *"Workflow project ready"* ]]
+
+    run cat "${CREATE_PROJECT_GH_LOG}"
+    [[ "${output}" != *"addProjectV2ItemById"* ]]
+}
+
+@test "provision_project exits non-zero when adding the AI Coverage option fails, and does not go on" {
+    install_gh_stub
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""}]}]}}'
+    export CREATE_PROJECT_GH_FAIL=updateProjectV2Field
+
+    run provision_project credfeto scripts true
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to add \"AI Coverage\" option"* ]]
+    [[ "${output}" != *"Could not find or create the"* ]]
+    [[ "${output}" != *"Workflow project ready"* ]]
 }
 
 @test "ensure_status_field_option adds a missing option to an existing field" {
