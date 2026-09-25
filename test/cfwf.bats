@@ -875,6 +875,24 @@ assert_nothing_created() {
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "issue create creates a label whose name starts with a dash without gh reading it as a flag" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --label -wip
+    [ "${status}" -eq 0 ]
+    grep -qxF "label create --repo ${REPO} -- -wip" "${GH_LOG}"
+    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label -wip" "${GH_LOG}"
+}
+
+@test "issue create refuses --title given twice, like --priority and --body-file" {
+    prepare_issue_create
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}" --title "Another"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"--title can only be given once"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
 @test "issue create rejects a --repo that is not owner/repo, without calling gh" {
     prepare_issue_create
     local bad
@@ -1107,8 +1125,8 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label AI-Work --label "on hold"
     [ "${status}" -eq 0 ]
-    grep -qxF "label create AI-Work --repo ${REPO} --color ffa500 --description Work for an AI Agent" "${GH_LOG}"
-    grep -qxF "label create On Hold --repo ${REPO} --color ff0000 --description Do not work on this" "${GH_LOG}"
+    grep -qxF "label create --repo ${REPO} --color ffa500 --description Work for an AI Agent -- AI-Work" "${GH_LOG}"
+    grep -qxF "label create --repo ${REPO} --color ff0000 --description Do not work on this -- On Hold" "${GH_LOG}"
     grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label AI-Work --label On Hold" "${GH_LOG}"
 }
 
@@ -1117,7 +1135,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
     [ "${status}" -eq 0 ]
-    grep -qxF "label create brand new --repo ${REPO}" "${GH_LOG}"
+    grep -qxF "label create --repo ${REPO} -- brand new" "${GH_LOG}"
     grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label brand new" "${GH_LOG}"
 }
 
@@ -1126,7 +1144,7 @@ assert_nothing_created() {
     create_args Medium
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 0 ]
-    grep -qxF "label create Medium --repo ${REPO} --color ffff00 --description Medium Priority" "${GH_LOG}"
+    grep -qxF "label create --repo ${REPO} --color ffff00 --description Medium Priority -- Medium" "${GH_LOG}"
 }
 
 @test "issue create does not create a label that exists in another case" {

@@ -551,6 +551,7 @@ assign_issue_option() {
                 || usage_error "unknown priority '${value}' (expected ${PRIORITY_LIST})"
             ;;
         --title)
+            [ -z "${TITLE}" ] || usage_error "--title can only be given once"
             validate "${value}" '^[^[:cntrl:]]+$' "${flag}"
             TITLE="${value}"
             ;;
@@ -635,10 +636,12 @@ ensure_labels_exist() {
 
     for label in "${ISSUE_LABELS[@]}"; do
         [ -z "${existing["${label,,}"]:-}" ] || continue
-        create=(label create "${label}" --repo "${REPO}")
+        # The name follows -- so a name that starts with a dash is not read as a flag.
+        create=(label create --repo "${REPO}")
         if standard_label "${label}"; then
             create+=(--color "${STANDARD_COLOUR}" --description "${STANDARD_DESCRIPTION}")
         fi
+        create+=(-- "${label}")
         output=$(gh "${create[@]}" 2>&1) || label_create_failed "${label}" "${output}"
     done
 }
