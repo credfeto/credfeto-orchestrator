@@ -466,7 +466,7 @@ is_owner_rate_limited() {
 # issue.  All gh failures are non-fatal (warn only) so the caller's die still fires normally.
 report_unparseable_rate_limit() {
     local item_type="$1" item_id="$2" result_text="$3"
-    local now_iso existing body
+    local now_iso existing body created
 
     now_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -499,10 +499,14 @@ report_unparseable_rate_limit() {
         gh issue comment "${existing}" --repo "${RATE_LIMIT_ISSUE_REPO}" --body "${body}" 2>/dev/null \
             || warn "Failed to append unparseable rate-limit message to issue #${existing}"
     else
-        # cfwf puts the new issue on the Workflow board as well; the body goes in on stdin.
-        printf '%s' "${body}" | "${CFWF_SCRIPT}" issue create --repo "${RATE_LIMIT_ISSUE_REPO}" \
-            --priority Medium --title "${RATE_LIMIT_ISSUE_TITLE}" --label "AI-Work" --body-file - 2>/dev/null \
-            || warn "Failed to create unparseable rate-limit tracking issue"
+        # cfwf puts the new issue on the Workflow board as well; the body goes in on stdin. Its own
+        # message is kept in the warning, since cfwf refuses when the board cannot be resolved.
+        if [ ! -x "${CFWF_SCRIPT}" ]; then
+            warn "Failed to create unparseable rate-limit tracking issue: cfwf not found at ${CFWF_SCRIPT}"
+        elif ! created=$(printf '%s' "${body}" | "${CFWF_SCRIPT}" issue create --repo "${RATE_LIMIT_ISSUE_REPO}" \
+            --priority Medium --title "${RATE_LIMIT_ISSUE_TITLE}" --label "AI-Work" --body-file - 2>&1); then
+            warn "Failed to create unparseable rate-limit tracking issue: ${created//$'\n'/ }"
+        fi
     fi
 }
 
