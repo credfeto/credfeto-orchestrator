@@ -4561,29 +4561,6 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
-# --- find_any_open_pr_for_repo (#1326) ---------------------------------------------
-
-@test "find_any_open_pr_for_repo returns the first open PR regardless of author or Blocked label" {
-    # shellcheck disable=SC2016
-    make_stub gh 'printf '"'"'[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"someone-else"}}]\n'"'"
-    run find_any_open_pr_for_repo "org/repo"
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "99" ]
-}
-
-@test "find_any_open_pr_for_repo returns empty when the repo has no open PR" {
-    make_stub gh 'printf "[]\n"'
-    run find_any_open_pr_for_repo "org/repo"
-    [ "${status}" -eq 0 ]
-    [ -z "${output}" ]
-}
-
-@test "find_any_open_pr_for_repo returns 1 when gh fails" {
-    make_stub gh 'exit 1'
-    run find_any_open_pr_for_repo "org/repo"
-    [ "${status}" -ne 0 ]
-}
-
 # --- json_has_commit_author_identity (#1294) --------------------------------------
 
 @test "json_has_commit_author_identity matches on resolved login" {
@@ -5394,9 +5371,6 @@ setup_main_mocks() {
     # stand-off paths override these individually.
     find_human_taken_over_pr_for_issue() { return 1; }
     pr_is_human_driven()                 { return 1; }
-    # Default: no other PR occupies the repo's active-branch/PR slot (#1476) — tests that
-    # exercise the occupied-slot deferral override this individually.
-    find_any_open_pr_for_repo()          { printf ''; }
     # Default: the auto-merge-unsupported board fallback never matches (#1479) — matches every
     # pre-existing test's expectation byte-for-byte, since pr_json_is_terminal's behaviour before
     # this fallback existed is exactly what "no fallback match" reproduces. Tests exercising the
@@ -9404,114 +9378,49 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main defers a plan-approved Issue at idle exhaustion when another open PR occupies the repo, without invoking (#1326, #1476)" {
-    # The occupying-PR check now runs once, unconditionally, at the top of the "no bot-driven PR"
-    # branch (#1476) - before the fingerprint/idle-budget logic this test used to reach directly.
-    # This still exercises the same real-world case (idle-exhausted re-poke deferred because
-    # another PR holds the repo's slot); it just now short-circuits earlier.
-    setup_main_mocks
-    recover_orphaned_branch() { return 1; }
-    resolve_resumable_issue_branch() { return 1; }
-    issue_plan_approved() { printf 'true'; }
-    issue_plan_approved_or_later() { printf 'true'; }
-
-    fetch_all_priorities() {
-        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    find_any_open_pr_for_repo()        { printf '99\n'; }
-    fetch_issue_json() {
-        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
-    }
-    issue_json_has_blocked_label() { return 1; }
-    fingerprint_issue_json()      { printf 'same-fp\n'; }
-    load_issue_fingerprint()      { printf 'same-fp\n'; }
-    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
-    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
-    # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
-    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Issue #42 in org/repo: repo's active-branch/PR slot occupied by PR #99 — deferring, not invoking"* ]]
-    [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
-    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
-    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'issue comment' "${GH_CALL_LOG}"
-}
-
-@test "main skips (does not invoke or block) a plan-approved Issue when the occupying-PR check itself fails (#1326, #1476)" {
-    setup_main_mocks
-    recover_orphaned_branch() { return 1; }
-    resolve_resumable_issue_branch() { return 1; }
-    issue_plan_approved() { printf 'true'; }
-    issue_plan_approved_or_later() { printf 'true'; }
-
-    fetch_all_priorities() {
-        printf '[{"id":42,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    find_any_open_pr_for_repo()        { return 1; }
-    fetch_issue_json() {
-        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
-    }
-    issue_json_has_blocked_label() { return 1; }
-    fingerprint_issue_json()      { printf 'same-fp\n'; }
-    load_issue_fingerprint()      { printf 'same-fp\n'; }
-    save_issue_invocation_counts 42 4 "${MAX_ISSUE_IDLE_INVOCATIONS}"
-    export GH_CALL_LOG="${TEST_TMP}/gh_calls"
-    # shellcheck disable=SC2016
-    make_stub gh 'printf "%s\n" "$*" >> "${GH_CALL_LOG}"; exit 0'
-    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Failed to check for an occupying PR in org/repo — skipping this item for now"* ]]
-    [[ "${output}" != *"idle budget exhausted with plan approved but no progress — blocking"* ]]
-    [ ! -f "${GH_CALL_LOG}" ] || ! grep -q 'add-label Blocked' "${GH_CALL_LOG}"
-}
-
-@test "main defers a fresh Issue invocation without invoking when another open PR already occupies the repo (#1476)" {
-    # Regression test for #1476: a freshly plan-approved Issue (first pass, no saved fingerprint
-    # yet - the exact shape of a just-approved plan) with no bot-driven PR of its own must not
-    # burn a paid agent invocation to rediscover that a completely unrelated, human-driven PR
-    # already occupies the repo's one-active-branch-or-PR-at-a-time slot; oneshot itself must
-    # catch this for free before ever invoking.
+@test "main works an Issue even though an unrelated PR by someone else is open in the same repo (#1517)" {
+    # The one-active-branch-or-PR rule is per user: a human's or a dependency bot's PR is not the
+    # AI's, so it neither occupies the repo's slot nor defers the Issue. Only the orchestrator's
+    # own PRs (found by find_open_nonblocked_pr_for_repo, empty here) and an Issue's own
+    # human-driven PR (find_human_taken_over_pr_for_issue, none here) stop the Issue being worked.
     setup_main_mocks
     fetch_all_priorities() {
         printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    find_any_open_pr_for_repo()        { printf '1475\n'; }
-    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
 
     run main
     [ "${status}" -eq 0 ]
-    [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
+    [[ "${output}" == *"Found actionable Issue #1310"* ]]
+    [[ "${output}" != *"active-branch/PR slot occupied"* ]]
+    [[ "${output}" != *"repo-active"* ]]
 }
 
-@test "main defers a second Issue in the same occupied repo at zero extra cost via skip_repos (#1476)" {
-    # The first Issue's occupancy check populates skip_repos, so a second Issue in the SAME repo
-    # later in the same tick is skipped via the cheap is_skipped path at the top of the loop -
-    # never re-calling find_any_open_pr_for_repo, let alone invoking an agent.
+@test "main reports an Issue whose linked PR a human is developing as human-driven, not repo-active (#1517)" {
+    # The credfeto-dotnet-repo-tools case: Issue #317's PR #318 was opened by the PR create bot
+    # and has only the owner's commits, so find_human_taken_over_pr_for_issue returns it. The
+    # Issue is skipped for that one reason, under the one label.
     setup_main_mocks
     fetch_all_priorities() {
-        printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":1311,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]\n'
+        printf '[{"id":317,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
     }
     find_open_nonblocked_pr_for_repo() { printf ''; }
-    export FIND_ANY_OPEN_PR_CALLS="${TEST_TMP}/find_any_open_pr_calls"
-    find_any_open_pr_for_repo() { printf 'x\n' >> "${FIND_ANY_OPEN_PR_CALLS}"; printf '1475\n'; }
-    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    fetch_issue_json() {
+        printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'
+    }
+    issue_json_has_blocked_label() { return 1; }
+    find_human_taken_over_pr_for_issue() { printf '318'; }
 
     run main
     [ "${status}" -eq 0 ]
-    [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"Issue #1310 in org/repo: repo's active-branch/PR slot occupied by PR #1475 — deferring, not invoking"* ]]
-    [[ "${output}" == *"Skipping Issue #1311 in org/repo — repo already has active work"* ]]
-    [ "$(wc -l < "${FIND_ANY_OPEN_PR_CALLS}")" -eq 1 ]
+    [[ "${output}" == *"Issue #317 in org/repo: PR #318 is being developed by a human — standing off"* ]]
+    [[ "${output}" == *"human-driven: 1"* ]]
+    [[ "${output}" == *"repo-active: 0"* ]]
+    [[ "${output}" != *"active-branch/PR slot occupied"* ]]
 }
 
 # --- main() integration: self-heal a plan posted without Blocked (#1286) ----

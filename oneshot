@@ -303,7 +303,7 @@ main() {
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
-    local other_open_pr background_stall
+    local background_stall
     local -a _filtered_repos
 
     while [ "${item_index}" -lt "${item_count}" ]; do
@@ -632,35 +632,12 @@ main() {
                 item_type="PullRequest"
 
             else
-                # No bot-driven PR to pivot into, but the repo's single active-branch/PR slot may
-                # still be occupied by a PR the pivot above deliberately excludes — human-driven
-                # (the include_blocked=true above only widens the pivot to Blocked bot PRs, not to
-                # human-driven ones), or authored by some other tool entirely. Any of those still
-                # occupies the one-active-branch-or-PR-at-a-time slot per the mandatory PR
-                # Lifecycle rule (#1326), so invoking a fresh session for THIS issue could never
-                # make progress either — it would just spend a paid invocation re-discovering the
-                # same occupied slot from inside the session instead of for free here (#1476:
-                # confirmed live — Issue #1310 burned a full invocation to self-report exactly this
-                # after PR #1475, entirely unrelated and human-driven, had already sat open for
-                # over an hour). Checked once per repo per tick, then cached via skip_repos for the
-                # rest of this tick's items in the same repo, same as every other "repo already has
-                # active work" path above. A failed check is treated the same as "occupied" — skip
-                # rather than risk starting duplicate work on an uncertain read, mirroring the
-                # identical failure handling on the idle-budget-exhausted occupancy check further
-                # down.
-                other_open_pr=$(find_any_open_pr_for_repo "${item_repo}") || {
-                    warn "Failed to check for an occupying PR in ${item_repo} — skipping this item for now"
-                    count_error=$((count_error + 1))
-                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to check for an occupying PR - skipping this item for now")")
-                    continue
-                }
-                if [ -n "${other_open_pr}" ]; then
-                    info "Issue #${item_id} in ${item_repo}: repo's active-branch/PR slot occupied by PR #${other_open_pr} — deferring, not invoking"
-                    skip_repos+=("${item_repo}")
-                    count_active_repo=$((count_active_repo + 1))
-                    item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "repo's active-branch/PR slot occupied by PR #${other_open_pr} - deferring")")
-                    continue
-                fi
+                # No bot-driven PR to pivot into. The one-active-branch-or-PR-at-a-time rule is per
+                # user, so a PR that is human-driven, or authored by anyone else (a person, a
+                # dependency bot), does not occupy this issue's slot: only the orchestrator's own
+                # PRs do, and the pivot above has already handled those. An issue whose own linked
+                # PR is being developed by a human stands off further down, through
+                # find_human_taken_over_pr_for_issue (#1517).
 
                 # No active PR — check the issue itself.
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then
@@ -816,14 +793,11 @@ main() {
                         issue_idle_advance=1
                     else
                         if [ "${plan_approved_or_later}" = "true" ]; then
-                            # No occupying-PR check here: the unconditional check at the top of
-                            # this "no bot-driven PR" branch (#1476) already ran earlier in this
-                            # same pass, for every Issue that reaches this branch regardless of
-                            # fingerprint state — so by the time execution reaches this deep,
-                            # find_any_open_pr_for_repo is guaranteed to have found nothing for
-                            # this repo moments ago. A second check here could only ever repeat
-                            # that same empty answer; it was removed rather than left as
-                            # unreachable dead code (former #1326 occupancy re-check).
+                            # No occupying-PR check here: a PR that is not the orchestrator's own
+                            # does not occupy the slot (see the "no bot-driven PR" branch above),
+                            # and the orchestrator's own were handled by the pivot, so an Issue
+                            # that reaches this point with an approved plan and no progress has
+                            # genuinely made none.
                             info "Issue #${item_id} in ${item_repo}: idle budget exhausted with plan approved but no progress — blocking"
                             block_issue_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with plan approved but no progress - blocking")")
@@ -856,10 +830,8 @@ main() {
                             # plan-awaiting-approval self-heal above that: an Issue that never had a
                             # plan posted at all has exhausted its idle re-poke budget (just granted
                             # by the issue_should_advance_unchanged change above) without ever
-                            # producing one. Deliberately does NOT check for an occupying PR the way
-                            # the plan-approved branch does above: posting a plan is comment-only and
-                            # needs no branch/PR slot, so slot occupancy is not a reason for a
-                            # pre-plan Issue to make no progress.
+                            # producing one. Posting a plan is comment-only and needs no branch or
+                            # PR, so no PR is a reason for a pre-plan Issue to make no progress.
                             info "Issue #${item_id} in ${item_repo}: idle budget exhausted with no plan ever posted, blocking"
                             block_issue_for_idle_exhausted_no_plan "${item_id}" "${item_repo}"
                             item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "idle budget exhausted with no plan ever posted - blocking")")
