@@ -54,7 +54,10 @@ get_trusted_logins() {
         done
     fi
 
-    _TRUSTED_LOGINS_JSON=$(printf '%s\n' "${logins[@]+"${logins[@]}"}" | jq -R -s 'split("\n") | map(select(length > 0)) | unique')
+    # The PR create bot is never trusted, whatever access it has to the repository: it only opens
+    # PRs, and a trusted comment of its own must never count as a human's plan approval (#1517).
+    _TRUSTED_LOGINS_JSON=$(printf '%s\n' "${logins[@]+"${logins[@]}"}" \
+        | jq -R -s --arg creator "${PR_CREATOR_LOGIN}" 'split("\n") | map(select(length > 0 and . != $creator)) | unique')
     printf '%s' "${_TRUSTED_LOGINS_JSON}"
 }
 
@@ -126,7 +129,8 @@ resolve_gh_me() {
 # issue gets duplicate work (#1134 review).
 # Returns 1 if the identity lookup or the gh call fails.
 # Avoids --author @me because gh 2.93.0 broke that flag (exits 1 with "malformed version:").
-# Instead, fetches all open PRs with their author field and filters client-side using _GH_ME.
+# Instead, fetches all open PRs with their author field and filters client-side on the author being
+# _GH_ME (the AI agent) or PR_CREATOR_LOGIN (the PR create bot that opens the PRs for its work).
 # _GH_ME is resolved lazily (with retries) on the first call and cached for subsequent calls.
 list_bot_created_open_prs() {
     local repo_full="$1" include_blocked="${2:-false}"
@@ -143,9 +147,9 @@ list_bot_created_open_prs() {
         --limit 200 \
         --json number,labels,author \
         2>/dev/null) || return 1
-    printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" --argjson incb "${include_blocked}" '
+    printf '%s' "${pr_list}" | jq -r --arg me "${_GH_ME}" --arg creator "${PR_CREATOR_LOGIN}" --argjson incb "${include_blocked}" '
         .[] | select(
-            .author.login == $me and
+            (.author.login == $me or .author.login == $creator) and
             ($incb or (([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null))
         ) | .number
     '
@@ -414,8 +418,9 @@ pr_should_use_dependency_prompt() {
 
 # Decides whether an open PR from the priorities feed is being driven by a human rather than the
 # bot (#1131): the bot has authored no commits on it, AND it is either a PR the bot itself
-# created (the issue workflow's draft PR, since taken over) or it contains commits authored by a
-# trusted human login.
+# created (the issue workflow's draft PR, since taken over; "the bot" here is the AI agent account
+# or the PR create bot, PR_CREATOR_LOGIN, which opens that PR) or it contains commits authored by
+# a trusted human login.
 # Check order matters (#1134): a PR the bot CREATED with zero bot commits is a human takeover
 # regardless of its labels — issue-label sync can put a dependencies-ish label on any bot PR, so
 # the label must not be consulted first (that was the substring-exemption regression).  Only for
@@ -451,7 +456,8 @@ pr_is_human_driven() {
         return 1
     fi
 
-    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" '.author.login == $me' > /dev/null 2>&1; then
+    if printf '%s' "${pr_json}" | jq -e --arg me "${_GH_ME}" --arg creator "${PR_CREATOR_LOGIN}" \
+        '.author.login == $me or .author.login == $creator' > /dev/null 2>&1; then
         return 0
     fi
 

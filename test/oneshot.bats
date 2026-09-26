@@ -2835,6 +2835,16 @@ teardown() {
     printf '%s' "${result}" | jq -e 'index("collab2") != null' > /dev/null
 }
 
+@test "get_trusted_logins never includes the PR create bot, even as a collaborator or a whitelisted user (#1517)" {
+    set_repo_context "myorg/myrepo"
+    WHITELISTED_USERS="prpixie,friend"
+    make_stub gh 'printf "collab1\nprpixie\n"'
+    local result
+    result=$(get_trusted_logins)
+    printf '%s' "${result}" | jq -e 'index("prpixie") == null' > /dev/null
+    printf '%s' "${result}" | jq -e 'index("collab1") != null and index("friend") != null' > /dev/null
+}
+
 @test "get_trusted_logins includes copilot-pull-request-reviewer" {
     set_repo_context "myorg/myrepo"
     WHITELISTED_USERS=""
@@ -4739,6 +4749,28 @@ STUBEOF
     [ "${output}" = "42" ]
 }
 
+@test "find_human_taken_over_pr_for_issue returns a PR opened by the PR create bot that a human took over (#1517)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"prpixie"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 1 for a PR opened by the PR create bot that has the AI agent's commits (#1517)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"prpixie"}}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
+    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
 @test "find_human_taken_over_pr_for_issue returns 1 when the taken-over PR closes a different issue" {
     _GH_ME="testuser"
     printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
@@ -4791,6 +4823,43 @@ STUBEOF
     run list_bot_created_open_prs "org/repo" false
     [ "${status}" -eq 0 ]
     grep -q -- "--limit 200" "${TEST_TMP}/gh_args"
+}
+
+@test "list_bot_created_open_prs returns PRs authored by the AI agent or the PR create bot, and none by anyone else (#1517)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":1,"labels":[],"author":{"login":"testuser"}},{"number":2,"labels":[],"author":{"login":"prpixie"}},{"number":3,"labels":[],"author":{"login":"credfeto"}},{"number":4,"labels":[],"author":{"login":"app/dependabot"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'cat "'"${TEST_TMP}"'/prlist.json"'
+    run list_bot_created_open_prs "org/repo" false
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'1\n2' ]
+}
+
+@test "list_bot_created_open_prs still leaves out a Blocked PR by the PR create bot unless asked (#1517)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":2,"labels":[{"name":"Blocked"}],"author":{"login":"prpixie"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'cat "'"${TEST_TMP}"'/prlist.json"'
+    run list_bot_created_open_prs "org/repo" false
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    run list_bot_created_open_prs "org/repo" true
+    [ "${output}" = "2" ]
+}
+
+@test "PR_CREATOR_LOGIN defaults to prpixie, can be overridden, and falls back to the default when invalid (#1517)" {
+    [ "${PR_CREATOR_LOGIN}" = "prpixie" ]
+    run bash -c 'PR_CREATOR_LOGIN=some-bot; BASEDIR=/x; source "$1"; printf "%s" "${PR_CREATOR_LOGIN}"' _ "${REPO_ROOT}/lib/globals"
+    [ "${output}" = "some-bot" ]
+    run bash -c 'PR_CREATOR_LOGIN="not a login"; BASEDIR=/x; source "$1"; printf "%s" "${PR_CREATOR_LOGIN}"' _ "${REPO_ROOT}/lib/globals"
+    [ "${output}" = "prpixie" ]
+}
+
+@test "list_bot_created_open_prs follows an overridden PR_CREATOR_LOGIN (#1517)" {
+    _GH_ME="testuser"
+    PR_CREATOR_LOGIN="other-bot"
+    printf '%s' '[{"number":2,"labels":[],"author":{"login":"prpixie"}},{"number":3,"labels":[],"author":{"login":"other-bot"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'cat "'"${TEST_TMP}"'/prlist.json"'
+    run list_bot_created_open_prs "org/repo" false
+    [ "${output}" = "3" ]
 }
 
 # --- tag_pr_closed_issue result contract (#1134) --------------------------------
@@ -5150,6 +5219,18 @@ main_dependency_flag() {
     _GH_ME="testuser"
     run pr_is_human_driven '{"labels":[],"author":{"login":"testuser"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
     [ "${status}" -eq 0 ]
+}
+
+@test "pr_is_human_driven returns 0 for a PR opened by the PR create bot with zero bot commits (taken over) (#1517)" {
+    _GH_ME="testuser"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"prpixie"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_is_human_driven returns 1 for a PR opened by the PR create bot that has the AI agent's commits (#1517)" {
+    _GH_ME="testuser"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"prpixie"},"commits":[{"authors":[{"login":"testuser"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 1 ]
 }
 
 @test "pr_is_human_driven exempts a not-yet-claimed dependency-bump PR opened under the bot's own login (credfeto-enum-source-generation#118)" {
