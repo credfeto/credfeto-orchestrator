@@ -1084,3 +1084,8 @@ HOOKEOF
     [ "${REPO_WORK_DIR}" = "${WORK}/credfeto/example/repo" ]
     [ "${RULES_DIR}" = "${WORK}/credfeto/example/rules" ]
 }
+
+@test "interactive sets BASEDIR to its own directory, and lib/globals builds the cfwf path from it" {
+    [ "${BASEDIR}" = "${REPO_ROOT}" ]
+    [ "${CFWF_SCRIPT}" = "${BASEDIR}/containers/base/development-full/scripts/cfwf" ]
+}

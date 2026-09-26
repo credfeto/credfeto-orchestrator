@@ -64,10 +64,10 @@ MAX_PROMPT_CHARS=100000
 # Avoids hitting the limit again immediately after it lifts.
 RATE_LIMIT_RESUME_BUFFER_SECS=3600
 
-# The cfwf script that ships in this repository, found from this file's own path rather than
-# PATH, so the orchestrator always runs the version it was released with and ignores any other
-# cfwf that happens to be installed.
-CFWF_SCRIPT="${BASH_SOURCE[0]%/lib/globals}/containers/base/development-full/scripts/cfwf"
+# The cfwf script that ships in this repository, found from BASEDIR (set by the script that sources
+# this file) rather than PATH, so the orchestrator always runs the version it was released with and
+# ignores any other cfwf that happens to be installed. An unset BASEDIR stops the script here.
+CFWF_SCRIPT="${BASEDIR:?BASEDIR must be set by the script that sources lib/globals}/containers/base/development-full/scripts/cfwf"
 
 # Where unparseable 429 rate-limit messages are reported so parse_reset_time can be extended.
 RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"

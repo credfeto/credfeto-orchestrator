@@ -27,6 +27,9 @@
 # session fall through into its main loop instead of dying at the oneshot-not-executable
 # check, repeatedly running real git commands against the enclosing repo, #1185 review).
 ONESHOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The directory the whole tree lives in. lib/globals builds paths from it, so it is set here,
+# before that is sourced, and a lib file never works out its own location.
+export BASEDIR="${ONESHOT_DIR}"
 # shellcheck source=lib/globals disable=SC1091
 source "${ONESHOT_DIR}/lib/globals" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/globals\n' "${ONESHOT_DIR}" >&2; exit 1; }

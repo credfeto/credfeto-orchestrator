@@ -8541,6 +8541,21 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "oneshot sets BASEDIR to its own directory, and lib/globals builds the cfwf path from it" {
+    [ "${BASEDIR}" = "${REPO_ROOT}" ]
+    [ "${CFWF_SCRIPT}" = "${BASEDIR}/containers/base/development-full/scripts/cfwf" ]
+}
+
+@test "lib/globals takes the cfwf path from BASEDIR and stops loudly when BASEDIR is not set" {
+    run bash -c 'BASEDIR=/some/dir; source "$1"; printf "%s" "${CFWF_SCRIPT}"' _ "${REPO_ROOT}/lib/globals"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "/some/dir/containers/base/development-full/scripts/cfwf" ]
+
+    run bash -c 'unset BASEDIR; source "$1"' _ "${REPO_ROOT}/lib/globals"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"BASEDIR must be set by the script that sources lib/globals"* ]]
+}
+
 @test "report_unparseable_rate_limit runs the cfwf in this repository and ignores one on PATH" {
     local gh_log="${TEST_TMP}/gh_args"
     make_cfwf_gh_stub "${gh_log}"
