@@ -8,6 +8,8 @@ Back to the [development guide](README.md).
 
 `oneshot` resolves its own directory from `${BASH_SOURCE[0]}` (never `$0`, which is the bats runner when a test sources it) and sources the libraries in this fixed order: `globals`, `core`, `git`, `github`, `github-status`, `fingerprints`, `state`, `prompts`, `workflow-board`, `discord`, `podman`. Each `source` line carries a `# shellcheck source=lib/x disable=SC1091` directive and a dependency-free failure fallback that prints `FATAL: failed to source` and exits 1. The fallback cannot call `die`, because `die` lives in `lib/core` and may not have loaded.
 
+Before sourcing `lib/globals`, the top-level script (`oneshot` or `interactive`) sets `BASEDIR` to that directory. A `lib/` file never works out where it is itself (no `BASH_SOURCE` in a library); one that needs a path in the tree builds it from `BASEDIR`, as `lib/globals` does for `CFWF_SCRIPT`, and `lib/globals` stops with a message if `BASEDIR` is not set.
+
 Only `lib/globals` has to come first: it declares every associative array (bash needs `declare -A` before any assignment into one) and the configuration defaults. The other libraries call each other by function name at run time, so the order does not encode the dependencies below, and there are cycles (`github-status` calls `discord`, which calls `github-status`). The dependency lists are the calls to functions defined in another library, found by scanning for function names, so a call built dynamically would not show up.
 
 The `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` source guard lives only in the top-level script. A `lib/` file starts with `# shellcheck shell=bash` and has no shebang and no guard. See [shell-testing.instructions.md](../../ai/local/shell-testing.instructions.md) for the reasoning and the shellcheck rules.
@@ -16,7 +18,7 @@ The `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` source guard lives
 
 ### globals
 
-Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back silently to the default (`warn` does not exist yet when this file runs); `PROJECT_CACHE_TTL` is not validated. Depends on: nothing.
+Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back silently to the default (`warn` does not exist yet when this file runs); `PROJECT_CACHE_TTL` is not validated. `CFWF_SCRIPT` is the path of the `cfwf` that ships in this repository, built from `BASEDIR`, which the sourcing script sets first (see above); sourcing this file without `BASEDIR` stops the script with a message. Depends on: nothing.
 
 ### core
 
@@ -40,7 +42,7 @@ The "did this item change" state. `fetch_pr_json`, `fetch_issue_json`, `fingerpr
 
 ### state
 
-File-backed bookkeeping between ticks. Invocation guard files (`load_pr_invocation_counts`, `save_issue_invocation_counts`, the `MAX_*_INVOCATIONS` backstops), environment-block auto-unblocking (`try_auto_unblock_env_diagnosed_pr`), rate limiting (`save_rate_limit`, `is_owner_rate_limited`, `parse_reset_time`), pull-duration history, and the `.blocked`, plan-block, background-stall and last-diagnostic markers. Depends on: `core`, `github-status`, `podman`.
+File-backed bookkeeping between ticks. Invocation guard files (`load_pr_invocation_counts`, `save_issue_invocation_counts`, the `MAX_*_INVOCATIONS` backstops), environment-block auto-unblocking (`try_auto_unblock_env_diagnosed_pr`), rate limiting (`save_rate_limit`, `is_owner_rate_limited`, `parse_reset_time`), pull-duration history, and the `.blocked`, plan-block, background-stall and last-diagnostic markers. `report_unparseable_rate_limit` files its tracking issue with the in-repo `cfwf issue create` (`${CFWF_SCRIPT}`, never a `cfwf` found on `PATH`), so the issue is on the Workflow board as `Not Started`; the body goes in on stdin (`--body-file -`) and the priority is `Medium`. A failure is a warning that carries cfwf's own message (or says `cfwf` was not found), because cfwf refuses to create an issue when the repository's Workflow board cannot be resolved. Depends on: `core`, `github-status`, `podman`.
 
 ### prompts
 
@@ -49,6 +51,8 @@ Builds the CLAUDE.md and launch prompts (`build_issue_claude_md`, `build_pr_clau
 ### workflow-board
 
 The GitHub Projects v2 "Workflow" board. Discovery and creation (`discover_or_create_workflow_project`), the disk cache (`load_project_cache`, `save_project_cache`, `invalidate_project_cache`), writes (`update_workflow_status`, `_wf_set_builtin_status`), reads (`fetch_board_item_statuses`, `fetch_board_approved_items`, `fetch_single_item_workflow_status`, `board_substatus_for_item`), the forward-only PR mirror (`sync_pr_workflow_status_from_linked_issues`), and the status mappings (`coarse_status_for_substatus`, `builtin_status_for_workflow_status`, `priority_for_labels`). Depends on: `core`, `github`.
+
+`report_missing_workflow_project` files its "Workflow project setup required" issue with plain `gh issue create`, not `cfwf issue create`. This is a deliberate exception, to be reviewed later: it runs only when the repository has no usable Workflow board, and `cfwf issue create` checks for a board before creating anything, so it would always refuse.
 
 The option maps (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`) are copied between the live globals, the in-memory `_WF_CACHE` and the on-disk cache by helpers written once, which take the array by name (a nameref): `_wf_reset_assoc`, `_wf_assoc_to_json`, `_wf_assoc_from_json`, `_wf_cache_store_assoc`, `_wf_cache_load_assoc` and `_wf_cache_forget_assoc`. `update_workflow_status` writes a field through `_wf_set_item_field` (Workflow Status first, then `_wf_set_builtin_status` for the built-in Status, which uses the same helper).
 

@@ -2,6 +2,8 @@
 
 A POSIX shell script that checks the current branch is not behind its remote, then finds the active `pre-commit` hook and runs it with `--all-files`.
 
+It was ported verbatim from `development/pre-commit-check` in `credfeto/scripts`.
+
 Back to the [development guide](../README.md).
 
 ## Purpose

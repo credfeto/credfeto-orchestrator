@@ -74,6 +74,10 @@ test. This applies to all five scripts that source a `lib/*` file — `oneshot`,
 `is_ai_agent` in isolation, so `$0`-based resolution silently breaks under that path too — do not
 assume a script is exempt just because most of its coverage runs it as a subprocess.
 
+### `lib/*` Files Never Locate Themselves
+
+A `lib/*` file must not use `BASH_SOURCE` (or `$0`) to work out where the tree lives. `oneshot` and `interactive` set `BASEDIR` from the directory they have already resolved (see above) before sourcing `lib/globals`, and any `lib/*` file that needs a path in the tree builds it from `BASEDIR`. Text stripped from a `BASH_SOURCE` path silently produces a wrong path when the file is sourced by a relative path, and one place that owns the location keeps every library in step. `lib/globals` uses `${BASEDIR:?...}` so a script that forgets to set it stops loudly.
+
 ### Fail Loudly When a `lib/*` Source Fails
 
 Every `source "${SCRIPT_DIR}/lib/x"` line must be followed by a dependency-free failure

@@ -30,6 +30,9 @@
 # harness `source`s it. lib/globals must be sourced first (see oneshot for why); each source
 # has a dependency-free fallback because `die` only exists once lib/core has loaded.
 INTERACTIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The directory the whole tree lives in. lib/globals builds paths from it, so it is set here,
+# before that is sourced, and a lib file never works out its own location.
+export BASEDIR="${INTERACTIVE_DIR}"
 # shellcheck source=lib/globals disable=SC1091
 source "${INTERACTIVE_DIR}/lib/globals" \
     || { printf 'interactive: FATAL: failed to source %s/lib/globals\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
