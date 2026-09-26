@@ -693,15 +693,17 @@ issue_create() {
         args+=(--label "${label}")
     done
     url=$(gh "${args[@]}") || die "could not create the issue in ${REPO}"
-    url="${url##*$'\n'}"
-    # The repository in the URL is not compared with --repo: a renamed or transferred repository
-    # answers with its new name, and the issue exists by now.
-    [[ "${url}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$ ]] \
-        || die "gh returned an unexpected result for the new issue, which may have been created: ${url}"
-    CREATED_URL="${url}"
+    # Named before it is checked, so the EXIT trap reports whatever gh answered with if the check
+    # or the board write fails: the issue may exist by now.
+    CREATED_URL="${url##*$'\n'}"
+    # Neither the host nor the repository in the URL is compared with anything: gh may be reached
+    # through a proxy that answers with its own host, and a renamed or transferred repository
+    # answers with its new name.
+    [[ "${CREATED_URL}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the new issue, which may have been created: ${CREATED_URL}"
 
-    put_item_on_board "${url}"
-    printf '%s\n' "${url}"
+    put_item_on_board "${CREATED_URL}"
+    printf '%s\n' "${CREATED_URL}"
 }
 
 cmd_issue() {

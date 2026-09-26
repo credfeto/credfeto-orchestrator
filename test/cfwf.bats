@@ -1254,8 +1254,31 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"unexpected result for the new issue, which may have been created: something odd"* ]]
+    [[ "${output}" == *"the issue was already created: something odd"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
+}
 
+@test "issue create puts a new issue on the board when gh answers with another host, such as a proxy" {
+    prepare_issue_create
+    printf 'https://github-proxy.example.com/credfeto/credfeto-orchestrator/issues/7\n' > "${GH_FIXTURES}/issue-create.out"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "https://github-proxy.example.com/credfeto/credfeto-orchestrator/issues/7" ]
+    grep -qF "project item-add 74 --owner credfeto --url https://github-proxy.example.com/credfeto/credfeto-orchestrator/issues/7 " "${GH_LOG}"
+}
+
+@test "issue create refuses an answer that is not an https issue URL, whatever the host" {
+    prepare_issue_create
+    create_args
+    local answer
+    for answer in "http://github.com/credfeto/credfeto-orchestrator/issues/7" "https://github.com/credfeto/credfeto-orchestrator/pull/7" "https://github.com/credfeto/issues/7" "https://ho st/credfeto/credfeto-orchestrator/issues/7"; do
+        printf '%s\n' "${answer}" > "${GH_FIXTURES}/issue-create.out"
+        run "${SCRIPT}" "${CREATE_ARGS[@]}"
+        [ "${status}" -eq 1 ]
+        [[ "${output}" == *"unexpected result for the new issue"* ]]
+    done
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
 @test "issue create puts a new issue on the board even when a renamed repository answers with its new name" {
