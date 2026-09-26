@@ -1285,7 +1285,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"unexpected result for the new issue, which may have been created: something odd"* ]]
-    [[ "${output}" == *"the issue was already created: something odd"* ]]
+    [[ "${output}" != *"the issue was already created"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
