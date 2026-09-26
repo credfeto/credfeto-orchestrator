@@ -549,8 +549,9 @@ utf8_locale_available() {
     [ "${#accented}" -eq 1 ]
 }
 
-# Lengths are checked in C.UTF-8 (see validate_visible_text), so a host without it is refused
-# rather than left to count bytes and turn away a valid multi-byte title or label.
+# Called just before a length is counted in C.UTF-8 (validate_visible_text and resolve_body), so a
+# host without it is refused rather than left to count bytes and turn away a valid multi-byte
+# title, label or body. Nothing else needs the locale, so --help and usage errors still work.
 require_utf8_locale() {
     utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
 }
@@ -560,6 +561,7 @@ require_utf8_locale() {
 # locale a container usually has, so the length is taken in a UTF-8 one.
 validate_visible_text() {
     local value="$1" limit="$2" flag="$3"
+    require_utf8_locale
     local LC_ALL=C.UTF-8
     [[ "${value}" =~ [^[:space:]] && "${#value}" -le "${limit}" ]] \
         || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
@@ -627,6 +629,7 @@ resolve_body() {
         [ -f "${BODY_FILE}" ] && [ -r "${BODY_FILE}" ] || die "cannot read the body file: ${BODY_FILE}"
     fi
     grep -q '[^[:space:]]' "${BODY_FILE}" || die "the issue body is empty"
+    require_utf8_locale
     [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_FILE}")" -le "${BODY_LIMIT}" ] \
         || die "the issue body is longer than ${BODY_LIMIT} characters"
 }
@@ -684,7 +687,6 @@ label_create_failed() {
 }
 
 issue_create() {
-    require_utf8_locale
     parse_issue_options "$@"
     require REPO --repo
     [ -n "${PRIORITY}" ] || usage_error "--priority is required (${PRIORITY_LIST})"

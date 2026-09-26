@@ -924,10 +924,29 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
 }
 
-@test "issue create refuses to run, before calling gh, when the C.UTF-8 locale is not installed" {
-    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; require_utf8_locale' _ "${SCRIPT}"
+@test "issue create refuses to count a title, a label or a body when the C.UTF-8 locale is not installed" {
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; CURRENT_COMMAND=issue; parse_issue_options --title T' _ "${SCRIPT}"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
+
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; CURRENT_COMMAND=issue; parse_issue_options --label bug' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
+
+    printf 'body\n' > "${TEST_TMP}/body.md"
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; BODY_FILE="$2"; resolve_body' _ "${SCRIPT}" "${TEST_TMP}/body.md"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
+}
+
+@test "issue create --help and a usage error do not need the C.UTF-8 locale" {
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; CURRENT_COMMAND=issue; parse_issue_options --help' _ "${SCRIPT}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf issue create"* ]]
+
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; CURRENT_COMMAND=issue; parse_issue_options --bogus' _ "${SCRIPT}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"unknown option: --bogus"* ]]
 }
 
 @test "the C.UTF-8 locale check passes where the locale is installed" {
