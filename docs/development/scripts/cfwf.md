@@ -1,17 +1,12 @@
 # cfwf
 
-A bash helper (Credfeto WorkFlow) that gives each recurring multi-step `gh` pattern one flat command: move an item on the Workflow board, read its status, list the labels of the issues a PR closes, or create an issue and put it on the board.
+A bash helper (Credfeto WorkFlow) that gives each recurring multi-step `gh` pattern one flat command.
 
 Back to the [development guide](../README.md).
 
 ## Purpose
 
-Agents used to re-derive the same multi-statement `gh` scripts every session. `cfwf` replaces them with single commands, so one `command-allowlist` entry and one `Bash(cfwf *)` permission cover them. It has four commands:
-
-- `workflow-status --set` puts an issue or PR on the Workflow board and sets its Workflow Status and the project's built-in Status.
-- `workflow-status --check` prints where an item currently is.
-- `closing-issue-labels` prints the labels of the issues a PR closes.
-- `issue create` creates an issue and puts it on the Workflow board as `Not Started`, so the board write can never be forgotten.
+Agents used to re-derive the same multi-statement `gh` scripts every session. `cfwf` replaces them with single commands, so one `command-allowlist` entry and one `Bash(cfwf *)` permission cover them. The commands are listed under [Running it](#running-it), and each is described in [How it works](#how-it-works).
 
 The board, its Workflow Status field and the option ids are all looked up from `--repo` and `--status`, so callers never handle project, field or option ids. The board itself is described in `docs/workflow-board.md`.
 
