@@ -37,6 +37,17 @@ commits still on the branch, and either:
   own draft — most commonly, a human rebased the bot's placeholder commit away), or
 - at least one commit on the branch is authored by a trusted human login.
 
+"The bot" here means either of two accounts: the AI agent (the account the orchestrator's token
+belongs to) and the PR create bot (`PR_CREATOR_LOGIN`, `prpixie` by default), which opens the
+Pull Requests for the agent's work but never commits to them. A Pull Request authored by either
+is the bot's own; commit authorship then decides whether it is still bot-driven. The PR create
+bot is never a trusted login, so a comment of its own can never count as a human's approval.
+
+The rule that only one branch or Pull Request is active at a time applies **per user**, so it is
+about the bot's own Pull Requests only. A Pull Request from a person, or from a dependency bot, is
+not the bot's and does not stop it working on other Issues in the same repository; an Issue whose
+own Pull Request a human is developing is stood off, and reported as human-driven.
+
 Dependency-update Pull Requests (from tools like Dependabot) are a deliberate exception: they
 never contain bot-authored commits by design, so they're recognised by their branch-naming
 convention (`depends/` or `dependabot/`, on a branch in the same repository: a fork PR is never
@@ -53,11 +64,13 @@ auto-merge or mark it ready while it is listed (the full flow removes the placeh
 change has landed next to it; an auto-merge already armed on a placeholder-only PR is disarmed).
 
 The trickiest case: an Issue whose linked Pull Request has been taken over by a human is
-otherwise *invisible* to the normal "does this repo already have an active PR" check (it has no
+otherwise *invisible* to the normal pivot into the bot's own Pull Request (it has no
 bot-authored commits, so it doesn't look bot-driven at all) — which would make the Issue look
 free to re-work from scratch, opening a second, duplicate branch alongside the human's real one.
 A separate check specifically looks for this situation (matching the Pull Request back to the
-Issue it closes) and stands the Issue off too.
+Issue it closes) and stands the Issue off too. It looks at every open Pull Request in the
+repository, whoever opened it, in a single `gh pr list`: one a person opened themselves for the
+Issue is found the same way, by what it closes, and stands the Issue off just the same.
 
 ## The `Blocked` label: how a stuck item gets a human's attention
 

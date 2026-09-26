@@ -350,6 +350,21 @@ GH_COLLABORATORS_RETRY_DELAY_SECS="${GH_COLLABORATORS_RETRY_DELAY_SECS:-2}"
 CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
 [[ "${CLAUDE_CODE_AUTO_COMPACT_WINDOW}" =~ ^[1-9][0-9]*$ ]] || CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000
 
+# Login of the PR create bot: the account that opens the PRs for the AI's work, deliberately a
+# different account from the AI agent (the one _GH_ME resolves to) so each can tell what the other
+# did. A PR it authored is treated as the orchestrator's own, exactly like one authored by the AI
+# agent; it only opens PRs, so it is never a commit author and never a trusted approver (#1517).
+# Overridable from the environment; an invalid value silently falls back to the default (warn does
+# not exist yet when this file runs).
+PR_CREATOR_LOGIN="${PR_CREATOR_LOGIN:-prpixie}"
+[[ "${PR_CREATOR_LOGIN}" =~ ^(app/)?[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\[bot\])?$ ]] || PR_CREATOR_LOGIN=prpixie
+
+# jq definition, prepended to every jq program that asks "is this PR authored by the orchestrator's
+# own side": the AI agent ($me) or the PR create bot ($creator). One definition, so the pivot and
+# the human-driven check cannot disagree about it. GitHub logins are case-insensitive, so the
+# comparison is too. The program must be given --arg me and --arg creator.
+_JQ_DEF_OWN_PR_AUTHOR='def own_pr_author: ((.author.login // "") | ascii_downcase) as $login | ($login == ($me | ascii_downcase) or $login == ($creator | ascii_downcase));'
+
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""
 # Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
