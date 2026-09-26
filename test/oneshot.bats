@@ -4713,6 +4713,18 @@ STUBEOF
     [ "${status}" -eq 2 ]
 }
 
+@test "pr_has_bot_authored_commit returns 2, without reading the commits, when the identity cannot be resolved (#1517)" {
+    # With no identity every commit would look human-authored, so this is a failure to classify.
+    _GH_ME=""
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    # shellcheck disable=SC2016  # $* expands inside the stub at run time
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"; exit 1'
+    run pr_has_bot_authored_commit "org/repo" 5
+    [ "${status}" -eq 2 ]
+    [ "$(grep -c -- "pr view" "${TEST_TMP}/gh_args")" -eq 0 ]
+}
+
 # --- find_human_taken_over_pr_for_issue (#1131) --------------------------------
 
 # Stubs gh for the takeover lookup: `gh pr list` answers $1 (every open PR with its author, closing

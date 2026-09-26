@@ -276,6 +276,9 @@ find_open_nonblocked_pr_for_repo() {
 # misreading it as "human-driven".
 pr_has_bot_authored_commit() {
     local repo_full="$1" pr_number="$2" commits_json
+    # An unresolved identity would make every commit look human-authored, so it is a failure to
+    # classify, not an answer (#1517).
+    resolve_gh_me || return 2
     commits_json=$(fetch_pr_fields_json "${pr_number}" commits "${repo_full}") || return 2
     printf '%s' "${commits_json}" | json_has_commit_author_identity "${_GH_ME}" "${GIT_USER_EMAIL}"
 }
