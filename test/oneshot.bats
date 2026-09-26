@@ -4715,70 +4715,128 @@ STUBEOF
 
 # --- find_human_taken_over_pr_for_issue (#1131) --------------------------------
 
-# Stubs gh for the takeover lookup: `gh pr list` answers $1 (every open PR with its closing
-# references and branch name, in one call) and `gh pr view 42 --json commits` answers $2.
+# Stubs gh for the takeover lookup: `gh pr list` answers $1 (every open PR with its author, closing
+# references and branch name, in one call) and `gh pr view 42 --json commits` answers $2. The
+# repo's trusted logins are cached as the owner and one collaborator.
 stub_open_prs_and_commits() {
+    _GH_ME="testuser"
+    _TRUSTED_LOGINS_JSON='["credfeto","humanuser"]'
     printf '%s' "$1" > "${TEST_TMP}/prlist.json"
     printf '%s' "$2" > "${TEST_TMP}/pr42commits.json"
     make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *) exit 1 ;; esac'
 }
 
-@test "find_human_taken_over_pr_for_issue returns the PR that closes the issue when a human is developing it" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+@test "find_human_taken_over_pr_for_issue returns the bot's PR that closes the issue when a human took it over" {
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"testuser"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
-@test "find_human_taken_over_pr_for_issue asks for every open PR, whoever opened it, in one call (#1517)" {
+@test "find_human_taken_over_pr_for_issue returns a PR opened by the PR create bot that a human took over (#1517)" {
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"prpixie"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"credfeto"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns a PR that a trusted person opened for the issue (#1517)" {
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"credfeto"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"credfeto"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_human_taken_over_pr_for_issue ignores a stranger's PR that says it closes the issue (#1517)" {
+    # Anyone who can open a PR could otherwise park the issue for good by writing "Closes #164".
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"stranger"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"stranger"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_human_taken_over_pr_for_issue ignores a stranger's PR whose branch name carries the issue number (#1517)" {
+    # The branch name of a fork PR is the forker's choice, so it must not park an issue either.
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"stranger"},"closingIssuesReferences":[],"headRefName":"x/164-foo"}]' '{"commits":[{"authors":[{"login":"stranger"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_human_taken_over_pr_for_issue asks for every open PR in one call (#1517)" {
     _GH_ME="testuser"
+    _TRUSTED_LOGINS_JSON='["credfeto"]'
     # shellcheck disable=SC2016  # $* expands inside the stub at run time
     make_stub gh 'printf "%s\n" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
     grep -q -- "--state open" "${TEST_TMP}/gh_args"
     grep -q -- "--limit 200" "${TEST_TMP}/gh_args"
-    grep -q -- "--json number,closingIssuesReferences,headRefName" "${TEST_TMP}/gh_args"
+    grep -q -- "--json number,author,closingIssuesReferences,headRefName" "${TEST_TMP}/gh_args"
     [ "$(grep -c -- "--author" "${TEST_TMP}/gh_args")" -eq 0 ]
 }
 
 @test "find_human_taken_over_pr_for_issue scans past PRs for other issues to the one that owns this issue (#1517)" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":7,"closingIssuesReferences":[{"number":5}],"headRefName":"feature/5-y"},{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":7,"author":{"login":"credfeto"},"closingIssuesReferences":[{"number":5}],"headRefName":"feature/5-y"},{"number":42,"author":{"login":"credfeto"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
 @test "find_human_taken_over_pr_for_issue returns 1 for a PR unrelated to the issue (#1517)" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"fix/other-thing"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"credfeto"},"closingIssuesReferences":[],"headRefName":"fix/other-thing"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
 @test "find_human_taken_over_pr_for_issue returns 1 for a PR that has the AI agent's commits" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"testuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"prpixie"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"testuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
 @test "find_human_taken_over_pr_for_issue returns 1 when the PR closes a different issue" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"credfeto"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 99
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
+@test "find_human_taken_over_pr_for_issue still sees a Blocked taken-over PR (#1134)" {
+    # Tagging a taken-over PR adds Blocked; the stand-off must not go blind because of it,
+    # or a reopened issue would get duplicate work.
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"testuser"},"labels":[{"name":"Blocked"}],"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
 @test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
     _GH_ME="testuser"
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    _TRUSTED_LOGINS_JSON='["credfeto"]'
+    make_stub gh 'exit 1'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 2 when the identity cannot be resolved (#1517)" {
+    _GH_ME=""
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    _TRUSTED_LOGINS_JSON='["credfeto"]'
+    make_stub gh 'exit 1'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 2 when the trusted logins cannot be fetched (#1517)" {
+    _GH_ME="testuser"
+    _TRUSTED_LOGINS_JSON=""
+    GH_COLLABORATORS_RETRY_ATTEMPTS=1
+    GH_COLLABORATORS_RETRY_DELAY_SECS=0
+    set_repo_context "org/repo"
     make_stub gh 'exit 1'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 2 ]
@@ -4786,34 +4844,32 @@ stub_open_prs_and_commits() {
 
 @test "find_human_taken_over_pr_for_issue returns 2 when the commits of the PR that owns the issue cannot be read (#1134)" {
     _GH_ME="testuser"
+    _TRUSTED_LOGINS_JSON='["credfeto"]'
     GH_ITEM_FETCH_RETRY_ATTEMPTS=1
     GH_ITEM_FETCH_RETRY_DELAY_SECS=0
-    printf '%s' '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '[{"number":42,"author":{"login":"credfeto"},"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' > "${TEST_TMP}/prlist.json"
     make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 2 ]
 }
 
 @test "find_human_taken_over_pr_for_issue falls back to the branch-name convention when the closing reference is gone (#1134)" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"feature/164-buildtest-skip-benchmarks"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"testuser"},"closingIssuesReferences":[],"headRefName":"feature/164-buildtest-skip-benchmarks"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
 @test "find_human_taken_over_pr_for_issue does not match a branch whose issue number merely starts with the target (#1134)" {
-    _GH_ME="testuser"
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"feature/1640-other-work"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"testuser"},"closingIssuesReferences":[],"headRefName":"feature/1640-other-work"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
 }
 
 @test "find_human_taken_over_pr_for_issue lets explicit closing references beat a stale branch name (#1134)" {
-    _GH_ME="testuser"
     # PR was retargeted to issue 264 (body edited) but still lives on branch fix/164-foo:
     # querying 164 must NOT match - the explicit reference wins over the branch convention.
-    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":264}],"headRefName":"fix/164-foo"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    stub_open_prs_and_commits '[{"number":42,"author":{"login":"testuser"},"closingIssuesReferences":[{"number":264}],"headRefName":"fix/164-foo"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
 }

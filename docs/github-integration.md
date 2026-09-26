@@ -69,8 +69,11 @@ bot-authored commits, so it doesn't look bot-driven at all) — which would make
 free to re-work from scratch, opening a second, duplicate branch alongside the human's real one.
 A separate check specifically looks for this situation (matching the Pull Request back to the
 Issue it closes) and stands the Issue off too. It looks at every open Pull Request in the
-repository, whoever opened it, in a single `gh pr list`: one a person opened themselves for the
-Issue is found the same way, by what it closes, and stands the Issue off just the same.
+repository in a single `gh pr list`, and considers those opened by the bot, by the PR create bot
+or by a trusted person (the owner, a collaborator or a whitelisted user): one a trusted person
+opened themselves for the Issue is found the same way, by what it closes, and stands the Issue off
+just the same. A Pull Request from anyone else is ignored, so a stranger cannot park an Issue by
+writing "Closes #N" in theirs.
 
 ## The `Blocked` label: how a stuck item gets a human's attention
 
