@@ -542,6 +542,19 @@ standard_label() {
     return 1
 }
 
+# True when the C.UTF-8 locale exists, so that bash counts characters and not bytes in it: an
+# assignment of a locale that is not installed is silently ignored.
+utf8_locale_available() {
+    local LC_ALL=C.UTF-8 accented=$'\303\251'
+    [ "${#accented}" -eq 1 ]
+}
+
+# Lengths are checked in C.UTF-8 (see validate_visible_text), so a host without it is refused
+# rather than left to count bytes and turn away a valid multi-byte title or label.
+require_utf8_locale() {
+    utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
+}
+
 # Refuses a value that is only whitespace or longer than GitHub accepts, so the call fails here and
 # not half way through creating things. GitHub counts characters, and bash counts bytes in the C
 # locale a container usually has, so the length is taken in a UTF-8 one.
@@ -671,6 +684,7 @@ label_create_failed() {
 }
 
 issue_create() {
+    require_utf8_locale
     parse_issue_options "$@"
     require REPO --repo
     [ -n "${PRIORITY}" ] || usage_error "--priority is required (${PRIORITY_LIST})"

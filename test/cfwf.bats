@@ -924,6 +924,18 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
 }
 
+@test "issue create refuses to run, before calling gh, when the C.UTF-8 locale is not installed" {
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; require_utf8_locale' _ "${SCRIPT}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
+}
+
+@test "the C.UTF-8 locale check passes where the locale is installed" {
+    LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); [ "${#v}" -eq 1 ]' || skip "no C.UTF-8 locale on this host"
+    run bash -c 'source "$1"; utf8_locale_available' _ "${SCRIPT}"
+    [ "${status}" -eq 0 ]
+}
+
 @test "issue create refuses a body over GitHub's 65536 characters before creating anything, and accepts exactly that many" {
     prepare_issue_create
     head -c 65537 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/long.md"

@@ -341,6 +341,9 @@ RUN set -e; \
         [ -x "/usr/local/bin/$script" ] \
             || { echo "FATAL sanity: /usr/local/bin/$script is missing or not executable" >&2; exit 1; }; \
     done; \
+    echo "== C.UTF-8 locale (cfwf counts characters, not bytes, in it, and refuses to run without it) =="; \
+    [ "$(LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); echo "${#v}"')" = "1" ] \
+        || { echo "FATAL sanity: the C.UTF-8 locale is not installed" >&2; exit 1; }; \
     echo "== HTTPS clone (dnyw4l3n13/scratch — sacrificial sanity target) =="; \
     rm -rf /tmp/sanity-clone; \
     GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 https://github.com/dnyw4l3n13/scratch.git /tmp/sanity-clone; \
