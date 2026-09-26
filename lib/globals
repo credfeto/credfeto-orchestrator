@@ -357,7 +357,13 @@ CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-100000}"
 # Overridable from the environment; an invalid value silently falls back to the default (warn does
 # not exist yet when this file runs).
 PR_CREATOR_LOGIN="${PR_CREATOR_LOGIN:-prpixie}"
-[[ "${PR_CREATOR_LOGIN}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\[bot\])?$ ]] || PR_CREATOR_LOGIN=prpixie
+[[ "${PR_CREATOR_LOGIN}" =~ ^(app/)?[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?(\[bot\])?$ ]] || PR_CREATOR_LOGIN=prpixie
+
+# jq definition, prepended to every jq program that asks "is this PR authored by the orchestrator's
+# own side": the AI agent ($me) or the PR create bot ($creator). One definition, so the pivot and
+# the human-driven check cannot disagree about it. GitHub logins are case-insensitive, so the
+# comparison is too. The program must be given --arg me and --arg creator.
+_JQ_DEF_OWN_PR_AUTHOR='def own_pr_author: ((.author.login // "") | ascii_downcase) as $login | ($login == ($me | ascii_downcase) or $login == ($creator | ascii_downcase));'
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 WHITELISTED_USERS=""

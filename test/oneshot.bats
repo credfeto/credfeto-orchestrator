@@ -4715,82 +4715,107 @@ STUBEOF
 
 # --- find_human_taken_over_pr_for_issue (#1131) --------------------------------
 
-@test "find_human_taken_over_pr_for_issue returns the PR that closes the issue when a human took it over" {
+# Stubs gh for the takeover lookup: `gh pr list` answers $1 (every open PR with its closing
+# references and branch name, in one call) and `gh pr view 42 --json commits` answers $2.
+stub_open_prs_and_commits() {
+    printf '%s' "$1" > "${TEST_TMP}/prlist.json"
+    printf '%s' "$2" > "${TEST_TMP}/pr42commits.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *) exit 1 ;; esac'
+}
+
+@test "find_human_taken_over_pr_for_issue returns the PR that closes the issue when a human is developing it" {
     _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
-@test "find_human_taken_over_pr_for_issue returns a PR opened by the PR create bot that a human took over (#1517)" {
+@test "find_human_taken_over_pr_for_issue asks for every open PR, whoever opened it, in one call (#1517)" {
     _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"prpixie"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    # shellcheck disable=SC2016  # $* expands inside the stub at run time
+    make_stub gh 'printf "%s\n" "$*" > "'"${TEST_TMP}"'/gh_args"; printf "[]"'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+    grep -q -- "--state open" "${TEST_TMP}/gh_args"
+    grep -q -- "--limit 200" "${TEST_TMP}/gh_args"
+    grep -q -- "--json number,closingIssuesReferences,headRefName" "${TEST_TMP}/gh_args"
+    [ "$(grep -c -- "--author" "${TEST_TMP}/gh_args")" -eq 0 ]
+}
+
+@test "find_human_taken_over_pr_for_issue scans past PRs for other issues to the one that owns this issue (#1517)" {
+    _GH_ME="testuser"
+    stub_open_prs_and_commits '[{"number":7,"closingIssuesReferences":[{"number":5}],"headRefName":"feature/5-y"},{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
-@test "find_human_taken_over_pr_for_issue returns 1 for a PR opened by the PR create bot that has the AI agent's commits (#1517)" {
+@test "find_human_taken_over_pr_for_issue returns 1 for a PR unrelated to the issue (#1517)" {
     _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"prpixie"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"fix/other-thing"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
-@test "find_human_taken_over_pr_for_issue returns 1 when the taken-over PR closes a different issue" {
+@test "find_human_taken_over_pr_for_issue returns 1 for a PR that has the AI agent's commits" {
     _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}]}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"testuser"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 1 when the PR closes a different issue" {
+    _GH_ME="testuser"
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 99
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
 }
 
-@test "find_human_taken_over_pr_for_issue returns 1 when the candidate PR has bot-authored commits" {
-    _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 1 ]
-}
-
-@test "find_human_taken_over_pr_for_issue scans past a candidate with unreadable references to a later match (#1134)" {
+@test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
     _GH_ME="testuser"
     GH_ITEM_FETCH_RETRY_ATTEMPTS=1
     GH_ITEM_FETCH_RETRY_DELAY_SECS=0
-    # PR 7's fetches always fail; PR 42 is a readable taken-over PR owning issue 164.
-    printf '%s' '[{"number":7,"labels":[],"author":{"login":"testuser"}},{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run --separate-stderr find_human_taken_over_pr_for_issue 164
+    make_stub gh 'exit 1'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+@test "find_human_taken_over_pr_for_issue returns 2 when the commits of the PR that owns the issue cannot be read (#1134)" {
+    _GH_ME="testuser"
+    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
+    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
+    printf '%s' '[{"number":42,"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 2 ]
+}
+
+@test "find_human_taken_over_pr_for_issue falls back to the branch-name convention when the closing reference is gone (#1134)" {
+    _GH_ME="testuser"
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"feature/164-buildtest-skip-benchmarks"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
     [ "${status}" -eq 0 ]
     [ "${output}" = "42" ]
 }
 
-@test "find_human_taken_over_pr_for_issue returns 2 when the only candidate has unreadable references (#1134)" {
+@test "find_human_taken_over_pr_for_issue does not match a branch whose issue number merely starts with the target (#1134)" {
     _GH_ME="testuser"
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
-    printf '%s' '[{"number":7,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[],"headRefName":"feature/1640-other-work"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
     run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 2 ]
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_human_taken_over_pr_for_issue lets explicit closing references beat a stale branch name (#1134)" {
+    _GH_ME="testuser"
+    # PR was retargeted to issue 264 (body edited) but still lives on branch fix/164-foo:
+    # querying 164 must NOT match - the explicit reference wins over the branch convention.
+    stub_open_prs_and_commits '[{"number":42,"closingIssuesReferences":[{"number":264}],"headRefName":"fix/164-foo"}]' '{"commits":[{"authors":[{"login":"humanuser"}]}]}'
+    run find_human_taken_over_pr_for_issue 164
+    [ "${status}" -eq 1 ]
 }
 
 @test "list_bot_created_open_prs raises the gh pr list page size above the default 30 (#1134)" {
@@ -4828,6 +4853,25 @@ STUBEOF
     [ "${output}" = "some-bot" ]
     run bash -c 'PR_CREATOR_LOGIN="not a login"; BASEDIR=/x; source "$1"; printf "%s" "${PR_CREATOR_LOGIN}"' _ "${REPO_ROOT}/lib/globals"
     [ "${output}" = "prpixie" ]
+    # The forms gh reports an author in are accepted: an app slug, an Enterprise Managed User login.
+    run bash -c 'PR_CREATOR_LOGIN=app/some-bot; BASEDIR=/x; source "$1"; printf "%s" "${PR_CREATOR_LOGIN}"' _ "${REPO_ROOT}/lib/globals"
+    [ "${output}" = "app/some-bot" ]
+    run bash -c 'PR_CREATOR_LOGIN=Some_Bot; BASEDIR=/x; source "$1"; printf "%s" "${PR_CREATOR_LOGIN}"' _ "${REPO_ROOT}/lib/globals"
+    [ "${output}" = "Some_Bot" ]
+}
+
+@test "list_bot_created_open_prs compares the author without regard to case, as GitHub logins are case-insensitive (#1517)" {
+    _GH_ME="TestUser"
+    printf '%s' '[{"number":1,"labels":[],"author":{"login":"testuser"}},{"number":2,"labels":[],"author":{"login":"PRPixie"}},{"number":3,"labels":[],"author":{"login":"someone"}}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'cat "'"${TEST_TMP}"'/prlist.json"'
+    run list_bot_created_open_prs "org/repo" false
+    [ "${output}" = $'1\n2' ]
+}
+
+@test "pr_is_human_driven compares the PR author without regard to case (#1517)" {
+    _GH_ME="testuser"
+    run pr_is_human_driven '{"labels":[],"author":{"login":"PrPixie"},"commits":[{"authors":[{"login":"credfeto"}]}]}' '["credfeto"]'
+    [ "${status}" -eq 0 ]
 }
 
 @test "list_bot_created_open_prs follows an overridden PR_CREATOR_LOGIN (#1517)" {
@@ -4872,61 +4916,6 @@ STUBEOF
     run tag_pr_closed_issue 42 164
     [ "${status}" -eq 0 ]
     grep -q "pr comment" "${gh_log}"
-}
-
-@test "find_human_taken_over_pr_for_issue returns 2 when the PR list fetch fails" {
-    _GH_ME="testuser"
-    GH_ITEM_FETCH_RETRY_ATTEMPTS=1
-    GH_ITEM_FETCH_RETRY_DELAY_SECS=0
-    make_stub gh 'exit 1'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 2 ]
-}
-
-@test "find_human_taken_over_pr_for_issue falls back to the branch-name convention when the closing reference is gone (#1134)" {
-    _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[],"headRefName":"feature/164-buildtest-skip-benchmarks"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "42" ]
-}
-
-@test "find_human_taken_over_pr_for_issue does not match a branch whose issue number merely starts with the target (#1134)" {
-    _GH_ME="testuser"
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[],"headRefName":"feature/1640-other-work"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 1 ]
-}
-
-@test "find_human_taken_over_pr_for_issue lets explicit closing references beat a stale branch name (#1134)" {
-    _GH_ME="testuser"
-    # PR was retargeted to issue 264 (body edited) but still lives on branch fix/164-foo:
-    # querying 164 must NOT match — the explicit reference wins over the branch convention.
-    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":264}],"headRefName":"fix/164-foo"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 1 ]
-}
-
-@test "find_human_taken_over_pr_for_issue still sees a Blocked taken-over PR (#1134)" {
-    _GH_ME="testuser"
-    # Tagging a taken-over PR adds Blocked; the stand-off must not go blind because of it,
-    # or a reopened issue would get duplicate work.
-    printf '%s' '[{"number":42,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
-    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42commits.json"
-    printf '%s' '{"closingIssuesReferences":[{"number":164}],"headRefName":"feature/164-x"}' > "${TEST_TMP}/pr42refs.json"
-    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42commits.json" ;; *"pr view 42"*"--json closingIssuesReferences"*) cat "'"${TEST_TMP}"'/pr42refs.json" ;; *) exit 1 ;; esac'
-    run find_human_taken_over_pr_for_issue 164
-    [ "${status}" -eq 0 ]
-    [ "${output}" = "42" ]
 }
 
 # --- resolve_resumable_issue_branch (#1262) -------------------------------------
@@ -9378,11 +9367,12 @@ STUBEOF
     grep -q 'Blocked' "${GH_CALL_LOG}"
 }
 
-@test "main works an Issue even though an unrelated PR by someone else is open in the same repo (#1517)" {
-    # The one-active-branch-or-PR rule is per user: a human's or a dependency bot's PR is not the
-    # AI's, so it neither occupies the repo's slot nor defers the Issue. Only the orchestrator's
-    # own PRs (found by find_open_nonblocked_pr_for_repo, empty here) and an Issue's own
-    # human-driven PR (find_human_taken_over_pr_for_issue, none here) stop the Issue being worked.
+@test "main works an Issue that has no PR of its own, with no repo-wide slot deferral (#1517)" {
+    # The one-active-branch-or-PR rule is per user, so there is no check that any open PR in the
+    # repo defers the Issue: only the orchestrator's own PRs (find_open_nonblocked_pr_for_repo,
+    # empty here) and a PR that owns this Issue and is human-driven (find_human_taken_over_pr_for_issue,
+    # none here) stop it being worked. That an unrelated PR is ignored by those two is covered by
+    # their own tests above.
     setup_main_mocks
     fetch_all_priorities() {
         printf '[{"id":1310,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'

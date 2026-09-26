@@ -68,7 +68,9 @@ otherwise *invisible* to the normal pivot into the bot's own Pull Request (it ha
 bot-authored commits, so it doesn't look bot-driven at all) — which would make the Issue look
 free to re-work from scratch, opening a second, duplicate branch alongside the human's real one.
 A separate check specifically looks for this situation (matching the Pull Request back to the
-Issue it closes) and stands the Issue off too.
+Issue it closes) and stands the Issue off too. It looks at every open Pull Request in the
+repository, whoever opened it, in a single `gh pr list`: one a person opened themselves for the
+Issue is found the same way, by what it closes, and stands the Issue off just the same.
 
 ## The `Blocked` label: how a stuck item gets a human's attention
 
