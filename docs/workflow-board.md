@@ -59,7 +59,7 @@ by seconds. `cfwf workflow-status --check` prints the state name alone, for exam
 A board set up before the built-in field carried the workflow has a custom single-select field called
 "Workflow Status" with the ten options, and a Status field with Todo, In Progress and Done. Such a board
 is converted in place, by `create-project` or by `oneshot` the first time it discovers the board: the
-Status options are renamed and added as above, every card's Workflow Status value is copied onto Status,
+Status options are renamed and added as above, every open card's Workflow Status value is copied onto Status (a card whose issue or pull request is already closed or merged is set to Complete instead, so it never keeps a stale in-progress state),
 every card is read back, and the Workflow Status field is deleted only when every card matches. For `oneshot`
 a board that is already converted costs nothing extra, because the check uses the fields and Default
 Workflows that its discovery query already reads; `create-project` makes one read to find that out.
