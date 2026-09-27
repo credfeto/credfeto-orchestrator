@@ -100,6 +100,9 @@ testdb
 testdocker
 querydb
 cfwf
+# create-project provisions and converts a repository's Workflow board; oneshot already runs
+# the same conversion (lib/project-status), so an agent running it adds nothing oneshot does not
+create-project
 
 # credfeto-global-pre-commit: repo-bundled wrapper scripts, invoked by
 # basename via a PATH prepend from src/hooks/pre-commit
