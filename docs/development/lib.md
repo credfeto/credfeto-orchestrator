@@ -18,7 +18,7 @@ The `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` source guard lives
 
 ### globals
 
-Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back silently to the default (`warn` does not exist yet when this file runs); `PROJECT_CACHE_TTL` is not validated. `CFWF_SCRIPT` is the path of the `cfwf` that ships in this repository, built from `BASEDIR`, which the sourcing script sets first (see above); sourcing this file without `BASEDIR` stops the script with a message. Depends on: nothing.
+Configuration and state declarations, and nothing else. Environment-backed defaults (`AGENT_TIMEOUT_MINUTES`, `MAX_PR_TOTAL_INVOCATIONS`, `CI_CHECK_TIMEOUT_MINUTES`, `PROJECT_CACHE_TTL`, `PR_CREATOR_LOGIN`, the `GH_*_RETRY_ATTEMPTS` family), the schema counter `FINGERPRINT_SCHEMA_VERSION`, the per-item counters (`PR_INVOCATION_TOTAL`, `ISSUE_INVOCATION_IDLE`), and the Workflow board arrays (`_WF_OPTION_IDS`, `_WF_BUILTIN_OPTION_IDS`, `_WF_CACHE`, `_WF_APPROVED_ITEMS`, `_WF_ITEM_STATUS_OPTION_ID`, `_WF_STATUS_ORDER`). Most numeric overrides are checked with a regex and fall back silently to the default (`warn` does not exist yet when this file runs); `PROJECT_CACHE_TTL` is not validated. `CFWF_SCRIPT` is the path of the `cfwf` that ships in this repository, built from `BASEDIR`, which the sourcing script sets first (see above); sourcing this file without `BASEDIR` stops the script with a message. Depends on: nothing.
 
 ### core
 
@@ -30,7 +30,7 @@ Configuration and state declarations, and nothing else. Environment-backed defau
 
 ### github
 
-Trust and discovery. `get_trusted_logins` (cached in `_TRUSTED_LOGINS_JSON`), `fetch_all_priorities` (the priorities feed, not GitHub), `resolve_gh_me` (cached in `_GH_ME`), `list_bot_created_open_prs`, `find_open_nonblocked_pr_for_repo`, `fetch_pr_fields_json`, and the human-takeover predicates (`pr_has_bot_authored_commit`, `find_human_taken_over_pr_for_issue`, `pr_is_human_driven`). Depends on: `core`, `git`.
+Trust and discovery. `get_trusted_logins` (cached in `_TRUSTED_LOGINS_JSON`), `fetch_all_priorities` (the priorities feed, not GitHub), `resolve_gh_me` (cached in `_GH_ME`), `list_bot_created_open_prs` (the open PRs authored by `_GH_ME` or `PR_CREATOR_LOGIN`, the PR create bot, which is never a trusted login), `find_open_nonblocked_pr_for_repo`, `fetch_pr_fields_json`, and the human-takeover predicates (`pr_has_bot_authored_commit`, `find_human_taken_over_pr_for_issue`, `pr_is_human_driven`). Depends on: `core`, `git`.
 
 ### github-status
 
@@ -91,7 +91,7 @@ A list, a search or a field value can return the old state for seconds to minute
 - `json_has_commit_author_identity` (#1294) copes with a commit author login that has not resolved yet, by accepting the bot's own `GIT_USER_EMAIL` when no author of that commit has a login. `pr_is_human_driven` still matches other trusted humans by resolved login only, so a lagging login for a human is not covered (a comment in `lib/github` says so).
 - `fetch_single_item_workflow_status` reads one item fresh but does not wait or retry, so a read straight after `update_workflow_status` can return the old value. It also calls `addProjectV2ItemById` to find the item id, so asking about an item that is not on the board adds it.
 - `sync_pr_workflow_status_from_linked_issues` and `sync_pr_labels_from_linked_issues` treat a failed or empty `closingIssuesReferences` read as "no linked issue". Nothing distinguishes that from a lagging read; the status mirror is forward-only and runs every tick, so a wrong first-touch value is corrected on a later tick.
-- `resolve_resumable_issue_branch` and `find_any_open_pr_for_repo` read `gh pr list`. Nothing re-checks a list that has not yet shown a just-opened PR. On a failed count `resolve_resumable_issue_branch` assumes a PR exists and does not resume.
+- `resolve_resumable_issue_branch` reads `gh pr list`. Nothing re-checks a list that has not yet shown a just-opened PR. On a failed count `resolve_resumable_issue_branch` assumes a PR exists and does not resume.
 
 ### The board has no single-item read
 
@@ -99,7 +99,7 @@ A list, a search or a field value can return the old state for seconds to minute
 
 ### Capped list commands
 
-`gh pr list --limit 200` (`list_bot_created_open_prs`, `find_any_open_pr_for_repo`) and `gh issue list --limit 100` (the rate-limit and Workflow-setup issue lookups) return at most that many items. The comment in `lib/github` records that the default is 30, and that a truncated list made the bot's own PR invisible (#1134). The code never checks whether the cap was reached, so a repo beyond it is truncated without a warning. Comment, collaborator and inline-comment reads use `gh api --paginate` with no cap. `fetch_pr_json` uses `gh pr view --json`; the code does nothing to detect a truncated list there.
+`gh pr list --limit 200` (`list_bot_created_open_prs`) and `gh issue list --limit 100` (the rate-limit and Workflow-setup issue lookups) return at most that many items. The comment in `lib/github` records that the default is 30, and that a truncated list made the bot's own PR invisible (#1134). The code never checks whether the cap was reached, so a repo beyond it is truncated without a warning. Comment, collaborator and inline-comment reads use `gh api --paginate` with no cap. `fetch_pr_json` uses `gh pr view --json`; the code does nothing to detect a truncated list there.
 
 ### Caches and their invalidation
 

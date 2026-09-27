@@ -56,7 +56,8 @@ done next.
 An Issue and the Pull Request that eventually closes it are tracked as one continuous piece of
 work, even though they're different GitHub objects. Each tick, before treating something in the
 priorities list as "just an Issue," `oneshot` checks: is there already an open, non-blocked Pull
-Request for this repository that the bot itself created *and* has committed to? If yes, it
+Request for this repository that the bot itself created (as the AI agent, or through the PR
+create bot) *and* has committed to? If yes, it
 switches to working that Pull Request instead — the Issue's own plan-approval phase is long
 done, and the interesting question now is "what's the next PR phase" (see the PR phase list in
 [workflow-board.md](workflow-board.md)).
