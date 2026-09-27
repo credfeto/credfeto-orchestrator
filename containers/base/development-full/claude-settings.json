@@ -376,7 +376,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "block-no-verify"
+            "command": "$HOME/.claude/hooks/block-github-mcp-write-tools"
           }
         ]
       },

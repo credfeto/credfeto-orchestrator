@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Blocks the GitHub MCP server's write tools outright. Registered (in
+# claude-settings.json) against the `mcp__github__.*` matcher.
+# Exit 2 = blocked, 0 = allowed.
+#
+# These tools write through the GitHub API directly, bypassing every local
+# git hook this repo relies on (pre-commit, commit-msg, pre-push) - a commit
+# made via create_or_update_file/push_files never runs pre-commit, a merge
+# via merge_pull_request never runs pre-push, and so on. Local git commands
+# (git commit/push, gh pr merge, etc.) go through those hooks as normal and
+# are unaffected by this hook.
+#
+# A straightforward exact match on `.tool_name` is enough here: unlike the
+# Bash-command hooks in this directory, MCP tool calls are already
+# structured JSON with a fixed, non-obfuscatable tool identity - there is no
+# shell quoting/substitution surface to parse around.
+#
+# Fails closed: jq missing, the payload not parsing as JSON, or a missing/
+# empty tool_name (this hook is only ever invoked for the mcp__github__.*
+# matcher, so a payload with no tool_name is malformed, not a read-only
+# tool), all block.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
+tool_name=$(jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+[ -z "$tool_name" ] && block 'tool payload has no tool_name - failing closed'
+
+case "$tool_name" in
+  mcp__github__create_or_update_file | mcp__github__delete_file | mcp__github__push_files | mcp__github__merge_pull_request | mcp__github__update_pull_request_branch)
+    block "${tool_name} writes through the GitHub API directly, bypassing local git hooks (pre-commit/commit-msg/pre-push) - use local git commands instead"
+    ;;
+esac
+
+exit 0
