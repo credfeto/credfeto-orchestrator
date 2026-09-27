@@ -214,12 +214,19 @@ PR_LINKED='[{"id":"W_ADD","name":"Item added to project","enabled":true},{"id":"
     [ "$(grep -c 'items(first:100' "${FIX}/gh.log")" -eq 3 ]
     grep -q '"f":"F_LEGACY"' "${FIX}/gh.log"
     # Each wait says what it is waiting for, so a pause in the log is explained.
-    [[ "${stderr}" == *"for GitHub to show the copied values (read 1 of 5 still differs)"* ]]
+    [[ "${stderr}" == *"for GitHub to show the copied values (read 1 of 20 still differs)"* ]]
 }
 
 @test "the read-back waits 15 seconds between reads by default (#1519)" {
     run bash -c 'unset PROJECT_STATUS_READBACK_DELAY_SECS; source "$1"; source "$2"; printf "%s" "${PROJECT_STATUS_READBACK_DELAY_SECS}"' _ "${REPO_ROOT}/lib/core" "${REPO_ROOT}/lib/project-status"
     [ "${output}" = "15" ]
+}
+
+@test "the read-back makes 20 attempts by default, and falls back to 20 for an invalid value (#1523)" {
+    run bash -c 'unset PROJECT_STATUS_READBACK_ATTEMPTS; source "$1"; source "$2"; printf "%s" "${PROJECT_STATUS_READBACK_ATTEMPTS}"' _ "${REPO_ROOT}/lib/core" "${REPO_ROOT}/lib/project-status"
+    [ "${output}" = "20" ]
+    run bash -c 'PROJECT_STATUS_READBACK_ATTEMPTS=banana; source "$1"; source "$2"; printf "%s" "${PROJECT_STATUS_READBACK_ATTEMPTS}"' _ "${REPO_ROOT}/lib/core" "${REPO_ROOT}/lib/project-status"
+    [ "${output}" = "20" ]
 }
 
 @test "project_status_convert gives up after PROJECT_STATUS_READBACK_ATTEMPTS reads that still differ (#1519)" {
