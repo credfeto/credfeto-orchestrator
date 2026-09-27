@@ -155,27 +155,34 @@ _ps_convert_options() {
     printf '%s' "${updated}"
 }
 
-# Prints every item on the project as one compact JSON object per line:
-# {id, legacy: <Workflow Status name or null>, status: <Status name or null>}. Pages through all
-# items, so a board of any size is read in full.
+# Prints every item on the project as one compact JSON object per line: {id, closed: <whether its
+# issue or pull request is closed or merged; false for a draft>, legacy: <Workflow Status name or
+# null>, status: <Status name or null>}. Pages through all items, so a board of any size is read in
+# full.
 _ps_read_items() {
     local project_id="$1" cursor="" resp page
     while :; do
         resp=$(jq -cn --arg p "${project_id}" --arg c "${cursor}" --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" \
-            '{query: "query($p:ID!,$c:String,$legacy:String!){node(id:$p){... on ProjectV2{items(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{id legacy:fieldValueByName(name:$legacy){... on ProjectV2ItemFieldSingleSelectValue{name}} status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}", variables: ({p: $p, legacy: $legacy} + (if $c == "" then {} else {c: $c} end))}' \
+            '{query: "query($p:ID!,$c:String,$legacy:String!){node(id:$p){... on ProjectV2{items(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{id content{... on Issue{state} ... on PullRequest{state}} legacy:fieldValueByName(name:$legacy){... on ProjectV2ItemFieldSingleSelectValue{name}} status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}", variables: ({p: $p, legacy: $legacy} + (if $c == "" then {} else {c: $c} end))}' \
             | _ps_graphql) || return 1
         page=$(printf '%s' "${resp}" | jq -c '.data.node.items // empty')
         [ -n "${page}" ] || return 1
-        printf '%s' "${page}" | jq -c '.nodes[] | {id, legacy: (.legacy.name // null), status: (.status.name // null)}'
+        printf '%s' "${page}" | jq -c '.nodes[] | {id, closed: ((.content.state // "") as $s | $s == "CLOSED" or $s == "MERGED"), legacy: (.legacy.name // null), status: (.status.name // null)}'
         [ "$(printf '%s' "${page}" | jq -r '.pageInfo.hasNextPage')" = "true" ] || return 0
         cursor=$(printf '%s' "${page}" | jq -r '.pageInfo.endCursor')
     done
 }
 
-# Copies every item's Workflow Status value onto Status, then reads every item back and returns 0
-# only when each item that had a Workflow Status value now has the same Status value. An item
-# whose value is not one of the ten states is a mismatch, so the old field is never deleted with a
-# value that could not be carried across.
+# The jq definition of the Status value an item must end up with: Complete when its issue or pull
+# request is already closed or merged (at the repository owner's request, so a closed item never
+# keeps a stale in-progress state such as Human Review), otherwise its Workflow Status value (null
+# when it has none, meaning nothing to copy).
+_PS_JQ_DEF_TARGET='def target: if .closed then "Complete" else .legacy end;'
+
+# Sets every item's Status to its target (see _PS_JQ_DEF_TARGET), then reads every item back and
+# returns 0 only when each item with a target now has it. An item whose Workflow Status value is not
+# one of the ten states is a mismatch, so the old field is never deleted with a value that could not
+# be carried across.
 _ps_copy_values() {
     local project_id="$1" status_field="$2" field_id items item item_id name option_id copied=0
     field_id=$(printf '%s' "${status_field}" | jq -r '.id')
@@ -183,7 +190,7 @@ _ps_copy_values() {
 
     while IFS= read -r item; do
         [ -n "${item}" ] || continue
-        name=$(printf '%s' "${item}" | jq -r '.legacy // empty')
+        name=$(printf '%s' "${item}" | jq -r "${_PS_JQ_DEF_TARGET}"' target // empty')
         [ -n "${name}" ] || continue
         [ "$(printf '%s' "${item}" | jq -r '.status // empty')" != "${name}" ] || continue
         item_id=$(printf '%s' "${item}" | jq -r '.id')
@@ -195,7 +202,7 @@ _ps_copy_values() {
             || { _ps_fail "copying Workflow Status values" "item ${item_id} could not be set to \"${name}\""; return 1; }
         copied=$((copied + 1))
     done <<< "${items}"
-    [ "${copied}" -eq 0 ] || info "Copied ${copied} Workflow Status value(s) onto Status" >&2
+    [ "${copied}" -eq 0 ] || info "Set ${copied} item(s) on Status: closed ones to Complete, open ones to their Workflow Status" >&2
 
     # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
     # show the old values (seen on the credfeto/scratch canary). The read-back is repeated a few
@@ -203,14 +210,14 @@ _ps_copy_values() {
     local mismatches attempt=1
     while :; do
         items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
-        mismatches=$(printf '%s\n' "${items}" | jq -sc '[.[] | select(.legacy != null and .legacy != .status) | .id]')
+        mismatches=$(printf '%s\n' "${items}" | jq -sc "${_PS_JQ_DEF_TARGET}"' [.[] | select(target != null and target != .status) | .id]')
         [ "${mismatches}" != "[]" ] || return 0
         [ "${attempt}" -lt "${PROJECT_STATUS_READBACK_ATTEMPTS}" ] || break
         info "Waiting ${PROJECT_STATUS_READBACK_DELAY_SECS}s for GitHub to show the copied values (read ${attempt} of ${PROJECT_STATUS_READBACK_ATTEMPTS} still differs)..." >&2
         [ "${PROJECT_STATUS_READBACK_DELAY_SECS}" -eq 0 ] || sleep "${PROJECT_STATUS_READBACK_DELAY_SECS}"
         attempt=$((attempt + 1))
     done
-    _ps_fail "checking the copied values" "Status does not match Workflow Status on items ${mismatches} after ${attempt} read(s)"
+    _ps_fail "checking the copied values" "Status does not show the expected value on items ${mismatches} after ${attempt} read(s)"
 }
 
 # Runs a delete mutation (a {query, variables} body on stdin) and returns 0 when it succeeds or

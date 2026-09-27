@@ -63,9 +63,10 @@ write_project() {
         > "${FIX}/project.json"
 }
 
-# Writes items-N.json: $1 N, $2 a JSON array of [id, legacy, status] triples.
+# Writes items-N.json: $1 N, $2 a JSON array of [id, legacy, status] or [id, legacy, status, state]
+# entries, state being the issue or pull request state (OPEN, CLOSED or MERGED; none for a draft).
 write_items() {
-    jq -cn --argjson i "$2" '{data: {node: {items: {pageInfo: {hasNextPage: false, endCursor: null}, nodes: [$i[] | {id: .[0], legacy: (if .[1] == null then null else {name: .[1]} end), status: (if .[2] == null then null else {name: .[2]} end)}]}}}}' \
+    jq -cn --argjson i "$2" '{data: {node: {items: {pageInfo: {hasNextPage: false, endCursor: null}, nodes: [$i[] | {id: .[0], content: (if .[3] == null then {} else {state: .[3]} end), legacy: (if .[1] == null then null else {name: .[1]} end), status: (if .[2] == null then null else {name: .[2]} end)}]}}}}' \
         > "${FIX}/items-$1.json"
 }
 
@@ -155,6 +156,40 @@ PR_LINKED='[{"id":"W_ADD","name":"Item added to project","enabled":true},{"id":"
     # The field is deleted after the read-back (the second items read).
     [ "$(grep -n 'deleteProjectV2Field' "${FIX}/gh.log" | cut -d: -f1)" -gt "$(grep -n 'items(first:100' "${FIX}/gh.log" | tail -1 | cut -d: -f1)" ]
     grep -q '"f":"F_LEGACY"' "${FIX}/gh.log"
+}
+
+@test "project_status_convert sets every closed or merged item to Complete, whatever its Workflow Status said (#1519)" {
+    # The repository owner: "Anything closed before the convert should be marked as complete".
+    write_project "${NEW_BOARD_STATUS}" "${LEGACY_FIELD}" '[]'
+    write_update_result
+    write_items 1 '[["I_MERGED","Human Review","Complete","MERGED"],["I_CLOSED","Planning","Complete","CLOSED"],["I_NONE",null,"Not Started","CLOSED"],["I_OPEN","Development","Not Started","OPEN"]]'
+    write_items 2 '[["I_MERGED","Human Review","Complete","MERGED"],["I_CLOSED","Planning","Complete","CLOSED"],["I_NONE",null,"Complete","CLOSED"],["I_OPEN","Development","Development","OPEN"]]'
+    run --separate-stderr project_status_convert "P1"
+    [ "${status}" -eq 0 ]
+    # Merged and closed items already on the renamed Done (Complete) need no write; the closed one
+    # with no Workflow Status and the open one each get one.
+    [ "$(grep -c 'updateProjectV2ItemFieldValue' "${FIX}/gh.log")" -eq 2 ]
+    grep 'updateProjectV2ItemFieldValue' "${FIX}/gh.log" | grep -q '"i":"I_NONE","f":"F_STATUS","o":"B_DONE"'
+    grep 'updateProjectV2ItemFieldValue' "${FIX}/gh.log" | grep -q '"i":"I_OPEN","f":"F_STATUS","o":"B_PROG"'
+    [ "$(grep 'updateProjectV2ItemFieldValue' "${FIX}/gh.log" | grep -c 'I_MERGED\|I_CLOSED')" -eq 0 ]
+    grep -q '"f":"F_LEGACY"' "${FIX}/gh.log"
+}
+
+@test "project_status_convert moves a closed item off a stale in-progress value onto Complete (#1519)" {
+    write_project "$(all_states_json)" "${LEGACY_FIELD}" '[]'
+    write_items 1 '[["I1","Human Review","Human Review","MERGED"]]'
+    write_items 2 '[["I1","Human Review","Complete","MERGED"]]'
+    run --separate-stderr project_status_convert "P1"
+    [ "${status}" -eq 0 ]
+    grep 'updateProjectV2ItemFieldValue' "${FIX}/gh.log" | grep -q '"i":"I1","f":"F_STATUS","o":"S9"'
+}
+
+@test "the item read asks for each item's issue or pull request state and treats a draft as open (#1519)" {
+    write_items 1 '[["I1",null,null,"MERGED"],["I2",null,null,"CLOSED"],["I3",null,null,"OPEN"],["I4",null,null]]'
+    run _ps_read_items "P1"
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s\n' "${output}" | jq -rs 'map("\(.id)=\(.closed)") | join(",")')" = "I1=true,I2=true,I3=false,I4=false" ]
+    grep -q 'content{... on Issue{state} ... on PullRequest{state}}' "${FIX}/gh.log"
 }
 
 @test "project_status_convert keeps the Workflow Status field when a value does not read back, and names the step (#1519)" {
