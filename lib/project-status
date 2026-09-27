@@ -213,14 +213,31 @@ _ps_copy_values() {
     _ps_fail "checking the copied values" "Status does not match Workflow Status on items ${mismatches} after ${attempt} read(s)"
 }
 
-# Deletes a field or a Default Workflow by id; the step names it for the failure message.
+# Runs a delete mutation (a {query, variables} body on stdin) and returns 0 when it succeeds or
+# when GitHub answers that the node no longer exists. The id always comes from this project's own
+# read, so "not found" means it is already deleted: a read shortly after a delete can still list
+# the deleted field or workflow (seen on the credfeto/scratch canary), and a re-run then deletes it
+# a second time. Any other failure returns 1, with the API's message on stderr.
+_ps_delete_node() {
+    local out
+    if out=$(_ps_graphql 2>&1 > /dev/null); then
+        return 0
+    fi
+    case "${out}" in
+        *"Could not resolve to a node with the global id"*) return 0 ;;
+    esac
+    printf '%s\n' "${out}" >&2
+    return 1
+}
+
+# Delete a field or a Default Workflow by id; the step names it for the failure message.
 _ps_delete_field() {
     jq -cn --arg f "$1" '{query: "mutation($f:ID!){deleteProjectV2Field(input:{fieldId:$f}){projectV2Field{... on ProjectV2SingleSelectField{id}}}}", variables: {f: $f}}' \
-        | _ps_graphql > /dev/null
+        | _ps_delete_node
 }
 _ps_delete_workflow() {
     jq -cn --arg w "$1" '{query: "mutation($w:ID!){deleteProjectV2Workflow(input:{workflowId:$w}){deletedWorkflowId}}", variables: {w: $w}}' \
-        | _ps_graphql > /dev/null
+        | _ps_delete_node
 }
 
 # Converts a board in place so its built-in Status field carries the ten workflow states, and
