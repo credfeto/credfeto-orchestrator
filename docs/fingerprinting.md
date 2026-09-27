@@ -186,7 +186,7 @@ means "the schema as it stood the moment versioning began."
 
 | Version | What changed | Introduced in |
 | --- | --- | --- |
-| 1 | Introduced `FINGERPRINT_SCHEMA_VERSION` itself, prepended to every fingerprint from this point on. Also added to the Issue fingerprint: `plan_approved` (whether the Workflow board's Workflow Status field currently reads "Approved"), because a plan approved purely via the board was otherwise invisible to the fingerprint forever. | #1204 |
+| 1 | Introduced `FINGERPRINT_SCHEMA_VERSION` itself, prepended to every fingerprint from this point on. Also added to the Issue fingerprint: `plan_approved` (whether the Issue's card on the Workflow board currently reads "Approved"), because a plan approved purely via the board was otherwise invisible to the fingerprint forever. | #1204 |
 | 2 | Added to the PR fingerprint's status-check-rollup canonicalization: a `.state` fallback for legacy StatusContext checks (e.g. Codecov-style commit statuses) that have neither `.conclusion` nor `.status`, which previously all canonicalized to the same `none:<name>` regardless of their real result. | #1210 |
 
 See [fingerprinting.instructions.md](../ai/local/fingerprinting.instructions.md#what-gets-hashed)

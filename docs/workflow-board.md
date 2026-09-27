@@ -20,7 +20,10 @@ the agent posts a plan as a comment, then sets its own card to "Planning" and st
 reads the plan, and only they can move the card to "Approved" — no code gets written until that
 happens.
 
-## The Workflow Status field and its options, in order
+## The Status field and its options, in order
+
+The board's workflow lives in the project's built-in **Status** field, which carries these ten
+options (defined once, in `lib/project-status`):
 
 | Status | Set by | Meaning |
 | --- | --- | --- |
@@ -35,23 +38,38 @@ happens.
 | Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to enable auto-merge — reaching this status does not by itself mean that has happened yet. |
 | Complete | (implicit — the PR merges) | Done. |
 
-Every GitHub Project also has a built-in **Status** field (Todo / In Progress / Done) that GitHub's own
-views and automation read. Whenever the Workflow Status is set, the built-in Status is set to a matching
-value straight afterwards, by both `oneshot` and `cfwf workflow-status --set` ([#1493](https://github.com/credfeto/credfeto-orchestrator/issues/1493)):
+Using the built-in field means there is one status per card, and GitHub's own views and automation
+read the same value the orchestrator writes ([#1519](https://github.com/credfeto/credfeto-orchestrator/issues/1519)).
+A new project's Status field starts with Todo, In Progress and Done. These are renamed to Not Started,
+Development and Complete by option id, and the other seven are added. GitHub's Default Workflows target
+an option by id, not by name, so they keep working after the rename: closing or merging an item still
+moves its card to Complete. The "Pull request linked to issue" Default Workflow is deleted, because it
+would move a card back to Development whenever it fired again after the agent had moved the card on
+(the agent sets Development itself when it opens the PR).
 
-| Workflow Status | Built-in Status |
-| --- | --- |
-| Not Started, Planning | Todo |
-| Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review | In Progress |
-| Complete | Done |
+The state list is written in three places: `lib/project-status` (used by `oneshot` and
+`create-project`), `_WF_STATUS_ORDER` in `lib/globals` (the order the PR mirror below compares), and
+`cfwf`, which is copied alone into a container image and cannot source `lib/`.
+`test/status-mapping-parity.bats` fails if they ever disagree. Neither `oneshot` nor
+`cfwf workflow-status --set` reads a value back after writing it, since the API can lag behind a write
+by seconds. `cfwf workflow-status --check` prints the state name alone, for example `Development`.
 
-The mapping is the one already used for the coarse status in Discord notifications (`coarse_status_for_substatus`).
-It exists twice, in `lib/workflow-board` and in `cfwf` (which is copied alone into a container image and cannot
-source `lib/`), and `test/status-mapping-parity.bats` fails if the two ever disagree. Neither writer reads the
-value back afterwards, since the API can lag behind a write by seconds. If a project admin has renamed or
-removed the built-in option that a status maps to, the built-in write is skipped with a warning and the
-Workflow Status stands. `cfwf workflow-status --check` prints both values, for example `Development (In Progress)`.
-GitHub's own automation (closing or merging sets Done) is left as it is and agrees with the mapping.
+### A board that still has a Workflow Status field
+
+A board set up before the built-in field carried the workflow has a custom single-select field called
+"Workflow Status" with the ten options, and a Status field with Todo, In Progress and Done. Such a board
+is converted in place, by `create-project` or by `oneshot` the first time it discovers the board: the
+Status options are renamed and added as above, every card's Workflow Status value is copied onto Status,
+every card is read back, and the Workflow Status field is deleted only when every card matches. For `oneshot`
+a board that is already converted costs nothing extra, because the check uses the fields and Default
+Workflows that its discovery query already reads; `create-project` makes one read to find that out.
+
+If GitHub refuses any step, the Workflow Status field is kept, so no value is lost. `oneshot` then sends a
+Discord alert naming the repository and the step (at most one an hour per repository), skips that
+repository before touching any of its items, and does not try the conversion again until
+`PROJECT_CACHE_TTL` has passed. `create-project` stops with a message naming the step. While a board is
+not yet converted, `cfwf` reads and writes its Workflow Status field instead of Status, so agents keep
+working on it.
 
 Only one of these transitions is ever made by a human: **Approved**. Every other column is moved
 through entirely by the agent itself as it works. This is deliberately the single, simple, highly
@@ -116,7 +134,7 @@ nothing durable is invisible to the next tick and the workflow stalls.
 ## Keeping a PR's card in step with its issue's
 
 An Issue and its Pull Request are two separate items on the board, each with its own
-independent Workflow Status card — nothing about GitHub Projects keeps them in sync with each
+independent Status value, and nothing about GitHub Projects keeps them in sync with each
 other automatically. That used to cause a real failure: `oneshot` stamped every newly-touched
 PR's card with a hardcoded "Not Started", regardless of what its linked issue's card already
 said. A PR only ever exists once its issue has passed the human Approved gate, so the issue's
@@ -131,8 +149,8 @@ Issue-workflow's Approved gate (which does not apply once a PR already exists �
 ([#1276](https://github.com/credfeto/credfeto-orchestrator/issues/1276)).
 
 `sync_pr_workflow_status_from_linked_issues` (`lib/workflow-board`) fixes this by mirroring
-every PR's linked issue's Workflow Status onto the PR's own card, every tick — not just on
-first touch, so an already-stuck PR self-heals without a human having to intervene:
+every PR's linked issue's Status onto the PR's own card, every tick (not just on first touch),
+so an already-stuck PR self-heals without a human having to intervene:
 
 - **One-directional**: issue → PR only. The PR's card is never read back onto the issue's — the
   Approved gate is enforced solely on the issue's card, and nothing may ever write "Approved"
