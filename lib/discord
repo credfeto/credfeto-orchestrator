@@ -532,6 +532,34 @@ notify_discord_pull_failed() {
     _discord_send_item_error "Image Pull Failed: ${REPO_FULL}" "${1:-}" "${2:-}" "$3"
 }
 
+# Sends a Discord embed notification when converting a repository's Workflow board to the built-in
+# Status field fails (#1519): the orchestrator skips that repository until the step succeeds, so
+# without an alert its work would stop silently. Deduplicates per repository: at most one
+# notification per hour, because oneshot runs every tick and would otherwise alert on each one.
+# Arguments: repo_full, the step that failed (PROJECT_STATUS_FAILED_STEP, lib/project-status)
+# Silent when DISCORD_WEBHOOK_URL is unset; logs a warning on curl failure.
+notify_discord_board_conversion_failed() {
+    [ -n "${DISCORD_WEBHOOK_URL}" ] || return 0
+    local repo_full="$1" step="$2"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file board_conversion_failed "${repo_full}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local payload
+    payload=$(jq --null-input \
+        --argjson color 15158332 \
+        --arg title "Workflow Board Conversion Failed: ${repo_full}" \
+        --arg step "${step}" \
+        '{embeds:[{title:$title,color:$color,
+            description:"The repository is skipped until its Workflow board has been converted to the built-in Status field. Its Workflow Status field is kept, so no value is lost.",
+            fields:[{name:"Failed step",value:$step,inline:false}]}]}') \
+        || { warn "Discord: failed to build board-conversion-failed payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}"
+}
+
 # Sends a Discord embed notification when oneshot detects its OWN checkout is behind
 # origin/main — install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate
 # failure, #1098), so a permanently wedged merge (e.g. a stale git lock left by a killed process,

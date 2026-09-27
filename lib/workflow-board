@@ -11,10 +11,9 @@ project_cache_file_path() {
 }
 
 # --- option-map helpers -------------------------------------------------------------------
-# The Workflow Status options and the built-in Status options are each an associative array of
-# option name -> option id (_WF_OPTION_IDS, _WF_BUILTIN_OPTION_IDS) that is copied between the
-# live globals, the in-memory _WF_CACHE and the on-disk cache. These helpers take the array by
-# name so each copy is written once.
+# The Status options are an associative array of option name -> option id (_WF_OPTION_IDS) that
+# is copied between the live globals, the in-memory _WF_CACHE and the on-disk cache. These helpers
+# take the array by name so each copy is written once.
 
 # Empties the associative array named by $1.
 # shellcheck disable=SC2178  # the nameref is an array named by the caller
@@ -88,14 +87,13 @@ _wf_cache_forget_assoc() {
     done
 }
 
-# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS, the built-in Status
-# field globals, and _WF_CACHED_REPO from the on-disk project cache for the current repo, without
-# making any network call. Returns 0 (hit) when a fresh (within PROJECT_CACHE_TTL seconds) cache
-# entry was found and loaded; returns 1 (miss) when the file is absent, unparseable, incomplete,
-# or stale, leaving the caller to perform a live discovery. An entry written before the built-in
-# Status field was recorded (#1493) has no builtin_field_id key at all, so it counts as a miss and
-# the board is rediscovered once. An entry that has the key with an empty value (the project has no
-# built-in Status field) is a hit, so such a project is not rediscovered on every run.
+# Attempts to populate _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS and _WF_CACHED_REPO
+# from the on-disk project cache for the current repo, without making any network call. Returns 0
+# (hit) when a fresh (within PROJECT_CACHE_TTL seconds) cache entry was found and loaded; returns 1
+# (miss) when the file is absent, unparseable, incomplete, stale, or written by a different
+# PROJECT_CACHE_VERSION, leaving the caller to perform a live discovery. The version check is what
+# stops an entry written before #1519, whose status_field_id is the old Workflow Status field,
+# being served for up to an hour after the board has been converted.
 load_project_cache() {
     local cache_file cached_json cached_at now_unix
     cache_file=$(project_cache_file_path)
@@ -115,34 +113,33 @@ load_project_cache() {
     cached_repo=$(printf '%s' "${cached_json}" | jq -r '.repo // empty' 2>/dev/null)
     [ "${cached_repo}" = "${REPO_FULL}" ] || return 1
 
+    [ "$(printf '%s' "${cached_json}" | jq -r '.cache_version // empty' 2>/dev/null)" = "${PROJECT_CACHE_VERSION}" ] || return 1
+
     now_unix=$(date +%s)
     (( now_unix - cached_at <= PROJECT_CACHE_TTL )) || return 1
 
-    local project_id status_field_id builtin_field_id
+    local project_id status_field_id
     project_id=$(printf '%s' "${cached_json}" | jq -r '.project_id // empty' 2>/dev/null)
     [ -n "${project_id}" ] || return 1
     status_field_id=$(printf '%s' "${cached_json}" | jq -r '.status_field_id // empty' 2>/dev/null)
     [ -n "${status_field_id}" ] || return 1
-    printf '%s' "${cached_json}" | jq -e 'has("builtin_field_id")' > /dev/null 2>&1 || return 1
-    builtin_field_id=$(printf '%s' "${cached_json}" | jq -r '.builtin_field_id // ""' 2>/dev/null)
 
     _wf_assoc_from_json _WF_OPTION_IDS "${cached_json}" option_ids
-    _wf_assoc_from_json _WF_BUILTIN_OPTION_IDS "${cached_json}" builtin_option_ids
 
     _WF_PROJECT_ID="${project_id}"
     _WF_STATUS_FIELD_ID="${status_field_id}"
-    _WF_BUILTIN_FIELD_ID="${builtin_field_id}"
     _WF_CACHED_REPO="${REPO_FULL}"
     _WF_CREATION_FAILED=""
+    _WF_CONVERSION_FAILED=""
     return 0
 }
 
-# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS (and the built-in Status
-# field's id and option ids) for the current repo to disk so subsequent oneshot invocations can
-# skip live discovery until PROJECT_CACHE_TTL elapses. Best-effort: a failure to write just means
-# every run re-discovers, which is the pre-existing behaviour, so it only warns rather than dying.
+# Persists the current _WF_PROJECT_ID/_WF_STATUS_FIELD_ID/_WF_OPTION_IDS for the current repo to
+# disk, stamped with PROJECT_CACHE_VERSION, so subsequent oneshot invocations can skip live
+# discovery until PROJECT_CACHE_TTL elapses. Best-effort: a failure to write just means every run
+# re-discovers, which is the pre-existing behaviour, so it only warns rather than dying.
 save_project_cache() {
-    local cache_file option_ids_json builtin_option_ids_json
+    local cache_file option_ids_json
     cache_file=$(project_cache_file_path)
     mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null || {
         warn "Workflow project: failed to create ${SESSION_BASE_DIR} for disk cache"
@@ -150,17 +147,15 @@ save_project_cache() {
     }
 
     option_ids_json=$(_wf_assoc_to_json _WF_OPTION_IDS) || option_ids_json='{}'
-    builtin_option_ids_json=$(_wf_assoc_to_json _WF_BUILTIN_OPTION_IDS) || builtin_option_ids_json='{}'
 
     jq -n \
         --arg repo "${REPO_FULL}" \
         --arg project_id "${_WF_PROJECT_ID}" \
         --arg status_field_id "${_WF_STATUS_FIELD_ID}" \
         --argjson option_ids "${option_ids_json}" \
-        --arg builtin_field_id "${_WF_BUILTIN_FIELD_ID}" \
-        --argjson builtin_option_ids "${builtin_option_ids_json}" \
+        --arg cache_version "${PROJECT_CACHE_VERSION}" \
         --argjson cached_at "$(date +%s)" \
-        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, builtin_field_id: $builtin_field_id, builtin_option_ids: $builtin_option_ids, cached_at: $cached_at}' \
+        '{repo: $repo, project_id: $project_id, status_field_id: $status_field_id, option_ids: $option_ids, cache_version: $cache_version, cached_at: $cached_at}' \
         > "${cache_file}" 2>/dev/null \
         || warn "Workflow project: failed to write disk cache ${cache_file}"
 }
@@ -174,84 +169,50 @@ invalidate_project_cache() {
     rm -f "$(project_cache_file_path)" 2>/dev/null || true
 
     unset "_WF_CACHE[${REPO_FULL}:discovered]" "_WF_CACHE[${REPO_FULL}:project_id]" \
-        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]" \
-        "_WF_CACHE[${REPO_FULL}:builtin_field_id]" "_WF_CACHE[${REPO_FULL}:builtin_opt_names]"
+        "_WF_CACHE[${REPO_FULL}:field_id]" "_WF_CACHE[${REPO_FULL}:opt_names]"
     _wf_cache_forget_assoc opt _WF_OPTION_IDS
-    _wf_cache_forget_assoc builtin_opt _WF_BUILTIN_OPTION_IDS
 
     if [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ]; then
         _WF_CACHED_REPO=""
         _WF_PROJECT_ID=""
         _WF_STATUS_FIELD_ID=""
         _wf_reset_assoc _WF_OPTION_IDS
-        _WF_BUILTIN_FIELD_ID=""
-        _wf_reset_assoc _WF_BUILTIN_OPTION_IDS
     fi
+}
+
+# The marker recording that converting this repository's board failed, holding the time it did.
+_wf_conversion_failure_file() {
+    printf '%s/board-conversion-failed' "${SESSION_BASE_DIR}"
+}
+
+# Records that converting this repository's board failed just now. Best-effort, like the cache.
+_wf_record_conversion_failure() {
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null && date +%s > "$(_wf_conversion_failure_file)" 2>/dev/null \
+        || warn "Workflow project: failed to record the conversion failure for ${REPO_FULL}"
+}
+
+# Returns 0 when converting this repository's board failed within the last PROJECT_CACHE_TTL
+# seconds, so it is not retried until then.
+_wf_conversion_failed_recently() {
+    local failed_at
+    [ -f "$(_wf_conversion_failure_file)" ] || return 1
+    read -r failed_at < "$(_wf_conversion_failure_file)" 2>/dev/null || return 1
+    [[ "${failed_at}" =~ ^[0-9]+$ ]] || return 1
+    (( $(date +%s) - failed_at <= PROJECT_CACHE_TTL ))
 }
 
 # _build_wf_section is declared in lib/prompts.
 
-# Adds a single option to an existing "Workflow Status" field if it is not already present,
-# used to migrate boards discovered live that were provisioned before that option existed
-# (e.g. "AI Simplify", #1169) — mirrors create-project's ensure_status_field_option so a
-# pre-existing board self-heals here too, without needing a human to re-run create-project.
-# Inserts the new option immediately after ${after_name} (falling back to appending at the
-# end if ${after_name} is not found). Re-sends every existing option WITH its id, per
-# GitHub's documented contract for ProjectV2SingleSelectFieldOptionInput.id (preserves each
-# option's identity so items already set to it keep their value), and round-trips existing
-# options' color/description unchanged. Best-effort: any failure (GraphQL error, or a
-# mutation that succeeds but returns no usable field data) warns and returns the original
-# field_node unchanged rather than dying, since board-status updates are always best-effort
-# in oneshot. No-op if the option is already present or the field has no id. Prints the
-# (possibly updated) field JSON.
-_wf_ensure_status_field_option() {
-    local field_node="$1" option_name="$2" option_color="$3" after_name="$4"
-    local field_id has_option
-    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
-        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
-    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
-        printf '%s' "${field_node}"
-        return 0
-    fi
-
-    local options_json
-    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" --arg after "${after_name}" '
-        (.options // []) as $opts
-        | ($opts | map(.name) | index($after)) as $idx
-        | [$opts[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}] as $existing
-        | if $idx == null then $existing + [{name: $n, color: $c, description: ""}]
-          else $existing[0:($idx+1)] + [{name: $n, color: $c, description: ""}] + $existing[($idx+1):]
-          end
-    ')
-    local resp resp_err resp_err_content
-    resp_err=$(mktemp --suffix=.stderr) || resp_err=/dev/null
-    if ! resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
-            '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
-            | gh api graphql --input - 2>"${resp_err}"); then
-        resp_err_content=$(head -3 "${resp_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        rm -f "${resp_err}"
-        warn "Workflow project: could not add \"${option_name}\" option to \"Workflow Status\"${resp_err_content:+ — ${resp_err_content}}"
-        printf '%s' "${field_node}"
-        return 0
-    fi
-    rm -f "${resp_err}"
-
-    local updated
-    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field' 2>/dev/null)
-    if [ -z "${updated}" ] || [ "${updated}" = "null" ]; then
-        warn "Workflow project: mutation to add \"${option_name}\" option to \"Workflow Status\" returned no field data — leaving field unchanged"
-        printf '%s' "${field_node}"
-        return 0
-    fi
-    info "Workflow project: added missing \"${option_name}\" option to \"Workflow Status\"" >&2
-    printf '%s' "${updated}"
-}
-
 # Discovers or creates a GitHub Projects (v2) board named "Workflow" linked to
-# the current repo (OWNER/REPO).  Populates _WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS
-# and the built-in Status field's _WF_BUILTIN_FIELD_ID / _WF_BUILTIN_OPTION_IDS on success.  On any
-# failure, leaves _WF_PROJECT_ID empty so all subsequent update_workflow_status calls are silent
-# no-ops.
+# the current repo (OWNER/REPO), and makes sure its built-in "Status" field carries the ten
+# workflow states (lib/project-status, #1519). Populates _WF_PROJECT_ID, _WF_STATUS_FIELD_ID and
+# _WF_OPTION_IDS on success. On any failure, leaves _WF_PROJECT_ID empty so all subsequent
+# update_workflow_status calls are silent no-ops.
+# A board that still uses the old "Workflow Status" field, or a project just created here, is
+# converted in place. The discovery query already returns the fields and Default Workflows, so a
+# converted board costs no extra call. When a conversion step is refused, the Workflow Status
+# field is kept (no value is lost), a Discord alert names the repository and the step, and
+# _WF_CONVERSION_FAILED is set so the caller skips the repository this tick.
 # Safe to call multiple times — returns immediately when the cache is valid for REPO_FULL.
 discover_or_create_workflow_project() {
     [ "${_WF_CACHED_REPO}" = "${REPO_FULL}" ] && return 0
@@ -260,10 +221,19 @@ discover_or_create_workflow_project() {
         _WF_PROJECT_ID="${_WF_CACHE["${REPO_FULL}:project_id"]}"
         _WF_STATUS_FIELD_ID="${_WF_CACHE["${REPO_FULL}:field_id"]}"
         _wf_cache_load_assoc opt _WF_OPTION_IDS
-        _WF_BUILTIN_FIELD_ID="${_WF_CACHE["${REPO_FULL}:builtin_field_id"]:-}"
-        _wf_cache_load_assoc builtin_opt _WF_BUILTIN_OPTION_IDS
         _WF_CACHED_REPO="${REPO_FULL}"
         _WF_CREATION_FAILED=""
+        _WF_CONVERSION_FAILED=""
+        return 0
+    fi
+
+    # A conversion that failed this run, or within PROJECT_CACHE_TTL on an earlier run, is not
+    # retried: the repository stays skipped without any API call until the marker expires, so a
+    # board that keeps refusing does not cost several GraphQL calls on every tick.
+    if [ "${_WF_CACHE["${REPO_FULL}:conversion_failed"]:-}" = "1" ] || _wf_conversion_failed_recently; then
+        _WF_CACHE["${REPO_FULL}:conversion_failed"]="1"
+        _WF_PROJECT_ID=""
+        _WF_CONVERSION_FAILED="1"
         return 0
     fi
 
@@ -272,10 +242,8 @@ discover_or_create_workflow_project() {
     # cache file, then return without making any network calls.
     if load_project_cache; then
         _wf_cache_store_assoc opt _WF_OPTION_IDS
-        _wf_cache_store_assoc builtin_opt _WF_BUILTIN_OPTION_IDS
         _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
         _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
-        _WF_CACHE["${REPO_FULL}:builtin_field_id"]="${_WF_BUILTIN_FIELD_ID}"
         _WF_CACHE["${REPO_FULL}:discovered"]="1"
         return 0
     fi
@@ -283,10 +251,9 @@ discover_or_create_workflow_project() {
     _WF_PROJECT_ID=""
     _WF_STATUS_FIELD_ID=""
     _WF_CREATION_FAILED=""
+    _WF_CONVERSION_FAILED=""
     _WF_CACHED_REPO=""
     _wf_reset_assoc _WF_OPTION_IDS
-    _WF_BUILTIN_FIELD_ID=""
-    _wf_reset_assoc _WF_BUILTIN_OPTION_IDS
 
     # If Projects is disabled on the repo, repository.projectsV2 always returns empty, so
     # we would loop trying to create a project every run.  Enable it silently when needed.
@@ -299,7 +266,7 @@ discover_or_create_workflow_project() {
             || warn "Workflow project: could not enable Projects on ${REPO_FULL} — discovery may fail"
     fi
 
-    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:30){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}pageInfo{endCursor hasNextPage}}}}"
+    local query="query(\$owner:String!,\$repo:String!,\$cursor:String){repository(owner:\$owner,name:\$repo){projectsV2(first:100,after:\$cursor){nodes{id title fields(first:50){nodes{...on ProjectV2SingleSelectField{id name options{id name color description}}}} workflows(first:30){nodes{id name enabled}}}pageInfo{endCursor hasNextPage}}}}"
     local project_json="" cursor="" has_next_page="true" graphql_stderr graphql_err_content page_json
     local -a cursor_args
     while true; do
@@ -333,12 +300,8 @@ discover_or_create_workflow_project() {
         [ -n "${cursor}" ] || break
     done
 
-    # A project created below is returned without its built-in "Status" field, so it is not written
-    # to the disk cache until a later run has seen that field.
-    local created=0
     if [ -z "${project_json}" ]; then
         info "Workflow project: no 'Workflow' project found for ${REPO_FULL} — creating one"
-        created=1
         project_json=$(_wf_create_project) || {
             warn "Workflow project: creation failed for ${REPO_FULL} — status updates disabled"
             _WF_CREATION_FAILED="1"
@@ -352,25 +315,34 @@ discover_or_create_workflow_project() {
         return 0
     }
 
-    local status_field_node
-    status_field_node=$(printf '%s' "${project_json}" | \
-        jq -c '.fields.nodes[] | select(.name == "Workflow Status")' 2>/dev/null | head -1)
-    [ -n "${status_field_node}" ] || {
-        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
-        _WF_PROJECT_ID=""
-        return 0
-    }
-
-    # Backfills the "AI Simplify" and "AI Coverage" options onto boards provisioned before
-    # those options existed (#1169, #1215), mirroring create-project's own migration so
-    # oneshot self-heals a pre-existing board without needing a human to re-run create-project
-    # by hand.
-    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Simplify" PURPLE "Development")
-    status_field_node=$(_wf_ensure_status_field_option "${status_field_node}" "AI Coverage" RED "AI Security Review")
+    # The shape project_status_is_converted reads. A project just created by _wf_create_project
+    # carries no fields here, so it is never taken for converted and goes through the conversion.
+    local board status_field_node
+    board=$(printf '%s' "${project_json}" | jq -c --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" '
+        {status: ([(.fields.nodes // [])[] | select(.name? == "Status")] | first),
+         legacy: ([(.fields.nodes // [])[] | select(.name? == $legacy)] | first),
+         workflows: (.workflows.nodes // [])}' 2>/dev/null)
+    if project_status_is_converted "${board}"; then
+        status_field_node=$(printf '%s' "${board}" | jq -c '.status')
+    else
+        info "Workflow project: converting the Status field of ${REPO_FULL} to the workflow states"
+        # Called directly, never in $(...), so PROJECT_STATUS_FAILED_STEP survives for the alert.
+        if ! project_status_convert "${_WF_PROJECT_ID}"; then
+            warn "Workflow project: converting ${REPO_FULL} failed at ${PROJECT_STATUS_FAILED_STEP:-an unknown step} — skipping the repository"
+            notify_discord_board_conversion_failed "${REPO_FULL}" "${PROJECT_STATUS_FAILED_STEP:-an unknown step}"
+            _wf_record_conversion_failure
+            _WF_CACHE["${REPO_FULL}:conversion_failed"]="1"
+            _WF_CONVERSION_FAILED="1"
+            _WF_PROJECT_ID=""
+            return 0
+        fi
+        rm -f "$(_wf_conversion_failure_file)" 2>/dev/null || true
+        status_field_node="${PROJECT_STATUS_FIELD}"
+    fi
 
     _WF_STATUS_FIELD_ID=$(printf '%s' "${status_field_node}" | jq -r '.id // empty')
     [ -n "${_WF_STATUS_FIELD_ID}" ] || {
-        warn "Workflow project: Workflow Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
+        warn "Workflow project: Status field not found in project ${_WF_PROJECT_ID} — status updates disabled"
         _WF_PROJECT_ID=""
         return 0
     }
@@ -383,30 +355,11 @@ discover_or_create_workflow_project() {
     done < <(printf '%s' "${status_field_node}" | \
         jq -r '.options[] | "\(.id)|\(.name)"' 2>/dev/null)
 
-    # The built-in "Status" field (Todo / In Progress / Done) comes back in the same fields query.
-    # It is optional: a project without it just skips the built-in write. Option ids are keyed by
-    # lower-case name so a differently-cased option still matches.
-    local builtin_field_node
-    builtin_field_node=$(printf '%s' "${project_json}" | \
-        jq -c '.fields.nodes[] | select(.name == "Status")' 2>/dev/null | head -1)
-    if [ -n "${builtin_field_node}" ]; then
-        _WF_BUILTIN_FIELD_ID=$(printf '%s' "${builtin_field_node}" | jq -r '.id // empty' 2>/dev/null)
-        while IFS='|' read -r opt_id opt_name; do
-            if [ -z "${opt_name}" ] || [ -z "${opt_id}" ]; then continue; fi
-            _WF_BUILTIN_OPTION_IDS["${opt_name,,}"]="${opt_id}"
-        done < <(printf '%s' "${builtin_field_node}" | \
-            jq -r '.options[]? | "\(.id)|\(.name)"' 2>/dev/null)
-    fi
-
     _wf_cache_store_assoc opt _WF_OPTION_IDS
-    _wf_cache_store_assoc builtin_opt _WF_BUILTIN_OPTION_IDS
     _WF_CACHE["${REPO_FULL}:project_id"]="${_WF_PROJECT_ID}"
     _WF_CACHE["${REPO_FULL}:field_id"]="${_WF_STATUS_FIELD_ID}"
-    _WF_CACHE["${REPO_FULL}:builtin_field_id"]="${_WF_BUILTIN_FIELD_ID}"
     _WF_CACHE["${REPO_FULL}:discovered"]="1"
-    if [ "${created}" -eq 0 ] || [ -n "${_WF_BUILTIN_FIELD_ID}" ]; then
-        save_project_cache
-    fi
+    save_project_cache
 
     _WF_CACHED_REPO="${REPO_FULL}"
     info "Workflow project ready for ${REPO_FULL}: ${_WF_PROJECT_ID}"
@@ -442,7 +395,7 @@ report_missing_workflow_project() {
 
     local body
     # shellcheck disable=SC2016
-    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, adds the "Workflow Status" field, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
+    body=$(printf $'The orchestrator could not obtain a usable "Workflow" GitHub Project for this repository, so workflow board status updates are disabled for it.\n\nA bot account cannot create a project under a personal account, so the project must be set up by the repository owner.\n\nFrom a checkout of `credfeto/credfeto-orchestrator`, authenticated as the repository owner, run:\n\n```\n./create-project --repo %s\n```\n\nThe script is idempotent: it creates the "Workflow" project, sets up its built-in "Status" field with the workflow states, links it to this repository, grants the orchestrator bot (`dnyw4l3n13`) write access, and (on first creation only) seeds the board with all open issues and PRs. Re-running performs only whatever is still missing.\n' \
         "${REPO_FULL}")
 
     # Deliberately plain gh issue create, not cfwf issue create: this runs only when the repo has
@@ -519,9 +472,9 @@ _wf_invite_trusted_collaborators() {
     rm -f "${mut_err}"
 }
 
-# Creates a new "Workflow" GitHub Project (v2), adds the Status single-select
-# field with all eight options, and links it to the current repo.
-# Outputs project JSON (same shape as the discovery query) on stdout.
+# Creates a new "Workflow" GitHub Project (v2), linked to the current repo, and invites the
+# trusted collaborators. Outputs project JSON (the discovery query's shape, with no fields) on
+# stdout.
 _wf_create_project() {
     local owner_node_id org_err user_err
     org_err=$(mktemp --suffix=.stderr) || org_err=/dev/null
@@ -581,25 +534,12 @@ _wf_create_project() {
     }
     rm -f "${project_err}"
 
-    local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"Workflow Status\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"AI Coverage\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
-    local field_json field_err field_err_content
-    field_err=$(mktemp --suffix=.stderr) || field_err=/dev/null
-    field_json=$(gh api graphql \
-        -f query="${create_field_query}" \
-        -f p="${project_id}" 2>"${field_err}") || {
-        field_err_content=$(head -3 "${field_err}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
-        rm -f "${field_err}"
-        warn "Workflow project: createProjectV2Field failed for project ${project_id}${field_err_content:+ — ${field_err_content}}"
-        return 1
-    }
-    rm -f "${field_err}"
-
     _wf_invite_trusted_collaborators "${project_id}"
 
-    local status_field_nodes
-    status_field_nodes=$(printf '%s' "${field_json}" | \
-        jq -c '{nodes: [.data.createProjectV2Field.projectV2Field | {id, name, options}]}' 2>/dev/null)
-    printf '{"id":"%s","title":"Workflow","fields":%s}\n' "${project_id}" "${status_field_nodes}"
+    # No field is created: the new project's built-in Status field is converted to the workflow
+    # states by the caller (project_status_convert, lib/project-status). The JSON carries no fields,
+    # so the caller never takes the new project for already converted.
+    printf '{"id":"%s","title":"Workflow","fields":{"nodes":[]},"workflows":{"nodes":[]}}\n' "${project_id}"
 }
 
 # Updates the Workflow board status for an issue or PR.
@@ -645,11 +585,8 @@ update_workflow_status() {
     }
     rm -f "${add_err}"
 
-    if _wf_set_item_field "${project_item_id}" "${_WF_STATUS_FIELD_ID}" "${opt_id}"; then
-        _wf_set_builtin_status "${item_type}" "${item_number}" "${status_name}" "${project_item_id}"
-    else
-        warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
-    fi
+    _wf_set_item_field "${project_item_id}" "${_WF_STATUS_FIELD_ID}" "${opt_id}" \
+        || warn "Workflow: failed to set status '${status_name}' for ${item_type} #${item_number}"
 
     info "Workflow: ${item_type} #${item_number} added to board with status '${status_name}'"
 }
@@ -662,29 +599,6 @@ _wf_set_item_field() {
         -f query="mutation(\$p:ID!,\$i:ID!,\$f:ID!,\$v:String!){updateProjectV2ItemFieldValue(input:{projectId:\$p,itemId:\$i,fieldId:\$f,value:{singleSelectOptionId:\$v}}){projectV2Item{id}}}" \
         -f p="${_WF_PROJECT_ID}" -f i="${project_item_id}" -f f="${field_id}" -f v="${option_id}" \
         > /dev/null 2>&1
-}
-
-# Sets the project's built-in "Status" field to the value that goes with a Workflow Status
-# (builtin_status_for_workflow_status), straight after update_workflow_status has set the Workflow
-# Status (#1493). Best-effort like everything else on the board: when the project has no built-in
-# Status field (its option map is then empty too, because the two are only ever recorded together),
-# or its Todo / In Progress / Done option was renamed or removed by a project admin, or the
-# mutation fails, it only warns and the Workflow Status stands.
-# Arguments: item_type, item_number, status_name, project_item_id
-_wf_set_builtin_status() {
-    local item_type="$1" item_number="$2" status_name="$3" project_item_id="$4"
-    local builtin_name builtin_opt_id=""
-    builtin_name=$(builtin_status_for_workflow_status "${status_name}")
-    if [ -n "${builtin_name}" ]; then
-        builtin_opt_id="${_WF_BUILTIN_OPTION_IDS["${builtin_name,,}"]:-}"
-    fi
-    if [ -z "${builtin_opt_id}" ]; then
-        warn "Workflow: no built-in Status option for '${status_name}' — leaving the built-in Status of ${item_type} #${item_number} unchanged"
-        return 0
-    fi
-
-    _wf_set_item_field "${project_item_id}" "${_WF_BUILTIN_FIELD_ID}" "${builtin_opt_id}" \
-        || warn "Workflow: failed to set built-in Status '${builtin_name}' for ${item_type} #${item_number}"
 }
 
 # Populate _WF_APPROVED_ITEMS with issue keys ("owner/repo/number") whose
@@ -762,7 +676,7 @@ issue_plan_approved_or_later() {
     fi
 }
 
-# Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Workflow Status field
+# Populates _WF_ITEM_STATUS_OPTION_ID with every project item's current Status field
 # option ID, keyed "owner/repo/number" — covers BOTH Issues and PRs (unlike
 # fetch_board_approved_items, which only ever needs Issues for the plan-approval flow).
 # Results are cached per repo per tick; a no-op when the board is not configured. Used to show
@@ -789,7 +703,7 @@ fetch_board_item_statuses() {
                 .data.node.items.nodes[]
                 | select((.content | type) == "object") | select(.content.number? != null)
                 | . as $item
-                | ($item.fieldValues.nodes[] | select(.field.name? == "Workflow Status") | .optionId) as $opt
+                | ($item.fieldValues.nodes[] | select(.field.name? == "Status") | .optionId) as $opt
                 | "\($item.content.repository.nameWithOwner)/\($item.content.number)\t\($opt)"
             ' 2>/dev/null)
         pagination=$(printf '%s' "${page_json}" | \
@@ -888,7 +802,7 @@ fetch_single_item_workflow_status() {
         --jq '.data.addProjectV2ItemById.item.id' 2>/dev/null) || { printf 'Unknown'; return 0; }
 
     opt_id=$(gh api graphql \
-        -f query="query(\$i:ID!){node(id:\$i){... on ProjectV2Item{fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}" \
+        -f query="query(\$i:ID!){node(id:\$i){... on ProjectV2Item{fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}" \
         -f i="${project_item_id}" \
         --jq '.data.node.fieldValueByName.optionId // empty' 2>/dev/null)
 
@@ -983,19 +897,6 @@ coarse_status_for_substatus() {
             printf 'Done' ;;
         *)
             printf 'Unknown' ;;
-    esac
-}
-
-# Maps a Workflow-board status to the option name of the project's built-in "Status" field that is
-# set alongside it (#1493): Todo, In Progress or Done, printed as GitHub names them, or nothing for
-# a status it does not know. It is coarse_status_for_substatus under GitHub's own spelling, and
-# cfwf's builtin_status_for is the same mapping (test/status-mapping-parity.bats keeps the two in
-# step, since cfwf is copied alone into a container image and cannot source lib/).
-builtin_status_for_workflow_status() {
-    case "$(coarse_status_for_substatus "$1")" in
-        "To Do") printf 'Todo' ;;
-        "In Progress") printf 'In Progress' ;;
-        Done) printf 'Done' ;;
     esac
 }
 
