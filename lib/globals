@@ -385,24 +385,16 @@ _PARSED_COUNT_TOTAL=0
 _PARSED_COUNT_IDLE=0
 
 # Workflow project cache — populated by discover_or_create_workflow_project (lib/workflow-board).
-# Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode).
+# Empty _WF_PROJECT_ID disables all update_workflow_status calls (no-op mode). _WF_STATUS_FIELD_ID
+# is the project's built-in "Status" field, which carries the workflow states (#1519).
 _WF_PROJECT_ID=""
 _WF_STATUS_FIELD_ID=""
 declare -gA _WF_OPTION_IDS
-# The project's built-in "Status" field (Todo / In Progress / Done), which is set alongside the
-# Workflow Status so GitHub's own views and automation see a matching value (#1493). Its option
-# ids are keyed by lower-case option name. An empty _WF_BUILTIN_FIELD_ID means the project has no
-# such field; its option map is then empty as well, and the built-in write is skipped for lack of
-# an option id.
-_WF_BUILTIN_FIELD_ID=""
-declare -gA _WF_BUILTIN_OPTION_IDS
 _WF_CACHED_REPO=""
 # Per-repo discovery cache: keys are "REPO_FULL:discovered", "REPO_FULL:project_id",
 # "REPO_FULL:field_id", "REPO_FULL:opt_names" (newline-delimited option names), and
 # "REPO_FULL:opt:<name>" (one entry per status-field option, avoiding any separator
-# character that could collide with characters in option names), plus the same for the built-in
-# Status field: "REPO_FULL:builtin_field_id", "REPO_FULL:builtin_opt_names" and
-# "REPO_FULL:builtin_opt:<name>".
+# character that could collide with characters in option names).
 declare -gA _WF_CACHE
 
 # Space-delimited list of repos already issued a Workflow-project setup request this run.
@@ -414,6 +406,12 @@ _WF_REPORTED_REPOS=""
 # so the call site can distinguish a genuine "cannot create project" failure from other reasons
 # _WF_PROJECT_ID might be empty (missing status field, GraphQL auth error, etc.).
 _WF_CREATION_FAILED=""
+
+# Set to "1" by discover_or_create_workflow_project when converting the board's Status field to
+# the workflow states (project_status_convert, lib/project-status) failed. The repository owner
+# has already been alerted on Discord; the call sites in oneshot skip the repository this tick
+# rather than work an item on a board that is not converted (#1519).
+_WF_CONVERSION_FAILED=""
 
 # Board-approved items cache — populated by fetch_board_approved_items.
 # Keys are "owner/repo/number"; value is "1" when issue is in Approved status.
@@ -443,3 +441,9 @@ _WF_STATUS_ORDER=(
 # environment; the project/field/option IDs are effectively permanent once set up, so the
 # default of 1 hour is conservative rather than tightly load-bearing.
 PROJECT_CACHE_TTL="${PROJECT_CACHE_TTL:-3600}"
+
+# Stamped on every disk-persisted project cache entry and checked on load: an entry with any other
+# value is a miss. Bump it whenever what the cache holds changes meaning, as it did when the status
+# field moved from the custom "Workflow Status" field to the built-in "Status" (#1519); without it,
+# an old entry would keep serving the deleted field's id for up to PROJECT_CACHE_TTL.
+PROJECT_CACHE_VERSION="2"

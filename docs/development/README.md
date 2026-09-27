@@ -74,8 +74,9 @@ link in these pages is broken.
 - Shared helpers live in `lib/` and are only available to scripts that source it. A script that
   is copied on its own into a container image (`cfwf`, `pre-commit-check`, `querydb`) cannot
   source `lib/`, so anything it shares with the orchestrator exists twice and needs a parity test
-  that fails when the copies drift. `cfwf`'s Workflow-Status-to-built-in-Status mapping is the
-  example: `test/status-mapping-parity.bats`.
+  that fails when the copies drift. `cfwf`'s list of the ten workflow states (`WORKFLOW_STATES`,
+  checked against `lib/project-status` and `_WF_STATUS_ORDER`) is the example:
+  `test/status-mapping-parity.bats`.
 - Prefer native `gh <noun> <verb>` subcommands to `gh api graphql`. The exceptions are
   documented where they are made, for example the read-only single-item query in `cfwf`
   (see [cfwf](scripts/cfwf.md)). A GraphQL mutation typed as a command is blocked by the agent
@@ -160,10 +161,13 @@ These have all been seen in practice. Where a script has to cope with one, its g
   limit.
 - **Writes can be idempotent.** `gh project item-add` for an item already on the board returns
   the existing item, so "add then set" is safe to repeat.
-- **The built-in `Status` is not the `Workflow Status`.** Every project has a built-in `Status`
-  field (Todo / In Progress / Done) as well as our custom `Workflow Status` (ten options). They
-  are separate fields with separate option ids. Both writers set the built-in one to match the
-  Workflow Status; see [the workflow-board page](../workflow-board.md).
+- **Default Workflows target an option by id.** The board's workflow lives in the project's
+  built-in `Status` field, whose Todo, In Progress and Done options are renamed to Not Started,
+  Development and Complete. GitHub's Default Workflows keep working after the rename because they
+  point at the option id, not its name. The "Pull request linked to issue" workflow is deleted,
+  because it would move a card backwards. A board not yet converted still has a custom
+  `Workflow Status` field, and `cfwf` uses that field until the board is converted; see
+  [the workflow-board page](../workflow-board.md).
 - **Ids are per project.** Field and option ids are looked up from the board each time (or from
   a cache with a time limit, `PROJECT_CACHE_TTL`, that is cleared only when adding the item to
   the board is rejected), never hard-coded.

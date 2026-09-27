@@ -15,8 +15,21 @@ install_gh_stub() {
     export CREATE_PROJECT_GH_INPUT_LOG="${TEST_TMP}/gh-input.log"
     : > "${CREATE_PROJECT_GH_LOG}"
     : > "${CREATE_PROJECT_GH_INPUT_LOG}"
-    export FIELD_CREATE_RESULT='{"data":{"createProjectV2Field":{"projectV2Field":{"id":"F_NEW","name":"Workflow Status","options":[{"id":"OPT_NS","name":"Not Started"}]}}}}'
-    export FIELD_OPTION_UPDATE_RESULT='{"data":{"updateProjectV2Field":{"projectV2Field":{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"},{"id":"O_NEW","name":"AI Simplify"}]}}}}'
+    # The conversion of the Status field is tested on its own in test/project-status.bats, so
+    # here project_status_convert is replaced: it logs its call and sets PROJECT_STATUS_FIELD to
+    # ${CONVERT_RESULT}, or, when ${CONVERT_FAIL_STEP} is set, fails with that step, as
+    # lib/project-status does.
+    export CONVERT_RESULT='{"id":"F_STATUS","name":"Status","options":[{"id":"OPT_NS","name":"Not Started"}]}'
+    project_status_convert() {
+        echo "project_status_convert $1" >> "${CREATE_PROJECT_GH_LOG}"
+        if [ -n "${CONVERT_FAIL_STEP:-}" ]; then
+            # shellcheck disable=SC2034  # read by create-project's ensure_status_field
+            PROJECT_STATUS_FAILED_STEP="${CONVERT_FAIL_STEP}"
+            return 1
+        fi
+        # shellcheck disable=SC2034  # read by create-project's ensure_status_field
+        PROJECT_STATUS_FIELD="${CONVERT_RESULT}"
+    }
     # shellcheck disable=SC2016  # stub body: $* / ${...} must stay literal and expand at stub runtime
     make_stub gh '
 op="$*"
@@ -35,7 +48,6 @@ case "${op}" in
             exit 1
         fi
         case "${body}" in
-            *updateProjectV2Field*)   echo "updateProjectV2FieldOptions" >> "${log}"; printf "%s" "${FIELD_OPTION_UPDATE_RESULT}" ;;
             *)                        echo "updateProjectV2Collaborators" >> "${log}"; printf "{}" ;;
         esac
         ;;
@@ -46,7 +58,7 @@ case "${op}" in
     *updateProjectV2*)                  echo "updateProjectV2Description" >> "${log}"; printf "{}" ;;
     *shortDescription*)                 printf "%s" "${PROJECT_SHORT_DESC:-}" ;;
     *projectsV2*)                       printf "%s" "${DISCOVERY_RESULT}" ;;
-    *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "%s" "${FIELD_CREATE_RESULT}" ;;
+    *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "{}" ;;
     *createProjectV2*)                  echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
     *hasProjectsEnabled*)               printf "%s" "${PROJECTS_ENABLED:-true}" ;;
     *"repo edit"*"--enable-projects"*)  echo "enableProjects" >> "${log}" ;;
@@ -100,7 +112,7 @@ teardown() {
 
 @test "main accepts --force-bootstrap without dying" {
     install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
     run main --repo credfeto/scripts --force-bootstrap
     [ "${status}" -eq 0 ]
 }
@@ -120,7 +132,7 @@ teardown() {
 
 @test "provision_project skips create when a linked project already exists and updates description" {
     install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[]}]}}'
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Status","options":[]}]}}'
 
     run provision_project credfeto scripts
     [ "${status}" -eq 0 ]
@@ -133,7 +145,7 @@ teardown() {
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
 }
 
-@test "provision_project creates, sets description, adds field and grants access when no project exists" {
+@test "provision_project creates, sets description, converts the Status field and grants access when no project exists" {
     install_gh_stub
     export DISCOVERY_RESULT=""
 
@@ -143,38 +155,37 @@ teardown() {
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" == *"createProjectV2"* ]]
     [[ "${output}" == *"updateProjectV2Description"* ]]
-    [[ "${output}" == *"createProjectV2Field"* ]]
+    # The new project's built-in Status field is converted; no custom field is created (#1519).
+    [[ "${output}" == *"project_status_convert P_NEW"* ]]
+    [[ "${output}" != *"createProjectV2Field"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
     # repositoryId is passed to createProjectV2 so no separate link call is needed
     [[ "${output}" != *"linkProjectV2ToRepository"* ]]
 }
 
-@test "provision_project adds a missing status field on an existing project" {
+@test "provision_project converts the Status field of an existing project (#1519)" {
     install_gh_stub
     export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
 
     run provision_project credfeto scripts
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Status field added"* ]]
+    [[ "${output}" == *"Status field carries the workflow states"* ]]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"createProjectV2 "* ]]
-    [[ "${output}" == *"createProjectV2Field"* ]]
+    [[ "${output}" == *"project_status_convert P_EXIST"* ]]
     [[ "${output}" == *"updateProjectV2Collaborators"* ]]
 }
 
-@test "provision_project exits non-zero when creating the status field fails, and does not go on" {
+@test "provision_project exits non-zero naming the failed step when the Status conversion fails, and does not go on (#1519)" {
     install_gh_stub
     export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
-    export CREATE_PROJECT_GH_FAIL=createProjectV2Field
+    export CONVERT_FAIL_STEP="deleting the Workflow Status field"
 
     run provision_project credfeto scripts true
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"GitHub GraphQL call failed"* ]]
-    [[ "${output}" == *"boom: createProjectV2Field"* ]]
-    # the call's own failure ends the script, not the empty-field check further down
-    [[ "${output}" != *"Could not find or create the"* ]]
-    [[ "${output}" != *"Status field added"* ]]
+    [[ "${output}" == *"Could not set up the Status field: deleting the Workflow Status field failed"* ]]
+    [[ "${output}" != *"Status field carries the workflow states"* ]]
     [[ "${output}" != *"Workflow project ready"* ]]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
@@ -182,154 +193,18 @@ teardown() {
     [[ "${output}" != *"addProjectV2ItemById"* ]]
 }
 
-@test "provision_project exits non-zero when adding a missing option to the status field fails, and does not go on" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}]}}'
-    export CREATE_PROJECT_GH_FAIL=updateProjectV2Field
-
-    run provision_project credfeto scripts true
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Failed to add \"AI Simplify\" option"* ]]
-    [[ "${output}" != *"Could not find or create the"* ]]
-    [[ "${output}" != *"Workflow project ready"* ]]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" != *"updateProjectV2Collaborators"* ]]
-    [[ "${output}" != *"addProjectV2ItemById"* ]]
-}
-
-@test "provision_project exits non-zero, without claiming the field was added, when the create mutation returns no field" {
+@test "provision_project exits non-zero when the conversion returns no field id (#1519)" {
     install_gh_stub
     export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[]}}'
-    export FIELD_CREATE_RESULT='{"data":{"createProjectV2Field":{"projectV2Field":null}}}'
+    export CONVERT_RESULT='{"id":null,"options":[]}'
 
     run provision_project credfeto scripts true
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Could not find or create the"* ]]
-    [[ "${output}" != *"Status field added"* ]]
+    [[ "${output}" == *"Could not find the built-in Status field"* ]]
     [[ "${output}" != *"Workflow project ready"* ]]
 
     run cat "${CREATE_PROJECT_GH_LOG}"
     [[ "${output}" != *"addProjectV2ItemById"* ]]
-}
-
-@test "provision_project exits non-zero when adding the AI Coverage option fails, and does not go on" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""}]}]}}'
-    export CREATE_PROJECT_GH_FAIL=updateProjectV2Field
-
-    run provision_project credfeto scripts true
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"Failed to add \"AI Coverage\" option"* ]]
-    [[ "${output}" != *"Could not find or create the"* ]]
-    [[ "${output}" != *"Workflow project ready"* ]]
-}
-
-@test "ensure_status_field_option adds a missing option to an existing field" {
-    install_gh_stub
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" == *"updateProjectV2FieldOptions"* ]]
-}
-
-@test "ensure_status_field_option is a no-op when the option is already present" {
-    install_gh_stub
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == "${field_node}" ]]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" != *"updateProjectV2FieldOptions"* ]]
-}
-
-@test "ensure_status_field_option sends existing option ids and their color/description so item field values and appearance are preserved" {
-    install_gh_stub
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":"start here"},{"id":"O2","name":"Development","color":"PURPLE","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
-    [[ "${output}" == *'"id":"O1"'* ]]
-    [[ "${output}" == *'"id":"O2"'* ]]
-    [[ "${output}" == *'"color":"GRAY"'* ]]
-    [[ "${output}" == *'"description":"start here"'* ]]
-    [[ "${output}" == *'"name":"AI Simplify"'* ]]
-}
-
-@test "ensure_status_field_option inserts the new option immediately after after_name instead of appending at the end" {
-    install_gh_stub
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"Development","color":"PURPLE","description":""},{"id":"O3","name":"AI Review","color":"ORANGE","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
-    [[ "${output}" == *'"name":"Development"'*'"name":"AI Simplify"'*'"name":"AI Review"'* ]]
-}
-
-@test "ensure_status_field_option falls back to appending when after_name is not found among the existing options" {
-    install_gh_stub
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_INPUT_LOG}"
-    [[ "${output}" == *'"name":"Not Started"'*'"name":"AI Simplify"'* ]]
-}
-
-@test "ensure_status_field_option falls back to the original field_node when the mutation returns no field data" {
-    install_gh_stub
-    export FIELD_OPTION_UPDATE_RESULT='{"data":{"updateProjectV2Field":{"projectV2Field":null}}}'
-    local field_node='{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}'
-
-    run ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"returned no field data"* ]]
-    [[ "${output}" == *"${field_node}" ]]
-}
-
-@test "provision_project adds the AI Simplify option to an existing field that lacks it" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""}]}]}}'
-
-    run provision_project credfeto scripts
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" != *"createProjectV2Field"* ]]
-    [[ "${output}" == *"updateProjectV2FieldOptions"* ]]
-}
-
-@test "provision_project adds the AI Coverage option to an existing field that has AI Simplify but lacks it" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""}]}]}}'
-
-    run provision_project credfeto scripts
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" != *"createProjectV2Field"* ]]
-    [[ "${output}" == *"updateProjectV2FieldOptions"* ]]
-}
-
-@test "provision_project does not touch the field when AI Simplify and AI Coverage options are already present" {
-    install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started","color":"GRAY","description":""},{"id":"O2","name":"AI Simplify","color":"PURPLE","description":""},{"id":"O3","name":"AI Security Review","color":"RED","description":""},{"id":"O4","name":"AI Coverage","color":"RED","description":""}]}]}}'
-
-    run provision_project credfeto scripts
-    [ "${status}" -eq 0 ]
-
-    run cat "${CREATE_PROJECT_GH_LOG}"
-    [[ "${output}" != *"createProjectV2Field"* ]]
-    [[ "${output}" != *"updateProjectV2FieldOptions"* ]]
 }
 
 @test "provision_project seeds open issues and PRs as Not Started on creation" {
@@ -350,7 +225,7 @@ teardown() {
 
 @test "provision_project does not seed the board when the project already exists" {
     install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
     export BOOT_ISSUE_IDS='I_1\nI_2'
     export BOOT_PR_IDS='PR_9'
 
@@ -363,7 +238,7 @@ teardown() {
 
 @test "provision_project with --force-bootstrap reseeds board on existing project" {
     install_gh_stub
-    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Workflow Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
+    export DISCOVERY_RESULT='{"id":"P_EXIST","fields":{"nodes":[{"id":"F1","name":"Status","options":[{"id":"O1","name":"Not Started"}]}]}}'
     export BOOT_ISSUE_IDS='I_1\nI_2'
     export BOOT_PR_IDS='PR_9'
 

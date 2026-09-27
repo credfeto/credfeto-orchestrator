@@ -57,6 +57,9 @@ source "${INTERACTIVE_DIR}/lib/state" \
 # shellcheck source=lib/prompts disable=SC1091
 source "${INTERACTIVE_DIR}/lib/prompts" \
     || { printf 'interactive: FATAL: failed to source %s/lib/prompts\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
+# shellcheck source=lib/project-status disable=SC1091
+source "${INTERACTIVE_DIR}/lib/project-status" \
+    || { printf 'interactive: FATAL: failed to source %s/lib/project-status\n' "${INTERACTIVE_DIR}" >&2; exit 1; }
 # shellcheck source=lib/workflow-board disable=SC1091
 source "${INTERACTIVE_DIR}/lib/workflow-board" \
     || { printf 'interactive: FATAL: failed to source %s/lib/workflow-board\n' "${INTERACTIVE_DIR}" >&2; exit 1; }

@@ -1,0 +1,329 @@
+# shellcheck shell=bash
+# The Workflow board's status field: the project's built-in "Status" single-select field,
+# carrying the ten workflow states (#1519). Holds the one definition of those states and the
+# in-place conversion of a board that still uses the old custom "Workflow Status" field.
+# Sourced by create-project and by oneshot and interactive (through lib/workflow-board). Needs
+# only lib/core (warn/info), `gh` and `jq`. cfwf is copied into the container image on its own
+# and keeps its own copy of the state names; test/status-mapping-parity.bats keeps the two in
+# step.
+#
+# Nothing here exits: every function returns a status, and on failure it sets
+# PROJECT_STATUS_FAILED_STEP to the step that failed and writes the reason to stderr, so
+# create-project can die and the orchestrator can alert and skip the repository.
+
+# The ten workflow states, in board order, as name|colour.
+PROJECT_STATUS_OPTIONS=(
+    "Not Started|GRAY"
+    "Planning|YELLOW"
+    "Approved|BLUE"
+    "Development|PURPLE"
+    "AI Simplify|PURPLE"
+    "AI Review|ORANGE"
+    "AI Security Review|RED"
+    "AI Coverage|RED"
+    "Human Review|GREEN"
+    "Complete|PINK"
+)
+
+# The field every board used before #1519, converted away and then deleted.
+PROJECT_STATUS_LEGACY_FIELD="Workflow Status"
+
+# The options a new project's built-in Status starts with, and the workflow state each becomes.
+# Renaming by option id keeps GitHub's Default Workflows pointing at the right state, because
+# they target an option by id, not by name (verified live on #1519).
+PROJECT_STATUS_RENAMES=(
+    "Todo|Not Started"
+    "In Progress|Development"
+    "Done|Complete"
+)
+
+# The Default Workflow that is deleted: once Status carries the workflow, "Pull request linked to
+# issue" would move a card back to Development whenever it fires again after the orchestrator has
+# moved it on, and the orchestrator already sets Development itself when it opens the PR.
+PROJECT_STATUS_REMOVED_WORKFLOW="Pull request linked to issue"
+
+# Set by project_status_convert: the step that failed, for the caller's error or alert, and on
+# success the converted Status field JSON.
+PROJECT_STATUS_FAILED_STEP=""
+PROJECT_STATUS_FIELD=""
+
+# How often, and how far apart, the copied values are read back before a difference is a mismatch
+# (see _ps_copy_values). Overridable from the environment; tests set the delay to 0. An invalid
+# value falls back to the default.
+PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-5}"
+[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=5
+PROJECT_STATUS_READBACK_DELAY_SECS="${PROJECT_STATUS_READBACK_DELAY_SECS:-15}"
+[[ "${PROJECT_STATUS_READBACK_DELAY_SECS}" =~ ^[0-9]+$ ]] || PROJECT_STATUS_READBACK_DELAY_SECS=15
+
+# Prints the ten workflow state names, one per line, in board order.
+project_status_names() {
+    local entry
+    for entry in "${PROJECT_STATUS_OPTIONS[@]}"; do
+        printf '%s\n' "${entry%%|*}"
+    done
+}
+
+# The ten state names as a JSON array, built once for the jq programs below. No state name holds a
+# quote or a backslash, so plain quoting makes valid JSON.
+PROJECT_STATUS_NAMES_JSON=""
+for _ps_entry in "${PROJECT_STATUS_OPTIONS[@]}"; do
+    PROJECT_STATUS_NAMES_JSON+="${PROJECT_STATUS_NAMES_JSON:+,}\"${_ps_entry%%|*}\""
+done
+PROJECT_STATUS_NAMES_JSON="[${PROJECT_STATUS_NAMES_JSON}]"
+unset _ps_entry
+
+# jq definition: true when the single-select field it is applied to has an option for every state in
+# $names (PROJECT_STATUS_NAMES_JSON). The one definition of "carries the workflow states".
+_PS_JQ_DEF_HAS_ALL_STATES='def has_all_states($names): ([(.options // [])[].name]) as $have | all($names[]; . as $n | $have | index($n) != null);'
+
+# Prints the shape the conversion reads, {status, legacy, workflows}, from a project node with
+# .fields.nodes and .workflows.nodes on stdin (the node of the conversion's own read, or of the
+# orchestrator's discovery query): status and legacy are the Status and Workflow Status single-select
+# fields, null when absent.
+project_status_board_shape() {
+    jq -c --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" '
+        {status: ([(.fields.nodes // [])[] | select(.name? == "Status")] | first),
+         legacy: ([(.fields.nodes // [])[] | select(.name? == $legacy)] | first),
+         workflows: (.workflows.nodes // [])}'
+}
+
+# Records the failed step and prints why on stderr, then returns 1 so a caller can end with it.
+_ps_fail() {
+    PROJECT_STATUS_FAILED_STEP="$1"
+    warn "Workflow board conversion failed at ${1}: ${2}"
+    return 1
+}
+
+# Runs one GraphQL request, given as a {query, variables} JSON body on stdin, and prints the
+# response. Returns 1, writing the API's message to stderr, when gh fails or the response carries
+# errors, so a partly failed mutation is never read as a success.
+_ps_graphql() {
+    local out err_file rc=0
+    err_file=$(mktemp) || return 1
+    out=$(gh api graphql --input - 2>"${err_file}") || rc=$?
+    if [ "${rc}" -ne 0 ] || printf '%s' "${out}" | jq -e '(.errors // []) | length > 0' > /dev/null 2>&1; then
+        local message
+        for message in "$(head -3 "${err_file}")" "$(printf '%s' "${out}" | jq -r '(.errors // [])[].message' 2>/dev/null)"; do
+            [ -z "${message}" ] || printf '%s\n' "${message}" >&2
+        done
+        rm -f "${err_file}"
+        return 1
+    fi
+    rm -f "${err_file}"
+    printf '%s' "${out}"
+}
+
+# Prints the fields and Default Workflows of a project: {status, legacy, workflows}, where status
+# and legacy are the Status and Workflow Status single-select fields (null when absent).
+_ps_read_project() {
+    local project_id="$1" resp
+    resp=$(jq -cn --arg p "${project_id}" '{query: "query($p:ID!){node(id:$p){... on ProjectV2{fields(first:50){nodes{... on ProjectV2SingleSelectField{id name options{id name color description}}}} workflows(first:30){nodes{id name enabled}}}}}", variables: {p: $p}}' \
+        | _ps_graphql) || return 1
+    printf '%s' "${resp}" | jq -c '.data.node' | project_status_board_shape
+}
+
+# Returns 0 when the project JSON from _ps_read_project (or the same shape) describes a board that
+# is already converted: Status has all ten states, there is no Workflow Status field, and the
+# "Pull request linked to issue" Default Workflow is not enabled.
+project_status_is_converted() {
+    printf '%s' "$1" | jq -e --argjson names "${PROJECT_STATUS_NAMES_JSON}" --arg wf "${PROJECT_STATUS_REMOVED_WORKFLOW}" "${_PS_JQ_DEF_HAS_ALL_STATES}"'
+        (.status // {} | has_all_states($names))
+          and (.legacy == null)
+          and (([(.workflows // [])[] | select(.name == $wf and .enabled)] | length) == 0)
+    ' > /dev/null 2>&1
+}
+
+# Prints the singleSelectOptions input that turns the given Status field into the ten workflow
+# states: an option already named for a state keeps its id, colour and description; a Todo, In
+# Progress or Done option is renamed to its state, keeping its id; any other state is added; and
+# any option that is none of these is kept after them, unchanged, with a warning.
+_ps_options_input() {
+    local status_field="$1" states renames
+    states=$(printf '%s\n' "${PROJECT_STATUS_OPTIONS[@]}" | jq -R 'split("|") | {name: .[0], color: .[1]}' | jq -sc .)
+    renames=$(printf '%s\n' "${PROJECT_STATUS_RENAMES[@]}" | jq -R 'split("|") | {(.[1]): .[0]}' | jq -sc 'add')
+    printf '%s' "${status_field}" | jq -c --argjson states "${states}" --argjson renames "${renames}" '
+        (.options // []) as $opts
+        | [$states[] as $s
+            | ([$opts[] | select(.name == $s.name)] | first) as $same
+            | ([$opts[] | select(.name == ($renames[$s.name] // ""))] | first) as $old
+            | if $same != null then {id: $same.id, name: $s.name, color: ($same.color // $s.color), description: ($same.description // "")}
+              elif $old != null then {id: $old.id, name: $s.name, color: $s.color, description: ""}
+              else {name: $s.name, color: $s.color, description: ""}
+              end] as $wanted
+        | ([$wanted[] | .id // empty]) as $used
+        | $wanted + [$opts[] | select((.id as $i | $used | index($i)) == null)
+                     | {id, name, color: (.color // "GRAY"), description: (.description // "")}]'
+}
+
+# Makes the Status field carry the ten workflow states. Prints the updated field JSON.
+_ps_convert_options() {
+    local status_field="$1" field_id options resp updated extra
+    field_id=$(printf '%s' "${status_field}" | jq -r '.id // empty')
+    [ -n "${field_id}" ] || { warn "the project has no built-in Status field"; return 1; }
+
+    options=$(_ps_options_input "${status_field}") \
+        || { warn "could not build the Status option list"; return 1; }
+    extra=$(printf '%s' "${options}" | jq -r --argjson n "${PROJECT_STATUS_NAMES_JSON}" \
+        '[.[] | select((.name as $x | $n | index($x)) == null) | .name] | join(", ")')
+    [ -z "${extra}" ] || warn "Keeping Status options that are not workflow states: ${extra}"
+
+    resp=$(jq -cn --arg f "${field_id}" --argjson o "${options}" \
+        '{query: "mutation($f:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$f,singleSelectOptions:$o}){projectV2Field{... on ProjectV2SingleSelectField{id name options{id name color description}}}}}", variables: {f: $f, o: $o}}' \
+        | _ps_graphql) || { warn "updateProjectV2Field was refused"; return 1; }
+    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field // empty')
+    [ -n "${updated}" ] || { warn "updateProjectV2Field returned no field"; return 1; }
+    printf '%s' "${updated}"
+}
+
+# Prints every item on the project as one compact JSON object per line: {id, closed: <whether its
+# issue or pull request is closed or merged; false for a draft>, legacy: <Workflow Status name or
+# null>, status: <Status name or null>}. Pages through all items, so a board of any size is read in
+# full.
+_ps_read_items() {
+    local project_id="$1" cursor="" resp page
+    while :; do
+        resp=$(jq -cn --arg p "${project_id}" --arg c "${cursor}" --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" \
+            '{query: "query($p:ID!,$c:String,$legacy:String!){node(id:$p){... on ProjectV2{items(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{id content{... on Issue{state} ... on PullRequest{state}} legacy:fieldValueByName(name:$legacy){... on ProjectV2ItemFieldSingleSelectValue{name}} status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}", variables: ({p: $p, legacy: $legacy} + (if $c == "" then {} else {c: $c} end))}' \
+            | _ps_graphql) || return 1
+        page=$(printf '%s' "${resp}" | jq -c '.data.node.items // empty')
+        [ -n "${page}" ] || return 1
+        printf '%s' "${page}" | jq -c '.nodes[] | {id, closed: ((.content.state // "") as $s | $s == "CLOSED" or $s == "MERGED"), legacy: (.legacy.name // null), status: (.status.name // null)}'
+        [ "$(printf '%s' "${page}" | jq -r '.pageInfo.hasNextPage')" = "true" ] || return 0
+        cursor=$(printf '%s' "${page}" | jq -r '.pageInfo.endCursor')
+    done
+}
+
+# The jq definition of the Status value an item must end up with: Complete when its issue or pull
+# request is already closed or merged (at the repository owner's request, so a closed item never
+# keeps a stale in-progress state such as Human Review), otherwise its Workflow Status value (null
+# when it has none, meaning nothing to copy).
+_PS_JQ_DEF_TARGET='def target: if .closed then "Complete" else .legacy end;'
+
+# Sets every item's Status to its target (see _PS_JQ_DEF_TARGET), then reads every item back and
+# returns 0 only when each item with a target now has it. An item whose Workflow Status value is not
+# one of the ten states is a mismatch, so the old field is never deleted with a value that could not
+# be carried across.
+_ps_copy_values() {
+    local project_id="$1" status_field="$2" field_id items item_id name option_id copied=0
+    field_id=$(printf '%s' "${status_field}" | jq -r '.id')
+    items=$(_ps_read_items "${project_id}") || { _ps_fail "reading the board's items" "the items could not be listed"; return 1; }
+
+    # One jq pass lists every item whose Status is not yet its target, with the target's option id
+    # (empty when the target is not a Status option), so no item costs a jq process of its own. The
+    # fields are joined by the ASCII unit separator, not a tab: read collapses adjacent whitespace
+    # separators, which would shift the target name into an empty option id.
+    local writes
+    writes=$(printf '%s\n' "${items}" | jq -rs --argjson opts "$(printf '%s' "${status_field}" | jq -c '.options // []')" "${_PS_JQ_DEF_TARGET}"'
+        .[] | select(target != null and target != .status)
+        | target as $t | [.id, ([$opts[] | select(.name == $t) | .id] | first // ""), $t] | join("\u001f")') \
+        || { _ps_fail "reading the board's items" "the items could not be parsed"; return 1; }
+
+    while IFS=$'\x1f' read -r item_id option_id name; do
+        [ -n "${item_id}" ] || continue
+        [ -n "${option_id}" ] || { _ps_fail "copying Workflow Status values" "item ${item_id} has \"${name}\", which is not a Status option"; return 1; }
+        jq -cn --arg p "${project_id}" --arg i "${item_id}" --arg f "${field_id}" --arg o "${option_id}" \
+            '{query: "mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}", variables: {p: $p, i: $i, f: $f, o: $o}}' \
+            | _ps_graphql > /dev/null \
+            || { _ps_fail "copying Workflow Status values" "item ${item_id} could not be set to \"${name}\""; return 1; }
+        copied=$((copied + 1))
+    done <<< "${writes}"
+    [ "${copied}" -eq 0 ] || info "Set ${copied} item(s) on Status: closed ones to Complete, open ones to their Workflow Status" >&2
+
+    # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
+    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated a few
+    # times before a difference counts as a real mismatch.
+    local mismatches attempt=1
+    while :; do
+        items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
+        mismatches=$(printf '%s\n' "${items}" | jq -sc "${_PS_JQ_DEF_TARGET}"' [.[] | select(target != null and target != .status) | .id]')
+        [ "${mismatches}" != "[]" ] || return 0
+        [ "${attempt}" -lt "${PROJECT_STATUS_READBACK_ATTEMPTS}" ] || break
+        info "Waiting ${PROJECT_STATUS_READBACK_DELAY_SECS}s for GitHub to show the copied values (read ${attempt} of ${PROJECT_STATUS_READBACK_ATTEMPTS} still differs)..." >&2
+        [ "${PROJECT_STATUS_READBACK_DELAY_SECS}" -eq 0 ] || sleep "${PROJECT_STATUS_READBACK_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    _ps_fail "checking the copied values" "Status does not show the expected value on items ${mismatches} after ${attempt} read(s)"
+}
+
+# Runs a delete mutation (a {query, variables} body on stdin) and returns 0 when it succeeds or
+# when GitHub answers that the node no longer exists. The id always comes from this project's own
+# read, so "not found" means it is already deleted: a read shortly after a delete can still list
+# the deleted field or workflow (seen on the credfeto/scratch canary), and a re-run then deletes it
+# a second time. Any other failure returns 1, with the API's message on stderr.
+_ps_delete_node() {
+    local out
+    if out=$(_ps_graphql 2>&1 > /dev/null); then
+        return 0
+    fi
+    case "${out}" in
+        *"Could not resolve to a node with the global id"*) return 0 ;;
+    esac
+    printf '%s\n' "${out}" >&2
+    return 1
+}
+
+# Delete a field or a Default Workflow by id; the step names it for the failure message.
+_ps_delete_field() {
+    jq -cn --arg f "$1" '{query: "mutation($f:ID!){deleteProjectV2Field(input:{fieldId:$f}){projectV2Field{... on ProjectV2SingleSelectField{id}}}}", variables: {f: $f}}' \
+        | _ps_delete_node
+}
+_ps_delete_workflow() {
+    jq -cn --arg w "$1" '{query: "mutation($w:ID!){deleteProjectV2Workflow(input:{workflowId:$w}){deletedWorkflowId}}", variables: {w: $w}}' \
+        | _ps_delete_node
+}
+
+# Converts a board in place so its built-in Status field carries the ten workflow states, and
+# sets PROJECT_STATUS_FIELD to the resulting Status field JSON ({id, name, options}). It sets
+# globals rather than printing so it is called directly, never in $(...): a subshell would lose
+# PROJECT_STATUS_FAILED_STEP. Safe to re-run: each step is skipped when already done, so a
+# converted board costs one read, and none when the caller passes the board it has just read
+# (project_status_board_shape) as the optional second argument.
+#   1. rename Todo, In Progress and Done to Not Started, Development and Complete (keeping their
+#      option ids) and add the other seven states;
+#   2. when a Workflow Status field exists, copy every item's value onto Status, read every item
+#      back, and only when they all match delete the Workflow Status field;
+#   3. delete the "Pull request linked to issue" Default Workflow when it is enabled.
+# Returns 1 at the first step that fails, with PROJECT_STATUS_FAILED_STEP set; the Workflow
+# Status field is then left in place, so no value is lost.
+project_status_convert() {
+    local project_id="$1" project="${2:-}" status legacy workflow_id
+    PROJECT_STATUS_FAILED_STEP=""
+    PROJECT_STATUS_FIELD=""
+    # A caller that has just read the project (the orchestrator's discovery) passes the shape in, so
+    # the project is not read a second time.
+    if [ -z "${project}" ]; then
+        project=$(_ps_read_project "${project_id}") || { _ps_fail "reading the project" "its fields and workflows could not be read"; return 1; }
+    fi
+    status=$(printf '%s' "${project}" | jq -c '.status // empty')
+    [ -n "${status}" ] || { _ps_fail "reading the Status field" "the project has no built-in Status field"; return 1; }
+
+    if project_status_is_converted "${project}"; then
+        PROJECT_STATUS_FIELD="${status}"
+        return 0
+    fi
+
+    if ! printf '%s' "${status}" | jq -e --argjson names "${PROJECT_STATUS_NAMES_JSON}" "${_PS_JQ_DEF_HAS_ALL_STATES}"' has_all_states($names)' > /dev/null 2>&1; then
+        info "Converting the built-in Status field to the workflow states..." >&2
+        # _ps_convert_options runs in a subshell, so the step is recorded here, where it survives.
+        status=$(_ps_convert_options "${status}") \
+            || { _ps_fail "renaming and adding the Status options" "see the message above"; return 1; }
+    fi
+
+    legacy=$(printf '%s' "${project}" | jq -r '.legacy.id // empty')
+    if [ -n "${legacy}" ]; then
+        _ps_copy_values "${project_id}" "${status}" || return 1
+        _ps_delete_field "${legacy}" \
+            || { _ps_fail "deleting the Workflow Status field" "deleteProjectV2Field was refused"; return 1; }
+        info "Deleted the \"${PROJECT_STATUS_LEGACY_FIELD}\" field" >&2
+    fi
+
+    workflow_id=$(printf '%s' "${project}" | jq -r --arg wf "${PROJECT_STATUS_REMOVED_WORKFLOW}" \
+        '[(.workflows // [])[] | select(.name == $wf and .enabled) | .id] | first // empty')
+    if [ -n "${workflow_id}" ]; then
+        _ps_delete_workflow "${workflow_id}" \
+            || { _ps_fail "deleting the \"${PROJECT_STATUS_REMOVED_WORKFLOW}\" workflow" "deleteProjectV2Workflow was refused"; return 1; }
+        info "Deleted the \"${PROJECT_STATUS_REMOVED_WORKFLOW}\" Default Workflow" >&2
+    fi
+
+    PROJECT_STATUS_FIELD="${status}"
+}

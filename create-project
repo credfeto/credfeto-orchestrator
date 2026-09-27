@@ -6,7 +6,8 @@
 #
 # Each step is skipped when already done, so the script is safe to re-run:
 #   1. create a "Workflow" project owned by the repository owner
-#   2. add the "Workflow Status" single-select field with its ten options
+#   2. make the built-in "Status" field carry the ten workflow states, converting a board that
+#      still uses the old "Workflow Status" field (lib/project-status)
 #   3. link the project to the repository
 #   4. grant the orchestrator bot WRITER access to the project
 #
@@ -20,7 +21,6 @@
 # The orchestrator bot account that needs write access to drive the board.
 BOT_LOGIN="dnyw4l3n13"
 PROJECT_TITLE="Workflow"
-STATUS_FIELD_NAME="Workflow Status"
 
 # Resolve this script's own directory via BASH_SOURCE (not $0), so it works both when run
 # directly and when a test harness `source`s it.
@@ -28,6 +28,9 @@ CREATE_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/core disable=SC1091
 source "${CREATE_PROJECT_DIR}/lib/core" \
     || { printf 'create-project: FATAL: failed to source %s/lib/core\n' "${CREATE_PROJECT_DIR}" >&2; exit 1; }
+# shellcheck source=lib/project-status disable=SC1091
+source "${CREATE_PROJECT_DIR}/lib/project-status" \
+    || { printf 'create-project: FATAL: failed to source %s/lib/project-status\n' "${CREATE_PROJECT_DIR}" >&2; exit 1; }
 
 check_required_tools() {
     local tool
@@ -137,89 +140,26 @@ ensure_project_description() {
     success "Description set"
 }
 
-# Ensures the project has the "Workflow Status" single-select field, creating it when absent.
-# project_json is the discovery JSON ("" for a freshly created project).  Populates the globals
-# WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board bootstrap can set
-# item statuses without an extra round-trip.  Exits 1 when a field create or option update
-# fails, and dies when it ends with no field id, so a caller never carries on with a missing field.
+# Makes the project's built-in "Status" field carry the ten workflow states, converting a board
+# that still uses the old "Workflow Status" field (project_status_convert, lib/project-status).
+# Populates the globals WF_FIELD_ID and WF_NOT_STARTED_OPT (the "Not Started" option ID) so board
+# bootstrap can set item statuses without an extra round-trip. Dies naming the step that failed, so
+# a caller never carries on with a half-converted field; the Workflow Status field is only deleted
+# once every item's value has been copied onto Status and read back.
 ensure_status_field() {
-    local project_id="$1" project_json="$2"
+    local project_id="$1" status_field
     WF_FIELD_ID=""
     WF_NOT_STARTED_OPT=""
 
-    # Every substitution below wraps a function that can die, and a die inside $(...) only ends the
-    # subshell, so each needs an explicit || exit 1 (ai/local/github-projects.instructions.md).
-    local field_node created_field=0
-    field_node=$(printf '%s' "${project_json}" | \
-        jq -c --arg n "${STATUS_FIELD_NAME}" '(.fields.nodes // [])[] | select(.name==$n)' 2>/dev/null | head -1)
-    if [ -n "${field_node}" ]; then
-        info "Status field \"${STATUS_FIELD_NAME}\" already present — checking its options are up to date"
-        field_node=$(ensure_status_field_option "${field_node}" "AI Simplify" PURPLE "Development") || exit 1
-        field_node=$(ensure_status_field_option "${field_node}" "AI Coverage" RED "AI Security Review") || exit 1
-    else
-        info "Adding \"${STATUS_FIELD_NAME}\" field with its ten options..."
-        local create_field_query="mutation(\$p:ID!){createProjectV2Field(input:{projectId:\$p,dataType:SINGLE_SELECT,name:\"${STATUS_FIELD_NAME}\",singleSelectOptions:[{name:\"Not Started\",color:GRAY,description:\"\"},{name:\"Planning\",color:YELLOW,description:\"\"},{name:\"Approved\",color:BLUE,description:\"\"},{name:\"Development\",color:PURPLE,description:\"\"},{name:\"AI Simplify\",color:PURPLE,description:\"\"},{name:\"AI Review\",color:ORANGE,description:\"\"},{name:\"AI Security Review\",color:RED,description:\"\"},{name:\"AI Coverage\",color:RED,description:\"\"},{name:\"Human Review\",color:GREEN,description:\"\"},{name:\"Complete\",color:PINK,description:\"\"}]}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name}}}}}"
-        local resp
-        resp=$(gh_graphql -f query="${create_field_query}" -f p="${project_id}") || exit 1
-        field_node=$(printf '%s' "${resp}" | jq -c '.data.createProjectV2Field.projectV2Field' 2>/dev/null)
-        created_field=1
-    fi
-
-    WF_FIELD_ID=$(printf '%s' "${field_node}" | jq -r '.id // empty' 2>/dev/null)
-    [ -n "${WF_FIELD_ID}" ] || die "Could not find or create the \"${STATUS_FIELD_NAME}\" field on the project"
-    [ "${created_field}" -eq 0 ] || success "Status field added"
-    WF_NOT_STARTED_OPT=$(printf '%s' "${field_node}" | \
+    # Called directly, not in $(...), so PROJECT_STATUS_FAILED_STEP survives for the message.
+    project_status_convert "${project_id}" \
+        || die "Could not set up the Status field: ${PROJECT_STATUS_FAILED_STEP:-unknown step} failed"
+    status_field="${PROJECT_STATUS_FIELD}"
+    WF_FIELD_ID=$(printf '%s' "${status_field}" | jq -r '.id // empty' 2>/dev/null)
+    [ -n "${WF_FIELD_ID}" ] || die "Could not find the built-in Status field on the project"
+    WF_NOT_STARTED_OPT=$(printf '%s' "${status_field}" | \
         jq -r '(.options // [])[] | select(.name=="Not Started") | .id' 2>/dev/null | head -1)
-}
-
-# Adds a single option to an existing "Workflow Status" field if it is not already present,
-# used to migrate boards created before that option existed (e.g. "AI Simplify", #1169).
-# Inserts the new option immediately after ${after_name} (falling back to appending at the
-# end if ${after_name} is not found) so a migrated board's option order matches a freshly
-# created board's order. Re-sends every existing option WITH its id, per GitHub's documented
-# contract for ProjectV2SingleSelectFieldOptionInput.id ("include this to preserve the
-# option's identity during updates, preventing item field values from being cleared") - so
-# items already set to an existing option keep their value, and only the new option is
-# actually created. Existing options' color/description are round-tripped unchanged (the
-# discovery query fetches both) so this never alters how a board already looks. No-op
-# (prints field_node unchanged) if the option is already present or the field has no id.
-# If the mutation succeeds but returns no usable field data, warns and falls back to the
-# original field_node rather than propagating a broken result. Prints the (possibly
-# updated) field JSON.
-ensure_status_field_option() {
-    local field_node="$1" option_name="$2" option_color="$3" after_name="$4"
-    local field_id has_option
-    read -r field_id has_option < <(printf '%s' "${field_node}" | jq -r --arg n "${option_name}" \
-        '[(.id // ""), ((([(.options // [])[] | select(.name==$n)] | length) > 0) | tostring)] | @tsv' 2>/dev/null)
-    if [ "${has_option}" = "true" ] || [ -z "${field_id}" ]; then
-        printf '%s' "${field_node}"
-        return 0
-    fi
-
-    info "Adding missing \"${option_name}\" option to \"${STATUS_FIELD_NAME}\"..." >&2
-    local options_json
-    options_json=$(printf '%s' "${field_node}" | jq -c --arg n "${option_name}" --arg c "${option_color}" --arg after "${after_name}" '
-        (.options // []) as $opts
-        | ($opts | map(.name) | index($after)) as $idx
-        | [$opts[] | {id, name, color: (.color // "GRAY"), description: (.description // "")}] as $existing
-        | if $idx == null then $existing + [{name: $n, color: $c, description: ""}]
-          else $existing[0:($idx+1)] + [{name: $n, color: $c, description: ""}] + $existing[($idx+1):]
-          end
-    ')
-    local resp
-    resp=$(jq -cn --arg p "${field_id}" --argjson o "${options_json}" \
-        '{query:"mutation($p:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$p,singleSelectOptions:$o}){projectV2Field{...on ProjectV2SingleSelectField{id name options{id name color description}}}}}",variables:{p:$p,o:$o}}' \
-        | gh_graphql --input -) \
-        || die "Failed to add \"${option_name}\" option to \"${STATUS_FIELD_NAME}\""
-    local updated
-    updated=$(printf '%s' "${resp}" | jq -c '.data.updateProjectV2Field.projectV2Field' 2>/dev/null)
-    if [ -z "${updated}" ] || [ "${updated}" = "null" ]; then
-        warn "Mutation to add \"${option_name}\" option to \"${STATUS_FIELD_NAME}\" returned no field data — leaving field unchanged" >&2
-        printf '%s' "${field_node}"
-        return 0
-    fi
-    success "Option \"${option_name}\" added" >&2
-    printf '%s' "${updated}"
+    success "Status field carries the workflow states"
 }
 
 # Grants the orchestrator bot WRITER access.  The mutation is declarative (it sets the role),
@@ -249,13 +189,13 @@ ensure_bot_collaborator() {
 # Seeds a freshly created board with every open issue and open PR in the repo, each set to
 # "Not Started".  Only called for a newly created project so re-runs never re-add items a human
 # may have curated off the board.  Per-item failures are non-fatal so one bad item cannot abort
-# the whole bootstrap.  field_id / opt_id are the "Workflow Status" field and "Not Started" option.
+# the whole bootstrap.  field_id / opt_id are the built-in Status field and its "Not Started" option.
 bootstrap_board_items() {
     local owner="$1" repo="$2" project_id="$3" field_id="$4" opt_id="$5"
     local repo_full="${owner}/${repo}"
 
     if [ -z "${field_id}" ] || [ -z "${opt_id}" ]; then
-        die "Cannot bootstrap board for ${repo_full}: unresolved \"${STATUS_FIELD_NAME}\" field or \"Not Started\" option"
+        die "Cannot bootstrap board for ${repo_full}: unresolved Status field or \"Not Started\" option"
     fi
 
     local issue_ids pr_ids n_issues n_prs
@@ -324,7 +264,7 @@ provision_project() {
         created=true
     fi
 
-    ensure_status_field "${project_id}" "${project_json}"
+    ensure_status_field "${project_id}"
     ensure_project_description "${project_id}" "${repo_full}"
     ensure_bot_collaborator "${project_id}"
 
