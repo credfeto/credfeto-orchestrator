@@ -47,6 +47,14 @@ PROJECT_STATUS_REMOVED_WORKFLOW="Pull request linked to issue"
 PROJECT_STATUS_FAILED_STEP=""
 PROJECT_STATUS_FIELD=""
 
+# How often, and how far apart, the copied values are read back before a difference is a mismatch
+# (see _ps_copy_values). Overridable from the environment; tests set the delay to 0. An invalid
+# value falls back to the default.
+PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-5}"
+[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=5
+PROJECT_STATUS_READBACK_DELAY_SECS="${PROJECT_STATUS_READBACK_DELAY_SECS:-15}"
+[[ "${PROJECT_STATUS_READBACK_DELAY_SECS}" =~ ^[0-9]+$ ]] || PROJECT_STATUS_READBACK_DELAY_SECS=15
+
 # Prints the ten workflow state names, one per line, in board order.
 project_status_names() {
     local entry
@@ -189,11 +197,20 @@ _ps_copy_values() {
     done <<< "${items}"
     [ "${copied}" -eq 0 ] || info "Copied ${copied} Workflow Status value(s) onto Status" >&2
 
-    local mismatches
-    items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
-    mismatches=$(printf '%s\n' "${items}" | jq -sc '[.[] | select(.legacy != null and .legacy != .status) | .id]')
-    [ "${mismatches}" = "[]" ] \
-        || { _ps_fail "checking the copied values" "Status does not match Workflow Status on items ${mismatches}"; return 1; }
+    # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
+    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated a few
+    # times before a difference counts as a real mismatch.
+    local mismatches attempt=1
+    while :; do
+        items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
+        mismatches=$(printf '%s\n' "${items}" | jq -sc '[.[] | select(.legacy != null and .legacy != .status) | .id]')
+        [ "${mismatches}" != "[]" ] || return 0
+        [ "${attempt}" -lt "${PROJECT_STATUS_READBACK_ATTEMPTS}" ] || break
+        info "Waiting ${PROJECT_STATUS_READBACK_DELAY_SECS}s for GitHub to show the copied values (read ${attempt} of ${PROJECT_STATUS_READBACK_ATTEMPTS} still differs)..." >&2
+        [ "${PROJECT_STATUS_READBACK_DELAY_SECS}" -eq 0 ] || sleep "${PROJECT_STATUS_READBACK_DELAY_SECS}"
+        attempt=$((attempt + 1))
+    done
+    _ps_fail "checking the copied values" "Status does not match Workflow Status on items ${mismatches} after ${attempt} read(s)"
 }
 
 # Deletes a field or a Default Workflow by id; the step names it for the failure message.
