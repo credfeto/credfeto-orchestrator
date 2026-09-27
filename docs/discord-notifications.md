@@ -24,6 +24,7 @@ rule, matched to what actually makes sense for that alert:
 | Item blocked | An Issue or Pull Request was just marked `Blocked` (see [github-integration.md](github-integration.md)). | Once per "blocked spell" — silent on every subsequent tick the item stays blocked, then re-armed the moment the item is next observed open and un-blocked. Not time-based at all. |
 | PR needs approval | A Pull Request is "settled" (auto-merge armed, nothing failed/pending) but GitHub's `reviewDecision` is `REVIEW_REQUIRED` — it cannot merge purely because no approving review exists, whether one was dismissed by a later force-push or never requested at all. | At most one per hour, per repo-and-PR (not per owner, so the same PR number in two different repos never suppresses each other's alert). |
 | Self-update stale | Only when systemd-invoked (gated on `ORCHESTRATOR_SELF_UPDATE_MANAGED`, a variable install-timer's generated unit declares explicitly — not systemd's generic `INVOCATION_ID`, which would also wrongly catch a manual shell descended from an unrelated systemd session — so `loop` and manual runs are unaffected): this checkout's own `HEAD` is behind `origin/main` — the systemd unit's self-update `ExecStartPre` steps did not converge (a stalled/unreachable remote is tolerated by design, but a permanently wedged merge, e.g. a stale git lock left by a killed process, previously had nothing surfacing it). The run refuses to continue this tick and exits non-zero, so `systemctl`/`journalctl` also show the unit as failed. | At most one per hour, per owner. |
+| Workflow board conversion failed (#1519) | Converting a repository's Workflow board to the built-in Status field was refused at some step (see [workflow-board.md](workflow-board.md)). The embed names the repository and the step; the repository is skipped until the conversion succeeds, and its Workflow Status field is kept. | At most one per hour, per repository. |
 | Claude error | The agent session itself returned an application-level error. | None — fires every time, every tick. |
 | Rate limited | The Claude API rate-limited the current owner; work pauses until the reported reset time. | None — fires every time, every tick. |
 | Image pull failed (#1400) | A `podman pull` of `ORCHESTRATOR_IMAGE` fails outright with no cached local image to fall back to. Distinct from "Claude error": the two used to share the same misleadingly-titled alert, which read "Claude Error" for a registry/pull failure that has nothing to do with Claude itself erroring. | None: fires every time, every tick; the caller dies immediately after, so this is already self-limiting the same way Claude error/rate limited are. |
@@ -34,7 +35,7 @@ Three different suppression shapes are in play, not one universal rule:
    expected to be rare or already self-limiting (a rate limit, once hit, stops further work, and
    further alerts, until it clears; a pull failure kills the run immediately after), so nothing
    extra is layered on top.
-2. **A rolling one-hour window** (low disk space, slow image pull, priorities unreachable, PR
+2. **A rolling one-hour window** (low disk space, slow image pull, priorities unreachable, Workflow board conversion failed, PR
    needs approval, self-update stale, and no-work *when the content is unchanged*): a small
    state file records the last time this alert actually sent, and a repeat within the hour is
    dropped. The no-work alert compares a hash of its title and item breakdown rather than the raw
@@ -48,7 +49,7 @@ Three different suppression shapes are in play, not one universal rule:
 
 For the rolling-window alerts, whether a **failed** attempt to reach Discord counts as "sent"
 differs by alert, and this is a real, known gap rather than a settled guarantee: low disk space,
-priorities-unreachable, PR-needs-approval, and self-update-stale all use a shared helper that
+priorities-unreachable, board-conversion-failed, PR-needs-approval, and self-update-stale all use a shared helper that
 only records the send after a *successful* POST, so a Discord outage at the exact moment any of
 them fires means the next tick retries immediately. The no-work and item-blocked alerts do
 **not** have this protection — both
@@ -56,7 +57,7 @@ write their state/marker file unconditionally, even when the `curl` call itself 
 Discord outage at the exact moment either of those fires can silently suppress the next
 occurrence for up to an hour (no-work) or for the rest of that blocked episode (item-blocked).
 
-Some alerts are deduplicated **per owner** (disk space and slow image pulls are each a genuinely
+The board-conversion alert is deduplicated **per repository**, since each board fails or converts on its own. Some alerts are deduplicated **per owner** (disk space and slow image pulls are each a genuinely
 separate concern for each machine/owner running the orchestrator); the priorities-unreachable
 alert instead uses a **single shared key** across all owners (the priorities API is one global
 endpoint everyone shares: if it goes down, every owner running concurrently would otherwise

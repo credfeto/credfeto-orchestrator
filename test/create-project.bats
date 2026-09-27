@@ -48,7 +48,6 @@ case "${op}" in
             exit 1
         fi
         case "${body}" in
-            *updateProjectV2Field*)   echo "updateProjectV2FieldOptions" >> "${log}"; printf "%s" "${FIELD_OPTION_UPDATE_RESULT}" ;;
             *)                        echo "updateProjectV2Collaborators" >> "${log}"; printf "{}" ;;
         esac
         ;;
@@ -59,7 +58,7 @@ case "${op}" in
     *updateProjectV2*)                  echo "updateProjectV2Description" >> "${log}"; printf "{}" ;;
     *shortDescription*)                 printf "%s" "${PROJECT_SHORT_DESC:-}" ;;
     *projectsV2*)                       printf "%s" "${DISCOVERY_RESULT}" ;;
-    *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "%s" "${FIELD_CREATE_RESULT}" ;;
+    *createProjectV2Field*)             echo "createProjectV2Field" >> "${log}"; printf "{}" ;;
     *createProjectV2*)                  echo "createProjectV2" >> "${log}"; printf "P_NEW" ;;
     *hasProjectsEnabled*)               printf "%s" "${PROJECTS_ENABLED:-true}" ;;
     *"repo edit"*"--enable-projects"*)  echo "enableProjects" >> "${log}" ;;
