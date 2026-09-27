@@ -56,6 +56,8 @@
       "Bash(chmod *)",
       "Bash(composite-action-lint *)",
       "Bash(cp *)",
+      "Bash(./create-project *)",
+      "Bash(create-project *)",
       "Bash(curl *)",
       "Bash(cut *)",
       "Bash(date)",
