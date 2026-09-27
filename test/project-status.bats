@@ -35,6 +35,7 @@ setup() {
         '    *"fields(first:50)"*) op=project ;;' \
         'esac' \
         '[ ! -f "${FIX}/fail-${op}" ] || { printf "boom: %s\n" "${op}" >&2; exit 1; }' \
+        '[ ! -f "${FIX}/gone-${op}" ] || { printf "{\"data\":null,\"errors\":[{\"type\":\"NOT_FOUND\",\"message\":\"Could not resolve to a node with the global id of '"'"'X'"'"'.\"}]}"; printf "gh: Could not resolve to a node with the global id of '"'"'X'"'"'.\n" >&2; exit 1; }' \
         'case "${op}" in' \
         '    project) cat "${FIX}/project.json" ;;' \
         '    update-field) cat "${FIX}/update-field.json" ;;' \
@@ -217,6 +218,27 @@ PR_LINKED='[{"id":"W_ADD","name":"Item added to project","enabled":true},{"id":"
     [[ "${stderr}" == *"renaming and adding the Status options"* ]]
     [[ "${stderr}" == *"boom: update-field"* ]]
     [ "$(grep -c 'items(first:100\|deleteProjectV2' "${FIX}/gh.log")" -eq 0 ]
+}
+
+@test "project_status_convert treats a field or workflow GitHub no longer finds as already deleted (#1519)" {
+    # Seen on the credfeto/scratch canary: a read shortly after a conversion still listed the deleted
+    # Workflow Status field, so a re-run tried to delete it again.
+    write_project "$(all_states_json)" "${LEGACY_FIELD}" "${PR_LINKED}"
+    write_items 1 '[["I1","Approved","Approved"]]'
+    touch "${FIX}/gone-delete-field" "${FIX}/gone-delete-workflow"
+    project_status_convert "P1" 2> /dev/null
+    [ -z "${PROJECT_STATUS_FAILED_STEP}" ]
+    [ "$(printf '%s' "${PROJECT_STATUS_FIELD}" | jq -r '.id')" = "F_STATUS" ]
+}
+
+@test "project_status_convert still fails on any other refusal of a delete (#1519)" {
+    write_project "$(all_states_json)" "${LEGACY_FIELD}" '[]'
+    write_items 1 '[["I1","Approved","Approved"]]'
+    touch "${FIX}/fail-delete-field"
+    run --separate-stderr project_status_convert "P1"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"boom: delete-field"* ]]
+    [[ "${stderr}" == *"deleting the Workflow Status field"* ]]
 }
 
 @test "project_status_convert sets PROJECT_STATUS_FAILED_STEP for the caller's message (#1519)" {
