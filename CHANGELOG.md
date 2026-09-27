@@ -37,6 +37,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Changed
 - install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
 - cfwf workflow-status --check now prints the built-in Status as well as the Workflow Status, as '<Workflow Status> (<built-in Status>)', for example 'Development (In Progress)' instead of 'Development'; the on-disk project cache gains the built-in Status field, so an existing entry is rediscovered once (#1493)
+- TBD - to be finalized after review (#1519)
 ### Deprecated
 ### Removed
 ### Deployment Changes
