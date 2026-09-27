@@ -8,15 +8,15 @@ The rules for changing them (the extension process, the widening rules, the deny
 
 ## What is where
 
-- `claude-hooks/` holds the executable hooks: `reject-obfuscated-commands`, `enforce-allowed-dirs`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-ssh-host-and-key`, `enforce-curl-host`, `enforce-background-for-long-running-commands` and `cache-gh-lookups`. It also holds four data files: `command-allowlist`, `command-blocklist`, `env-var-blocklist` and `allowed-dirs`.
+- `claude-hooks/` holds the executable hooks: `reject-obfuscated-commands`, `enforce-allowed-dirs`, `enforce-git-identity`, `enforce-git-dash-c`, `block-git-worktree`, `block-dotnet-tool-install`, `block-github-mcp-write-tools`, `enforce-ssh-host-and-key`, `enforce-curl-host`, `enforce-background-for-long-running-commands` and `cache-gh-lookups`. It also holds four data files: `command-allowlist`, `command-blocklist`, `env-var-blocklist` and `allowed-dirs`.
 - `claude-settings.json` wires the hooks under `hooks.PreToolUse` and holds `permissions.allow` and `permissions.deny` (with `defaultMode` set to `dontAsk`).
 - The Dockerfile copies each file into `/home/developer/.claude/`: hooks as `root:root 0755`, data files and settings as `root:root 0444`, and its sanity block fails the build if any is missing, if the hook commands contain a hard-coded `/home/developer`, or if an `allowed-dirs.local` was baked in.
 - `install-claude-hooks` installs the same set on a host. It symlinks every file directly under `claude-hooks/` into `~/.claude/hooks/` (so an edit takes effect immediately), copies `claude-settings.json` verbatim to `~/.claude/settings.json` (keeping the old one as `settings.json.bak`), and installs `cfwf`. It refuses to run inside a Claude Code session (`CLAUDECODE=1`) or if `jq`, `shfmt`, `base64`, `realpath`, `git`, `gpg`, `ssh-add`, `sed` or `grep` is missing, because a hook whose tool is missing blocks every command. The baked `allowed-dirs` lists the container mounts, so on a host it warns until you write your own `~/.claude/hooks/allowed-dirs.local`.
-- `block-no-verify` also appears in `hooks.PreToolUse` (for `Bash` and for `mcp__github__.*`). It is an npm tool installed by the `development-node` image (inherited by the images above it), not a file in `claude-hooks/`.
+- `block-no-verify` also appears in `hooks.PreToolUse` (for `Bash` only, since `block-github-mcp-write-tools` took over the `mcp__github__.*` matcher). It is an npm tool installed by the `development-node` image (inherited by the images above it), not a file in `claude-hooks/`.
 
 ## What a hook sees
 
-A `PreToolUse` hook receives the tool call as JSON on stdin. The Bash hooks read `.tool_input.command` and nothing else about the work (for an `EnterWorktree` call, `block-git-worktree` reads `.tool_input.path` and `.tool_input.name`); only `enforce-background-for-long-running-commands` reads `.tool_input.run_in_background`, and `block-git-worktree` also reads `.tool_name`.
+A `PreToolUse` hook receives the tool call as JSON on stdin. The Bash hooks read `.tool_input.command` and nothing else about the work (for an `EnterWorktree` call, `block-git-worktree` reads `.tool_input.path` and `.tool_input.name`); only `enforce-background-for-long-running-commands` reads `.tool_input.run_in_background`, and `block-git-worktree` also reads `.tool_name`. `block-github-mcp-write-tools`, registered against the `mcp__github__.*` matcher rather than `Bash`, reads only `.tool_name` — MCP tool calls have no command string to parse.
 
 The hook sees only the command string the agent typed. It does not see what a script or program does when it runs. `reject-obfuscated-commands` states this as an accepted gap: writing a script file and running it under an allowlisted name cannot be closed by a command-string filter. In practice:
 
@@ -68,6 +68,10 @@ It blocks `git worktree add` and, through a second `EnterWorktree` matcher, the 
 ### block-dotnet-tool-install
 
 It blocks `dotnet tool install` and `dotnet new tool-manifest` (also behind a wrapper name), because .NET tools are pinned in the image. `claude-settings.json` denies the same two patterns as well.
+
+### block-github-mcp-write-tools
+
+Registered against the `mcp__github__.*` matcher, not the `Bash` chain above. It blocks the five GitHub MCP tools that write through the API directly (`create_or_update_file`, `delete_file`, `push_files`, `merge_pull_request`, `update_pull_request_branch`), bypassing local git hooks, and fails closed on a missing/empty `tool_name`. Other `mcp__github__*` tools (read-only ones) pass.
 
 ### enforce-ssh-host-and-key
 
