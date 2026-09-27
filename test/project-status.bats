@@ -12,6 +12,7 @@ setup() {
     setup_isolated_env
     # shellcheck source=../lib/core disable=SC1091
     source "${REPO_ROOT}/lib/core"
+    export PROJECT_STATUS_READBACK_DELAY_SECS=0
     # shellcheck source=../lib/project-status disable=SC1091
     source "${REPO_ROOT}/lib/project-status"
     FIX="${TEST_TMP}/fixtures"
@@ -37,7 +38,7 @@ setup() {
         'case "${op}" in' \
         '    project) cat "${FIX}/project.json" ;;' \
         '    update-field) cat "${FIX}/update-field.json" ;;' \
-        '    items) n=$(( $(cat "${FIX}/items.count" 2>/dev/null || printf 0) + 1 )); printf "%s" "${n}" > "${FIX}/items.count"; cat "${FIX}/items-${n}.json" ;;' \
+        '    items) n=$(( $(cat "${FIX}/items.count" 2>/dev/null || printf 0) + 1 )); printf "%s" "${n}" > "${FIX}/items.count"; f="${FIX}/items-${n}.json"; [ -f "${f}" ] || f=$(ls "${FIX}"/items-*.json | sort -V | tail -1); cat "${f}" ;;' \
         '    set-item) printf "{\"data\":{\"updateProjectV2ItemFieldValue\":{\"projectV2Item\":{\"id\":\"x\"}}}}" ;;' \
         '    delete-field) printf "{\"data\":{\"deleteProjectV2Field\":{\"projectV2Field\":{\"id\":\"x\"}}}}" ;;' \
         '    delete-workflow) printf "{\"data\":{\"deleteProjectV2Workflow\":{\"deletedWorkflowId\":\"x\"}}}" ;;' \
@@ -163,6 +164,39 @@ PR_LINKED='[{"id":"W_ADD","name":"Item added to project","enabled":true},{"id":"
     [ "${status}" -eq 1 ]
     [ "$(grep -c 'deleteProjectV2Field' "${FIX}/gh.log")" -eq 0 ]
     [[ "${stderr}" == *"checking the copied values"* ]]
+}
+
+@test "project_status_convert reads the copied values back again when GitHub still shows the old ones, then deletes the old field (#1519)" {
+    # Seen on the credfeto/scratch canary: a read straight after the copy still returned the values
+    # from before it, because GitHub's reads lag its writes.
+    write_project "$(all_states_json)" "${LEGACY_FIELD}" '[]'
+    write_items 1 '[["I1","Approved","Not Started"]]'
+    write_items 2 '[["I1","Approved","Not Started"]]'
+    write_items 3 '[["I1","Approved","Approved"]]'
+    run --separate-stderr project_status_convert "P1"
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c 'items(first:100' "${FIX}/gh.log")" -eq 3 ]
+    grep -q '"f":"F_LEGACY"' "${FIX}/gh.log"
+    # Each wait says what it is waiting for, so a pause in the log is explained.
+    [[ "${stderr}" == *"for GitHub to show the copied values (read 1 of 5 still differs)"* ]]
+}
+
+@test "the read-back waits 15 seconds between reads by default (#1519)" {
+    run bash -c 'unset PROJECT_STATUS_READBACK_DELAY_SECS; source "$1"; source "$2"; printf "%s" "${PROJECT_STATUS_READBACK_DELAY_SECS}"' _ "${REPO_ROOT}/lib/core" "${REPO_ROOT}/lib/project-status"
+    [ "${output}" = "15" ]
+}
+
+@test "project_status_convert gives up after PROJECT_STATUS_READBACK_ATTEMPTS reads that still differ (#1519)" {
+    # shellcheck disable=SC2034  # read by lib/project-status
+    PROJECT_STATUS_READBACK_ATTEMPTS=3
+    write_project "$(all_states_json)" "${LEGACY_FIELD}" '[]'
+    write_items 1 '[["I1","Approved","Not Started"]]'
+    run --separate-stderr project_status_convert "P1"
+    [ "${status}" -eq 1 ]
+    # One read before copying, then three read-backs.
+    [ "$(grep -c 'items(first:100' "${FIX}/gh.log")" -eq 4 ]
+    [[ "${stderr}" == *"after 3 read(s)"* ]]
+    [ "$(grep -c 'deleteProjectV2Field' "${FIX}/gh.log")" -eq 0 ]
 }
 
 @test "project_status_convert keeps the Workflow Status field when an item's value is not a workflow state (#1519)" {
