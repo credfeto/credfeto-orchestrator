@@ -187,6 +187,15 @@ teardown() {
     [[ "${output}" == '$HOME/.claude/hooks/block-git-worktree' ]]
 }
 
+@test "generated settings.json registers block-github-mcp-write-tools against the mcp__github__.* matcher" {
+    main
+
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "mcp__github__.*") | .hooks[] | .command' "${HOME}/.claude/settings.json"
+    [ "${status}" -eq 0 ]
+    # shellcheck disable=SC2016  # literal $HOME - asserting the unexpanded token shipped in settings.json, not a shell variable
+    [[ "${output}" == '$HOME/.claude/hooks/block-github-mcp-write-tools' ]]
+}
+
 @test "a pre-existing settings.json is preserved as settings.json.bak" {
     mkdir -p "${HOME}/.claude"
     printf '{"marker": "pre-existing"}' > "${HOME}/.claude/settings.json"
