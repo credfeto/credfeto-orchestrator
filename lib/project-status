@@ -50,8 +50,8 @@ PROJECT_STATUS_FIELD=""
 # How often, and how far apart, the copied values are read back before a difference is a mismatch
 # (see _ps_copy_values). Overridable from the environment; tests set the delay to 0. An invalid
 # value falls back to the default.
-PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-5}"
-[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=5
+PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-20}"
+[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=20
 PROJECT_STATUS_READBACK_DELAY_SECS="${PROJECT_STATUS_READBACK_DELAY_SECS:-15}"
 [[ "${PROJECT_STATUS_READBACK_DELAY_SECS}" =~ ^[0-9]+$ ]] || PROJECT_STATUS_READBACK_DELAY_SECS=15
 
