@@ -23,44 +23,22 @@ run_hook() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "$payload" "$HOOK"
 }
 
-@test "mcp__github__create_or_update_file is blocked" {
-    run_hook "mcp__github__create_or_update_file"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'bypassing local git hooks'* ]]
-}
-
-@test "mcp__github__delete_file is blocked" {
-    run_hook "mcp__github__delete_file"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'bypassing local git hooks'* ]]
-}
-
-@test "mcp__github__push_files is blocked" {
-    run_hook "mcp__github__push_files"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'bypassing local git hooks'* ]]
-}
-
-@test "mcp__github__merge_pull_request is blocked" {
-    run_hook "mcp__github__merge_pull_request"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'bypassing local git hooks'* ]]
-}
-
-@test "mcp__github__update_pull_request_branch is blocked" {
-    run_hook "mcp__github__update_pull_request_branch"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'bypassing local git hooks'* ]]
+@test "each write-capable mcp__github__ tool is blocked, naming the command and stating it never ran (#1281)" {
+    local tool
+    for tool in mcp__github__create_or_update_file mcp__github__delete_file mcp__github__push_files mcp__github__merge_pull_request mcp__github__update_pull_request_branch; do
+        run_hook "${tool}"
+        [ "${status}" -eq 2 ] || { echo "did not block ${tool}: ${output}" >&2; return 1; }
+        [[ "${output}" == *'bypassing local git hooks'* ]] || { echo "missing bypass message for ${tool}: ${output}" >&2; return 1; }
+        [[ "${output}" == *'command did not run'* ]] || { echo "missing 'command did not run' for ${tool}: ${output}" >&2; return 1; }
+    done
 }
 
 @test "a read-only mcp__github__ tool is allowed" {
-    run_hook "mcp__github__get_pull_request"
-    [ "${status}" -eq 0 ]
-}
-
-@test "mcp__github__search_code is allowed" {
-    run_hook "mcp__github__search_code"
-    [ "${status}" -eq 0 ]
+    local tool
+    for tool in mcp__github__get_pull_request mcp__github__search_code; do
+        run_hook "${tool}"
+        [ "${status}" -eq 0 ] || { echo "did not allow ${tool}: ${output}" >&2; return 1; }
+    done
 }
 
 @test "a non-mcp tool_name is allowed" {
@@ -76,12 +54,6 @@ run_hook() {
 @test "a payload with no tool_name field is blocked (fail closed)" {
     run bash -c 'printf "%s" "{}" | "$1"' _ "$HOOK"
     [ "${status}" -eq 2 ]
-}
-
-@test "the denial message states the command never ran (#1281)" {
-    run_hook "mcp__github__delete_file"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'command did not run'* ]]
 }
 
 @test "a payload that does not parse as JSON is blocked (fail closed)" {
