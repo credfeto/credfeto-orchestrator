@@ -378,7 +378,10 @@ gh_line_of() {
     done < <(workflow_states)
 }
 
-@test "--set prefers the built-in Status when both fields have the state (#1519)" {
+@test "--set writes the Workflow Status field while the board still has it, even when Status already has the state (#1519)" {
+    # A board whose conversion stopped after renaming Status but before deleting Workflow Status:
+    # --check reads Workflow Status and the next conversion copies it onto Status, so a write to
+    # Status alone would be invisible and then overwritten.
     write_legacy_field_list
     jq --slurpfile st "${GH_FIXTURES}/wf-options.json" \
         '.fields |= map(if .name == "Status" then .options = ($st[0] | map(.id |= sub("^wf_"; "st_"))) else . end)' \
@@ -386,8 +389,19 @@ gh_line_of() {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 0 ]
-    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_3" "${GH_LOG}"
+    grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id wf_3" "${GH_LOG}"
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
+}
+
+@test "--set fails, writing nothing, when the board's Workflow Status field lacks the state (#1519)" {
+    jq -n '{fields: [
+        {id: "PVTSSF_status", name: "Status", options: [{id: "st_3", name: "Approved"}], type: "ProjectV2SingleSelectField"},
+        {id: "PVTSSF_wf", name: "Workflow Status", options: [{id: "wf_2", name: "Planning"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
+    set_args
+    run "${SCRIPT}" "${SET_ARGS[@]}"
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"has no 'Approved' option on its Workflow Status field"* ]]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
 @test "--set says which field it could not write when the write fails (#1519)" {
@@ -478,7 +492,7 @@ gh_line_of() {
     set_args
     run "${SCRIPT}" "${SET_ARGS[@]}"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"has no 'Approved' option on its Status field (or on a Workflow Status field)"* ]]
+    [[ "${output}" == *"has no 'Approved' option on its Status field"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 

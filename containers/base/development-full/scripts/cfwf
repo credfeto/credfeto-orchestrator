@@ -316,9 +316,9 @@ canonical_workflow_state() {
 
 # Finds the field that carries the workflow on this project and the option named STATUS, setting
 # FIELD_ID, FIELD_NAME and OPTION_ID and rewriting STATUS to its canonical spelling. STATUS must be
-# one of WORKFLOW_STATES. The built-in "Status" field is used when it has that option, which it does
-# once the board is converted (#1519); otherwise the old "Workflow Status" field is used, so a board
-# that has not been converted yet still works.
+# one of WORKFLOW_STATES. The built-in "Status" field is used once the board is converted (#1519);
+# while the board still has the old "Workflow Status" field, that field is used, so --set, --check
+# and the conversion always agree on which value is the real one.
 resolve_status() {
     local rows kind field option name canonical
     local -A options=()
@@ -336,20 +336,23 @@ resolve_status() {
         --jq ".fields[] | select(.name==\"Status\" or .name==\"${LEGACY_FIELD}\")"' | .name as $kind | .id as $field | .options[]? | [$kind, $field, .id, .name] | @tsv') \
         || die "could not read the fields of project ${PROJECT_NUMBER}"
 
+    local legacy_present=0
     while IFS=$'\t' read -r kind field option name; do
         [ -n "${kind}" ] || continue
+        [ "${kind}" != "${LEGACY_FIELD}" ] || legacy_present=1
         [ "${name,,}" = "${STATUS,,}" ] || continue
         options["${kind}"]="${field}|${option}"
     done <<< "${rows}"
 
-    for kind in Status "${LEGACY_FIELD}"; do
-        [ -n "${options[${kind}]:-}" ] || continue
-        FIELD_NAME="${kind}"
-        FIELD_ID="${options[${kind}]%%|*}"
-        OPTION_ID="${options[${kind}]#*|}"
-        return 0
-    done
-    die "project ${PROJECT_NUMBER} has no '${STATUS}' option on its Status field (or on a ${LEGACY_FIELD} field)"
+    # While the board still has the old field it is the one used, whatever Status holds: --check
+    # reads it first, and a conversion copies it onto Status, so a write to Status alone on a board
+    # whose conversion stopped part way would be invisible and then overwritten.
+    kind=Status
+    [ "${legacy_present}" -eq 0 ] || kind="${LEGACY_FIELD}"
+    [ -n "${options[${kind}]:-}" ] || die "project ${PROJECT_NUMBER} has no '${STATUS}' option on its ${kind} field"
+    FIELD_NAME="${kind}"
+    FIELD_ID="${options[${kind}]%%|*}"
+    OPTION_ID="${options[${kind}]#*|}"
 }
 
 # The board read below uses read-only GraphQL: gh project has no command that reads one
