@@ -13933,6 +13933,24 @@ stub_discovery() {
     [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_a1" ]
 }
 
+@test "discover_or_create_workflow_project clears a leftover failure flag on the fast path for the repository it last discovered (#1519)" {
+    stub_discovery "$(converted_board_nodes PVT_repo_a PVTSSF_a1)" 0
+    discover_or_create_workflow_project
+    _WF_CONVERSION_FAILED="1"
+    : > "${TEST_TMP}/gh_calls"
+    discover_or_create_workflow_project
+    [ -z "${_WF_CONVERSION_FAILED}" ]
+    [ ! -s "${TEST_TMP}/gh_calls" ]
+}
+
+@test "discover_or_create_workflow_project says nothing about a missing failure marker, the usual case (#1519)" {
+    stub_discovery "$(converted_board_nodes PVT_found PVTSSF_status)"
+    run --separate-stderr discover_or_create_workflow_project
+    [ "${status}" -eq 0 ]
+    [[ "${stderr}" != *"No such file"* ]]
+    [[ "${stderr}" != *"board-conversion-failed"* ]]
+}
+
 @test "discover_or_create_workflow_project converts a project it has just created (#1519)" {
     stub_discovery '[]'
     _wf_create_project() { printf '{"id":"PVT_new","title":"Workflow","fields":{"nodes":[]},"workflows":{"nodes":[]}}\n'; }

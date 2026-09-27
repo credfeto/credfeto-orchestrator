@@ -196,7 +196,9 @@ _wf_record_conversion_failure() {
 _wf_conversion_failed_recently() {
     local failed_at marker
     marker=$(_wf_conversion_failure_file)
-    read -r failed_at < "${marker}" 2>/dev/null || return 1
+    # Grouped so a missing marker, the usual case, says nothing: a plain `< file 2>/dev/null` opens
+    # the file before stderr is redirected, and bash would report the missing file.
+    { read -r failed_at < "${marker}"; } 2>/dev/null || return 1
     [[ "${failed_at}" =~ ^[0-9]+$ ]] || return 1
     (( $(date +%s) - failed_at <= PROJECT_CACHE_TTL ))
 }
