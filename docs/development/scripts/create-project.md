@@ -18,7 +18,7 @@ create-project --repo <owner>/<repo> [--force-bootstrap]
 - `--force-bootstrap` re-runs board seeding on an already-provisioned project. Without it, seeding only happens when this run created the project.
 - Anything else dies with `Unknown argument`; a missing or empty `--repo` value dies with `--repo requires a value`.
 
-Environment variables: the script reads none of its own. The bot login, project title and field name are hard-coded assignments (`BOT_LOGIN`, `PROJECT_TITLE`, `STATUS_FIELD_NAME`) and are not overridable. `gh` itself uses whatever authentication and host settings (for example `GH_HOST`) are in the caller's environment; which token scopes are needed is not checked by the script.
+Environment variables: the script reads none of its own. The bot login and project title are hard-coded assignments (`BOT_LOGIN`, `PROJECT_TITLE`), and the workflow states and field names come from `lib/project-status`; none is overridable. `gh` itself uses whatever authentication and host settings (for example `GH_HOST`) are in the caller's environment; which token scopes are needed is not checked by the script.
 
 Inputs and outputs: it reads and writes only through `gh` (GraphQL, `gh repo view`, `gh repo edit`, `gh issue list`, `gh pr list`); it touches no local files apart from a temporary stderr capture file inside `gh_graphql`. Progress goes to stdout through `info` and `success`, warnings to stderr through `warn`.
 
@@ -26,7 +26,7 @@ Exit codes: 0 on success, including when granting the bot access fails (that onl
 
 ## How it works
 
-The script sources `lib/core` (`die`, `success`, `info`, `warn`) with a `BASH_SOURCE`-based path and a fatal fallback. It then defines its own `check_required_tools`, which replaces the one in `lib/core` and requires only `gh` and `jq`. The main flow is `main` then `provision_project`:
+The script sources `lib/core` (`die`, `success`, `info`, `warn`) and `lib/project-status` (`project_status_convert`), each with a `BASH_SOURCE`-based path and a fatal fallback. It then defines its own `check_required_tools`, which replaces the one in `lib/core` and requires only `gh` and `jq`. The main flow is `main` then `provision_project`:
 
 1. `main` parses arguments, validates `--repo`, calls `check_required_tools`.
 2. `resolve_repo_node_id` looks up the repository's GraphQL node ID.
@@ -44,9 +44,9 @@ External tools: `gh`, `jq`, plus `head`, `tr`, `sed`, `awk`, `wc`, `mktemp`, `rm
 
 `test/create-project.bats` loads `test_helper`, calls `setup_isolated_env` and `source_create_project` in `setup()`, and calls `cleanup_stubs` in `teardown()`. Because the script has a source guard, sourcing it defines the functions without running `main`, and tests call `main`, `provision_project` and the helpers directly.
 
-`gh` is faked by `install_gh_stub`, which uses `make_stub` to write a PATH stub. The stub is one `case` on the joined argument string. It returns an already `--jq`-filtered value, so the jq filters passed to `gh` are not exercised by the suite. It appends each mutation name to `CREATE_PROJECT_GH_LOG` and each `--input` body to `CREATE_PROJECT_GH_INPUT_LOG`, and tests grep those logs. Knobs are `DISCOVERY_RESULT`, `PROJECT_SHORT_DESC`, `PROJECTS_ENABLED`, `BOOT_ISSUE_IDS`, `BOOT_PR_IDS`, `FIELD_CREATE_RESULT` and `FIELD_OPTION_UPDATE_RESULT`. Smaller tests such as "bootstrap_board_items dies when gh issue list fails" define a one-off stub with `make_stub gh`. "check_required_tools dies when gh is missing" overrides the `command` builtin with a shell function.
+`gh` is faked by `install_gh_stub`, which uses `make_stub` to write a PATH stub. The stub is one `case` on the joined argument string. It returns an already `--jq`-filtered value, so the jq filters passed to `gh` are not exercised by the suite. It appends each mutation name to `CREATE_PROJECT_GH_LOG` and each `--input` body to `CREATE_PROJECT_GH_INPUT_LOG`, and tests grep those logs. `install_gh_stub` also replaces `project_status_convert` with a shell function that logs its call and sets `PROJECT_STATUS_FIELD` to `CONVERT_RESULT`, or fails with `PROJECT_STATUS_FAILED_STEP` set to `CONVERT_FAIL_STEP`; the conversion itself is tested against its own `gh` stub in `test/project-status.bats`. Knobs are `DISCOVERY_RESULT`, `PROJECT_SHORT_DESC`, `PROJECTS_ENABLED`, `BOOT_ISSUE_IDS`, `BOOT_PR_IDS`, `CONVERT_RESULT` and `CONVERT_FAIL_STEP`. Smaller tests such as "bootstrap_board_items dies when gh issue list fails" define a one-off stub with `make_stub gh`. "check_required_tools dies when gh is missing" overrides the `command` builtin with a shell function.
 
-Unusual points: the stub's `case` patterns are order-sensitive (for example `*updateProjectV2ItemFieldValue*` must precede `*updateProjectV2*`, and `*createProjectV2Field*` must precede `*createProjectV2*`); the stub answers `*user*` with `U_NODE`, which also serves the bot lookup; `jq` is the real binary.
+Unusual points: the stub's `case` patterns are order-sensitive (for example `*updateProjectV2ItemFieldValue*` must precede `*updateProjectV2*`); the stub answers `*user*` with `U_NODE`, which also serves the bot lookup; `jq` is the real binary.
 
 Run just this file with `bats test/create-project.bats`, or one test with `bats -f "seeds open issues" test/create-project.bats`.
 
