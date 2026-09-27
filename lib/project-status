@@ -63,6 +63,30 @@ project_status_names() {
     done
 }
 
+# The ten state names as a JSON array, built once for the jq programs below. No state name holds a
+# quote or a backslash, so plain quoting makes valid JSON.
+PROJECT_STATUS_NAMES_JSON=""
+for _ps_entry in "${PROJECT_STATUS_OPTIONS[@]}"; do
+    PROJECT_STATUS_NAMES_JSON+="${PROJECT_STATUS_NAMES_JSON:+,}\"${_ps_entry%%|*}\""
+done
+PROJECT_STATUS_NAMES_JSON="[${PROJECT_STATUS_NAMES_JSON}]"
+unset _ps_entry
+
+# jq definition: true when the single-select field it is applied to has an option for every state in
+# $names (PROJECT_STATUS_NAMES_JSON). The one definition of "carries the workflow states".
+_PS_JQ_DEF_HAS_ALL_STATES='def has_all_states($names): ([(.options // [])[].name]) as $have | all($names[]; . as $n | $have | index($n) != null);'
+
+# Prints the shape the conversion reads, {status, legacy, workflows}, from a project node with
+# .fields.nodes and .workflows.nodes on stdin (the node of the conversion's own read, or of the
+# orchestrator's discovery query): status and legacy are the Status and Workflow Status single-select
+# fields, null when absent.
+project_status_board_shape() {
+    jq -c --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" '
+        {status: ([(.fields.nodes // [])[] | select(.name? == "Status")] | first),
+         legacy: ([(.fields.nodes // [])[] | select(.name? == $legacy)] | first),
+         workflows: (.workflows.nodes // [])}'
+}
+
 # Records the failed step and prints why on stderr, then returns 1 so a caller can end with it.
 _ps_fail() {
     PROJECT_STATUS_FAILED_STEP="$1"
@@ -78,7 +102,10 @@ _ps_graphql() {
     err_file=$(mktemp) || return 1
     out=$(gh api graphql --input - 2>"${err_file}") || rc=$?
     if [ "${rc}" -ne 0 ] || printf '%s' "${out}" | jq -e '(.errors // []) | length > 0' > /dev/null 2>&1; then
-        printf '%s\n' "$(head -3 "${err_file}")" "$(printf '%s' "${out}" | jq -r '(.errors // [])[].message' 2>/dev/null)" >&2
+        local message
+        for message in "$(head -3 "${err_file}")" "$(printf '%s' "${out}" | jq -r '(.errors // [])[].message' 2>/dev/null)"; do
+            [ -z "${message}" ] || printf '%s\n' "${message}" >&2
+        done
         rm -f "${err_file}"
         return 1
     fi
@@ -92,22 +119,15 @@ _ps_read_project() {
     local project_id="$1" resp
     resp=$(jq -cn --arg p "${project_id}" '{query: "query($p:ID!){node(id:$p){... on ProjectV2{fields(first:50){nodes{... on ProjectV2SingleSelectField{id name options{id name color description}}}} workflows(first:30){nodes{id name enabled}}}}}", variables: {p: $p}}' \
         | _ps_graphql) || return 1
-    printf '%s' "${resp}" | jq -c --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" '
-        .data.node as $n
-        | {status: ([($n.fields.nodes // [])[] | select(.name? == "Status")] | first),
-           legacy: ([($n.fields.nodes // [])[] | select(.name? == $legacy)] | first),
-           workflows: ($n.workflows.nodes // [])}'
+    printf '%s' "${resp}" | jq -c '.data.node' | project_status_board_shape
 }
 
 # Returns 0 when the project JSON from _ps_read_project (or the same shape) describes a board that
 # is already converted: Status has all ten states, there is no Workflow Status field, and the
 # "Pull request linked to issue" Default Workflow is not enabled.
 project_status_is_converted() {
-    local project_json="$1" names
-    names=$(project_status_names | jq -R . | jq -sc .)
-    printf '%s' "${project_json}" | jq -e --argjson names "${names}" --arg wf "${PROJECT_STATUS_REMOVED_WORKFLOW}" '
-        ([(.status.options // [])[].name]) as $have
-        | (all($names[]; . as $n | $have | index($n) != null))
+    printf '%s' "$1" | jq -e --argjson names "${PROJECT_STATUS_NAMES_JSON}" --arg wf "${PROJECT_STATUS_REMOVED_WORKFLOW}" "${_PS_JQ_DEF_HAS_ALL_STATES}"'
+        (.status // {} | has_all_states($names))
           and (.legacy == null)
           and (([(.workflows // [])[] | select(.name == $wf and .enabled)] | length) == 0)
     ' > /dev/null 2>&1
@@ -143,7 +163,7 @@ _ps_convert_options() {
 
     options=$(_ps_options_input "${status_field}") \
         || { warn "could not build the Status option list"; return 1; }
-    extra=$(printf '%s' "${options}" | jq -r --argjson n "$(project_status_names | jq -R . | jq -sc .)" \
+    extra=$(printf '%s' "${options}" | jq -r --argjson n "${PROJECT_STATUS_NAMES_JSON}" \
         '[.[] | select((.name as $x | $n | index($x)) == null) | .name] | join(", ")')
     [ -z "${extra}" ] || warn "Keeping Status options that are not workflow states: ${extra}"
 
@@ -184,24 +204,29 @@ _PS_JQ_DEF_TARGET='def target: if .closed then "Complete" else .legacy end;'
 # one of the ten states is a mismatch, so the old field is never deleted with a value that could not
 # be carried across.
 _ps_copy_values() {
-    local project_id="$1" status_field="$2" field_id items item item_id name option_id copied=0
+    local project_id="$1" status_field="$2" field_id items item_id name option_id copied=0
     field_id=$(printf '%s' "${status_field}" | jq -r '.id')
     items=$(_ps_read_items "${project_id}") || { _ps_fail "reading the board's items" "the items could not be listed"; return 1; }
 
-    while IFS= read -r item; do
-        [ -n "${item}" ] || continue
-        name=$(printf '%s' "${item}" | jq -r "${_PS_JQ_DEF_TARGET}"' target // empty')
-        [ -n "${name}" ] || continue
-        [ "$(printf '%s' "${item}" | jq -r '.status // empty')" != "${name}" ] || continue
-        item_id=$(printf '%s' "${item}" | jq -r '.id')
-        option_id=$(printf '%s' "${status_field}" | jq -r --arg n "${name}" '[(.options // [])[] | select(.name == $n) | .id] | first // empty')
+    # One jq pass lists every item whose Status is not yet its target, with the target's option id
+    # (empty when the target is not a Status option), so no item costs a jq process of its own. The
+    # fields are joined by the ASCII unit separator, not a tab: read collapses adjacent whitespace
+    # separators, which would shift the target name into an empty option id.
+    local writes
+    writes=$(printf '%s\n' "${items}" | jq -rs --argjson opts "$(printf '%s' "${status_field}" | jq -c '.options // []')" "${_PS_JQ_DEF_TARGET}"'
+        .[] | select(target != null and target != .status)
+        | target as $t | [.id, ([$opts[] | select(.name == $t) | .id] | first // ""), $t] | join("\u001f")') \
+        || { _ps_fail "reading the board's items" "the items could not be parsed"; return 1; }
+
+    while IFS=$'\x1f' read -r item_id option_id name; do
+        [ -n "${item_id}" ] || continue
         [ -n "${option_id}" ] || { _ps_fail "copying Workflow Status values" "item ${item_id} has \"${name}\", which is not a Status option"; return 1; }
         jq -cn --arg p "${project_id}" --arg i "${item_id}" --arg f "${field_id}" --arg o "${option_id}" \
             '{query: "mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){projectV2Item{id}}}", variables: {p: $p, i: $i, f: $f, o: $o}}' \
             | _ps_graphql > /dev/null \
             || { _ps_fail "copying Workflow Status values" "item ${item_id} could not be set to \"${name}\""; return 1; }
         copied=$((copied + 1))
-    done <<< "${items}"
+    done <<< "${writes}"
     [ "${copied}" -eq 0 ] || info "Set ${copied} item(s) on Status: closed ones to Complete, open ones to their Workflow Status" >&2
 
     # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
@@ -251,7 +276,8 @@ _ps_delete_workflow() {
 # sets PROJECT_STATUS_FIELD to the resulting Status field JSON ({id, name, options}). It sets
 # globals rather than printing so it is called directly, never in $(...): a subshell would lose
 # PROJECT_STATUS_FAILED_STEP. Safe to re-run: each step is skipped when already done, so a
-# converted board costs one read.
+# converted board costs one read, and none when the caller passes the board it has just read
+# (project_status_board_shape) as the optional second argument.
 #   1. rename Todo, In Progress and Done to Not Started, Development and Complete (keeping their
 #      option ids) and add the other seven states;
 #   2. when a Workflow Status field exists, copy every item's value onto Status, read every item
@@ -260,10 +286,14 @@ _ps_delete_workflow() {
 # Returns 1 at the first step that fails, with PROJECT_STATUS_FAILED_STEP set; the Workflow
 # Status field is then left in place, so no value is lost.
 project_status_convert() {
-    local project_id="$1" project status legacy workflow_id
+    local project_id="$1" project="${2:-}" status legacy workflow_id
     PROJECT_STATUS_FAILED_STEP=""
     PROJECT_STATUS_FIELD=""
-    project=$(_ps_read_project "${project_id}") || { _ps_fail "reading the project" "its fields and workflows could not be read"; return 1; }
+    # A caller that has just read the project (the orchestrator's discovery) passes the shape in, so
+    # the project is not read a second time.
+    if [ -z "${project}" ]; then
+        project=$(_ps_read_project "${project_id}") || { _ps_fail "reading the project" "its fields and workflows could not be read"; return 1; }
+    fi
     status=$(printf '%s' "${project}" | jq -c '.status // empty')
     [ -n "${status}" ] || { _ps_fail "reading the Status field" "the project has no built-in Status field"; return 1; }
 
@@ -272,8 +302,7 @@ project_status_convert() {
         return 0
     fi
 
-    if ! printf '%s' "${project}" | jq -e --argjson n "$(project_status_names | jq -R . | jq -sc .)" \
-        '([(.status.options // [])[].name]) as $have | all($n[]; . as $x | $have | index($x) != null)' > /dev/null 2>&1; then
+    if ! printf '%s' "${status}" | jq -e --argjson names "${PROJECT_STATUS_NAMES_JSON}" "${_PS_JQ_DEF_HAS_ALL_STATES}"' has_all_states($names)' > /dev/null 2>&1; then
         info "Converting the built-in Status field to the workflow states..." >&2
         # _ps_convert_options runs in a subshell, so the step is recorded here, where it survives.
         status=$(_ps_convert_options "${status}") \

@@ -194,9 +194,9 @@ _wf_record_conversion_failure() {
 # Returns 0 when converting this repository's board failed within the last PROJECT_CACHE_TTL
 # seconds, so it is not retried until then.
 _wf_conversion_failed_recently() {
-    local failed_at
-    [ -f "$(_wf_conversion_failure_file)" ] || return 1
-    read -r failed_at < "$(_wf_conversion_failure_file)" 2>/dev/null || return 1
+    local failed_at marker
+    marker=$(_wf_conversion_failure_file)
+    read -r failed_at < "${marker}" 2>/dev/null || return 1
     [[ "${failed_at}" =~ ^[0-9]+$ ]] || return 1
     (( $(date +%s) - failed_at <= PROJECT_CACHE_TTL ))
 }
@@ -324,17 +324,17 @@ discover_or_create_workflow_project() {
 
     # The shape project_status_is_converted reads. A project just created by _wf_create_project
     # carries no fields here, so it is never taken for converted and goes through the conversion.
-    local board status_field_node
-    board=$(printf '%s' "${project_json}" | jq -c --arg legacy "${PROJECT_STATUS_LEGACY_FIELD}" '
-        {status: ([(.fields.nodes // [])[] | select(.name? == "Status")] | first),
-         legacy: ([(.fields.nodes // [])[] | select(.name? == $legacy)] | first),
-         workflows: (.workflows.nodes // [])}' 2>/dev/null)
+    local board status_field_node known_board=""
+    board=$(printf '%s' "${project_json}" | project_status_board_shape 2>/dev/null)
     if project_status_is_converted "${board}"; then
         status_field_node=$(printf '%s' "${board}" | jq -c '.status')
     else
         info "Workflow project: converting the Status field of ${REPO_FULL} to the workflow states"
+        # A discovered board is handed over so the conversion does not read it again; a project just
+        # created here has no fields in this JSON, so the conversion reads it itself.
+        [ "$(printf '%s' "${board}" | jq -r '.status // empty | .id // empty' 2>/dev/null)" = "" ] || known_board="${board}"
         # Called directly, never in $(...), so PROJECT_STATUS_FAILED_STEP survives for the alert.
-        if ! project_status_convert "${_WF_PROJECT_ID}"; then
+        if ! project_status_convert "${_WF_PROJECT_ID}" "${known_board}"; then
             warn "Workflow project: converting ${REPO_FULL} failed at ${PROJECT_STATUS_FAILED_STEP:-an unknown step} — skipping the repository"
             notify_discord_board_conversion_failed "${REPO_FULL}" "${PROJECT_STATUS_FAILED_STEP:-an unknown step}"
             _wf_record_conversion_failure
