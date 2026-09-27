@@ -108,7 +108,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # (lib/workflow-board).
 
 # project_cache_file_path, load_project_cache, save_project_cache, invalidate_project_cache,
-# _wf_ensure_status_field_option, discover_or_create_workflow_project,
+# discover_or_create_workflow_project,
 # report_missing_workflow_project, _wf_invite_trusted_collaborators, _wf_create_project,
 # update_workflow_status, fetch_board_approved_items, fetch_board_item_statuses,
 # workflow_status_name_for_option_id, board_substatus_for_item,
