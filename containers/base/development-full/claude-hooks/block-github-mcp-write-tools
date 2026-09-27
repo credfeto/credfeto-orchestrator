@@ -33,8 +33,7 @@ block() {
 
 command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
 
-input=$(cat)
-tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
+tool_name=$(jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
 
 [ -z "$tool_name" ] && block 'tool payload has no tool_name - failing closed'
 
