@@ -13,6 +13,13 @@ readonly BODY_LIMIT=65536
 readonly PRIORITIES=(Security Urgent High Medium Low)
 readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
 readonly NEW_ISSUE_STATUS="Not Started"
+# The ten workflow states, in board order, which the project's built-in "Status" field carries
+# (#1519). cfwf is installed alone and cannot source lib/project-status, which holds the same list;
+# test/status-mapping-parity.bats fails when the two differ.
+readonly WORKFLOW_STATES=("Not Started" Planning Approved Development "AI Simplify" "AI Review" "AI Security Review" "AI Coverage" "Human Review" Complete)
+# The custom field every board used before #1519. While boards are being converted one at a time,
+# a board that still has it is read and written through it; a converted board has only Status.
+readonly LEGACY_FIELD="Workflow Status"
 
 # The labels the repositories share, copied from .github/labels.yml as name|colour|description
 # (cfwf is installed alone and cannot read that file; test/standard-labels-parity.bats fails
@@ -70,10 +77,8 @@ OWNER=""
 PROJECT_ID=""
 PROJECT_NUMBER=""
 FIELD_ID=""
+FIELD_NAME=""
 OPTION_ID=""
-BUILTIN_FIELD_ID=""
-BUILTIN_OPTION_ID=""
-BUILTIN_STATUS=""
 ITEM_STATUS=""
 GRAPHQL_ERR_FILE=""
 GRAPHQL_OUTPUT=""
@@ -106,7 +111,7 @@ Usage: cfwf <command> [options]
 
 Commands:
   workflow-status --set    Move an issue or PR to a Workflow board status
-  workflow-status --check  Print the current Workflow Status of an issue or PR
+  workflow-status --check  Print the current Workflow board status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   issue create             Create an issue and put it on the Workflow board as Not Started
   help [command]           Show this help, or the help for one command
@@ -122,22 +127,22 @@ Usage:
   cfwf workflow-status --check --repo <owner/repo> (--pr <n> | --issue <n>)
 
 Both name the item the same way: --repo plus --pr or --issue. The board is looked up from
-the repository: the project titled "Workflow" linked to it, and that project's
-"Workflow Status" field. No ids are needed.
+the repository: the project titled "Workflow" linked to it, and that project's built-in
+"Status" field, which carries the workflow states. A board that still has the old
+"Workflow Status" field (boards are converted one repository at a time) is read and written
+through that field instead. No ids are needed.
 
---set adds the item to the board if it is not already there (idempotent) and sets the
-Workflow Status to --status (the option's display name, for example Approved or
-"AI Review", matched without regard to case). It also sets the project's built-in Status to
-match: Todo for Not Started and Planning, In Progress for Approved through Human Review,
-Done for Complete. If the project has no such built-in option it warns and leaves the
-built-in Status alone. It exits 0 when gh reports the writes succeeded, and that is all: it
-does not read the values back. A write whose call succeeded is done, and GitHub can lag behind
-a write by seconds, so a read straight afterwards that disagrees is lag, not a failed write.
+--status is one of Not Started, Planning, Approved, Development, AI Simplify, AI Review,
+AI Security Review, AI Coverage, Human Review or Complete, matched without regard to case.
+
+--set adds the item to the board if it is not already there (idempotent) and sets its status
+to --status. It exits 0 when gh reports the write succeeded, and that is all: it does not
+read the value back. A write whose call succeeded is done, and GitHub can lag behind a write
+by seconds, so a read straight afterwards that disagrees is lag, not a failed write.
 Do not poll or repeat the write; if a later step reads the value, check again at that step.
 
---check prints the item's current Workflow Status and built-in Status on one line, for
-example "Development (In Progress)", with (unset) or unset for a value it does not have.
-It exits non-zero when the item is not on the board.
+--check prints the item's current status on one line, for example "Development", or (unset)
+when it has none. It exits non-zero when the item is not on the board.
 
 --check reads the board with a read-only GraphQL query for the single item (gh api graphql),
 because gh project has no command that reads one item and listing the whole board is capped
@@ -297,60 +302,54 @@ resolve_project() {
     OWNER="${BASH_REMATCH[2]}"
 }
 
-# The built-in Status value that goes with a Workflow Status, printed as the option's display
-# name, or nothing for a status it does not know. It mirrors coarse_status_for_substatus in
-# lib/workflow-board (cfwf is copied alone into a container image and cannot source lib/, so
-# test/status-mapping-parity.bats keeps the two in step): Not Started and Planning are Todo,
-# Approved through Human Review are In Progress, Complete is Done.
-builtin_status_for() {
-    case "$1" in
-        "Not Started" | Planning) printf 'Todo' ;;
-        Approved | Development | "AI Simplify" | "AI Review" | "AI Security Review" | "AI Coverage" | "Human Review") printf 'In Progress' ;;
-        Complete) printf 'Done' ;;
-    esac
+# Prints the workflow state named $1 (matched without regard to case) in its canonical spelling,
+# or nothing when it is not one of WORKFLOW_STATES.
+canonical_workflow_state() {
+    local state
+    for state in "${WORKFLOW_STATES[@]}"; do
+        if [ "${state,,}" = "${1,,}" ]; then
+            printf '%s' "${state}"
+            return 0
+        fi
+    done
 }
 
-# Finds the project's "Workflow Status" field and the option named STATUS, setting FIELD_ID and
-# OPTION_ID and rewriting STATUS to the option's canonical display name; STATUS is only ever
-# matched against the Workflow Status options, never the built-in Status ones. Also finds the
-# built-in "Status" field and the option that goes with STATUS (see builtin_status_for), setting
-# BUILTIN_FIELD_ID, BUILTIN_OPTION_ID and BUILTIN_STATUS; when the project has no such option
-# (an admin renamed or removed it) it warns and leaves BUILTIN_OPTION_ID empty so --set skips
-# that write.
+# Finds the field that carries the workflow on this project and the option named STATUS, setting
+# FIELD_ID, FIELD_NAME and OPTION_ID and rewriting STATUS to its canonical spelling. STATUS must be
+# one of WORKFLOW_STATES. The built-in "Status" field is used when it has that option, which it does
+# once the board is converted (#1519); otherwise the old "Workflow Status" field is used, so a board
+# that has not been converted yet still works.
 resolve_status() {
-    local rows kind field option name valid=""
-    local -A builtin_options=()
+    local rows kind field option name canonical
+    local -A options=()
+    canonical=$(canonical_workflow_state "${STATUS}")
+    if [ -z "${canonical}" ]; then
+        local valid
+        valid=$(printf '%s, ' "${WORKFLOW_STATES[@]}")
+        die "unknown status '${STATUS}' (valid: ${valid%, })"
+    fi
+    STATUS="${canonical}"
+
     # $kind and $field below are jq variables, not shell ones.
     # shellcheck disable=SC2016
     rows=$(gh project field-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${FIELD_LIMIT}" \
-        --jq '.fields[] | select(.name=="Workflow Status" or .name=="Status") | .name as $kind | .id as $field | .options[]? | [$kind, $field, .id, .name] | @tsv') \
+        --jq ".fields[] | select(.name==\"Status\" or .name==\"${LEGACY_FIELD}\")"' | .name as $kind | .id as $field | .options[]? | [$kind, $field, .id, .name] | @tsv') \
         || die "could not read the fields of project ${PROJECT_NUMBER}"
 
     while IFS=$'\t' read -r kind field option name; do
         [ -n "${kind}" ] || continue
-        if [ "${kind}" = "Status" ]; then
-            BUILTIN_FIELD_ID="${field}"
-            builtin_options["${name,,}"]="${option}"
-            continue
-        fi
-        FIELD_ID="${field}"
-        valid+="${valid:+, }${name}"
-        if [ -z "${OPTION_ID}" ] && [ "${name,,}" = "${STATUS,,}" ]; then
-            OPTION_ID="${option}"
-            STATUS="${name}"
-        fi
+        [ "${name,,}" = "${STATUS,,}" ] || continue
+        options["${kind}"]="${field}|${option}"
     done <<< "${rows}"
-    [ -n "${FIELD_ID}" ] || die "project ${PROJECT_NUMBER} has no Workflow Status field"
-    [ -n "${OPTION_ID}" ] || die "unknown status '${STATUS}' (valid: ${valid})"
 
-    BUILTIN_STATUS=$(builtin_status_for "${STATUS}")
-    if [ -n "${BUILTIN_STATUS}" ]; then
-        BUILTIN_OPTION_ID="${builtin_options["${BUILTIN_STATUS,,}"]:-}"
-    fi
-    if [ -z "${BUILTIN_OPTION_ID}" ]; then
-        printf 'cfwf: warning: project %s has no built-in Status option for %s, so its built-in Status is left unchanged\n' \
-            "${PROJECT_NUMBER}" "'${STATUS}'" >&2
-    fi
+    for kind in Status "${LEGACY_FIELD}"; do
+        [ -n "${options[${kind}]:-}" ] || continue
+        FIELD_NAME="${kind}"
+        FIELD_ID="${options[${kind}]%%|*}"
+        OPTION_ID="${options[${kind}]#*|}"
+        return 0
+    done
+    die "project ${PROJECT_NUMBER} has no '${STATUS}' option on its Status field (or on a ${LEGACY_FIELD} field)"
 }
 
 # The board read below uses read-only GraphQL: gh project has no command that reads one
@@ -390,22 +389,29 @@ fall_back_to_listing() {
     ITEM_STATUS=$(gh project item-list "${PROJECT_NUMBER}" --owner "${OWNER}" --format json -L "${ITEM_LIMIT}" --jq "$2")
 }
 
-# Sets ITEM_STATUS to the target's status on the Workflow project, written as
-# "<Workflow Status> (<built-in Status>)" with "(unset)" for a Workflow Status it does not have and
-# "unset" in the brackets for a built-in Status it does not have, or "" when it is not on that
-# project. issue(number:) resolves only an issue and pullRequest(number:) only a pull request
+# Sets ITEM_STATUS to the target's workflow state on the Workflow project, "(unset)" when it has
+# none, or "" when it is not on that project. The state is the built-in "Status" value; while a
+# board still has the old "Workflow Status" field (it is converted one repository at a time,
+# #1519) that field's value is used instead, and a built-in Todo, In Progress or Done, which is not
+# a workflow state, reads as "(unset)". issue(number:) resolves only an issue and pullRequest(number:) only a pull request
 # (chosen by --issue or --pr), so a number of the other type comes back as not found. GitHub's
 # "no such issue/pull request with that number" answer means "not found", not a failure (any
 # other error, such as an unreadable repository, still falls back). Returns non-zero only when
 # both the direct read and the board listing fail.
 read_target_status() {
-    local accessor="issue"
+    local accessor="issue" states="" state
     [ "${TARGET_TYPE}" = "PullRequest" ] && accessor="pullRequest"
     ITEM_STATUS=""
+    # The ten states as a jq array literal (gh --jq takes no --arg); no state contains a quote.
+    for state in "${WORKFLOW_STATES[@]}"; do
+        states+="${states:+,}\"${state}\""
+    done
+    # $legacy / $status: the two field values; the old field wins while the board still has it.
+    local pick="(if \$legacy != null then \$legacy elif (\$status != null and ([${states}] | index(\$status)) != null) then \$status else \"(unset)\" end)"
     if graphql_query \
-        -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:100){nodes{project{id} fieldValueByName(name:\"Workflow Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}} builtin:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
+        -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:100){nodes{project{id} legacy:fieldValueByName(name:\"${LEGACY_FIELD}\"){... on ProjectV2ItemFieldSingleSelectValue{name}} status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
         -f o="${REPO%%/*}" -f r="${REPO#*/}" -F n="${TARGET_NUMBER}" \
-        --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | ((.fieldValueByName.name // \"(unset)\") + \" (\" + (.builtin.name // \"unset\") + \")\")"; then
+        --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | (.legacy.name // null) as \$legacy | (.status.name // null) as \$status | ${pick}"; then
         ITEM_STATUS="${GRAPHQL_OUTPUT}"
         return 0
     fi
@@ -413,11 +419,12 @@ read_target_status() {
         *"Could not resolve to an Issue with the number"* | *"Could not resolve to a PullRequest with the number"*) return 0 ;;
     esac
 
-    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | ((.[\"workflow Status\"] // \"(unset)\") + \" (\" + (.status // \"unset\") + \")\")"
+    # The listing names a field by its lower-cased first word, so Workflow Status is "workflow Status".
+    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // null) as \$legacy | (.status // null) as \$status | ${pick}"
 }
 
-# Adds the item at the given URL to the board (idempotent) and sets its Workflow Status and
-# built-in Status. resolve_project and resolve_status must already have run. Never reads the
+# Adds the item at the given URL to the board (idempotent) and sets its status on the field
+# resolve_status chose. resolve_project and resolve_status must already have run. Never reads the
 # values back.
 put_item_on_board() {
     local item_url="$1"
@@ -429,13 +436,7 @@ put_item_on_board() {
 
     gh project item-edit --project-id "${PROJECT_ID}" --id "${item_id}" \
         --field-id "${FIELD_ID}" --single-select-option-id "${OPTION_ID}" > /dev/null \
-        || die "could not set the Workflow Status of ${item_url}"
-
-    if [ -n "${BUILTIN_OPTION_ID}" ]; then
-        gh project item-edit --project-id "${PROJECT_ID}" --id "${item_id}" \
-            --field-id "${BUILTIN_FIELD_ID}" --single-select-option-id "${BUILTIN_OPTION_ID}" > /dev/null \
-            || die "set the Workflow Status of ${item_url} but could not set its built-in Status to ${BUILTIN_STATUS}"
-    fi
+        || die "could not set the ${FIELD_NAME} of ${item_url}"
 }
 
 workflow_status_set() {
@@ -461,7 +462,7 @@ workflow_status_check() {
 
     resolve_project
 
-    read_target_status || die "could not read the Workflow Status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
+    read_target_status || die "could not read the status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
     [ -n "${ITEM_STATUS}" ] || die "${REPO}#${TARGET_NUMBER} is not on project ${PROJECT_NUMBER}"
     printf '%s\n' "${ITEM_STATUS}"
 }
@@ -759,7 +760,7 @@ main() {
     esac
 }
 
-# Sourced by test/status-mapping-parity.bats (builtin_status_for) and test/standard-labels-parity.bats
+# Sourced by test/status-mapping-parity.bats (WORKFLOW_STATES) and test/standard-labels-parity.bats
 # (STANDARD_LABELS, PRIORITIES and standard_label).
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     main "$@"

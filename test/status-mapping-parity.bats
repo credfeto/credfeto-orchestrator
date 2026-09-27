@@ -1,9 +1,10 @@
 #!/usr/bin/env bats
 
-# cfwf is copied alone into a container image and cannot source lib/, so the mapping from a
-# Workflow Status to the built-in Status (Todo / In Progress / Done) exists twice: builtin_status_for
-# in cfwf and builtin_status_for_workflow_status in lib/workflow-board. These tests are the only
-# thing stopping the two drifting apart.
+# The ten workflow states that the Workflow board's built-in Status field carries (#1519) are
+# written in three places: lib/project-status (the one definition the orchestrator and
+# create-project use), _WF_STATUS_ORDER in lib/globals (the ordinal the forward-only PR mirror
+# compares), and WORKFLOW_STATES in cfwf, which is copied alone into a container image and cannot
+# source lib/. These tests are the only thing stopping the three drifting apart.
 
 bats_require_minimum_version 1.5.0
 
@@ -20,32 +21,24 @@ teardown() {
     cleanup_stubs
 }
 
-# cfwf's mapping, run in a subshell so sourcing cfwf cannot replace this shell's own functions.
-cfwf_mapping() {
+# cfwf's list, one per line, run in a subshell so sourcing cfwf cannot replace this shell's own
+# functions.
+cfwf_states() {
     (
         # shellcheck source=/dev/null
         source "${CFWF}"
-        builtin_status_for "$1"
+        printf '%s\n' "${WORKFLOW_STATES[@]}"
     )
 }
 
-@test "the parity tests cover all ten Workflow Statuses" {
-    [ "${#_WF_STATUS_ORDER[@]}" -eq 10 ]
+@test "there are ten workflow states" {
+    [ "$(project_status_names | wc -l)" -eq 10 ]
 }
 
-@test "cfwf and the orchestrator choose the same built-in Status for every Workflow Status" {
-    local name from_cfwf from_orchestrator
-    for name in "${_WF_STATUS_ORDER[@]}"; do
-        from_cfwf=$(cfwf_mapping "${name}")
-        from_orchestrator=$(builtin_status_for_workflow_status "${name}")
-        [ -n "${from_cfwf}" ]
-        [ "${from_cfwf}" = "${from_orchestrator}" ]
-    done
+@test "cfwf lists the same workflow states as lib/project-status, in the same order (#1519)" {
+    [ "$(cfwf_states)" = "$(project_status_names)" ]
 }
 
-@test "cfwf and the orchestrator both give nothing for a status they do not know" {
-    [ -z "$(cfwf_mapping "Custom Stage")" ]
-    [ -z "$(builtin_status_for_workflow_status "Custom Stage")" ]
-    [ -z "$(cfwf_mapping "")" ]
-    [ -z "$(builtin_status_for_workflow_status "")" ]
+@test "_WF_STATUS_ORDER lists the same workflow states as lib/project-status, in the same order (#1519)" {
+    [ "$(printf '%s\n' "${_WF_STATUS_ORDER[@]}")" = "$(project_status_names)" ]
 }
