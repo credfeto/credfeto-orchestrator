@@ -13912,6 +13912,27 @@ stub_discovery() {
     [ ! -f "${SESSION_BASE_DIR}/board-conversion-failed" ]
 }
 
+@test "discover_or_create_workflow_project does not carry another repository's remembered failure over to a healthy one (#1519)" {
+    # Found in review: after repo A was discovered, a remembered failure for repo B left the flag
+    # set, and the fast path for A returned without clearing it, so A was skipped too.
+    stub_discovery "$(converted_board_nodes PVT_repo_a PVTSSF_a1)" 0
+    REPO_FULL="owner/repo-a"; OWNER="owner"; REPO="repo-a"; SESSION_BASE_DIR="${TEST_TMP}/sessions/a"
+    discover_or_create_workflow_project
+    [ -z "${_WF_CONVERSION_FAILED}" ]
+
+    REPO_FULL="owner/repo-b"; OWNER="owner"; REPO="repo-b"; SESSION_BASE_DIR="${TEST_TMP}/sessions/b"
+    mkdir -p "${SESSION_BASE_DIR}"
+    date +%s > "${SESSION_BASE_DIR}/board-conversion-failed"
+    discover_or_create_workflow_project
+    [ "${_WF_CONVERSION_FAILED}" = "1" ]
+
+    REPO_FULL="owner/repo-a"; OWNER="owner"; REPO="repo-a"; SESSION_BASE_DIR="${TEST_TMP}/sessions/a"
+    discover_or_create_workflow_project
+    [ -z "${_WF_CONVERSION_FAILED}" ]
+    [ "${_WF_PROJECT_ID}" = "PVT_repo_a" ]
+    [ "${_WF_STATUS_FIELD_ID}" = "PVTSSF_a1" ]
+}
+
 @test "discover_or_create_workflow_project converts a project it has just created (#1519)" {
     stub_discovery '[]'
     _wf_create_project() { printf '{"id":"PVT_new","title":"Workflow","fields":{"nodes":[]},"workflows":{"nodes":[]}}\n'; }
