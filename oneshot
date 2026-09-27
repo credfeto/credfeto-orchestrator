@@ -54,6 +54,9 @@ source "${ONESHOT_DIR}/lib/state" \
 # shellcheck source=lib/prompts disable=SC1091
 source "${ONESHOT_DIR}/lib/prompts" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/prompts\n' "${ONESHOT_DIR}" >&2; exit 1; }
+# shellcheck source=lib/project-status disable=SC1091
+source "${ONESHOT_DIR}/lib/project-status" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/project-status\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/workflow-board disable=SC1091
 source "${ONESHOT_DIR}/lib/workflow-board" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/workflow-board\n' "${ONESHOT_DIR}" >&2; exit 1; }
@@ -369,6 +372,18 @@ main() {
 
         # Configure per-repo globals for all sub-functions.
         set_repo_context "${item_repo}"
+
+        # A repository whose Workflow board could not be converted to the built-in Status field is
+        # skipped outright, before anything on it is touched (#1519). Discovery has already alerted
+        # on Discord and remembers the failure for PROJECT_CACHE_TTL, and a converted board is served
+        # from the disk cache, so this costs no API call on most ticks.
+        discover_or_create_workflow_project
+        if [ -n "${_WF_CONVERSION_FAILED}" ]; then
+            info "Skipping ${item_type} #${item_id} in ${item_repo} — its Workflow board could not be converted"
+            count_error=$((count_error + 1))
+            item_status_log+=("$(record_item_status "${item_type}" "${item_id}" "${item_repo}" "Workflow board conversion failed - skipping the repository")")
+            continue
+        fi
 
         if [ "${item_type}" = "Issue" ]; then
             # Lazy check: does this repo already have an open PR that we are actually driving
