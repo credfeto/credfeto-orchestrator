@@ -15,6 +15,8 @@
       "Bash(base64 *)",
       "Bash(basename *)",
       "Bash(bats *)",
+      "Bash(buildcheck *)",
+      "Bash(buildtest *)",
       "Bash(bun add *)",
       "Bash(bun install *)",
       "Bash(bun run *)",
