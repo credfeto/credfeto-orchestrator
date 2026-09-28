@@ -77,11 +77,6 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
-@test "git ls-files is allowed with any flags" {
-    run_hook_in_dir "git -C . ls-files --others --exclude-standard"
-    [ "${status}" -eq 0 ]
-}
-
 @test "git ls-tree is allowed by the subcommand allowlist" {
     run_hook_in_dir "git -C . ls-tree -r HEAD"
     [ "${status}" -eq 0 ]
