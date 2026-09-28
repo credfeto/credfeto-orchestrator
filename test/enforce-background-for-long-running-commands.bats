@@ -92,6 +92,34 @@ teardown() {
     [ "${status}" -eq 2 ]
 }
 
+# --- buildtest -------------------------------------------------------------
+
+@test "buildtest without run_in_background is blocked" {
+    run_hook "buildtest"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'buildtest must run with run_in_background: true'* ]]
+}
+
+@test "buildtest with run_in_background true is allowed" {
+    run_hook "buildtest" true
+    [ "${status}" -eq 0 ]
+}
+
+@test "a path-qualified buildtest invocation is blocked" {
+    run_hook "/home/user/bin/buildtest"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a buildtest prefixed with sudo is blocked" {
+    run_hook "sudo buildtest"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a command merely mentioning buildtest as an argument is allowed" {
+    run_hook "grep buildtest ."
+    [ "${status}" -eq 0 ]
+}
+
 # --- dotnet build / dotnet test ------------------------------------------
 
 @test "dotnet build without run_in_background is blocked" {
