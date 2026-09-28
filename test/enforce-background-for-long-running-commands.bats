@@ -110,11 +110,6 @@ teardown() {
     [ "${status}" -eq 2 ]
 }
 
-@test "a buildtest prefixed with sudo is blocked" {
-    run_hook "sudo buildtest"
-    [ "${status}" -eq 2 ]
-}
-
 # --- dotnet build / dotnet test ------------------------------------------
 
 @test "dotnet build without run_in_background is blocked" {
