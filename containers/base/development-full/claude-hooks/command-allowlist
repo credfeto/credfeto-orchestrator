@@ -27,6 +27,8 @@ pre-commit-check
 
 # .NET
 dotnet
+buildcheck
+buildtest
 
 # Python toolchain (python3 -c inline code is still rejected by the
 # interpreter re-invocation check)
