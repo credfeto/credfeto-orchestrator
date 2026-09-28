@@ -109,17 +109,21 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
     fi
 
-    if [ "$tok" = "pre-commit" ] || [[ "$tok" == */pre-commit ]]; then
-      block 'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
-    fi
-
-    if [ "$tok" = "pre-commit-check" ] || [[ "$tok" == */pre-commit-check ]]; then
-      block 'pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
-    fi
-
-    if [ "$tok" = "buildtest" ] || [[ "$tok" == */buildtest ]]; then
-      block 'buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
-    fi
+    # Bare-name commands (as opposed to git/dotnet/npm/bun above, which are checked by
+    # subcommand): each is opaque to this hook - a wrapper or tool invoked directly by name
+    # rather than as a subcommand of something else - so the match is the literal name itself,
+    # bare or path-qualified, in the command-name position.
+    case "$tok" in
+      pre-commit | */pre-commit)
+        block 'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
+        ;;
+      pre-commit-check | */pre-commit-check)
+        block 'pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
+        ;;
+      buildtest | */buildtest)
+        block 'buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
+        ;;
+    esac
 
     if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
       j=$((i + 1))
