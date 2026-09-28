@@ -50,10 +50,12 @@ PROJECT_STATUS_FIELD=""
 # How often, and how far apart, the copied values are read back before a difference is a mismatch
 # (see _ps_copy_values). Overridable from the environment; tests set the delay to 0. An invalid
 # value falls back to the default.
-PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-5}"
-[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=5
-PROJECT_STATUS_READBACK_DELAY_SECS="${PROJECT_STATUS_READBACK_DELAY_SECS:-15}"
-[[ "${PROJECT_STATUS_READBACK_DELAY_SECS}" =~ ^[0-9]+$ ]] || PROJECT_STATUS_READBACK_DELAY_SECS=15
+_PS_READBACK_ATTEMPTS_DEFAULT=20
+_PS_READBACK_DELAY_SECS_DEFAULT=15
+PROJECT_STATUS_READBACK_ATTEMPTS="${PROJECT_STATUS_READBACK_ATTEMPTS:-${_PS_READBACK_ATTEMPTS_DEFAULT}}"
+[[ "${PROJECT_STATUS_READBACK_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || PROJECT_STATUS_READBACK_ATTEMPTS=${_PS_READBACK_ATTEMPTS_DEFAULT}
+PROJECT_STATUS_READBACK_DELAY_SECS="${PROJECT_STATUS_READBACK_DELAY_SECS:-${_PS_READBACK_DELAY_SECS_DEFAULT}}"
+[[ "${PROJECT_STATUS_READBACK_DELAY_SECS}" =~ ^[0-9]+$ ]] || PROJECT_STATUS_READBACK_DELAY_SECS=${_PS_READBACK_DELAY_SECS_DEFAULT}
 
 # Prints the ten workflow state names, one per line, in board order.
 project_status_names() {
@@ -230,8 +232,9 @@ _ps_copy_values() {
     [ "${copied}" -eq 0 ] || info "Set ${copied} item(s) on Status: closed ones to Complete, open ones to their Workflow Status" >&2
 
     # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
-    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated a few
-    # times before a difference counts as a real mismatch.
+    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated up to
+    # PROJECT_STATUS_READBACK_ATTEMPTS times, PROJECT_STATUS_READBACK_DELAY_SECS apart, before a
+    # difference counts as a real mismatch, so a board that never converges stalls for their product.
     local mismatches attempt=1
     while :; do
         items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
