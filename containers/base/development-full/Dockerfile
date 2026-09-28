@@ -119,6 +119,7 @@ RUN git clone --depth 1 --branch "${MARKDOWN_LINTER_FIXER_REF}" \
 RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
     git clone --depth 1 https://github.com/credfeto/credfeto-ai-skills.git /opt/credfeto-ai-skills \
     && test -d /opt/credfeto-ai-skills/ai/skills \
+    && test -d /opt/credfeto-ai-skills/ai/agents \
     && chown -R root:root /opt/credfeto-ai-skills
 
 # ---- Link cloned skill repos into ~/.claude/skills --------------------------
@@ -171,6 +172,34 @@ RUN mkdir -p /home/developer/.claude/skills \
     && find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-skill-count \
     && chown -R root:root /home/developer/.claude/skills /opt/.claude-skill-count \
     && chmod 0444 /opt/.claude-skill-count
+
+# ---- Link credfeto-ai-skills agents into ~/.claude/agents -------------------
+# Claude Code discovers "personal" subagents as *.md files directly under
+# ~/.claude/agents/. credfeto-ai-skills keeps each agent at
+# ai/agents/<name>/AGENT.md alongside non-agent files (config.yaml, install),
+# so only subdirectories containing an AGENT.md are linked, each as
+# credfeto-<name>.md, matching the name upstream's install script would give
+# it. Symlinked rather than copied so the link targets stay root:root and
+# non-writable by developer. The count is recorded to
+# /opt/.claude-agent-count for the sanity check below, for the same reason as
+# the skill count above. A glob loop (not find | while) keeps `exit 1` in the
+# current shell so a duplicate name aborts the build.
+# hadolint ignore=DL3059
+RUN mkdir -p /home/developer/.claude/agents \
+    && chmod 0755 /home/developer/.claude/agents \
+    && for agent_file in /opt/credfeto-ai-skills/ai/agents/*/AGENT.md; do \
+        test -f "${agent_file}" || continue; \
+        agent_name="credfeto-$(basename "$(dirname "${agent_file}")")"; \
+        target="/home/developer/.claude/agents/${agent_name}.md"; \
+        test ! -e "${target}" \
+            || { echo "FATAL: duplicate agent name '${agent_name}' (from ${agent_file})" >&2; exit 1; }; \
+        ln -s "${agent_file}" "${target}"; \
+    done \
+    && find /home/developer/.claude/agents -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-agent-count \
+    && { [ "$(cat /opt/.claude-agent-count)" -gt 0 ] \
+        || { echo "FATAL: no agents linked from /opt/credfeto-ai-skills/ai/agents" >&2; exit 1; }; } \
+    && chown -R root:root /home/developer/.claude/agents /opt/.claude-agent-count \
+    && chmod 0444 /opt/.claude-agent-count
 
 # ---- Bake in Claude Code settings, policy-limits, and hooks -----------------
 # Copied from the operator's ~/.claude/{settings.json,policy-limits.json,hooks/}
@@ -277,6 +306,7 @@ RUN { \
       echo "markdown-linter-fixer: ${MARKDOWN_LINTER_FIXER_REF} @ ${MARKDOWN_LINTER_FIXER_COMMIT}"; \
       echo "dotnet-skills: ${DOTNET_SKILLS_COMMIT}"; \
       echo "claude skills linked: $(cat /opt/.claude-skill-count || echo 'unknown')"; \
+      echo "claude agents linked: $(cat /opt/.claude-agent-count || echo 'unknown')"; \
       echo "pre-commit-check: present-only, no --version support"; \
       echo "querydb: present-only, no --version support"; \
       echo "cfwf: present-only, no --version support"; \
@@ -394,6 +424,16 @@ RUN set -e; \
     for skill in markdown-linter-fixer tdd k8s-debug python-type-safety bash-defensive-patterns terraform-validator credfeto-git-commit analyzing-dotnet-performance; do \
         test -f "/home/developer/.claude/skills/${skill}/SKILL.md" \
             || { echo "FATAL sanity: skill '$skill' missing or has no SKILL.md" >&2; exit 1; }; \
+    done; \
+    echo "== Claude Code agents wiring =="; \
+    agent_count=$(find /home/developer/.claude/agents -mindepth 1 -maxdepth 1 -type l | wc -l); \
+    expected_agent_count=$(cat /opt/.claude-agent-count); \
+    [ "$agent_count" -eq "$expected_agent_count" ] && [ "$agent_count" -gt 0 ] \
+        || { echo "FATAL sanity: expected $expected_agent_count agent symlinks in ~/.claude/agents (recorded at build time), found $agent_count" >&2; exit 1; }; \
+    for agent_link in /home/developer/.claude/agents/*.md; do \
+        if ! su developer -c "test -f '$agent_link' && test -r '$agent_link'"; then \
+            echo "FATAL sanity: agent link '$agent_link' does not resolve to a file readable by developer" >&2; exit 1; \
+        fi; \
     done; \
     echo "== all build-time checks passed =="
 

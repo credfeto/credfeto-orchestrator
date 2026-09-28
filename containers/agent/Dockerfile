@@ -24,6 +24,7 @@
 #   /home/developer/.claude/policy-limits.json — Claude Code policy limits       (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/hooks/             — Claude Code hooks (enforce-git-dash-c, etc.) (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/skills/            — Claude Code skills (symlinked from /opt/*)   (baked into development-full image, read-only, not mounted)
+#   /home/developer/.claude/agents/            - Claude Code agents (symlinked from /opt/credfeto-ai-skills/ai/agents/*/AGENT.md) (baked into development-full image, read-only, not mounted)
 #   /home/developer/.orchestrator         — oneshot state                (read/write, persists sessions)
 #
 # Required runtime environment variables (no default — must be set):

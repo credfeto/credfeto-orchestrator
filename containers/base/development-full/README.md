@@ -9,12 +9,12 @@ development-tools  →  development-node  →  development-python
     →  development-dotnet-tools  →  development-credfeto-tools  →  development-full
 ```
 
-It layers a curated set of Claude Code skill repositories, baked-in Claude Code
-settings/hooks, and a tamper-resistant global pre-commit hook chain on top of
-`development-credfeto-tools`. The NuGet configuration, `claude-code`, and all
-twelve .NET global tools (both stable third-party and first-party
-Credfeto.*/FunFair.*) are inherited from `development-dotnet-tools` /
-`development-credfeto-tools` — see those images' own READMEs for what they
+It layers a curated set of Claude Code skill repositories, the `credfeto-ai-skills`
+Claude Code agents, baked-in Claude Code settings/hooks, and a tamper-resistant
+global pre-commit hook chain on top of `development-credfeto-tools`. The NuGet
+configuration, `claude-code`, and all twelve .NET global tools (both stable
+third-party and first-party Credfeto.*/FunFair.*) are inherited from `development-dotnet-tools` /
+`development-credfeto-tools`. See those images' own READMEs for what they
 install and why they're split out.
 
 ---
@@ -52,6 +52,19 @@ next build as long as they still land under a `skills/` folder. The build fails 
 a skill with the same name. `/home/developer/.claude/skills/` and every symlink in it are root:root —
 `developer` can read/execute through them (to resolve and use the skill) but cannot add, remove, or
 retarget entries.
+
+### Linking agents into `~/.claude/agents`
+
+Claude Code discovers "personal" subagents as `*.md` files directly under `~/.claude/agents/`.
+`/opt/credfeto-ai-skills` keeps each agent at `ai/agents/<name>/AGENT.md`, next to non-agent files such
+as `config.yaml` and `install`. Every `ai/agents/<name>/` subdirectory that contains an `AGENT.md` has
+that file symlinked to `/home/developer/.claude/agents/credfeto-<name>.md`; everything else under
+`ai/agents/` is ignored. Upstream's `ai/agents/install` script is not run.
+
+The build fails if `ai/agents/` is missing, if two agents map to the same link name, or if no agents
+are linked. The number of links is recorded in `/opt/.claude-agent-count`.
+`/home/developer/.claude/agents/` and every symlink in it are root:root, so `developer` can read the
+agent definitions but cannot add, remove, or retarget entries.
 
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
@@ -200,6 +213,7 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/opt/markdown-linter-fixer/` | root:root | 0755 | Markdown linter/fixer skill (pinned to `MARKDOWN_LINTER_FIXER_REF`); agent can read/execute but not modify |
 | `/opt/dotnet-skills/` | root:root | 0755 | Sparse-checkout of dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade plugins (pinned to `DOTNET_SKILLS_COMMIT`); agent can read/execute but not modify |
 | `/home/developer/.claude/skills/` | root:root | 0755 | Symlinks into the `/opt/*` skill repos above, one per skill (count recorded at build time in `/opt/.claude-skill-count`); agent can read/execute but not add, remove, or retarget |
+| `/home/developer/.claude/agents/` | root:root | 0755 | Symlinks named `credfeto-<name>.md` to each `/opt/credfeto-ai-skills/ai/agents/<name>/AGENT.md` (count recorded at build time in `/opt/.claude-agent-count`); agent can read but not add, remove, or retarget |
 | `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code settings (from `claude-settings.json`); read-only for all users |
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/home/developer/.claude/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
@@ -267,6 +281,10 @@ each be root:root 0755 and executable; the
 representative skill names (one per source repo, e.g. `markdown-linter-fixer`, `tdd`, `k8s-debug`,
 `python-type-safety`, `bash-defensive-patterns`, `terraform-validator`, `analyzing-dotnet-performance`)
 must each resolve to a directory containing `SKILL.md`.
+
+**Claude Code agents wiring**: the number of symlinks recorded at build time in
+`/opt/.claude-agent-count` must exist directly under `/home/developer/.claude/agents/` and be greater
+than zero; every `*.md` link there must resolve to a regular file readable by `developer`.
 
 ### Stage 2 — acceptance test suite
 

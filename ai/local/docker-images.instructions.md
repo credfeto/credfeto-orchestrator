@@ -16,7 +16,7 @@ debian:trixie-slim
               └── development-python   (pip tools)
                     └── development-dotnet-tools   (third-party dotnet global tools, Claude Code)
                           └── development-credfeto-tools   (first-party Credfeto.*/FunFair.* dotnet tools)
-                                └── development-full   (pre-commit, skill repos, system-gitconfig)
+                                └── development-full   (pre-commit, skill repos, Claude Code agents, system-gitconfig)
                                       └── development-agent   (removes pkg-mgmt/sudo, adds agent-entrypoint)
 ```
 
@@ -160,7 +160,7 @@ RUN actual=$(find /some/dir -mindepth 1 -maxdepth 1 -type l | wc -l); \
     [ "$actual" -eq "$expected" ] && [ "$actual" -gt 0 ] || { echo "FATAL: ..." >&2; exit 1; }
 ```
 
-See the `~/.claude/skills` symlink count in `containers/base/development-full/Dockerfile`.
+See the `~/.claude/skills` and `~/.claude/agents` symlink counts in `containers/base/development-full/Dockerfile`.
 
 ## Workflow Build Chain
 
