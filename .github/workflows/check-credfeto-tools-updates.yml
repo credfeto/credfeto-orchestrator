@@ -114,41 +114,31 @@ jobs:
           workflow-id: "build-development-credfeto-tools.yml"
           github-token: "${{ secrets.SOURCE_PUSH_TOKEN }}"
 
-      - name: "Summarise (update dispatched)"
-        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'true' }}
+      - name: "Summarise"
         shell: "bash"
         run: |
-          {
-            echo "## development-credfeto-tools update detected"
-            echo ""
-            echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\` - dispatched a rebuild."
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${NEEDS_UPDATE}" = "true" ] && [ "${HAS_TOKEN}" = "true" ]; then
+            {
+              echo "## development-credfeto-tools update detected"
+              echo ""
+              echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\` - dispatched a rebuild."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${NEEDS_UPDATE}" = "true" ]; then
+            {
+              echo "## development-credfeto-tools update detected but not dispatched"
+              echo ""
+              echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\`,"
+              echo "but SOURCE_PUSH_TOKEN is not configured - see the job warning above."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## development-credfeto-tools up to date"
+              echo ""
+              echo "Resolved hash \`${RESOLVED}\` matches the published image - nothing to do."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
         env:
-          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
-          PUBLISHED: "${{ steps.published.outputs.version-hash }}"
-
-      - name: "Summarise (up to date)"
-        if: ${{ steps.compare.outputs.needs-update == 'false' }}
-        shell: "bash"
-        run: |
-          {
-            echo "## development-credfeto-tools up to date"
-            echo ""
-            echo "Resolved hash \`${RESOLVED}\` matches the published image - nothing to do."
-          } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
-
-      - name: "Summarise (secret missing)"
-        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'false' }}
-        shell: "bash"
-        run: |
-          {
-            echo "## development-credfeto-tools update detected but not dispatched"
-            echo ""
-            echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\`,"
-            echo "but SOURCE_PUSH_TOKEN is not configured - see the job warning above."
-          } >> "$GITHUB_STEP_SUMMARY"
-        env:
+          NEEDS_UPDATE: "${{ steps.compare.outputs.needs-update }}"
+          HAS_TOKEN: "${{ steps.check-dispatch-secret.outputs.has-token }}"
           RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
           PUBLISHED: "${{ steps.published.outputs.version-hash }}"
