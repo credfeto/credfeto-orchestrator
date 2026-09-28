@@ -164,7 +164,7 @@ See the `~/.claude/skills` and `~/.claude/agents` symlink counts in `containers/
 
 ## Workflow Build Chain
 
-Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`. `build-development-tools.yml` carries the *only* cron in the whole chain (daily); every other stage relies solely on `workflow_run` chaining plus real-change triggers (`push`, `pull_request`, and `development-full`'s `repository_dispatch: pre-commit-updated`) — do not add a per-stage cron to any downstream workflow. Stacking an independent schedule at every stage previously meant `development-agent` at the bottom inherited the union of all of them, moving its `:latest` digest every 15-30 minutes and starving the orchestrator host, which re-pulls before every invocation (#1401).
+Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`. `build-development-tools.yml` carries the *only* cron in the whole chain (daily); every other stage relies solely on `workflow_run` chaining plus real-change triggers (`push`, `pull_request`, `development-full`'s `repository_dispatch: pre-commit-updated`, and `development-credfeto-tools`' `repository_dispatch: credfeto-tools-updated`) — do not add a per-stage cron to any downstream workflow. Stacking an independent schedule at every stage previously meant `development-agent` at the bottom inherited the union of all of them, moving its `:latest` digest every 15-30 minutes and starving the orchestrator host, which re-pulls before every invocation (#1401).
 
 ```yaml
 on:
