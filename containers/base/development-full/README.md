@@ -108,8 +108,9 @@ restricting `ssh` to a strict `user@host.lan` grammar with a usable key already 
 ssh-agent, since `claude-settings.json`'s own `Bash(ssh *)` allow entry is otherwise blanket; see
 `claude-hooks.instructions.md` for the full grammar/host-allowlist rules. `enforce-background-for-long-running-commands`
 runs next, using the same shfmt-parsed AST to block `git commit`, a directly-invoked `pre-commit`,
-`dotnet build`, `dotnet test`, `npm test`, and `bun test` unless the tool call sets `run_in_background: true`
-(a call that omits the field entirely is treated the same as `false`) — these five commands have no
+`pre-commit-check`, `buildtest`, `dotnet build`, `dotnet test`, `npm test`, and `bun test` unless the tool
+call sets `run_in_background: true` (a call that omits the field entirely is treated the same as `false`);
+these eight commands have no
 bounded, predictable duration, and a foreground run that outlives the tool's own timeout is killed mid-run,
 skipping the target process's own cleanup; it also fails closed if shfmt is missing or the command does
 not parse. `cache-gh-lookups` runs last and, unlike every hook above, never blocks: it rewrites an exact,
