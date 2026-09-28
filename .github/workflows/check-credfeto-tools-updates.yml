@@ -1,0 +1,154 @@
+---
+name: "Check development-credfeto-tools NuGet updates"
+
+# Lightweight poller for the 5 first-party Credfeto.*/FunFair.* NuGet packages
+# development-credfeto-tools installs. build-development-credfeto-tools.yml has no
+# schedule of its own: #1401 removed its old per-stage hourly cron because that
+# rebuilt and pushed the image unconditionally on every tick, regardless of whether
+# any tracked package had actually released. This workflow restores near-hourly
+# freshness without that cost: it re-resolves the same nuget-latest-versions hash the
+# build itself uses, compares it against the hash baked into the currently-published
+# :latest image, and only dispatches a rebuild when they differ. See #1404.
+
+on:
+  schedule:
+    # Hourly, the cadence the pre-#1401 per-stage cron used, but gated on an actual
+    # release rather than firing an unconditional rebuild+push every tick.
+    - cron: "40 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: "check-credfeto-tools-updates-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: "ghcr.io"
+  IMAGE_NAME: "${{ github.repository_owner }}/development-credfeto-tools"
+
+permissions:
+  contents: "read"
+
+jobs:
+  check:
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 15
+    permissions:
+      contents: "read"
+      packages: "read"
+    steps:
+      - name: "Checkout source"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: "Resolve latest NuGet package versions"
+        id: "resolve"
+        uses: ./.github/actions/nuget-latest-versions
+        with:
+          package-ids: |
+            Credfeto.Changelog.Cmd
+            Credfeto.DotNet.Code.Analysis.Overrides.Cmd
+            FunFair.BuildCheck
+            FunFair.BuildVersion
+            Credfeto.DotNet.Repo.Formatter
+
+      - name: "Log in to GHCR"
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: "${{ env.REGISTRY }}"
+          username: "${{ github.actor }}"
+          password: "${{ github.token }}"
+
+      - name: "Read version hash baked into the published image"
+        id: "published"
+        shell: "bash"
+        run: |
+          docker pull "${IMAGE_REF}" || true
+          HASH=$(docker inspect --format "${FORMAT}" "${IMAGE_REF}" 2>/dev/null || true)
+          echo "version-hash=${HASH}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_REF: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          FORMAT: '{{ index .Config.Labels "credfeto.tools-version-hash" }}'
+
+      - name: "Compare resolved and published hashes"
+        # A pull failure above (registry hiccup, no image pushed yet) falls through to
+        # an empty published hash, which compares unequal here and dispatches a
+        # rebuild: fail open toward an extra (cache-cheap) rebuild rather than
+        # silently staying stale, matching this issue's actual complaint. A single
+        # boolean output here also keeps every downstream if: short instead of
+        # repeating both hash comparisons at every step.
+        id: "compare"
+        shell: "bash"
+        run: |
+          if [ "${RESOLVED}" = "${PUBLISHED}" ]; then
+            echo "needs-update=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs-update=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
+          PUBLISHED: "${{ steps.published.outputs.version-hash }}"
+
+      - name: "Check Required Secrets (dispatch)"
+        # Same pattern as build-development-dotnet-tools.yml's own dispatch secret
+        # check - only relevant when an update was actually detected, so a steady
+        # state with nothing to dispatch never spams the missing-secret warning.
+        id: "check-dispatch-secret"
+        if: ${{ steps.compare.outputs.needs-update == 'true' }}
+        shell: "bash"
+        run: |
+          if [ -z "${{ secrets.SOURCE_PUSH_TOKEN }}" ]; then
+            echo "::warning::SOURCE_PUSH_TOKEN is not set - skipping the development-credfeto-tools dispatch"
+            echo "has-token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Dispatch development-credfeto-tools build"
+        # Requires SOURCE_PUSH_TOKEN (a PAT), not the default GITHUB_TOKEN: GitHub
+        # exempts events triggered by GITHUB_TOKEN from cascading to further
+        # workflow_run listeners downstream of the dispatched build. See #1444.
+        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'true' }}
+        uses: ./.github/actions/dispatch-workflow
+        with:
+          workflow-id: "build-development-credfeto-tools.yml"
+          github-token: "${{ secrets.SOURCE_PUSH_TOKEN }}"
+
+      - name: "Summarise (update dispatched)"
+        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'true' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools update detected"
+            echo ""
+            echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\` - dispatched a rebuild."
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
+          PUBLISHED: "${{ steps.published.outputs.version-hash }}"
+
+      - name: "Summarise (up to date)"
+        if: ${{ steps.compare.outputs.needs-update == 'false' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools up to date"
+            echo ""
+            echo "Resolved hash \`${RESOLVED}\` matches the published image - nothing to do."
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
+
+      - name: "Summarise (secret missing)"
+        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'false' }}
+        shell: "bash"
+        run: |
+          {
+            echo "## development-credfeto-tools update detected but not dispatched"
+            echo ""
+            echo "Resolved hash \`${RESOLVED}\` differs from published hash \`${PUBLISHED}\`,"
+            echo "but SOURCE_PUSH_TOKEN is not configured - see the job warning above."
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          RESOLVED: "${{ steps.resolve.outputs.version-hash }}"
+          PUBLISHED: "${{ steps.published.outputs.version-hash }}"
