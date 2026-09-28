@@ -108,7 +108,7 @@ jobs:
         # Requires SOURCE_PUSH_TOKEN (a PAT), not the default GITHUB_TOKEN: GitHub
         # exempts events triggered by GITHUB_TOKEN from cascading to further
         # workflow_run listeners downstream of the dispatched build. See #1444.
-        if: ${{ steps.compare.outputs.needs-update == 'true' && steps.check-dispatch-secret.outputs.has-token == 'true' }}
+        if: ${{ steps.check-dispatch-secret.outputs.has-token == 'true' }}
         uses: ./.github/actions/dispatch-workflow
         with:
           workflow-id: "build-development-credfeto-tools.yml"
@@ -117,7 +117,7 @@ jobs:
       - name: "Summarise"
         shell: "bash"
         run: |
-          if [ "${NEEDS_UPDATE}" = "true" ] && [ "${HAS_TOKEN}" = "true" ]; then
+          if [ "${HAS_TOKEN}" = "true" ]; then
             {
               echo "## development-credfeto-tools update detected"
               echo ""
