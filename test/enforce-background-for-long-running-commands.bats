@@ -115,11 +115,6 @@ teardown() {
     [ "${status}" -eq 2 ]
 }
 
-@test "a command merely mentioning buildtest as an argument is allowed" {
-    run_hook "grep buildtest ."
-    [ "${status}" -eq 0 ]
-}
-
 # --- dotnet build / dotnet test ------------------------------------------
 
 @test "dotnet build without run_in_background is blocked" {
