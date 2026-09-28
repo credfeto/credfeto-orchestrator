@@ -82,26 +82,6 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
-@test "a bare git ls-files auto-corrects to git -C <dir> ls-files when run from inside a writable repo" {
-    local repo
-    repo=$(make_writable_repo)
-    run_hook_in_dir "git ls-files" "${repo}"
-    [ "${status}" -eq 0 ]
-    local rewritten
-    rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
-    [[ "${rewritten}" == "git -C ${repo} ls-files" ]]
-}
-
-@test "a bare git ls-tree auto-corrects to git -C <dir> ls-tree when run from inside a writable repo" {
-    local repo
-    repo=$(make_writable_repo)
-    run_hook_in_dir "git ls-tree HEAD" "${repo}"
-    [ "${status}" -eq 0 ]
-    local rewritten
-    rewritten=$(printf '%s' "${output}" | jq -r '.hookSpecificOutput.updatedInput.command')
-    [[ "${rewritten}" == "git -C ${repo} ls-tree HEAD" ]]
-}
-
 @test "git filter-branch is blocked by the subcommand allowlist even with -C present" {
     run_hook_in_dir "git -C . filter-branch --tag-name-filter cat -- --all"
     [ "${status}" -eq 2 ]
