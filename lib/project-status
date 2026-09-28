@@ -232,8 +232,9 @@ _ps_copy_values() {
     [ "${copied}" -eq 0 ] || info "Set ${copied} item(s) on Status: closed ones to Complete, open ones to their Workflow Status" >&2
 
     # GitHub's reads lag behind its writes by seconds, so a read straight after the copy can still
-    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated a few
-    # times before a difference counts as a real mismatch.
+    # show the old values (seen on the credfeto/scratch canary). The read-back is repeated up to
+    # PROJECT_STATUS_READBACK_ATTEMPTS times, PROJECT_STATUS_READBACK_DELAY_SECS apart, before a
+    # difference counts as a real mismatch, so a board that never converges stalls for their product.
     local mismatches attempt=1
     while :; do
         items=$(_ps_read_items "${project_id}") || { _ps_fail "checking the copied values" "the items could not be listed again"; return 1; }
