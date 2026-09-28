@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Blocks git commit, pre-commit, pre-commit-check, dotnet build, dotnet test,
-# npm test, and bun test unless the tool call sets run_in_background: true.
+# Blocks git commit, pre-commit, pre-commit-check, buildtest, dotnet build,
+# dotnet test, npm test, and bun test unless the tool call sets
+# run_in_background: true.
 # Exit 2 = blocked, 0 = allowed.
 #
 # credfeto-long-running-commands (this repo's own AI instructions) mandates
@@ -15,6 +16,8 @@
 # against the existing checked-out repo (as opposed to invoking pre-commit
 # directly) — it shares pre-commit's unbounded hook-chain duration, so it is
 # checked identically, immediately after the pre-commit check below.
+# buildtest runs the full build and test suite, so its duration is just as
+# unbounded; it is checked the same way, immediately after pre-commit-check.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
 # the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
@@ -112,6 +115,10 @@ while IFS= read -r call_line; do
 
     if [ "$tok" = "pre-commit-check" ] || [[ "$tok" == */pre-commit-check ]]; then
       block 'pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
+    fi
+
+    if [ "$tok" = "buildtest" ] || [[ "$tok" == */buildtest ]]; then
+      block 'buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
     fi
 
     if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
