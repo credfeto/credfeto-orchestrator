@@ -15,9 +15,9 @@
 # pre-commit-check is this repo's own wrapper script that runs pre-commit
 # against the existing checked-out repo (as opposed to invoking pre-commit
 # directly) — it shares pre-commit's unbounded hook-chain duration, so it is
-# checked identically, immediately after the pre-commit check below.
+# checked the same way.
 # buildtest runs the full build and test suite, so its duration is just as
-# unbounded; it is checked the same way, immediately after pre-commit-check.
+# unbounded; it is checked the same way too.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
 # the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
@@ -109,7 +109,7 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
     fi
 
-    # Bare-name commands (as opposed to git/dotnet/npm/bun above, which are checked by
+    # Bare-name commands (as opposed to git/dotnet/npm/bun, which are checked by
     # subcommand): each is opaque to this hook - a wrapper or tool invoked directly by name
     # rather than as a subcommand of something else - so the match is the literal name itself,
     # bare or path-qualified, in the command-name position.
