@@ -13,6 +13,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # ships a new release (not on a blind daily schedule).
 ARG CREDFETO_FUNFAIR_TOOLS_CACHE_BUST
 
+# Bakes the same hash in as an inspectable label so check-credfeto-tools-updates.yml
+# can read back "what this published image was built against" without re-running
+# nuget-latest-versions against the image itself: it just compares this label to a
+# fresh resolve and only dispatches a rebuild when they differ.
+LABEL credfeto.tools-version-hash="${CREDFETO_FUNFAIR_TOOLS_CACHE_BUST}"
+
 # NuGet.Config, NUGET_PACKAGES, and claude-code are already baked in by
 # development-dotnet-tools (this image's base) — nothing to redo here.
 

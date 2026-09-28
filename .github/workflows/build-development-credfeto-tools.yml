@@ -18,15 +18,6 @@ on:
       - completed
     branches:
       - "main"
-  repository_dispatch:
-    # Fired by credfeto-changelog-manager, credfeto-dotnet-codeanalysis-override,
-    # credfeto-dotnet-repo-tools, funfair-build-check and funfair-build-version on
-    # every push to their respective main branches so the image is rebuilt
-    # immediately when any of the 5 tracked NuGet packages resolved by
-    # nuget-latest-versions is released, rather than waiting up to a day for the
-    # scheduled run.
-    types:
-      - credfeto-tools-updated
   push:
     branches: ["main"]
     paths:
