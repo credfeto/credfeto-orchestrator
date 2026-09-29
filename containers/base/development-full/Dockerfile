@@ -432,6 +432,11 @@ RUN set -e; \
         su developer -c "test -f '$agent_link' && test -r '$agent_link'" \
             || { echo "FATAL sanity: agent link '$agent_link' does not resolve to a file readable by developer" >&2; exit 1; }; \
     done; \
+    default_agent=$(jq -r '.agent // empty' /home/developer/.claude/settings.json); \
+    [ -n "$default_agent" ] \
+        || { echo "FATAL sanity: settings.json does not set a default agent" >&2; exit 1; }; \
+    grep -qxF "name: ${default_agent}" /home/developer/.claude/agents/*.md \
+        || { echo "FATAL sanity: settings.json default agent '$default_agent' is not defined by any agent in ~/.claude/agents" >&2; exit 1; }; \
     echo "== all build-time checks passed =="
 
 # ---- /opt/pre-commit acceptance suite (end-to-end hook orchestrator test) ---

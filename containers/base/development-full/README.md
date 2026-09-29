@@ -284,7 +284,10 @@ must each resolve to a directory containing `SKILL.md`.
 
 **Claude Code agents wiring**: the number of symlinks recorded at build time in
 `/opt/.claude-agent-count` must exist directly under `/home/developer/.claude/agents/` and be greater
-than zero; every `*.md` link there must resolve to a regular file readable by `developer`.
+than zero; every `*.md` link there must resolve to a regular file readable by `developer`; and the
+default `agent` set in `settings.json` must be named (`name:` frontmatter) by one of those agents, so
+an upstream rename in the unpinned `credfeto-ai-skills` fails the build instead of silently dropping
+the default agent.
 
 ### Stage 2 — acceptance test suite
 
