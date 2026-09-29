@@ -424,6 +424,52 @@ git status'
     [[ "${output}" == *'interpreter re-invocation'* ]]
 }
 
+@test "node --eval=code glued with = is blocked (code-review finding)" {
+    run_hook "node --eval=\"require('child_process').execSync('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --print=code glued with = is blocked" {
+    run_hook "node --print=\"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -ecode glued short flag with no separator is blocked" {
+    run_hook "node -e\"require('child_process').execSync('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -pcode glued short flag with no separator is blocked" {
+    run_hook "node -p\"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -i is blocked (REPL is as dangerous as inline code)" {
+    run_hook "node -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --interactive is blocked" {
+    run_hook "node --interactive"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --check .github/actions script still allowed after the glued-flag fix" {
+    run_hook "node --check .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+}
+
+@test "node running a .github/actions script still allowed after the glued-flag fix" {
+    run_hook "node .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command containing a non-ASCII byte is blocked" {
     run_hook $'git -C . commit -m "caf\xc3\xa9"'
     [ "${status}" -eq 2 ]
