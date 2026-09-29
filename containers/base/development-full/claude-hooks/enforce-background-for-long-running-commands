@@ -133,10 +133,17 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # into one, silently dropping a non-literal word's slot and shifting every later word's
 # index left - e.g. `git -C "$PWD" commit ...` had its "$PWD" argument vanish entirely,
 # misaligning the -c/-C skip loop below and letting the block on git commit go unenforced).
-# This closes only that one desync: a genuinely literal word can still itself contain a real
-# embedded tab byte (backslash-tab escaping, outside quotes), which the tab-join cannot tell
-# apart from its own delimiter and which this marker does not touch - see #1530, not fixed
-# here.
+# A resolved literal_value is also folded back to this marker if it contains a raw tab,
+# newline or CR byte - this file's own delimiter, or one that would desync the later
+# `while IFS= read -r call_line` split - same guard as enforce-git-dash-c's resolve_parts:
+# a quoted argument can legitimately embed one of these (`git -c "x.y=a<TAB>b" ...`, a
+# multi-line commit message), and letting it through as-is would fragment that one word
+# into two on the tab-join, shifting every later word's index exactly like the empty-string
+# bug above. This also closes the #1530-tracked vector for this file specifically (a bare
+# unquoted word's backslash-escaped tab, e.g. `bu\<TAB>ild`, now decodes to a raw tab via
+# the gsub above and is caught by this same guard); the other two hooks #1530 named
+# (reject-obfuscated-commands, block-dotnet-tool-install) do not widen literal recognition
+# past a bare top-level Lit the way this file now does, so that issue still tracks them.
 calls=$(printf '%s' "$ast" | jq -r '
   def literal_value:
     if (.Parts | length) != 1 then null
@@ -151,7 +158,9 @@ calls=$(printf '%s' "$ast" | jq -r '
       end
     end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | literal_value // "\u0001" ] |
+  [ .Args[] | literal_value as $v |
+    if $v == null or ($v | explode | any(. == 9 or . == 10 or . == 13)) then "\u0001" else $v end
+  ] |
   join("\t")')
 
 while IFS= read -r call_line; do
@@ -192,14 +201,20 @@ while IFS= read -r call_line; do
       esac
     fi
 
-    if { [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; } \
-      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = "$OPAQUE_MARKER" ]; }; then
-      block 'npm test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after npm, which could resolve to test at runtime, so this fails closed)'
+    if [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; then
+      j=$((i + 1))
+      case "${words[$j]:-}" in
+        test) block 'npm test must run with run_in_background: true (test run duration has no fixed bound)' ;;
+        "$OPAQUE_MARKER") block 'npm test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after npm, which could resolve to test at runtime, so this fails closed)' ;;
+      esac
     fi
 
-    if { [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; } \
-      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = "$OPAQUE_MARKER" ]; }; then
-      block 'bun test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after bun, which could resolve to test at runtime, so this fails closed)'
+    if [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; then
+      j=$((i + 1))
+      case "${words[$j]:-}" in
+        test) block 'bun test must run with run_in_background: true (test run duration has no fixed bound)' ;;
+        "$OPAQUE_MARKER") block 'bun test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after bun, which could resolve to test at runtime, so this fails closed)' ;;
+      esac
     fi
   done
 done <<< "$calls"
