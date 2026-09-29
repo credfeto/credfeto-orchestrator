@@ -44,6 +44,12 @@ teardown() {
     [ "${status}" -eq 2 ]
 }
 
+@test "git commit with a non-literal -C argument is still blocked" {
+    # shellcheck disable=SC2016  # literal $PWD - must reach the hook unexpanded
+    run_hook 'git -C "$PWD" commit -m test'
+    [ "${status}" -eq 2 ]
+}
+
 @test "a path-qualified git commit invocation is blocked" {
     run_hook "/usr/bin/git -C . commit -m test"
     [ "${status}" -eq 2 ]
