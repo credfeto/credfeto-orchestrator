@@ -61,8 +61,7 @@ is_wrapper() {
 
 # Bare-name commands: invoked directly by name rather than via a subcommand check like
 # git/dotnet/npm/bun below, so each gets a table entry instead of its own if/case arm -
-# mirrors enforce-git-dash-c's array-driven subcommand allowlist, and means a future
-# addition here is a single new entry rather than a new block of matching logic.
+# a future addition here is a single new entry rather than a new block of matching logic.
 declare -A BARE_NAME_MESSAGES=(
   [pre-commit]='pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
   [pre-commit-check]='pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
