@@ -393,6 +393,40 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
+@test "node --check with a file argument is allowed" {
+    run_hook "node --check .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+}
+
+@test "node running a .github/actions script is allowed" {
+    run_hook "node .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+}
+
+@test "node -p with inline code is blocked" {
+    run_hook "node -p \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --print with inline code is blocked" {
+    run_hook "node --print \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -e with inline code is blocked" {
+    run_hook "node -e \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -c is blocked even though it is node's own --check alias (fail-safe collateral, use --check)" {
+    run_hook "node -c .github/actions/foo/bar.js"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
 @test "a command containing a non-ASCII byte is blocked" {
     run_hook $'git -C . commit -m "caf\xc3\xa9"'
     [ "${status}" -eq 2 ]

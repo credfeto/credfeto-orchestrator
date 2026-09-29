@@ -82,7 +82,10 @@ block() {
 # still cannot be handed inline code, and so the error message names the
 # actual problem.
 INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh fish python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
-INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
+# -p/--print is node's inline "evaluate and print" flag (node -c is a safe
+# syntax-check alias, but -c is already blocked here for other interpreters,
+# so node -c is blocked too - use node --check instead)
+INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe -p --print)
 
 is_interpreter() {
   local w
