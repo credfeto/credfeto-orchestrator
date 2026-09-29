@@ -85,15 +85,23 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One line per CallExpr: every word that is a single plain literal is
-# emitted verbatim; anything else (quoted text, substitutions, expansions)
-# is emitted as an empty string, same as block-git-worktree - an empty word
-# can never equal any of the literal command/subcommand names checked below,
-# so it is opaque to those checks. Words cannot contain raw whitespace, so
-# tab is a safe separator for the IFS-based splitting below.
+# One line per CallExpr: every word that is a single plain literal is emitted verbatim;
+# anything else (quoted text, substitutions, expansions) is represented as a \x01 marker,
+# same as block-dotnet-tool-install/reject-obfuscated-commands - it can never equal any of
+# the literal command/subcommand names checked below, so it is opaque to those checks, and
+# unlike an empty string, is never dropped by IFS=<tab> word-splitting's collapsing of
+# consecutive whitespace delimiters (an earlier version used an empty string here: tab is
+# IFS whitespace even when IFS is explicitly set to $'\t', so `read -ra` collapsed a run of
+# adjacent tabs into one, silently dropping a non-literal word's slot and shifting every
+# later word's index left - e.g. `git -C "$PWD" commit ...` had its "$PWD" argument vanish
+# entirely, misaligning the -c/-C skip loop below and letting the block on git commit go
+# unenforced). This closes only that one desync: a genuinely literal word can still itself
+# contain a real embedded tab byte (backslash-tab escaping, outside quotes), which the
+# tab-join cannot tell apart from its own delimiter and which this marker does not touch -
+# see #1530, not fixed here.
 calls=$(printf '%s' "$ast" | jq -r '
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "" end ] |
+  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
   join("\t")')
 
 while IFS= read -r call_line; do
