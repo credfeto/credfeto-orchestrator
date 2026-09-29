@@ -393,12 +393,9 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
-@test "node --check with a file argument is allowed" {
+@test "node --check and running a .github/actions script are both allowed (no inline-code flag)" {
     run_hook "node --check .github/actions/foo/bar.js"
     [ "${status}" -eq 0 ]
-}
-
-@test "node running a .github/actions script is allowed" {
     run_hook "node .github/actions/foo/bar.js"
     [ "${status}" -eq 0 ]
 }
