@@ -79,6 +79,28 @@ teardown() {
     [[ "${output}" == *'bun test'* ]]
 }
 
+@test "a quoted-but-static dotnet subcommand with no expansion is not blocked" {
+    run_hook 'dotnet "restore"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted-but-static npm subcommand with no expansion is not blocked" {
+    run_hook 'npm "install"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a quoted-but-static dotnet build is still blocked" {
+    run_hook 'dotnet "build"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
+}
+
+@test "an ANSI-C quoted dotnet subcommand still fails closed" {
+    run_hook $'dotnet $\'build\''
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+}
+
 @test "a path-qualified git commit invocation is blocked" {
     run_hook "/usr/bin/git -C . commit -m test"
     [ "${status}" -eq 2 ]
