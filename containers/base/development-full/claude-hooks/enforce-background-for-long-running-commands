@@ -27,8 +27,12 @@
 #
 # Obfuscated command names (quote-splices, substitutions, IFS games) are NOT
 # this hook's job - reject-obfuscated-commands rejects those categorically
-# before this hook ever runs. Anything here that is not a plain literal word
-# is deliberately treated as opaque.
+# before this hook ever runs. A word that is not a plain literal (or the one
+# layer of ordinary quoting literal_value below also resolves) is opaque to
+# the checks that match only a specific literal name; the git/dotnet/npm/bun
+# checks deliberately also match that opaque state itself, so it still fails
+# closed there rather than being silently ignored - see literal_value's own
+# comment for the full detail.
 #
 # Fails closed: shfmt missing or the command not parsing as shell blocks
 # the command.
@@ -57,6 +61,11 @@ is_wrapper() {
   done
   return 1
 }
+
+# Bash-side twin of the jq extraction's own "\u0001" literal below (same codepoint,
+# matching enforce-git-dash-c's own OPAQUE_MARKER) - one name for every check below that
+# needs to compare against the opaque marker, instead of repeating $'\x01' at each site.
+OPAQUE_MARKER=$'\x01'
 
 # Bare-name commands: invoked directly by name rather than via a subcommand check like
 # git/dotnet/npm/bun below, so each gets a table entry instead of its own if/case arm -
@@ -92,11 +101,27 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 
 # One line per CallExpr: a word that is a single plain literal, or one layer of ordinary
 # quoting with no expansion inside it ("restore", 'restore'), resolves to that literal
-# text - same literal_value scope as enforce-ssh-host-and-key, so a quoted-but-static word
-# like `dotnet "restore"` is recognised as literal "restore", not treated as opaque.
-# ANSI-C/locale quoting ($'...'/$"...") is deliberately excluded (checked via `.Dollar`)
-# and stays opaque, since it decodes escapes this hook cannot resolve without reimplementing
-# bash's own rules. Anything else (substitutions, expansions, ANSI-C/locale quoting, or
+# text - same literal_value scope as enforce-ssh-host-and-key, plus the backslash-decode fix
+# enforce-git-dash-c's own resolve_parts already has (#1399 round 3): a bare unquoted word
+# keeps shfmt's raw, undecoded backslash in its Lit.Value (e.g. `bu\ild` stays "bu\ild", not
+# "build") even though bash's own unquoted rule is simply "drop the backslash, keep the next
+# character" for any character - without the gsub below, `dotnet bu\ild` resolved to neither
+# "build" nor the opaque marker and fell through every check unblocked, while it really does
+# execute as plain `dotnet build` at runtime. The decode applies only to the bare top-level
+# Lit branch, never to a Lit nested inside a DblQuoted (which keeps its raw text unchanged),
+# since backslash inside double quotes is special only before $, `, ", \ and newline, not
+# before an arbitrary letter, so `"bu\ild"` really does stay bu\ild at runtime and must not
+# be decoded the same way. So a quoted-but-static word like `dotnet "restore"` is recognised
+# as literal "restore", not treated as opaque - but a genuinely *empty* quoted word ('' or
+# "") is deliberately NOT resolved to an empty string here (unlike enforce-git-dash-c, whose
+# transport does not join words with a shared delimiter the way this one does): an empty
+# field in the tab-join below collapses exactly like the empty-string opaque-marker bug this
+# file already fixed once (see the tab-splitting paragraph below), so an empty literal stays
+# opaque and this hook fails closed on it instead, which is safe (just occasionally
+# over-cautious) rather than reopening that same desync. ANSI-C/locale quoting ($'...'/$"...") is
+# deliberately excluded (checked via `.Dollar`) and stays opaque, since it decodes escapes
+# this hook cannot resolve without reimplementing bash's own rules. Anything else
+# (substitutions, expansions, ANSI-C/locale quoting, or
 # quoting that mixes literal text with either) is represented as a \x01 marker - it can
 # never equal any of the literal command/subcommand names checked below, so it is opaque to
 # those checks by default (the dotnet/npm/bun checks below deliberately also match the
@@ -118,8 +143,8 @@ calls=$(printf '%s' "$ast" | jq -r '
     else
       .Parts[0] as $p |
       if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then $p.Value
-      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "Lit" then ($p.Value | gsub("\\\\(?<c>.)"; "\(.c)"))
+      elif $p.Type == "SglQuoted" and ($p.Value // "") != "" then $p.Value
       elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
         then $p.Parts[0].Value
       else null
@@ -150,7 +175,7 @@ while IFS= read -r call_line; do
       while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
         j=$((j + 2))
       done
-      { [ "${words[$j]:-}" = "commit" ] || [ "${words[$j]:-}" = $'\x01' ]; } \
+      { [ "${words[$j]:-}" = "commit" ] || [ "${words[$j]:-}" = "$OPAQUE_MARKER" ]; } \
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration; this also fires on an unresolved subcommand right after -c/-C options, which could resolve to commit at runtime, so this fails closed)'
     fi
 
@@ -163,17 +188,17 @@ while IFS= read -r call_line; do
       case "${words[$j]:-}" in
         build) block 'dotnet build must run with run_in_background: true (analyzer/restore duration is unbounded)' ;;
         test) block 'dotnet test must run with run_in_background: true (test run duration scales with what changed)' ;;
-        $'\x01') block 'dotnet <unresolved subcommand> must run with run_in_background: true (a non-literal word right after dotnet could resolve to build/test at runtime, so this fails closed)' ;;
+        "$OPAQUE_MARKER") block 'dotnet <unresolved subcommand> must run with run_in_background: true (a non-literal word right after dotnet could resolve to build/test at runtime, so this fails closed)' ;;
       esac
     fi
 
     if { [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; } \
-      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = $'\x01' ]; }; then
+      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = "$OPAQUE_MARKER" ]; }; then
       block 'npm test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after npm, which could resolve to test at runtime, so this fails closed)'
     fi
 
     if { [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; } \
-      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = $'\x01' ]; }; then
+      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = "$OPAQUE_MARKER" ]; }; then
       block 'bun test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after bun, which could resolve to test at runtime, so this fails closed)'
     fi
   done

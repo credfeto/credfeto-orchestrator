@@ -101,6 +101,36 @@ teardown() {
     [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
 }
 
+@test "a backslash-escaped dotnet build (bu\\ild) is blocked" {
+    run_hook 'dotnet bu\ild'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
+}
+
+@test "a backslash-escaped git commit (com\\mit) is blocked" {
+    run_hook 'git -C . com\mit -m test'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
+@test "a backslash-escaped npm test (t\\est) is blocked" {
+    run_hook 'npm t\est'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'npm test must run with run_in_background: true'* ]]
+}
+
+@test "a backslash-escaped bun test (t\\est) is blocked" {
+    run_hook 'bun t\est'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'bun test must run with run_in_background: true'* ]]
+}
+
+@test "dotnet with a single empty-string argument fails closed" {
+    run_hook 'dotnet ""'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+}
+
 @test "a path-qualified git commit invocation is blocked" {
     run_hook "/usr/bin/git -C . commit -m test"
     [ "${status}" -eq 2 ]
