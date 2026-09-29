@@ -109,10 +109,7 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
     fi
 
-    # Bare-name commands (as opposed to git/dotnet/npm/bun, which are checked by
-    # subcommand): each is opaque to this hook - a wrapper or tool invoked directly by name
-    # rather than as a subcommand of something else - so the match is the literal name itself,
-    # bare or path-qualified, in the command-name position.
+    # These are invoked directly by name, not via a subcommand check like git/dotnet/npm/bun.
     case "$tok" in
       pre-commit | */pre-commit)
         block 'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
