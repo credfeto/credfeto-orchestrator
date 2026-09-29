@@ -105,7 +105,7 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "a command merely mentioning a BARE_NAME_MESSAGES key as an argument is allowed" {
+@test "a command merely mentioning a bare-name-table entry as an argument is allowed" {
     run_hook "grep buildtest ."
     [ "${status}" -eq 0 ]
 }
