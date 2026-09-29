@@ -62,11 +62,11 @@ is_wrapper() {
 # git/dotnet/npm/bun below, so each gets a table entry instead of its own if/case arm -
 # a future addition here is a single new entry. An associative array is safe to use even
 # though these hooks are symlinked to run on the host's own shell (see
-# install-claude-hooks): reject-obfuscated-commands and enforce-git-dash-c, both earlier
-# in this same PreToolUse chain, already call the bash-4.0+-only `mapfile` unconditionally,
-# so bash 4.0+ is already this chain's real floor - a parallel-indexed-array workaround
-# here would only add a same-index-desync risk (a name added without its message, or vice
-# versa) for no actual portability gained.
+# install-claude-hooks): reject-obfuscated-commands, earlier in this same PreToolUse
+# chain, already calls the bash-4.0+-only `mapfile` unconditionally, so bash 4.0+ is
+# already this chain's real floor - a parallel-indexed-array workaround here would only
+# add a same-index-desync risk (a name added without its message, or vice versa) for no
+# actual portability gained.
 declare -A BARE_NAME_MESSAGES=(
   [pre-commit]='pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
   [pre-commit-check]='pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
@@ -90,8 +90,11 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # One line per CallExpr: every word that is a single plain literal is emitted verbatim;
 # anything else (quoted text, substitutions, expansions) is represented as a \x01 marker,
 # same as block-dotnet-tool-install/reject-obfuscated-commands - it can never equal any of
-# the literal command/subcommand names checked below, so it is opaque to those checks, and
-# unlike an empty string, is never dropped by IFS=<tab> word-splitting's collapsing of
+# the literal command/subcommand names checked below, so it is opaque to those checks by
+# default (the dotnet/npm/bun checks below deliberately also match the marker itself
+# alongside their literal subcommand names, so a non-literal word right after dotnet/npm/
+# bun still fails closed rather than silently skipping the check), and unlike an empty
+# string, is never dropped by IFS=<tab> word-splitting's collapsing of
 # consecutive whitespace delimiters (an earlier version used an empty string here: tab is
 # IFS whitespace even when IFS is explicitly set to $'\t', so `read -ra` collapsed a run of
 # adjacent tabs into one, silently dropping a non-literal word's slot and shifting every
@@ -140,15 +143,18 @@ while IFS= read -r call_line; do
       case "${words[$j]:-}" in
         build) block 'dotnet build must run with run_in_background: true (analyzer/restore duration is unbounded)' ;;
         test) block 'dotnet test must run with run_in_background: true (test run duration scales with what changed)' ;;
+        $'\x01') block 'dotnet <unresolved subcommand> must run with run_in_background: true (a non-literal word right after dotnet could resolve to build/test at runtime, so this fails closed)' ;;
       esac
     fi
 
-    if { [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; } && [ "${words[$((i + 1))]:-}" = "test" ]; then
-      block 'npm test must run with run_in_background: true (test run duration has no fixed bound)'
+    if { [ "$tok" = "npm" ] || [[ "$tok" == */npm ]]; } \
+      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = $'\x01' ]; }; then
+      block 'npm test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after npm, which could resolve to test at runtime, so this fails closed)'
     fi
 
-    if { [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; } && [ "${words[$((i + 1))]:-}" = "test" ]; then
-      block 'bun test must run with run_in_background: true (test run duration has no fixed bound)'
+    if { [ "$tok" = "bun" ] || [[ "$tok" == */bun ]]; } \
+      && { [ "${words[$((i + 1))]:-}" = "test" ] || [ "${words[$((i + 1))]:-}" = $'\x01' ]; }; then
+      block 'bun test must run with run_in_background: true (test run duration has no fixed bound; this also fires on an unresolved argument right after bun, which could resolve to test at runtime, so this fails closed)'
     fi
   done
 done <<< "$calls"
