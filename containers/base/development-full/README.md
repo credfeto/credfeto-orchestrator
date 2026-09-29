@@ -13,9 +13,9 @@ It layers a curated set of Claude Code skill repositories, the `credfeto-ai-skil
 Claude Code agents, baked-in Claude Code settings/hooks, and a tamper-resistant
 global pre-commit hook chain on top of `development-credfeto-tools`. The NuGet
 configuration, `claude-code`, and all twelve .NET global tools (both stable
-third-party and first-party Credfeto.*/FunFair.*) are inherited from `development-dotnet-tools` /
-`development-credfeto-tools`. See those images' own READMEs for what they
-install and why they're split out.
+third-party and first-party Credfeto.*/FunFair.*) are inherited from
+`development-dotnet-tools` / `development-credfeto-tools`. See those images' own
+READMEs for what they install and why they're split out.
 
 ---
 
