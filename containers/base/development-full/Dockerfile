@@ -136,6 +136,9 @@ RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
 # The resulting count is recorded to /opt/.claude-skill-count (rather than
 # hardcoded in the sanity check below) so the check stays correct as any
 # source's skill set changes, while still catching a broken symlink pass.
+# The duplicate check's `exit 1` runs in the `find | while` subshell, so the
+# pipeline's status is checked after each root; otherwise a duplicate under
+# any root but the last would be ignored.
 # hadolint ignore=DL3059,SC3045
 RUN mkdir -p /home/developer/.claude/skills \
     && chown root:root /home/developer/.claude \
@@ -167,7 +170,7 @@ RUN mkdir -p /home/developer/.claude/skills \
                 test ! -e "${target}" \
                     || { echo "FATAL: duplicate skill name '${skill_name}' (from ${skill_dir})" >&2; exit 1; }; \
                 ln -s "${skill_dir}" "${target}"; \
-              done; \
+              done || exit 1; \
     done \
     && find /home/developer/.claude/skills -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-skill-count \
     && chown -R root:root /home/developer/.claude/skills /opt/.claude-skill-count \
