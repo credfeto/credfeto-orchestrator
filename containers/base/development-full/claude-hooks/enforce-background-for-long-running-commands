@@ -90,26 +90,43 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
-# One line per CallExpr: every word that is a single plain literal is emitted verbatim;
-# anything else (quoted text, substitutions, expansions) is represented as a \x01 marker,
-# same as block-dotnet-tool-install/reject-obfuscated-commands - it can never equal any of
-# the literal command/subcommand names checked below, so it is opaque to those checks by
-# default (the dotnet/npm/bun checks below deliberately also match the marker itself
-# alongside their literal subcommand names, so a non-literal word right after dotnet/npm/
-# bun still fails closed rather than silently skipping the check), and unlike an empty
-# string, is never dropped by IFS=<tab> word-splitting's collapsing of
-# consecutive whitespace delimiters (an earlier version used an empty string here: tab is
-# IFS whitespace even when IFS is explicitly set to $'\t', so `read -ra` collapsed a run of
-# adjacent tabs into one, silently dropping a non-literal word's slot and shifting every
-# later word's index left - e.g. `git -C "$PWD" commit ...` had its "$PWD" argument vanish
-# entirely, misaligning the -c/-C skip loop below and letting the block on git commit go
-# unenforced). This closes only that one desync: a genuinely literal word can still itself
-# contain a real embedded tab byte (backslash-tab escaping, outside quotes), which the
-# tab-join cannot tell apart from its own delimiter and which this marker does not touch -
-# see #1530, not fixed here.
+# One line per CallExpr: a word that is a single plain literal, or one layer of ordinary
+# quoting with no expansion inside it ("restore", 'restore'), resolves to that literal
+# text - same literal_value scope as enforce-ssh-host-and-key, so a quoted-but-static word
+# like `dotnet "restore"` is recognised as literal "restore", not treated as opaque.
+# ANSI-C/locale quoting ($'...'/$"...") is deliberately excluded (checked via `.Dollar`)
+# and stays opaque, since it decodes escapes this hook cannot resolve without reimplementing
+# bash's own rules. Anything else (substitutions, expansions, ANSI-C/locale quoting, or
+# quoting that mixes literal text with either) is represented as a \x01 marker - it can
+# never equal any of the literal command/subcommand names checked below, so it is opaque to
+# those checks by default (the dotnet/npm/bun checks below deliberately also match the
+# marker itself alongside their literal subcommand names, so a non-literal word right after
+# dotnet/npm/bun still fails closed rather than silently skipping the check), and unlike an
+# empty string, is never dropped by IFS=<tab> word-splitting's collapsing of consecutive
+# whitespace delimiters (an earlier version used an empty string here: tab is IFS whitespace
+# even when IFS is explicitly set to $'\t', so `read -ra` collapsed a run of adjacent tabs
+# into one, silently dropping a non-literal word's slot and shifting every later word's
+# index left - e.g. `git -C "$PWD" commit ...` had its "$PWD" argument vanish entirely,
+# misaligning the -c/-C skip loop below and letting the block on git commit go unenforced).
+# This closes only that one desync: a genuinely literal word can still itself contain a real
+# embedded tab byte (backslash-tab escaping, outside quotes), which the tab-join cannot tell
+# apart from its own delimiter and which this marker does not touch - see #1530, not fixed
+# here.
 calls=$(printf '%s' "$ast" | jq -r '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
+        then $p.Parts[0].Value
+      else null
+      end
+    end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
+  [ .Args[] | literal_value // "\u0001" ] |
   join("\t")')
 
 while IFS= read -r call_line; do
