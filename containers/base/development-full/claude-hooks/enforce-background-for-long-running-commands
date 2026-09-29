@@ -68,9 +68,12 @@ is_wrapper() {
 # add a same-index-desync risk (a name added without its message, or vice versa) for no
 # actual portability gained.
 declare -A BARE_NAME_MESSAGES=(
-  [pre-commit]='pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
-  [pre-commit-check]='pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
-  [buildtest]='buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
+  # Keys quoted deliberately: shfmt misparses a bare hyphenated subscript as a
+  # subtraction expression and reformats e.g. [pre-commit] to [pre - commit],
+  # silently changing the key's value and breaking the match below.
+  ['pre-commit']='pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
+  ['pre-commit-check']='pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
+  ['buildtest']='buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
 )
 
 input=$(cat)
@@ -130,8 +133,8 @@ while IFS= read -r call_line; do
       while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
         j=$((j + 2))
       done
-      [ "${words[$j]:-}" = "commit" ] \
-        && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
+      { [ "${words[$j]:-}" = "commit" ] || [ "${words[$j]:-}" = $'\x01' ]; } \
+        && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration; this also fires on an unresolved subcommand right after -c/-C options, which could resolve to commit at runtime, so this fails closed)'
     fi
 
     for name in "${!BARE_NAME_MESSAGES[@]}"; do

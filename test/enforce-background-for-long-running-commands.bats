@@ -51,6 +51,13 @@ teardown() {
     [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
 }
 
+@test "git commit via an unresolved subcommand word is still blocked" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'git -C . $X commit -m test'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
 @test "dotnet build via an unresolved argument right after dotnet is still blocked" {
     # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
     run_hook 'dotnet $X build'
@@ -242,9 +249,9 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-@test "an obfuscated git commit argument is opaque to this hook (reject-obfuscated-commands blocks it upstream)" {
+@test "an obfuscated git commit argument is blocked here too, incidentally, by the fail-closed sentinel check (reject-obfuscated-commands still blocks it categorically upstream)" {
     run_hook 'git "com""mit" -m test'
-    [ "${status}" -eq 0 ]
+    [ "${status}" -eq 2 ]
 }
 
 @test "a command that does not parse as shell is blocked (fail closed)" {
