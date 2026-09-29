@@ -131,6 +131,24 @@ teardown() {
     [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
 }
 
+@test "git commit preceded by a single-quoted arg with a real embedded tab byte is blocked" {
+    run_hook "git -c 'x.y=a$(printf '\t')b' -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
+@test "git commit preceded by a double-quoted arg with a real embedded newline is blocked" {
+    run_hook "git -c \"x.y=a$(printf '\n')b\" -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
+@test "a bare backslash-tab-escaped dotnet build (an embedded raw tab byte, #1530 vector-1) is blocked" {
+    run_hook "dotnet bu\\$(printf '\t')ild"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+}
+
 @test "a path-qualified git commit invocation is blocked" {
     run_hook "/usr/bin/git -C . commit -m test"
     [ "${status}" -eq 2 ]
