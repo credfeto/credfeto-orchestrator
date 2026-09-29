@@ -48,6 +48,28 @@ teardown() {
     # shellcheck disable=SC2016  # literal $PWD - must reach the hook unexpanded
     run_hook 'git -C "$PWD" commit -m test'
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
+@test "dotnet build via an unresolved argument right after dotnet is still blocked" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'dotnet $X build'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+}
+
+@test "npm test via an unresolved argument right after npm is still blocked" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'npm $X'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'npm test'* ]]
+}
+
+@test "bun test via an unresolved argument right after bun is still blocked" {
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    run_hook 'bun $X'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'bun test'* ]]
 }
 
 @test "a path-qualified git commit invocation is blocked" {
