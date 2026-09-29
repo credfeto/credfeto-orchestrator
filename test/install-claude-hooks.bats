@@ -153,6 +153,7 @@ teardown() {
     for pair in \
         "find:-delete" "find:-exec " "find:-execdir " "find:-fls " "find:-fprint" "find:-ok " "find:-okdir " \
         "git:--exec-path" "git:--git-dir" "git:--namespace" "git:--super-prefix" "git:--work-tree" \
+        "node:--experimental-loader" "node:--import" "node:--inspect" "node:--loader" "node:--require" "node:-r" \
         "npm:--globalconfig" "npm:--script-shell" "npm:--userconfig" \
         "npm:-globalconfig" "npm:-script-shell" "npm:-userconfig" \
         "rm:--no-preserve-root"; do
@@ -163,7 +164,8 @@ teardown() {
         printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} * ${flag}*)" \
             || { echo "missing later-position deny: Bash(${tool} * ${flag}*)" >&2; return 1; }
     done
-    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)"; do
+    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)" \
+        "Bash(node ..*)" "Bash(node *..*)"; do
         printf '%s\n' "${denies}" | grep -qxF "${exact}" \
             || { echo "missing exact deny: ${exact}" >&2; return 1; }
     done
