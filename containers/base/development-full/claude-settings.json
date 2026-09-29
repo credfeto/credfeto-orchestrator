@@ -142,7 +142,7 @@
       "Bash(mkdir *)",
       "Bash(mktemp *)",
       "Bash(mv *)",
-      "Bash(node --check *)",
+      "Bash(node --check .github/actions/*/*.js)",
       "Bash(node .github/actions/*/*.js)",
       "Bash(node .github/actions/*/*.js *)",
       "Bash(npm --version)",
