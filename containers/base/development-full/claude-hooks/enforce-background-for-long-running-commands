@@ -14,10 +14,9 @@
 # behind. Before this hook existed, nothing enforced the rule but prose.
 # pre-commit-check is this repo's own wrapper script that runs pre-commit
 # against the existing checked-out repo (as opposed to invoking pre-commit
-# directly) — it shares pre-commit's unbounded hook-chain duration, so it is
-# checked the same way.
+# directly) — it shares pre-commit's unbounded hook-chain duration.
 # buildtest runs the full build and test suite, so its duration is just as
-# unbounded; it is checked the same way too.
+# unbounded. Both are checked the same way, via the BARE_NAMES table below.
 #
 # Parses with shfmt (mvdan/sh) and walks the resulting AST, same approach as
 # the sibling enforce-git-dash-c/block-git-worktree/block-dotnet-tool-install
@@ -61,11 +60,15 @@ is_wrapper() {
 
 # Bare-name commands: invoked directly by name rather than via a subcommand check like
 # git/dotnet/npm/bun below, so each gets a table entry instead of its own if/case arm -
-# a future addition here is a single new entry rather than a new block of matching logic.
-declare -A BARE_NAME_MESSAGES=(
-  [pre-commit]='pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
-  [pre-commit-check]='pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
-  [buildtest]='buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
+# a future addition here is a single new entry in each of these two parallel indexed
+# arrays (kept parallel rather than one associative array, since `declare -A` is bash
+# 4.0+ only and these hooks are symlinked to run on the host's own shell - see
+# install-claude-hooks - with no bash-version floor guaranteed there).
+BARE_NAMES=(pre-commit pre-commit-check buildtest)
+BARE_NAME_MESSAGES=(
+  'pre-commit must run with run_in_background: true (its hook chain, including the bats suite, has no bounded duration)'
+  'pre-commit-check must run with run_in_background: true (it wraps pre-commit against the existing repo, so it has the same unbounded hook-chain duration)'
+  'buildtest must run with run_in_background: true (it runs the full build and test suite, so its duration is unbounded)'
 )
 
 input=$(cat)
@@ -118,8 +121,9 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration)'
     fi
 
-    for name in "${!BARE_NAME_MESSAGES[@]}"; do
-      { [ "$tok" = "$name" ] || [[ "$tok" == */"$name" ]]; } && block "${BARE_NAME_MESSAGES[$name]}"
+    for idx in "${!BARE_NAMES[@]}"; do
+      name="${BARE_NAMES[$idx]}"
+      { [ "$tok" = "$name" ] || [[ "$tok" == */"$name" ]]; } && block "${BARE_NAME_MESSAGES[$idx]}"
     done
 
     if [ "$tok" = "dotnet" ] || [[ "$tok" == */dotnet ]]; then
