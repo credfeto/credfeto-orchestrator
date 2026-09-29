@@ -1,4 +1,5 @@
 {
+  "agent": "credfeto-orchestrator",
   "attribution": {
     "commit": "",
     "pr": "",
@@ -15,6 +16,8 @@
       "Bash(base64 *)",
       "Bash(basename *)",
       "Bash(bats *)",
+      "Bash(buildcheck *)",
+      "Bash(buildtest *)",
       "Bash(bun add *)",
       "Bash(bun install *)",
       "Bash(bun run *)",
@@ -296,6 +299,7 @@
       "Edit(~/.claude/history.jsonl)",
       "Edit(~/.claude/CLAUDE.md)",
       "Edit(~/.claude/skills/**)",
+      "Edit(~/.claude/agents/**)",
       "Edit(~/.claude/plugins/**)",
       "Edit(*/.claude/settings*.json*)",
       "Edit(*/.claude/.credentials.json)",
@@ -304,6 +308,7 @@
       "Edit(*/.claude/history.jsonl)",
       "Edit(*/.claude/CLAUDE.md)",
       "Edit(*/.claude/skills/**)",
+      "Edit(*/.claude/agents/**)",
       "Edit(*/.claude/plugins/**)",
       "Read(~/.claude/settings*.json*)",
       "Read(~/.claude/.credentials.json)",
