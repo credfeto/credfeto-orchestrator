@@ -196,8 +196,6 @@ RUN mkdir -p /home/developer/.claude/agents \
         ln -s "${agent_file}" "${target}"; \
     done \
     && find /home/developer/.claude/agents -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-agent-count \
-    && { [ "$(cat /opt/.claude-agent-count)" -gt 0 ] \
-        || { echo "FATAL: no agents linked from /opt/credfeto-ai-skills/ai/agents" >&2; exit 1; }; } \
     && chown -R root:root /home/developer/.claude/agents /opt/.claude-agent-count \
     && chmod 0444 /opt/.claude-agent-count
 
@@ -431,9 +429,8 @@ RUN set -e; \
     [ "$agent_count" -eq "$expected_agent_count" ] && [ "$agent_count" -gt 0 ] \
         || { echo "FATAL sanity: expected $expected_agent_count agent symlinks in ~/.claude/agents (recorded at build time), found $agent_count" >&2; exit 1; }; \
     for agent_link in /home/developer/.claude/agents/*.md; do \
-        if ! su developer -c "test -f '$agent_link' && test -r '$agent_link'"; then \
-            echo "FATAL sanity: agent link '$agent_link' does not resolve to a file readable by developer" >&2; exit 1; \
-        fi; \
+        su developer -c "test -f '$agent_link' && test -r '$agent_link'" \
+            || { echo "FATAL sanity: agent link '$agent_link' does not resolve to a file readable by developer" >&2; exit 1; }; \
     done; \
     echo "== all build-time checks passed =="
 
