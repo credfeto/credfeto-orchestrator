@@ -182,18 +182,17 @@ RUN mkdir -p /home/developer/.claude/skills \
 # it. Symlinked rather than copied so the link targets stay root:root and
 # non-writable by developer. The count is recorded to
 # /opt/.claude-agent-count for the sanity check below, for the same reason as
-# the skill count above. A glob loop (not find | while) keeps `exit 1` in the
-# current shell so a duplicate name aborts the build.
+# the skill count above. Link names cannot collide: they all come from one
+# directory's subdirectory names with a fixed prefix. A glob loop (not
+# find | while) keeps `exit 1` in the current shell, so a failed link aborts
+# the build.
 # hadolint ignore=DL3059
 RUN mkdir -p /home/developer/.claude/agents \
     && chmod 0755 /home/developer/.claude/agents \
     && for agent_file in /opt/credfeto-ai-skills/ai/agents/*/AGENT.md; do \
         test -f "${agent_file}" || continue; \
         agent_name="credfeto-$(basename "$(dirname "${agent_file}")")"; \
-        target="/home/developer/.claude/agents/${agent_name}.md"; \
-        test ! -e "${target}" \
-            || { echo "FATAL: duplicate agent name '${agent_name}' (from ${agent_file})" >&2; exit 1; }; \
-        ln -s "${agent_file}" "${target}"; \
+        ln -s "${agent_file}" "/home/developer/.claude/agents/${agent_name}.md" || exit 1; \
     done \
     && find /home/developer/.claude/agents -mindepth 1 -maxdepth 1 -type l | wc -l > /opt/.claude-agent-count \
     && chown -R root:root /home/developer/.claude/agents /opt/.claude-agent-count \

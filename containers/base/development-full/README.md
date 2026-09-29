@@ -61,8 +61,8 @@ as `config.yaml` and `install`. Every `ai/agents/<name>/` subdirectory that cont
 that file symlinked to `/home/developer/.claude/agents/credfeto-<name>.md`; everything else under
 `ai/agents/` is ignored. Upstream's `ai/agents/install` script is not run.
 
-The build fails if `ai/agents/` is missing, if two agents map to the same link name, or if no agents
-are linked. The number of links is recorded in `/opt/.claude-agent-count`.
+The build fails if `ai/agents/` is missing, if any link cannot be created, or if no agents are
+linked. The number of links is recorded in `/opt/.claude-agent-count`.
 `/home/developer/.claude/agents/` and every symlink in it are root:root, so `developer` can read the
 agent definitions but cannot add, remove, or retarget entries.
 
