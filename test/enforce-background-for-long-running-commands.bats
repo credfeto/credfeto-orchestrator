@@ -105,6 +105,11 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a command merely mentioning a BARE_NAME_MESSAGES key as an argument is allowed" {
+    run_hook "grep buildtest ."
+    [ "${status}" -eq 0 ]
+}
+
 @test "a path-qualified buildtest invocation is blocked" {
     run_hook "/home/user/bin/buildtest"
     [ "${status}" -eq 2 ]
