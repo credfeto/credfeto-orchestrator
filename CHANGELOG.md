@@ -48,7 +48,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Changed
 - install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
 - The Workflow board's built-in Status field now carries the ten workflow states, replacing the separate Workflow Status field and the coarse Todo, In Progress and Done set alongside it; create-project and the orchestrator convert each board in place, keeping GitHub's own board automations working, setting anything already closed or merged to Complete, and deleting the Workflow Status field only once every item's value has been copied across and read back, and a board that cannot be converted gets a Discord alert and its repository is skipped until it can; cfwf workflow-status --check prints just the status name, and cfwf follows whichever field a board uses while boards are converted (#1519)
-- enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags, and buildcheck and buildtest are added to claude-settings.json permissions.allow, repairing the command-allowlist parity test (#1526)
+- enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
 ### Deprecated
 ### Removed
 ### Deployment Changes
