@@ -144,13 +144,19 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # the gsub above and is caught by this same guard); the other two hooks #1530 named
 # (reject-obfuscated-commands, block-dotnet-tool-install) do not widen literal recognition
 # past a bare top-level Lit the way this file now does, so that issue still tracks them.
+# Guarded the same way as the ast=$(...) assignment above: if this jq program ever
+# errors on some AST shape (e.g. a Lit part with no Value key - defended against directly
+# below via // "", but kept here too as the fail-closed backstop), an unguarded assignment
+# would leave $calls empty, the read loop below would process zero lines, and the hook
+# would silently fall through to exit 0 - allowing the command through unbackgrounded,
+# the opposite of this hook's fail-closed contract.
 calls=$(printf '%s' "$ast" | jq -r '
   def literal_value:
     if (.Parts | length) != 1 then null
     else
       .Parts[0] as $p |
       if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then ($p.Value | gsub("\\\\(?<c>.)"; "\(.c)"))
+      elif $p.Type == "Lit" then (($p.Value // "") | gsub("\\\\(?<c>.)"; "\(.c)"))
       elif $p.Type == "SglQuoted" and ($p.Value // "") != "" then $p.Value
       elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
         then $p.Parts[0].Value
@@ -161,7 +167,7 @@ calls=$(printf '%s' "$ast" | jq -r '
   [ .Args[] | literal_value as $v |
     if $v == null or ($v | explode | any(. == 9 or . == 10 or . == 13)) then "\u0001" else $v end
   ] |
-  join("\t")')
+  join("\t")') || block 'command AST could not be analysed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
