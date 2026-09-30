@@ -228,9 +228,18 @@ done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr")
 # and it fails the command-name allowlist regex), then the resolved line
 # (same approach as enforce-git-dash-c's own resolve_parts, trimmed to just
 # the Lit/SglQuoted/DblQuoted-of-only-those-parts concatenation - no
-# unquoted-backslash decode, no ANSI-C-escape sentinel: those are accepted
-# gaps here, not load-bearing the way they are for that hook's --no-verify
-# check). This exists because the words line's own "single Lit part" test
+# unquoted-backslash decode, no ANSI-C-escape sentinel). Unlike that hook's
+# own --no-verify check, the ANSI-C gap here IS load-bearing where an
+# interpreter has a broad, unscoped allow entry (e.g. the pre-existing
+# Bash(python3 *)): python3 $'\x2d\x63' '...' passes this check, since
+# shfmt stores an ANSI-C string's raw, undecoded source text in Lit.Value,
+# not the runtime value bash actually passes - tracked as #1552, not fixed
+# here. It does not chain to a working bypass for node specifically, since
+# every node permissions.allow shape requires the .github/actions/*/*.js
+# script path to be node's first positional argument, and node stops
+# parsing its own flags there.
+#
+# The resolved line itself exists because the words line's own "single Lit part" test
 # treats a glued flag+quoted-value word (node --eval="code", node -e"code")
 # as opaque and skips it entirely in the interpreter-flag check below, which
 # is exactly the shape needed to run inline code once node is on
