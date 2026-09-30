@@ -83,7 +83,7 @@ It allows curl only with the flags in `ALLOWED_NOARG_FLAGS` and `ALLOWED_ARG_FLA
 
 ### enforce-background-for-long-running-commands
 
-It blocks `git commit`, `pre-commit`, `pre-commit-check`, `dotnet build`, `dotnet test`, `npm test` and `bun test` unless `run_in_background` is exactly `true`. `git push` is not in its list.
+It blocks `git commit`, `pre-commit`, `pre-commit-check`, `buildtest`, `dotnet build`, `dotnet test`, `npm test` and `bun test` unless `run_in_background` is exactly `true`, and fails closed on an unresolved (non-literal) subcommand in the same position, since it could resolve to one of those at runtime. `git push` is not in its list.
 
 ### cache-gh-lookups
 

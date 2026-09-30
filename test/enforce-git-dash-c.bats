@@ -72,6 +72,16 @@ make_writable_repo() {
     [ "${status}" -eq 0 ]
 }
 
+@test "git ls-files is allowed by the subcommand allowlist" {
+    run_hook_in_dir "git -C . ls-files"
+    [ "${status}" -eq 0 ]
+}
+
+@test "git ls-tree is allowed by the subcommand allowlist" {
+    run_hook_in_dir "git -C . ls-tree -r HEAD"
+    [ "${status}" -eq 0 ]
+}
+
 @test "git filter-branch is blocked by the subcommand allowlist even with -C present" {
     run_hook_in_dir "git -C . filter-branch --tag-name-filter cat -- --all"
     [ "${status}" -eq 2 ]
