@@ -941,6 +941,20 @@ line two" && git -C . push'
     [ "${status}" -eq 0 ]
 }
 
+# A backslash-escaped tab (a\<TAB>b) is one word at runtime, but shfmt keeps it as a single Lit
+# whose raw Value contains the tab byte, so the words line must fold it to the opaque marker
+# rather than split it into two tab-joined fields against one resolved value.
+@test "a backslash-escaped tab in a plain word does not desync the parse" {
+    run_hook_in_dir $'git -C . log a\\\tb'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a backslash-escaped tab word before --no-verify is still blocked" {
+    run_hook_in_dir $'git -C . commit a\\\tb --no-verify -m x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" != *'desync'* ]]
+}
+
 # Abbreviated --no-verify tests (#1399 code review): git's own option parser accepts any
 # unambiguous prefix of a long option, so an exact-only `--no-verify` case arm lets a shorter,
 # still-working spelling straight through. `--no-v`/`--no-ve`/`--no-ver` are genuine,
