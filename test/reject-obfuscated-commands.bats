@@ -518,6 +518,46 @@ git status'
     [[ "${output}" == *'interpreter re-invocation'* ]]
 }
 
+# A backslash-escaped tab (a\<TAB>b) is one word at runtime, but shfmt keeps it as a single Lit
+# whose raw Value contains the tab byte; the word must not split into two tab-joined fields and
+# shift every later argument's words/resolved pairing past the real inline-code flag.
+@test "a backslash-escaped tab decoy before a nested python3 -c is still blocked" {
+    run_hook $'uv run a\\\tb python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "two backslash-escaped tab decoys before a nested python3 -c are still blocked" {
+    run_hook $'uv run a\\\tb c\\\td python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before a nested node -e is still blocked" {
+    run_hook $'npx a\\\tb node -e "1"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before a nested node --eval=code is still blocked" {
+    run_hook $'npx a\\\tb node --eval="1"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before an interpreter's own inline-code flag is still blocked" {
+    run_hook $'python3 a\\\tb -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a trailing empty quoted argument is allowed (not misread as inconsistent arguments)" {
+    run_hook 'echo a ""'
+    [ "${status}" -eq 0 ]
+    run_hook "python3 script.py ''"
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command containing a non-ASCII byte is blocked" {
     run_hook $'git -C . commit -m "caf\xc3\xa9"'
     [ "${status}" -eq 2 ]
