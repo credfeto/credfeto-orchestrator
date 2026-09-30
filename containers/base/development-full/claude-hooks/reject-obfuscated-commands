@@ -106,6 +106,18 @@ is_interpreter() {
 }
 
 # $1 is the argument word, $2 the interpreter's base name.
+#
+# Known, accepted limitation (#1545): Layer 3/3b call this for every
+# argument after the interpreter name, not only the positions where the
+# interpreter itself still parses options. A script's own argument that
+# looks like an inline-code flag is therefore rejected too, whether it is
+# an exact match (node .github/actions/a/b.js -p) or matches the glued
+# short-flag case below (python3 script.py -env prod, python3 -m pytest
+# -pno:cacheprovider, node .github/actions/a/b.js -config x). This fails
+# closed, so nothing is exploitable. Stopping the scan at the first
+# non-dash argument is not a safe fix: it would reopen shapes such as
+# python3 -W ignore -c code, where an option's value comes before the real
+# flag. A correct fix needs per-interpreter argument-position tracking.
 is_inline_code_flag() {
   local f
   local -a flags=("${INLINE_CODE_FLAGS[@]}")

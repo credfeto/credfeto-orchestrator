@@ -173,9 +173,10 @@ teardown() {
 @test "node's code-loading flags are denied in the first argument position only" {
     # Every permissions.allow shape for node puts the .github/actions script path as node's first
     # positional argument (optionally after --check), and node stops parsing its own options there,
-    # so a later -r/--require is a script argument, not a node flag. A later-position deny would only
-    # block legitimate script arguments; the first-position deny is defence in depth in case the
-    # allow patterns ever change.
+    # so a later -r/--require is a script argument, not a node flag. A later-position deny would
+    # block legitimate script arguments such as -refresh for no gain; the first-position deny is
+    # defence in depth in case the allow patterns ever change. (reject-obfuscated-commands still
+    # rejects a script argument that looks like an inline-code flag, such as -e or -config.)
     local denies flag
     denies=$(jq -r '.permissions.deny[]' "${SOURCE_SETTINGS}")
     for flag in --experimental-loader --import --inspect --loader --require -r; do
