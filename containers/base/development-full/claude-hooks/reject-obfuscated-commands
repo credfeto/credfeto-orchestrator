@@ -207,7 +207,7 @@ while IFS= read -r var; do
   done
 done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
 
-# Emit two lines per CallExpr anywhere in the AST (any nesting depth —
+# Emit two lines per CallExpr anywhere in the AST (at any nesting depth:
 # $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
 # process substitutions): the words line (command-name word followed by each
 # argument word, tab-separated - a word that is anything other than a single
