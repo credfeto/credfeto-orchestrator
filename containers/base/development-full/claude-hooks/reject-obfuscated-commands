@@ -234,12 +234,24 @@ done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr")
 # \x1f (unit separator), not tab, because a resolved value can genuinely be
 # an empty string and `IFS=$'\t' read -ra` collapses consecutive tabs,
 # silently dropping an empty field and desyncing the array against words;
-# \x1f is not IFS whitespace, so empty fields survive. A resolved value
-# containing a raw tab/newline/CR/\x1f byte (a quoted argument may
-# legitimately embed one) is folded back to the marker rather than risking
-# it corrupting this transport - no flag this check matches contains
-# whitespace, so nothing real is lost. Words cannot contain raw whitespace,
-# so tab is a safe separator for that line.
+# \x1f is not IFS whitespace, so empty fields survive between delimiters.
+# An empty resolved value is still folded to the marker, though, because
+# `read -ra` drops a trailing empty field even with a non-whitespace IFS
+# (`cmd a ""` would otherwise leave resolved one entry shorter than words).
+# A value on either line containing a raw tab/newline/CR/\x1f byte is also
+# folded back to the marker (unsafe_for_transport): a quoted argument may
+# legitimately embed one, and so may a plain single-Lit word, since shfmt
+# keeps an unquoted backslash-escaped tab (`a\<TAB>b`, one word at runtime)
+# as a single Lit whose raw Value still contains the tab byte. Left as-is,
+# that one word would split into two words[] entries while resolved[] kept
+# one, shifting every later words[i]/resolved[i] pairing so Layer 3/3b read
+# the wrong argument and could miss a real inline-code flag. No flag this
+# check matches contains whitespace or is empty, so folding costs nothing
+# real, and the loop below also fails closed if the two lines ever split
+# into different field counts. The jq program itself is guarded the same
+# way as the ast=$(...) assignment above: if it errored, $calls would be
+# empty, the loop would process nothing and the hook would fall through to
+# exit 0.
 calls=$(printf '%s' "$ast" | jq -r '
   def resolve_parts:
     if length == 0 then ""
@@ -256,17 +268,18 @@ calls=$(printf '%s' "$ast" | jq -r '
         end
       )
     end;
+  def unsafe_for_transport:
+    . == null or . == "" or (explode | any(. == 9 or . == 10 or . == 13 or . == 31));
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  ([ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] | join("\t")),
+  ([ .Args[] |
+     (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end) as $w |
+     if ($w | unsafe_for_transport) then "\u0001" else $w end
+  ] | join("\t")),
   ([ .Args[] |
      (.Parts | resolve_parts) as $r |
-     if $r == null or ($r | explode | any(. == 9 or . == 10 or . == 13 or . == 31)) then
-       ([1] | implode)
-     else
-       $r
-     end
+     if ($r | unsafe_for_transport) then "\u0001" else $r end
   ] | join("\u001f"))
-')
+') || block 'command AST could not be analysed - failing closed'
 
 MARKER=$'\x01'
 # `[` (the `test` builtin's bracket form) is a single-character command name
@@ -293,6 +306,14 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
   [ -z "$call_line" ] && continue
   IFS=$'\t' read -ra words <<< "$call_line"
   IFS=$'\x1f' read -ra resolved <<< "$resolved_line"
+  # Layers 3/3b pair words[i] with resolved[i] by index; if some unforeseen
+  # AST shape ever makes the two transports split into different field
+  # counts, every later pairing is wrong and an inline-code flag can be
+  # read at the wrong index, so fail closed rather than check misaligned
+  # data.
+  if [ "${#words[@]}" -ne "${#resolved[@]}" ]; then
+    block 'command arguments could not be analysed consistently - failing closed'
+  fi
   name="${words[0]}"
 
   if ! [[ "$name" =~ $NAME_RE ]]; then
