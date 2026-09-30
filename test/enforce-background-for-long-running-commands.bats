@@ -118,6 +118,12 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a double-quoted escaped dollar dotnet arg stays literal and allowed" {
+    # shellcheck disable=SC2016  # literal \$build - must reach the hook unexpanded
+    run_hook 'dotnet "\$build"'
+    [ "${status}" -eq 0 ]
+}
+
 @test "an unquoted double-backslash dotnet arg decodes to bu\\ild, not build, and stays allowed" {
     run_hook 'dotnet bu\\ild'
     [ "${status}" -eq 0 ]
