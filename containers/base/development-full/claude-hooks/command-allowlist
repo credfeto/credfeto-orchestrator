@@ -41,9 +41,10 @@ npm
 npx
 bun
 
-# Containers
-podman
-docker
+# (podman/docker deliberately excluded and blocklisted in command-blocklist -
+# container execution is banned outright in this workflow: running a script
+# or shell inside a container gets around the sub-shell ban, and no
+# in-session workflow needs one, see #1539)
 
 # Network
 curl

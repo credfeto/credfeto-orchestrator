@@ -523,6 +523,43 @@ git status'
     [[ "${output}" == *'xargs is not permitted'* ]]
 }
 
+# ---- container runtimes (banned outright, #1539) ----------------------------
+
+@test "podman run is banned outright" {
+    run_hook "podman run --rm -v /workspace/repo:/src alpine sh /src/script.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'podman is not permitted - container execution is banned'* ]]
+}
+
+@test "docker run is banned outright" {
+    run_hook "docker run --rm -v /workspace/repo:/src alpine sh /src/script.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'docker is not permitted - container execution is banned'* ]]
+}
+
+@test "podman exec is banned outright" {
+    run_hook "podman exec mycontainer ls /"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'podman is not permitted - container execution is banned'* ]]
+}
+
+@test "docker exec is banned outright" {
+    run_hook "docker exec mycontainer ls /"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'docker is not permitted - container execution is banned'* ]]
+}
+
+@test "nerdctl is banned outright" {
+    run_hook "nerdctl ps"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'nerdctl is not permitted - container execution is banned'* ]]
+}
+
+@test "testdocker is still allowed after the container runtime ban" {
+    run_hook "testdocker"
+    [ "${status}" -eq 0 ]
+}
+
 @test "source is banned outright" {
     run_hook "source ./setup.sh"
     [ "${status}" -eq 2 ]
