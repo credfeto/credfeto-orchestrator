@@ -101,6 +101,28 @@ teardown() {
     [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
 }
 
+@test "a Dollar-quoted double-quoted dotnet subcommand still fails closed" {
+    run_hook 'dotnet $"build"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet <unresolved subcommand> must run with run_in_background: true'* ]]
+}
+
+@test "a single-quoted dotnet build is still blocked" {
+    run_hook "dotnet 'build'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet build must run with run_in_background: true'* ]]
+}
+
+@test "a double-quoted single-backslash dotnet arg is not decoded and stays allowed" {
+    run_hook 'dotnet "bu\ild"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an unquoted double-backslash dotnet arg decodes to bu\\ild, not build, and stays allowed" {
+    run_hook 'dotnet bu\\ild'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a backslash-escaped dotnet build (bu\\ild) is blocked" {
     run_hook 'dotnet bu\ild'
     [ "${status}" -eq 2 ]
