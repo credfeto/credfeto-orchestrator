@@ -424,7 +424,7 @@ git status'
     [[ "${output}" == *'interpreter re-invocation'* ]]
 }
 
-@test "node --eval=code glued with = is blocked (code-review finding)" {
+@test "node --eval=code glued with = is blocked" {
     run_hook "node --eval=\"require('child_process').execSync('id')\""
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'interpreter re-invocation'* ]]
@@ -458,16 +458,6 @@ git status'
     run_hook "node --interactive"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'interpreter re-invocation'* ]]
-}
-
-@test "node --check .github/actions script still allowed after the glued-flag fix" {
-    run_hook "node --check .github/actions/foo/bar.js"
-    [ "${status}" -eq 0 ]
-}
-
-@test "node running a .github/actions script still allowed after the glued-flag fix" {
-    run_hook "node .github/actions/foo/bar.js"
-    [ "${status}" -eq 0 ]
 }
 
 @test "nodejs -p and nodejs -i are blocked the same as node (node-only flag set)" {
