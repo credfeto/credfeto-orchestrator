@@ -42,8 +42,8 @@ npx
 bun
 # node itself is scoped narrowly in claude-settings.json's permissions.allow
 # (node --check, and running a .github/actions/*/*.js script directly) -
-# node -e/-c/--eval and -p/--print are still rejected by the interpreter
-# re-invocation check in reject-obfuscated-commands
+# node -e/-c/--eval, -p/--print and -i/--interactive are still rejected by
+# the interpreter re-invocation check in reject-obfuscated-commands
 node
 
 # (podman/docker deliberately excluded and blocklisted in command-blocklist -
