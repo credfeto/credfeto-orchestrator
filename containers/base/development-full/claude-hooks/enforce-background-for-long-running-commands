@@ -145,18 +145,27 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # (reject-obfuscated-commands, block-dotnet-tool-install) do not widen literal recognition
 # past a bare top-level Lit the way this file now does, so that issue still tracks them.
 # Guarded the same way as the ast=$(...) assignment above: if this jq program ever
-# errors on some AST shape (e.g. a Lit part with no Value key - defended against directly
-# below via // "", but kept here too as the fail-closed backstop), an unguarded assignment
-# would leave $calls empty, the read loop below would process zero lines, and the hook
-# would silently fall through to exit 0 - allowing the command through unbackgrounded,
-# the opposite of this hook's fail-closed contract.
+# errors on some AST shape, an unguarded assignment would leave $calls empty, the
+# read loop below would process zero lines, and the hook would silently fall through
+# to exit 0 - allowing the command through unbackgrounded, the opposite of this
+# hook's fail-closed contract.
 calls=$(printf '%s' "$ast" | jq -r '
   def literal_value:
     if (.Parts | length) != 1 then null
     else
       .Parts[0] as $p |
       if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then (($p.Value // "") | gsub("\\\\(?<c>.)"; "\(.c)"))
+      # A Lit part with no Value key folds to null (-> opaque marker), same as every
+      # other branch below, rather than to "" - real shfmt never actually emits a Lit
+      # node without Value, so this is defense-in-depth against an unexpected future
+      # AST shape, but "" is the wrong fallback for that: an empty field survives as a
+      # genuine (non-null) string, so it is not caught by the null check two lines
+      # below, is not folded to the opaque marker, and comes out as a real empty field
+      # in the tab-joined line - collapsed by IFS=<tab> word-splitting exactly like the
+      # empty-string desync bug this file already fixed once (see the tab-splitting
+      # paragraph above), silently shifting the index of every later word left. null
+      # makes this fail closed the same way an unresolvable word already does elsewhere.
+      elif $p.Type == "Lit" then ($p.Value | if . == null then null else gsub("\\\\(?<c>.)"; "\(.c)") end)
       elif $p.Type == "SglQuoted" and ($p.Value // "") != "" then $p.Value
       elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
         then $p.Parts[0].Value

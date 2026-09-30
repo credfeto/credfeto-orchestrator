@@ -373,6 +373,24 @@ teardown() {
     [[ "${output}" == *'failing closed'* ]]
 }
 
+@test "an AST word with a Lit part but no Value key resolves opaque, not to a desyncing empty field (#1526 round 2)" {
+    # Real shfmt never actually emits a Lit node without a Value key for any parseable
+    # input, but literal_value must still fail closed on one rather than silently
+    # reopening the word-index-desync bug this file already fixed once: a "" fallback
+    # there resolves to a genuine (non-null) empty string, which is not caught by the
+    # null check and not folded to the opaque marker, so it comes out as a real empty
+    # tab field - collapsed away by IFS=<tab> word-splitting, shifting "commit" from
+    # word index 3 down to index 2, past where the -c/-C skip loop below looks for it,
+    # so the hook would no longer block. Stub shfmt to emit that exact AST shape
+    # (git -C <no-Value> commit) directly, bypassing real shfmt's parser entirely.
+    local ast_file="${TEST_TMP}/ast.json"
+    printf '%s' '{"Type":"CallExpr","Args":[{"Parts":[{"Type":"Lit","Value":"git"}]},{"Parts":[{"Type":"Lit","Value":"-C"}]},{"Parts":[{"Type":"Lit"}]},{"Parts":[{"Type":"Lit","Value":"commit"}]}]}' > "${ast_file}"
+    make_stub shfmt "cat '${ast_file}'"
+    run_hook "git -C . commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git commit must run with run_in_background: true'* ]]
+}
+
 @test "an empty command is allowed" {
     run_hook ""
     [ "${status}" -eq 0 ]
