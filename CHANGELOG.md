@@ -14,6 +14,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Extend enforce-git-dash-c to block git-hook-bypass flags (long and short form, scoped correctly per subcommand) and the HUSKY=0 environment override on git commands (#1399)
 - Added a repo-owned block-github-mcp-write-tools Claude Code hook that blocks GitHub MCP write tools (create/update/delete file, push files, merge pull request, update pull request branch), so they cannot bypass local git hooks
 - Claude Code sessions in the development-full container now start as the credfeto-orchestrator agent, so a session is limited to that agent's delegating tool set, and the image build fails if that agent is not installed
+- TBD - to be finalized after review
 ### Added
 - Idle-exhaustion and runaway/total-invocation Blocked comments on a PR or Issue now include the last session's own diagnostic (a permission-denials summary, or a short diagnostic-refusal result) when one was recorded, fenced and truncated, instead of only the generic reason text - closing the gap where that diagnostic previously only ever reached Discord, deduplicated, and never the PR/Issue a human is actually looking at (#1448)
 - Link dotnet/skills plugins (dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade) into the development-full container image
