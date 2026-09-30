@@ -69,14 +69,23 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # (which runs before this hook) already guarantees a real \x01 byte can
 # never appear in the input, so the marker is unambiguous, can never equal
 # "dotnet"/"tool"/"install"/"new"/"tool-manifest" and so is opaque to the
-# checks below, and — unlike an empty string — is never dropped by
+# checks below, and (unlike an empty string) is never dropped by
 # IFS=<tab> word-splitting's collapsing of consecutive whitespace
-# delimiters. Words cannot contain raw whitespace, so tab is a safe
-# separator.
+# delimiters. A plain literal can still contain a raw tab: shfmt keeps an
+# unquoted backslash-escaped tab (`a\<TAB>b`, one word at runtime) as a
+# single Lit whose Value holds the tab byte, which would split into two
+# fields on the tab join and shift every later word's index. Such a word
+# (or one holding a newline or CR) is folded to the marker as well, the
+# same guard reject-obfuscated-commands applies to its own words line.
+# Guarded like the ast=$(...) assignment above: a jq error would otherwise
+# leave $calls empty and the hook would silently allow the command.
 calls=$(printf '%s' "$ast" | jq -r '
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
-  join("\t")')
+  [ .Args[] |
+    (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end) as $w |
+    if $w == null or $w == "" or ($w | explode | any(. == 9 or . == 10 or . == 13)) then "\u0001" else $w end
+  ] |
+  join("\t")') || block 'command AST could not be analysed - failing closed'
 
 while IFS= read -r call_line; do
   [ -z "$call_line" ] && continue
