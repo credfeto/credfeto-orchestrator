@@ -51,15 +51,11 @@ As belt-and-suspenders, `ensure_repo_current()` and `try_nonagentic_rebase()` in
 
 The self-check HTTPS clone in each Dockerfile uses `GIT_CONFIG_SYSTEM=/dev/null` to bypass this rewrite (no SSH key is available at build time).
 
-## Local Build Before Any Change (MANDATORY)
+## Build Verification Before Any Change (MANDATORY)
 
-Before making any change to a Dockerfile or its associated workflow, build the affected image locally and confirm it succeeds:
+`docker`/`podman` execution is now banned outright for in-session Bash calls (#1539; see `ai/local/claude-hooks.instructions.md`), so an agent session can no longer run `docker build` locally to verify a Dockerfile or workflow change.
 
-```bash
-docker build -t <image-name>:local containers/base/<stage>/
-```
-
-Do not commit, push, or raise a PR until the local build passes. A broken image must be caught locally — not by CI.
+Each `build-development-*.yml` workflow already builds its image on every pull request (a `pull_request` trigger with no `paths:` filter, so it always runs, and it is a required status check). That CI run is now the verification point for a Dockerfile or workflow change: push the change and confirm the relevant `build-development-*` check passes before considering it verified. Do not mark a PR ready until it does.
 
 ## Lock-Down Requirements (MANDATORY)
 

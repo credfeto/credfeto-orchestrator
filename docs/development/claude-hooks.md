@@ -46,7 +46,7 @@ It runs first and applies these layers in order:
 - Function definitions and `declare`/`export`/`local`/`readonly` are rejected, and so is an assignment to any variable in `env-var-blocklist` (`IFS`, `PATH`, `LD_*`, `GIT_*`, `npm_config_*`, the `*_proxy` names), matched case-insensitively.
 - Every command name, at any depth, must be one plain literal word.
 - An interpreter given an inline-code flag (`bash -c`, `python3 -c`, `node -e`, also nested as an argument such as `uv run python3 -c`) is rejected.
-- Names in `command-blocklist` are rejected (`eval`, `source`, shells, and wrappers such as `env`, `sudo`, `command`, `timeout`, `xargs`, `time`).
+- Names in `command-blocklist` are rejected (`eval`, `source`, shells, and wrappers such as `env`, `sudo`, `command`, `timeout`, `xargs`, `time`, and the container runtimes `podman`, `docker` and `nerdctl`).
 - Anything not in `command-allowlist` is rejected. Path-qualified names match by basename. Exactly `set -e` is let through as a special case.
 
 ### enforce-allowed-dirs
