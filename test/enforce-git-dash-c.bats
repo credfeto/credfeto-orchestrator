@@ -949,9 +949,21 @@ line two" && git -C . push'
     [ "${status}" -eq 0 ]
 }
 
-@test "a backslash-escaped tab word before --no-verify is still blocked" {
-    run_hook_in_dir $'git -C . commit a\\\tb --no-verify -m x'
+# The tab word sits before the subcommand, so every later words/resolved index would shift if it
+# split: the block must come from the --no-verify rule itself, proving the scan stayed aligned.
+@test "a backslash-escaped tab word before the subcommand keeps --no-verify detection aligned" {
+    run_hook_in_dir $'git -c a\\\tb=1 -C . commit --no-verify -m x'
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+    [[ "${output}" != *'desync'* ]]
+}
+
+# A tab word inside a hook-bypass-checked subcommand's own arguments cannot be checked, so it is
+# blocked as opaque (fail closed) rather than as a parse desync.
+@test "a backslash-escaped tab word in commit arguments is blocked as opaque, not as a desync" {
+    run_hook_in_dir $'git -C . commit a\\\tb -m x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
     [[ "${output}" != *'desync'* ]]
 }
 
