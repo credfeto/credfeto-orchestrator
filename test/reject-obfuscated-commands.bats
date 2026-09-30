@@ -400,6 +400,28 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
+@test "a .github/actions script with ordinary trailing arguments is allowed" {
+    run_hook "node .github/actions/foo/bar.js prod --config x -refresh"
+    [ "${status}" -eq 0 ]
+}
+
+# Accepted fail-closed limitation (#1545): every argument after the interpreter name is checked,
+# including the script's own, so a script argument that looks like an inline-code flag is rejected.
+@test "a script argument that looks like an inline-code flag is rejected (accepted limitation)" {
+    run_hook "node .github/actions/foo/bar.js -config x"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "node .github/actions/foo/bar.js -p"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "python3 script.py -env prod"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "python3 -m pytest -pno:cacheprovider"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
 @test "node -p with inline code is blocked" {
     run_hook "node -p \"require('child_process').execSync('git push')\""
     [ "${status}" -eq 2 ]
