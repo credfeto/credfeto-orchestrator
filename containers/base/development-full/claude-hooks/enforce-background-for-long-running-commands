@@ -188,6 +188,16 @@ while IFS= read -r call_line; do
         && block 'git commit must run with run_in_background: true (its pre-commit hook run has no bounded duration; this also fires on an unresolved subcommand right after -c/-C options, which could resolve to commit at runtime, so this fails closed)'
     fi
 
+    # Unlike git/dotnet/npm/bun above and below, this loop deliberately does NOT also match
+    # OPAQUE_MARKER: $tok here is the command-name position itself (not an argument after a
+    # known trigger word), so an opaque $tok could be any dynamically-named command at all
+    # (e.g. `$PYTHON script.py`), not specifically one that might be pre-commit/buildtest -
+    # matching the marker here would block every dynamically-named command outright, a much
+    # wider blast radius than the narrowly-scoped dotnet/npm/bun/git checks. This is safe to
+    # leave unmatched only because reject-obfuscated-commands, earlier in the same PreToolUse
+    # chain, already uses a stricter single-Lit-only extraction for the command-name position
+    # and fails closed on any quoting there at all - this loop relies on that upstream gate,
+    # not on its own logic, for the opaque-command-name case.
     for name in "${!BARE_NAME_MESSAGES[@]}"; do
       { [ "$tok" = "$name" ] || [[ "$tok" == */"$name" ]]; } && block "${BARE_NAME_MESSAGES[$name]}"
     done
