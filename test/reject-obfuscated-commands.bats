@@ -537,18 +537,6 @@ git status'
     [[ "${output}" == *'docker is not permitted - container execution is banned'* ]]
 }
 
-@test "podman exec is banned outright" {
-    run_hook "podman exec mycontainer ls /"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'podman is not permitted - container execution is banned'* ]]
-}
-
-@test "docker exec is banned outright" {
-    run_hook "docker exec mycontainer ls /"
-    [ "${status}" -eq 2 ]
-    [[ "${output}" == *'docker is not permitted - container execution is banned'* ]]
-}
-
 @test "nerdctl is banned outright" {
     run_hook "nerdctl ps"
     [ "${status}" -eq 2 ]

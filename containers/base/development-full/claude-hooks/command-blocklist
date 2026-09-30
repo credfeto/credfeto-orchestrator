@@ -52,6 +52,6 @@ time	is not permitted - no legitimate need for it in this workflow
 # Container runtimes (banned outright, #1539 - running a script or shell
 # inside a container gets around the sub-shell and inline-code bans above,
 # and no in-session workflow needs one)
-podman	is not permitted - container execution is banned in this workflow, see credfeto-orchestrator#1539
-docker	is not permitted - container execution is banned in this workflow, see credfeto-orchestrator#1539
-nerdctl	is not permitted - container execution is banned in this workflow, see credfeto-orchestrator#1539
+podman	is not permitted - container execution is banned in this workflow
+docker	is not permitted - container execution is banned in this workflow
+nerdctl	is not permitted - container execution is banned in this workflow
