@@ -470,6 +470,54 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
+@test "nodejs -p and nodejs -i are blocked the same as node (node-only flag set)" {
+    run_hook "nodejs -p \"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "nodejs -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -i nested under an allowlisted runner is blocked" {
+    run_hook "npx node -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "bash -p and bash -i are not misreported as inline code (shell privileged/interactive mode)" {
+    run_hook "bash -p ./scripts/deploy.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+    run_hook "bash -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+}
+
+@test "sh -p and sh --interactive are not misreported as inline code" {
+    run_hook "sh -p ./scripts/deploy.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+    run_hook "sh --interactive"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+}
+
+@test "python3 -i with a script file is allowed (-i is only an inline-code flag for node)" {
+    run_hook "python3 -i script.py"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a glued -pe with its code attached is still blocked for a nested non-node interpreter" {
+    run_hook "uv run perl -pe\"system('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
 @test "a command containing a non-ASCII byte is blocked" {
     run_hook $'git -C . commit -m "caf\xc3\xa9"'
     [ "${status}" -eq 2 ]

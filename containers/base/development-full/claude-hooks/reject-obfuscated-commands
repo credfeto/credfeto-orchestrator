@@ -82,15 +82,20 @@ block() {
 # still cannot be handed inline code, and so the error message names the
 # actual problem.
 INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh fish python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
-# -p/--print is node's inline "evaluate and print" flag (node -c is a safe
-# syntax-check alias, but -c is already blocked here for other interpreters,
-# so node -c is blocked too - use node --check instead). -i/--interactive is
-# node's REPL flag - not itself an inline-code flag, but starting a REPL is
-# exactly as dangerous as one, and a bare `node` with no recognised flag at
-# all already falls through this loop with nothing to check (a script-path
-# argument is required by permissions.allow, not by this hook), so blocking
-# -i/--interactive here is defence in depth alongside that requirement.
-INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe -p --print -i --interactive)
+# Flags that hand virtually every interpreter above a literal string of code
+# to run, so they are checked whatever the interpreter is.
+INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
+# Flags that only mean "run code" for node: -p/--print is node's inline
+# "evaluate and print" flag, and -i/--interactive starts node's REPL - not
+# itself an inline-code flag, but exactly as dangerous as one. For the shells
+# in INTERPRETERS -p is privileged mode and -i is an ordinary interactive
+# shell, neither of which runs a string of code, so checking these for every
+# interpreter would misreport them as inline-code re-invocation. A bare `node`
+# with no recognised flag at all falls through with nothing to check here; a
+# script-path argument is required by permissions.allow, not by this hook.
+# node -c is blocked too even though it is node's own --check alias, because
+# -c is in the shared set above; use node --check instead.
+NODE_ONLY_INLINE_FLAGS=(-p --print -i --interactive)
 
 is_interpreter() {
   local w
@@ -100,9 +105,14 @@ is_interpreter() {
   return 1
 }
 
+# $1 is the argument word, $2 the interpreter's base name.
 is_inline_code_flag() {
   local f
-  for f in "${INLINE_CODE_FLAGS[@]}"; do
+  local -a flags=("${INLINE_CODE_FLAGS[@]}")
+  case "$2" in
+    node | nodejs) flags+=("${NODE_ONLY_INLINE_FLAGS[@]}") ;;
+  esac
+  for f in "${flags[@]}"; do
     [ "$1" = "$f" ] && return 0
     # A long flag glued to its value with '=' (node --eval="code",
     # --print="code") is exactly as dangerous as the space-separated form
@@ -112,12 +122,11 @@ is_inline_code_flag() {
     esac
   done
   # A short inline-code flag glued directly to its value with no separator
-  # (node -ecode, -pcode - node accepts this the same way -C3 works for
-  # other tools) is also not caught by the exact-match check above. Scoped
-  # to -c/-e/-p specifically (not a blanket "any short flag glued" rule):
-  # of the interpreters actually reachable via command-allowlist, only node
-  # and python3 are affected, and python3 has no -c/-e/-p flags of its own,
-  # so this cannot false-block a legitimate glued short option there.
+  # (node -ecode, -pcode, python3 -ccode, perl -peCODE - accepted the same
+  # way -C3 works for other tools) is also not caught by the exact-match
+  # check above. Deliberately shared across every interpreter, -p?* included:
+  # a glued -p word is perl/ruby's -pe with its code attached as well as
+  # node's -p, while a shell's privileged-mode -p is always passed on its own.
   case "$1" in
     -c?* | -e?* | -p?*) return 0 ;;
   esac
@@ -298,7 +307,7 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
       [ "$idx" -eq 0 ] && continue
       arg="${resolved[$idx]}"
       [ "$arg" = "$MARKER" ] && continue
-      if is_inline_code_flag "$arg"; then
+      if is_inline_code_flag "$arg" "$base"; then
         block 'interpreter re-invocation with inline code is not a simple, obvious command'
       fi
     done
@@ -351,11 +360,12 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
     tok="${words[$idx]}"
     [ "$tok" = "$MARKER" ] && continue
     if is_interpreter "${tok##*/}"; then
+      nested_base="${tok##*/}"
       for arg2idx in "${!words[@]}"; do
         [ "$arg2idx" -le "$idx" ] && continue
         arg="${resolved[$arg2idx]}"
         [ "$arg" = "$MARKER" ] && continue
-        if is_inline_code_flag "$arg"; then
+        if is_inline_code_flag "$arg" "$nested_base"; then
           block 'interpreter re-invocation with inline code is not a simple, obvious command'
         fi
       done
