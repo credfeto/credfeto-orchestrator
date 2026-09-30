@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2329  # functions in @test bodies are invoked indirectly via 'run'
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+# shellcheck disable=SC2154  # stderr is set by run --separate-stderr
 
 # Tests lib/project-status: converting a board's built-in Status field to the ten workflow states
 # (#1519). A gh stub answers each GraphQL request (sent as a JSON body on stdin) from fixture

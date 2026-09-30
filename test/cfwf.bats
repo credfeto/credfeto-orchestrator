@@ -137,7 +137,7 @@ use_fallback() {
 }
 
 set_args() {
-    SET_ARGS=(workflow-status --set --repo "${REPO}" --issue 1346 --status "${1:-Approved}")
+    SET_ARGS=(workflow-status --set --repo "${REPO}" --issue 1346 --status Approved)
 }
 
 gh_call_count() {
