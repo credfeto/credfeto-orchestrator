@@ -358,6 +358,21 @@ teardown() {
     [[ "${output}" == *'could not be parsed'* ]]
 }
 
+@test "AST analysis failing after shfmt succeeds is blocked (fail closed, not fallen through as allowed)" {
+    # Stub jq to fail only for the calls=$(... | jq ...) word-extraction pipeline
+    # (identified by its literal_value program text), passing every other jq call
+    # (raw_cmd, run_in_background) through to the real binary unchanged - the
+    # calls=$(...) assignment must be guarded the same way the earlier ast=$(...)
+    # assignment is, or a jq failure there silently falls through to `exit 0`
+    # instead of blocking.
+    local real_jq
+    real_jq="$(command -v jq)"
+    make_stub jq "case \"\$*\" in *literal_value*) exit 1 ;; esac; exec '${real_jq}' \"\$@\""
+    run_hook "git commit -m test"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'failing closed'* ]]
+}
+
 @test "an empty command is allowed" {
     run_hook ""
     [ "${status}" -eq 0 ]
