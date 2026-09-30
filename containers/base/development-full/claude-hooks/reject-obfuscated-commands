@@ -302,6 +302,22 @@ is_allowlisted() {
   return 1
 }
 
+# Blocks if any argument from index $1 onwards is an inline-code flag for the
+# interpreter whose base name is $2. Shared by Layer 3 (the command name is
+# the interpreter) and Layer 3b (an argument names a nested interpreter).
+# Reads the current call's resolved array, which the loop below has already
+# checked is index-aligned with words.
+check_inline_flags_from() {
+  local i arg
+  for ((i = $1; i < ${#resolved[@]}; i++)); do
+    arg="${resolved[$i]}"
+    [ "$arg" = "$MARKER" ] && continue
+    if is_inline_code_flag "$arg" "$2"; then
+      block 'interpreter re-invocation with inline code is not a simple, obvious command'
+    fi
+  done
+}
+
 while IFS= read -r call_line && IFS= read -r resolved_line; do
   [ -z "$call_line" ] && continue
   IFS=$'\t' read -ra words <<< "$call_line"
@@ -324,14 +340,7 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
 
   # ---- Layer 3: interpreter re-invocation (command name itself) --------
   if is_interpreter "$base"; then
-    for idx in "${!words[@]}"; do
-      [ "$idx" -eq 0 ] && continue
-      arg="${resolved[$idx]}"
-      [ "$arg" = "$MARKER" ] && continue
-      if is_inline_code_flag "$arg" "$base"; then
-        block 'interpreter re-invocation with inline code is not a simple, obvious command'
-      fi
-    done
+    check_inline_flags_from 1 "$base"
   fi
 
   # ---- Layer 4a: narrow, argument-scoped allowance for `set -e` --------
@@ -381,15 +390,7 @@ while IFS= read -r call_line && IFS= read -r resolved_line; do
     tok="${words[$idx]}"
     [ "$tok" = "$MARKER" ] && continue
     if is_interpreter "${tok##*/}"; then
-      nested_base="${tok##*/}"
-      for arg2idx in "${!words[@]}"; do
-        [ "$arg2idx" -le "$idx" ] && continue
-        arg="${resolved[$arg2idx]}"
-        [ "$arg" = "$MARKER" ] && continue
-        if is_inline_code_flag "$arg" "$nested_base"; then
-          block 'interpreter re-invocation with inline code is not a simple, obvious command'
-        fi
-      done
+      check_inline_flags_from $((idx + 1)) "${tok##*/}"
     fi
   done
 
