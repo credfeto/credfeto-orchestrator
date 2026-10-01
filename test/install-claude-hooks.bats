@@ -163,10 +163,34 @@ teardown() {
         printf '%s\n' "${denies}" | grep -qxF "Bash(${tool} * ${flag}*)" \
             || { echo "missing later-position deny: Bash(${tool} * ${flag}*)" >&2; return 1; }
     done
-    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)"; do
+    for exact in "Bash(rm -rf /)" "Bash(rm -fr /)" "Bash(rm -r -f /)" "Bash(rm -f -r /)" "Bash(rm * /)" \
+        "Bash(node *..*)"; do
         printf '%s\n' "${denies}" | grep -qxF "${exact}" \
             || { echo "missing exact deny: ${exact}" >&2; return 1; }
     done
+}
+
+@test "node's code-loading flags are denied in the first argument position only" {
+    # Every permissions.allow shape for node puts the .github/actions script path as node's first
+    # positional argument (optionally after --check), and node stops parsing its own options there,
+    # so a later -r/--require is a script argument, not a node flag. A later-position deny would
+    # block legitimate script arguments such as -refresh for no gain; the first-position deny is
+    # defence in depth in case the allow patterns ever change. (reject-obfuscated-commands still
+    # rejects a script argument that looks like an inline-code flag, such as -e or -config.)
+    local denies flag
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_SETTINGS}")
+    for flag in --experimental-loader --import --inspect --loader --require -r; do
+        printf '%s\n' "${denies}" | grep -qxF "Bash(node ${flag}*)" \
+            || { echo "missing first-position deny: Bash(node ${flag}*)" >&2; return 1; }
+        if printf '%s\n' "${denies}" | grep -qxF "Bash(node * ${flag}*)"; then
+            echo "unexpected later-position deny: Bash(node * ${flag}*)" >&2
+            return 1
+        fi
+    done
+    if printf '%s\n' "${denies}" | grep -qxF "Bash(node ..*)"; then
+        echo "unexpected deny Bash(node ..*) - already covered by Bash(node *..*)" >&2
+        return 1
+    fi
 }
 
 @test "generated settings.json includes cache-gh-lookups in the PreToolUse chain (#1380)" {

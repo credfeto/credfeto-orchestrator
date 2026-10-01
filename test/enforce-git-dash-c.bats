@@ -941,6 +941,32 @@ line two" && git -C . push'
     [ "${status}" -eq 0 ]
 }
 
+# A backslash-escaped tab (a\<TAB>b) is one word at runtime, but shfmt keeps it as a single Lit
+# whose raw Value contains the tab byte, so the words line must fold it to the opaque marker
+# rather than split it into two tab-joined fields against one resolved value.
+@test "a backslash-escaped tab in a plain word does not desync the parse" {
+    run_hook_in_dir $'git -C . log a\\\tb'
+    [ "${status}" -eq 0 ]
+}
+
+# The tab word sits before the subcommand, so every later words/resolved index would shift if it
+# split: the block must come from the --no-verify rule itself, proving the scan stayed aligned.
+@test "a backslash-escaped tab word before the subcommand keeps --no-verify detection aligned" {
+    run_hook_in_dir $'git -c a\\\tb=1 -C . commit --no-verify -m x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'--no-verify is not permitted'* ]]
+    [[ "${output}" != *'desync'* ]]
+}
+
+# A tab word inside a hook-bypass-checked subcommand's own arguments cannot be checked, so it is
+# blocked as opaque (fail closed) rather than as a parse desync.
+@test "a backslash-escaped tab word in commit arguments is blocked as opaque, not as a desync" {
+    run_hook_in_dir $'git -C . commit a\\\tb -m x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'cannot be checked for a hook-bypass flag'* ]]
+    [[ "${output}" != *'desync'* ]]
+}
+
 # Abbreviated --no-verify tests (#1399 code review): git's own option parser accepts any
 # unambiguous prefix of a long option, so an exact-only `--no-verify` case arm lets a shorter,
 # still-working spelling straight through. `--no-v`/`--no-ve`/`--no-ver` are genuine,

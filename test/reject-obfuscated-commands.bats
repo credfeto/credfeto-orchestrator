@@ -393,6 +393,183 @@ git status'
     [ "${status}" -eq 0 ]
 }
 
+@test "node --check and running a .github/actions script are both allowed (no inline-code flag)" {
+    run_hook "node --check .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+    run_hook "node .github/actions/foo/bar.js"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a .github/actions script with ordinary trailing arguments is allowed" {
+    run_hook "node .github/actions/foo/bar.js prod --config x -refresh"
+    [ "${status}" -eq 0 ]
+}
+
+# Accepted fail-closed limitation (#1545): every argument after the interpreter name is checked,
+# including the script's own, so a script argument that looks like an inline-code flag is rejected.
+@test "a script argument that looks like an inline-code flag is rejected (accepted limitation)" {
+    run_hook "node .github/actions/foo/bar.js -config x"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "node .github/actions/foo/bar.js -p"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "python3 script.py -env prod"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "python3 -m pytest -pno:cacheprovider"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -p with inline code is blocked" {
+    run_hook "node -p \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --print with inline code is blocked" {
+    run_hook "node --print \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -e with inline code is blocked" {
+    run_hook "node -e \"require('child_process').execSync('git push')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -c is blocked even though it is node's own --check alias (fail-safe collateral, use --check)" {
+    run_hook "node -c .github/actions/foo/bar.js"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --eval=code glued with = is blocked" {
+    run_hook "node --eval=\"require('child_process').execSync('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --print=code glued with = is blocked" {
+    run_hook "node --print=\"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -ecode glued short flag with no separator is blocked" {
+    run_hook "node -e\"require('child_process').execSync('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -pcode glued short flag with no separator is blocked" {
+    run_hook "node -p\"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -i is blocked (REPL is as dangerous as inline code)" {
+    run_hook "node -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node --interactive is blocked" {
+    run_hook "node --interactive"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "nodejs -p and nodejs -i are blocked the same as node (node-only flag set)" {
+    run_hook "nodejs -p \"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+    run_hook "nodejs -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "node -i nested under an allowlisted runner is blocked" {
+    run_hook "npx node -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "bash -p and bash -i are not misreported as inline code (shell privileged/interactive mode)" {
+    run_hook "bash -p ./scripts/deploy.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+    run_hook "bash -i"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+}
+
+@test "sh -p and sh --interactive are not misreported as inline code" {
+    run_hook "sh -p ./scripts/deploy.sh"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+    run_hook "sh --interactive"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'sub-shells are banned'* ]]
+    [[ "${output}" != *'interpreter re-invocation'* ]]
+}
+
+@test "python3 -i with a script file is allowed (-i is only an inline-code flag for node)" {
+    run_hook "python3 -i script.py"
+    [ "${status}" -eq 0 ]
+}
+
+@test "a glued -pe with its code attached is still blocked for a nested non-node interpreter" {
+    run_hook "uv run perl -pe\"system('id')\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+# A backslash-escaped tab (a\<TAB>b) is one word at runtime, but shfmt keeps it as a single Lit
+# whose raw Value contains the tab byte; the word must not split into two tab-joined fields and
+# shift every later argument's words/resolved pairing past the real inline-code flag.
+@test "a backslash-escaped tab decoy before a nested python3 -c is still blocked" {
+    run_hook $'uv run a\\\tb python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "two backslash-escaped tab decoys before a nested python3 -c are still blocked" {
+    run_hook $'uv run a\\\tb c\\\td python3 -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before a nested node -e is still blocked" {
+    run_hook $'npx a\\\tb node -e "1"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before a nested node --eval=code is still blocked" {
+    run_hook $'npx a\\\tb node --eval="1"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped tab decoy before an interpreter's own inline-code flag is still blocked" {
+    run_hook $'python3 a\\\tb -c "import os"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a trailing empty quoted argument is allowed (not misread as inconsistent arguments)" {
+    run_hook 'echo a ""'
+    [ "${status}" -eq 0 ]
+    run_hook "python3 script.py ''"
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command containing a non-ASCII byte is blocked" {
     run_hook $'git -C . commit -m "caf\xc3\xa9"'
     [ "${status}" -eq 2 ]

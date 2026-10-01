@@ -322,6 +322,13 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # "does cd appear anywhere in the command" (the auto-correction gate - see the header
 # comment), which must be known in full before the first block-or-rewrite decision, not
 # discovered mid-walk; the second is the real per-call processing loop.
+# A plain literal on the words line can still contain a raw tab: shfmt keeps an unquoted
+# backslash-escaped tab (`a\<TAB>b`, one word at runtime) as a single Lit whose Value holds
+# the tab byte, which would split into two tab-joined fields and trip the desync fail-close
+# below on an otherwise harmless command. Such a word (or one holding a newline or CR) is
+# folded to the opaque marker instead, the same guard reject-obfuscated-commands applies to
+# its own words line. The jq program is guarded like the ast=$(...) assignment above: a jq
+# error would otherwise leave $calls empty and the hook would silently allow the command.
 calls=$(printf '%s' "$ast" | jq -r '
   def resolve_parts(unquoted):
     if length == 0 then ""
@@ -340,7 +347,10 @@ calls=$(printf '%s' "$ast" | jq -r '
       )
     end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  ([ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] | join("\t")),
+  ([ .Args[] |
+     (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end) as $w |
+     if $w == null or $w == "" or ($w | explode | any(. == 9 or . == 10 or . == 13)) then "\u0001" else $w end
+  ] | join("\t")),
   ([ .Args[] | (.End.Offset | tostring) ] | join("\t")),
   ([ .Args[] |
      if (.Parts | any(.Type == "SglQuoted" and (.Dollar // false) and ((.Value // "") | test("\\\\")))) then
@@ -354,7 +364,7 @@ calls=$(printf '%s' "$ast" | jq -r '
        end
      end
   ] | join(""))
-')
+') || block 'command AST could not be analysed - failing closed'
 
 # Directory-changing command names that gate the auto-correction feature below - same
 # reasoning as is_wrapper()/WRAPPERS above, reused rather than a bespoke check: a plain or

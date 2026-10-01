@@ -164,6 +164,14 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+# A backslash-escaped tab (tool\<TAB>install) is one word at runtime, so it is not the tool
+# subcommand; shfmt keeps it as a single Lit holding the raw tab, which must not split into two
+# tab-joined fields that read as `tool install`.
+@test "a backslash-escaped tab inside one word is not split into separate words" {
+    run_hook $'dotnet tool\\\tinstall Foo.Bar'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command that does not parse as shell is blocked (fail closed)" {
     run_hook "if true; then dotnet tool install"
     [ "${status}" -eq 2 ]

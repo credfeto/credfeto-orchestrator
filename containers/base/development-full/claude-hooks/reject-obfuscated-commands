@@ -82,7 +82,20 @@ block() {
 # still cannot be handed inline code, and so the error message names the
 # actual problem.
 INTERPRETERS=(bash sh dash zsh ksh mksh csh tcsh fish python python2 python3 perl perl5 ruby irb node nodejs deno php lua lua5.1 lua5.3 tclsh wish osascript)
+# Flags that hand virtually every interpreter above a literal string of code
+# to run, so they are checked whatever the interpreter is.
 INLINE_CODE_FLAGS=(-c -e --eval --command -ne -pe)
+# Flags that only mean "run code" for node: -p/--print is node's inline
+# "evaluate and print" flag, and -i/--interactive starts node's REPL - not
+# itself an inline-code flag, but exactly as dangerous as one. For the shells
+# in INTERPRETERS -p is privileged mode and -i is an ordinary interactive
+# shell, neither of which runs a string of code, so checking these for every
+# interpreter would misreport them as inline-code re-invocation. A bare `node`
+# with no recognised flag at all falls through with nothing to check here; a
+# script-path argument is required by permissions.allow, not by this hook.
+# node -c is blocked too even though it is node's own --check alias, because
+# -c is in the shared set above; use node --check instead.
+NODE_ONLY_INLINE_FLAGS=(-p --print -i --interactive)
 
 is_interpreter() {
   local w
@@ -92,11 +105,43 @@ is_interpreter() {
   return 1
 }
 
+# $1 is the argument word, $2 the interpreter's base name.
+#
+# Known, accepted limitation (#1545): Layer 3/3b call this for every
+# argument after the interpreter name, not only the positions where the
+# interpreter itself still parses options. A script's own argument that
+# looks like an inline-code flag is therefore rejected too, whether it is
+# an exact match (node .github/actions/a/b.js -p) or matches the glued
+# short-flag case below (python3 script.py -env prod, python3 -m pytest
+# -pno:cacheprovider, node .github/actions/a/b.js -config x). This fails
+# closed, so nothing is exploitable. Stopping the scan at the first
+# non-dash argument is not a safe fix: it would reopen shapes such as
+# python3 -W ignore -c code, where an option's value comes before the real
+# flag. A correct fix needs per-interpreter argument-position tracking.
 is_inline_code_flag() {
   local f
-  for f in "${INLINE_CODE_FLAGS[@]}"; do
+  local -a flags=("${INLINE_CODE_FLAGS[@]}")
+  case "$2" in
+    node | nodejs) flags+=("${NODE_ONLY_INLINE_FLAGS[@]}") ;;
+  esac
+  for f in "${flags[@]}"; do
     [ "$1" = "$f" ] && return 0
+    # A long flag glued to its value with '=' (node --eval="code",
+    # --print="code") is exactly as dangerous as the space-separated form
+    # and is not caught by the exact-match check above.
+    case "$f" in
+      --*) [ "${1#"${f}"=}" != "$1" ] && return 0 ;;
+    esac
   done
+  # A short inline-code flag glued directly to its value with no separator
+  # (node -ecode, -pcode, python3 -ccode, perl -peCODE - accepted the same
+  # way -C3 works for other tools) is also not caught by the exact-match
+  # check above. Deliberately shared across every interpreter, -p?* included:
+  # a glued -p word is perl/ruby's -pe with its code attached as well as
+  # node's -p, while a shell's privileged-mode -p is always passed on its own.
+  case "$1" in
+    -c?* | -e?* | -p?*) return 0 ;;
+  esac
   return 1
 }
 
@@ -174,18 +219,88 @@ while IFS= read -r var; do
   done
 done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
 
-# Emit one line per CallExpr anywhere in the AST (any nesting depth —
+# Emit two lines per CallExpr anywhere in the AST (at any nesting depth:
 # $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
-# process substitutions): the command-name word followed by each argument
-# word, tab-separated. A word that is anything other than a single plain
-# literal is represented as a \x01 marker — layer 0 already guarantees a
-# real \x01 byte can never appear in the input, so the marker is
-# unambiguous, and it fails the command-name allowlist regex. Words cannot
-# contain raw whitespace, so tab is a safe separator.
+# process substitutions): the words line (command-name word followed by each
+# argument word, tab-separated - a word that is anything other than a single
+# plain literal is represented as a \x01 marker; layer 0 already guarantees a
+# real \x01 byte can never appear in the input, so the marker is unambiguous,
+# and it fails the command-name allowlist regex), then the resolved line
+# (same approach as enforce-git-dash-c's own resolve_parts, trimmed to just
+# the Lit/SglQuoted/DblQuoted-of-only-those-parts concatenation - no
+# unquoted-backslash decode, no ANSI-C-escape sentinel). Unlike that hook's
+# own --no-verify check, the ANSI-C gap here IS load-bearing where an
+# interpreter has a broad, unscoped allow entry (e.g. the pre-existing
+# Bash(python3 *)): python3 $'\x2d\x63' '...' passes this check, since
+# shfmt stores an ANSI-C string's raw, undecoded source text in Lit.Value,
+# not the runtime value bash actually passes - tracked as #1552, not fixed
+# here. It does not chain to a working bypass for node specifically, since
+# every node permissions.allow shape requires the .github/actions/*/*.js
+# script path to be node's first positional argument, and node stops
+# parsing its own flags there.
+#
+# The resolved line itself exists because the words line's own "single Lit part" test
+# treats a glued flag+quoted-value word (node --eval="code", node -e"code")
+# as opaque and skips it entirely in the interpreter-flag check below, which
+# is exactly the shape needed to run inline code once node is on
+# command-allowlist. Resolving a word entirely built from literal/quoted
+# pieces - even when the value itself is dynamic-looking, since the shell
+# has already stripped the quoting before the interpreter ever sees it -
+# closes that gap; a word containing a genuine expansion ($VAR, $(...), ...)
+# still folds to the same \x01 marker as the words line's own opaque case,
+# since its real value cannot be known statically. Used only for the
+# interpreter-flag check (Layer 3/3b below), never for command-name/
+# allowlist identification, which stays on the words line - matching
+# enforce-git-dash-c's own stated rationale for the same split. Joined with
+# \x1f (unit separator), not tab, because a resolved value can genuinely be
+# an empty string and `IFS=$'\t' read -ra` collapses consecutive tabs,
+# silently dropping an empty field and desyncing the array against words;
+# \x1f is not IFS whitespace, so empty fields survive between delimiters.
+# An empty resolved value is still folded to the marker, though, because
+# `read -ra` drops a trailing empty field even with a non-whitespace IFS
+# (`cmd a ""` would otherwise leave resolved one entry shorter than words).
+# A value on either line containing a raw tab/newline/CR/\x1f byte is also
+# folded back to the marker (unsafe_for_transport): a quoted argument may
+# legitimately embed one, and so may a plain single-Lit word, since shfmt
+# keeps an unquoted backslash-escaped tab (`a\<TAB>b`, one word at runtime)
+# as a single Lit whose raw Value still contains the tab byte. Left as-is,
+# that one word would split into two words[] entries while resolved[] kept
+# one, shifting every later words[i]/resolved[i] pairing so Layer 3/3b read
+# the wrong argument and could miss a real inline-code flag. No flag this
+# check matches contains whitespace or is empty, so folding costs nothing
+# real, and the loop below also fails closed if the two lines ever split
+# into different field counts. The jq program itself is guarded the same
+# way as the ast=$(...) assignment above: if it errored, $calls would be
+# empty, the loop would process nothing and the hook would fall through to
+# exit 0.
 calls=$(printf '%s' "$ast" | jq -r '
+  def resolve_parts:
+    if length == 0 then ""
+    else
+      reduce .[] as $p (
+        "";
+        if . == null then null
+        elif $p.Type == "Lit" then . + $p.Value
+        elif $p.Type == "SglQuoted" then . + ($p.Value // "")
+        elif $p.Type == "DblQuoted" then
+          (($p.Parts // []) | resolve_parts) as $inner
+          | (if $inner == null then null else . + $inner end)
+        else null
+        end
+      )
+    end;
+  def unsafe_for_transport:
+    . == null or . == "" or (explode | any(. == 9 or . == 10 or . == 13 or . == 31));
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else "\u0001" end ] |
-  join("\t")')
+  ([ .Args[] |
+     (if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end) as $w |
+     if ($w | unsafe_for_transport) then "\u0001" else $w end
+  ] | join("\t")),
+  ([ .Args[] |
+     (.Parts | resolve_parts) as $r |
+     if ($r | unsafe_for_transport) then "\u0001" else $r end
+  ] | join("\u001f"))
+') || block 'command AST could not be analysed - failing closed'
 
 MARKER=$'\x01'
 # `[` (the `test` builtin's bracket form) is a single-character command name
@@ -208,9 +323,34 @@ is_allowlisted() {
   return 1
 }
 
-while IFS= read -r call_line; do
+# Blocks if any argument from index $1 onwards is an inline-code flag for the
+# interpreter whose base name is $2. Shared by Layer 3 (the command name is
+# the interpreter) and Layer 3b (an argument names a nested interpreter).
+# Reads the current call's resolved array, which the loop below has already
+# checked is index-aligned with words.
+check_inline_flags_from() {
+  local i arg
+  for ((i = $1; i < ${#resolved[@]}; i++)); do
+    arg="${resolved[$i]}"
+    [ "$arg" = "$MARKER" ] && continue
+    if is_inline_code_flag "$arg" "$2"; then
+      block 'interpreter re-invocation with inline code is not a simple, obvious command'
+    fi
+  done
+}
+
+while IFS= read -r call_line && IFS= read -r resolved_line; do
   [ -z "$call_line" ] && continue
   IFS=$'\t' read -ra words <<< "$call_line"
+  IFS=$'\x1f' read -ra resolved <<< "$resolved_line"
+  # Layers 3/3b pair words[i] with resolved[i] by index; if some unforeseen
+  # AST shape ever makes the two transports split into different field
+  # counts, every later pairing is wrong and an inline-code flag can be
+  # read at the wrong index, so fail closed rather than check misaligned
+  # data.
+  if [ "${#words[@]}" -ne "${#resolved[@]}" ]; then
+    block 'command arguments could not be analysed consistently - failing closed'
+  fi
   name="${words[0]}"
 
   if ! [[ "$name" =~ $NAME_RE ]]; then
@@ -221,12 +361,7 @@ while IFS= read -r call_line; do
 
   # ---- Layer 3: interpreter re-invocation (command name itself) --------
   if is_interpreter "$base"; then
-    for arg in "${words[@]:1}"; do
-      [ "$arg" = "$MARKER" ] && continue
-      if is_inline_code_flag "$arg"; then
-        block 'interpreter re-invocation with inline code is not a simple, obvious command'
-      fi
-    done
+    check_inline_flags_from 1 "$base"
   fi
 
   # ---- Layer 4a: narrow, argument-scoped allowance for `set -e` --------
@@ -267,18 +402,16 @@ while IFS= read -r call_line; do
   # nested interpreter's inline-code flag is exactly as dangerous as if it
   # had been the command name, so scan every argument word (not just
   # words[0], already covered by Layer 3 above) for a nested interpreter
-  # name and check what follows it too.
+  # name and check what follows it too. The interpreter name itself is
+  # identified from the words line (command identification stays there, per
+  # the resolved line's own header comment); the flag scan after it uses
+  # the resolved line, same as Layer 3 above.
   for idx in "${!words[@]}"; do
     [ "$idx" -eq 0 ] && continue
     tok="${words[$idx]}"
     [ "$tok" = "$MARKER" ] && continue
     if is_interpreter "${tok##*/}"; then
-      for arg in "${words[@]:$((idx + 1))}"; do
-        [ "$arg" = "$MARKER" ] && continue
-        if is_inline_code_flag "$arg"; then
-          block 'interpreter re-invocation with inline code is not a simple, obvious command'
-        fi
-      done
+      check_inline_flags_from $((idx + 1)) "${tok##*/}"
     fi
   done
 
