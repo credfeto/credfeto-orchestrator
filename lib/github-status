@@ -287,6 +287,7 @@ append_last_diagnostic_to_reason() {
     truncated=${truncated//\`/\'}
 
     local heading="Last session's diagnostic:"
+    # shellcheck disable=SC2016  # the backticks are a literal Markdown code fence, not a substitution
     printf '%s\n\n%s\n```\n%s\n```' "${reason}" "${heading}" "${truncated}"
 }
 
