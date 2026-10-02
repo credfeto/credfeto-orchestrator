@@ -76,6 +76,7 @@ unset _ps_entry
 
 # jq definition: true when the single-select field it is applied to has an option for every state in
 # $names (PROJECT_STATUS_NAMES_JSON). The one definition of "carries the workflow states".
+# shellcheck disable=SC2016  # $names, $have and $n are jq variables, not shell expansions
 _PS_JQ_DEF_HAS_ALL_STATES='def has_all_states($names): ([(.options // [])[].name]) as $have | all($names[]; . as $n | $have | index($n) != null);'
 
 # Prints the shape the conversion reads, {status, legacy, workflows}, from a project node with
@@ -290,6 +291,7 @@ _ps_delete_workflow() {
 # Status field is then left in place, so no value is lost.
 project_status_convert() {
     local project_id="$1" project="${2:-}" status legacy workflow_id
+    # shellcheck disable=SC2034  # read by create-project and lib/workflow-board after sourcing
     PROJECT_STATUS_FAILED_STEP=""
     PROJECT_STATUS_FIELD=""
     # A caller that has just read the project (the orchestrator's discovery) passes the shape in, so
@@ -328,5 +330,6 @@ project_status_convert() {
         info "Deleted the \"${PROJECT_STATUS_REMOVED_WORKFLOW}\" Default Workflow" >&2
     fi
 
+    # shellcheck disable=SC2034  # read by create-project and lib/workflow-board after sourcing
     PROJECT_STATUS_FIELD="${status}"
 }
