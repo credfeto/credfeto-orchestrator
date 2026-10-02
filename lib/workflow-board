@@ -187,8 +187,9 @@ _wf_conversion_failure_file() {
 
 # Records that converting this repository's board failed just now. Best-effort, like the cache.
 _wf_record_conversion_failure() {
-    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null && date +%s > "$(_wf_conversion_failure_file)" 2>/dev/null \
-        || warn "Workflow project: failed to record the conversion failure for ${REPO_FULL}"
+    if ! { mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null && date +%s > "$(_wf_conversion_failure_file)" 2>/dev/null; }; then
+        warn "Workflow project: failed to record the conversion failure for ${REPO_FULL}"
+    fi
 }
 
 # Returns 0 when converting this repository's board failed within the last PROJECT_CACHE_TTL
