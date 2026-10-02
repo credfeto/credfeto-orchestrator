@@ -65,7 +65,7 @@ get_trusted_logins() {
 # Fetches trusted logins for the current repo into the caller's `trusted_logins` variable,
 # warning and bumping the caller's `count_error` on failure (#1094 review). Relies on bash's
 # dynamic scoping of `local`s: this must only be called from within main()'s per-item loop,
-# where both `trusted_logins` and `count_error` are already declared local — `continue` itself
+# where `trusted_logins`, `count_error` and `item_repo` are already declared local — `continue` itself
 # can't live inside a called function, so callers combine this with `|| continue` to skip the
 # item this tick, e.g.: `require_trusted_logins || continue`.
 require_trusted_logins() {
