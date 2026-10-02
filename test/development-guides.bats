@@ -17,7 +17,7 @@ HOOKS="${REPO_ROOT}/containers/base/development-full/claude-hooks"
 script_names() {
     local file
     for file in "${REPO_ROOT}"/* "${IMAGE_SCRIPTS}"/*; do
-        if ! { [ -f "${file}" ] && [ -x "${file}" ]; }; then
+        if [ ! -f "${file}" ] || [ ! -x "${file}" ]; then
             continue
         fi
         [ "$(head -c 2 "${file}")" = "#!" ] || continue

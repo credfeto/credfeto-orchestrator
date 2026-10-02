@@ -630,7 +630,7 @@ resolve_body() {
         cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
         BODY_FILE="${BODY_PATH_TMP}"
     else
-        if ! { [ -f "${BODY_FILE}" ] && [ -r "${BODY_FILE}" ]; }; then
+        if [ ! -f "${BODY_FILE}" ] || [ ! -r "${BODY_FILE}" ]; then
             die "cannot read the body file: ${BODY_FILE}"
         fi
     fi
