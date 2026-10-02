@@ -224,6 +224,7 @@
       "Write"
     ],
     "deny": [
+      "mcp__webstorm__execute_sql_query",
       "Bash(GH_HOST=*)",
       "Bash(dotnet csharpier *)",
       "Bash(dotnet new tool-manifest*)",
