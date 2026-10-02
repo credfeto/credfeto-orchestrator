@@ -1027,7 +1027,7 @@ coverage_summary_for_branch() {
     if [ -z "${branch_name}" ] || [ ! -d "${REPO_WORK_DIR}/.git" ]; then
         return 0
     fi
-    cov_content=$(git -C "${REPO_WORK_DIR}" show "origin/${branch_name}:COVERAGE.md" 2>/dev/null) || { printf ''; return 0; }
+    cov_content=$(git -C "${REPO_WORK_DIR}" show "origin/${branch_name}:COVERAGE.md" 2>/dev/null) || return 0
     while IFS= read -r line; do
         [ -n "${line}" ] || continue
         if [ -n "${joined}" ]; then

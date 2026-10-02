@@ -396,14 +396,12 @@ record_pull_duration() {
     mkdir -p "$(dirname "${state_file}")" \
         || die "Failed to create pull-duration directory for owner ${OWNER}"
     existing=$(_pull_duration_samples)
-    if ! { printf '%s\n' "${existing}"; printf '%s\n' "${duration_secs}"; } \
+    { printf '%s\n' "${existing}"; printf '%s\n' "${duration_secs}"; } \
         | grep -E '^[0-9]+$' \
-        | tail -n "${PULL_DURATION_HISTORY_SIZE}" > "${state_file}.tmp"; then
-        die "Failed to write pull-duration file: ${state_file}"
-    fi
-    if ! mv "${state_file}.tmp" "${state_file}"; then
-        die "Failed to write pull-duration file: ${state_file}"
-    fi
+        | tail -n "${PULL_DURATION_HISTORY_SIZE}" > "${state_file}.tmp" \
+        || die "Failed to write pull-duration file: ${state_file}"
+    mv "${state_file}.tmp" "${state_file}" \
+        || die "Failed to write pull-duration file: ${state_file}"
 }
 
 # Returns the median of the current owner's recorded pull durations on stdout, or nothing (and
