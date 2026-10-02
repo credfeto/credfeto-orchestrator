@@ -52,6 +52,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
 ### Deprecated
 ### Removed
+- src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
 ### Deployment Changes
 
 <!--
