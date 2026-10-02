@@ -175,7 +175,7 @@ load_env_config() {
                         # shellcheck disable=SC2034  # read by lib/github after sourcing
                         WHITELISTED_USERS="${val}" ;;
                     CI_CHECK_TIMEOUT_MINUTES=*)
-                        # shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
+                        # shellcheck disable=SC2034  # read by lib/fingerprints and lib/github-status after sourcing
                         if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                 esac
                 ;;
