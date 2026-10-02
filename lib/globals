@@ -7,7 +7,9 @@
 # before any assignment into it. Declarations only: no function definitions, no I/O, no command
 # calls.
 
-# shellcheck disable=SC2034  # read by lib/github after sourcing
+# Keep an assignment above the first directive: shellcheck applies a directive before the first command file-wide.
+ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
+# shellcheck disable=SC2034  # read by lib/discord, lib/github and oneshot after sourcing
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
 # shellcheck disable=SC2034  # read by lib/core, lib/git and interactive after sourcing
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
@@ -16,7 +18,6 @@ WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 # Specification compliant, replacing the old hard-coded ~/.orchestrator (#52).
 # shellcheck disable=SC2034  # read by lib/core, lib/discord, lib/git, lib/state and oneshot after sourcing
 ORCHESTRATOR_STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/orchestrator"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 # Set to 1 by invoke_claude after its first successful pull in this process. Deliberately NOT
 # seeded from the environment (no ${VAR:-0} indirection) — an inherited value would let a stray
 # export permanently suppress image pulls for a whole run.
