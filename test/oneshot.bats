@@ -8743,6 +8743,58 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+# A gh stand-in for an existing open tracker #99: `gh issue list` finds it, `gh issue view` prints
+# $2 as the tracker's body/comment text (or fails when $3 is "fail"), and every other call's
+# arguments are logged one per line to $1.
+make_existing_tracker_gh_stub() {
+    local gh_log="$1" tracker_text="$2" view_result="${3:-ok}"
+    printf '%s\n' "${tracker_text}" > "${TEST_TMP}/tracker_text"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "issue list") printf '%s\n' '99' ;;
+  "issue view")
+    [ '${view_result}' = "fail" ] && exit 1
+    cat '${TEST_TMP}/tracker_text' ;;
+  *) printf '%s\n' "\$@" >> '${gh_log}' ;;
+esac
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+}
+
+@test "report_unparseable_rate_limit does not comment when the message is already in the open tracking issue" {
+    local gh_log="${TEST_TMP}/gh_args"
+    local raw_msg="Already reported unparseable Claude 429 message"
+    make_existing_tracker_gh_stub "${gh_log}" $'Earlier report\n```\nAlready reported unparseable Claude 429 message\n```'
+
+    run report_unparseable_rate_limit "PullRequest" "15" "${raw_msg}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Rate-limit message already reported in issue #99"* ]]
+    [ ! -f "${gh_log}" ]
+}
+
+@test "report_unparseable_rate_limit comments when the message is absent from the open tracking issue" {
+    local gh_log="${TEST_TMP}/gh_args"
+    local raw_msg="Brand-new unparseable Claude 429 message"
+    make_existing_tracker_gh_stub "${gh_log}" $'Earlier report\n```\nSome other message\n```'
+
+    run report_unparseable_rate_limit "PullRequest" "15" "${raw_msg}"
+    [ "${status}" -eq 0 ]
+    grep -q "^comment$" "${gh_log}"
+    grep -q "^99$" "${gh_log}"
+    grep -q "${raw_msg}" "${gh_log}"
+}
+
+@test "report_unparseable_rate_limit warns, fails and does not comment when the tracking issue cannot be read" {
+    local gh_log="${TEST_TMP}/gh_args"
+    make_existing_tracker_gh_stub "${gh_log}" "" fail
+
+    run report_unparseable_rate_limit "PullRequest" "15" "Brand-new unparseable Claude 429 message"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to read issue #99"* ]]
+    [ ! -f "${gh_log}" ]
+}
+
 # --- rate-limit file management -----------------------------------------------
 
 @test "is_owner_rate_limited returns false when no rate-limit file exists" {
