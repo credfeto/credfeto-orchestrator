@@ -8,6 +8,7 @@
 _fetch_repo_collaborators() {
     local attempt=1 result
     while [ "${attempt}" -le "${GH_COLLABORATORS_RETRY_ATTEMPTS}" ]; do
+        # shellcheck disable=SC2153  # REPO_FULL is the global set by set_repo_context (lib/git), not a misspelling
         if result=$(gh api "repos/${REPO_FULL}/collaborators" --paginate --jq '.[].login' 2>/dev/null); then
             printf '%s' "${result}"
             return 0
@@ -64,11 +65,12 @@ get_trusted_logins() {
 # Fetches trusted logins for the current repo into the caller's `trusted_logins` variable,
 # warning and bumping the caller's `count_error` on failure (#1094 review). Relies on bash's
 # dynamic scoping of `local`s: this must only be called from within main()'s per-item loop,
-# where both `trusted_logins` and `count_error` are already declared local — `continue` itself
+# where `trusted_logins`, `count_error` and `item_repo` are already declared local — `continue` itself
 # can't live inside a called function, so callers combine this with `|| continue` to skip the
 # item this tick, e.g.: `require_trusted_logins || continue`.
 require_trusted_logins() {
     trusted_logins=$(get_trusted_logins) && return 0
+    # shellcheck disable=SC2154  # item_repo is the caller's local, reached by dynamic scoping (see above)
     warn "Failed to fetch trusted collaborators for ${item_repo} — skipping this item for now"
     count_error=$((count_error + 1))
     return 1

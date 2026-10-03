@@ -45,12 +45,14 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Allow the buildcheck and buildtest commands in the development-full container's claude-settings.json permissions, matching their command-allowlist entries
 - The development-full image build now fails on a duplicate skill name under any skills root, not only the last one
 - enforce-background-for-long-running-commands now recognises quoted-but-static subcommands like dotnet "restore" as literals instead of treating them as dynamic content, widening literal recognition to one layer of ordinary quoting with no expansion (matching enforce-ssh-host-and-key's pattern), whilst genuinely dynamic and ANSI-C/locale quoting remain opaque, preventing misleading unresolved subcommand blocks (#1526)
+- Shell scripts and bats tests now pass the agent container's ShellCheck 0.10 pre-work baseline as well as ShellCheck 0.11, and lib/* sourced libraries now pass the global pre-commit hooks' shellcheck --check-sourced validation (#1546)
 ### Changed
 - install-claude-hooks now installs cfwf into /usr/local/bin for every user on the host, using sudo when it cannot write there (printing the command to run if sudo is unavailable or declined), and refuses to install when any tool the hooks depend on is missing, instead of only checking for jq, since a hook whose tool is missing blocks every command (#1346)
 - The Workflow board's built-in Status field now carries the ten workflow states, replacing the separate Workflow Status field and the coarse Todo, In Progress and Done set alongside it; create-project and the orchestrator convert each board in place, keeping GitHub's own board automations working, setting anything already closed or merged to Complete, and deleting the Workflow Status field only once every item's value has been copied across and read back, and a board that cannot be converted gets a Discord alert and its repository is skipped until it can; cfwf workflow-status --check prints just the status name, and cfwf follows whichever field a board uses while boards are converted (#1519)
 - enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
 ### Deprecated
 ### Removed
+- src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
 ### Deployment Changes
 
 <!--

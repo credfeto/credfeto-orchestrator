@@ -384,7 +384,7 @@ stop_ssh_agent() {
 # would otherwise pass silently, get mounted into every agent container, and
 # fail every push inside it instead of failing fast here (#1103).
 preload_ssh_keys() {
-    [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ] || return 0
+    [ -S "${SSH_AUTH_SOCK:-}" ] || return 0
     local ssh_keys_status=0
     ssh-add -l >/dev/null 2>&1 || ssh_keys_status=$?
     case "${ssh_keys_status}" in

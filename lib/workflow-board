@@ -187,8 +187,9 @@ _wf_conversion_failure_file() {
 
 # Records that converting this repository's board failed just now. Best-effort, like the cache.
 _wf_record_conversion_failure() {
-    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null && date +%s > "$(_wf_conversion_failure_file)" 2>/dev/null \
-        || warn "Workflow project: failed to record the conversion failure for ${REPO_FULL}"
+    if ! { mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null && date +%s > "$(_wf_conversion_failure_file)" 2>/dev/null; }; then
+        warn "Workflow project: failed to record the conversion failure for ${REPO_FULL}"
+    fi
 }
 
 # Returns 0 when converting this repository's board failed within the last PROJECT_CACHE_TTL
@@ -1023,8 +1024,10 @@ count_pr_comments_matching() {
 # display enhancement, never a gate: e.g. ".NET 82.1%, Node 91.4%".
 coverage_summary_for_branch() {
     local branch_name="$1" cov_content line joined=""
-    [ -n "${branch_name}" ] && [ -d "${REPO_WORK_DIR}/.git" ] || { printf ''; return 0; }
-    cov_content=$(git -C "${REPO_WORK_DIR}" show "origin/${branch_name}:COVERAGE.md" 2>/dev/null) || { printf ''; return 0; }
+    if [ -z "${branch_name}" ] || [ ! -d "${REPO_WORK_DIR}/.git" ]; then
+        return 0
+    fi
+    cov_content=$(git -C "${REPO_WORK_DIR}" show "origin/${branch_name}:COVERAGE.md" 2>/dev/null) || return 0
     while IFS= read -r line; do
         [ -n "${line}" ] || continue
         if [ -n "${joined}" ]; then

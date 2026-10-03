@@ -630,7 +630,9 @@ resolve_body() {
         cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
         BODY_FILE="${BODY_PATH_TMP}"
     else
-        [ -f "${BODY_FILE}" ] && [ -r "${BODY_FILE}" ] || die "cannot read the body file: ${BODY_FILE}"
+        if [ ! -f "${BODY_FILE}" ] || [ ! -r "${BODY_FILE}" ]; then
+            die "cannot read the body file: ${BODY_FILE}"
+        fi
     fi
     grep -q '[^[:space:]]' "${BODY_FILE}" || die "the issue body is empty"
     require_utf8_locale

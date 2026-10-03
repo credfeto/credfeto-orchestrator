@@ -151,18 +151,32 @@ load_env_config() {
                     "'"*"'") val="${val#?}"; val="${val%?}" ;;
                 esac
                 case "${line}" in
-                    DISCORD_WEBHOOK=*)                    DISCORD_WEBHOOK_URL="${val}" ;;
-                    DISCORD_WEBHOOK_BLOCKED=*)             DISCORD_WEBHOOK_URL_BLOCKED="${val}" ;;
-                    DISCORD_WEBHOOK_AWAITING_APPROVAL=*)   DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="${val}" ;;
-                    DISCORD_WEBHOOK_PERMISSIONS=*)         DISCORD_WEBHOOK_URL_PERMISSIONS="${val}" ;;
-                    DISCORD_WEBHOOK_SLOW_PULL=*)           DISCORD_WEBHOOK_URL_SLOW_PULL="${val}" ;;
+                    DISCORD_WEBHOOK=*)
+                        # shellcheck disable=SC2034  # read by lib/discord after sourcing
+                        DISCORD_WEBHOOK_URL="${val}" ;;
+                    DISCORD_WEBHOOK_BLOCKED=*)
+                        # shellcheck disable=SC2034  # read by lib/discord after sourcing
+                        DISCORD_WEBHOOK_URL_BLOCKED="${val}" ;;
+                    DISCORD_WEBHOOK_AWAITING_APPROVAL=*)
+                        # shellcheck disable=SC2034  # read by lib/discord after sourcing
+                        DISCORD_WEBHOOK_URL_AWAITING_APPROVAL="${val}" ;;
+                    DISCORD_WEBHOOK_PERMISSIONS=*)
+                        # shellcheck disable=SC2034  # read by lib/discord after sourcing
+                        DISCORD_WEBHOOK_URL_PERMISSIONS="${val}" ;;
+                    DISCORD_WEBHOOK_SLOW_PULL=*)
+                        # shellcheck disable=SC2034  # read by lib/discord after sourcing
+                        DISCORD_WEBHOOK_URL_SLOW_PULL="${val}" ;;
                     GH_TOKEN=*)                 gh_token="${val}" ;;
                     GH_HOST=*)                  gh_host="${val}" ;;
                     GIT_USER_NAME=*)            GIT_USER_NAME="${val}" ;;
                     GIT_USER_EMAIL=*)           GIT_USER_EMAIL="${val}" ;;
                     GIT_SIGNING_KEY=*)          GIT_SIGNING_KEY="${val}" ;;
-                    WHITELISTED_USERS=*)        WHITELISTED_USERS="${val}" ;;
-                    CI_CHECK_TIMEOUT_MINUTES=*) if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
+                    WHITELISTED_USERS=*)
+                        # shellcheck disable=SC2034  # read by lib/github after sourcing
+                        WHITELISTED_USERS="${val}" ;;
+                    CI_CHECK_TIMEOUT_MINUTES=*)
+                        # shellcheck disable=SC2034  # read by lib/fingerprints and lib/github-status after sourcing
+                        if [[ "${val}" =~ ^[1-9][0-9]*$ ]]; then CI_CHECK_TIMEOUT_MINUTES="${val}"; else warn "CI_CHECK_TIMEOUT_MINUTES must be a positive integer; ignoring '${val}'"; fi ;;
                 esac
                 ;;
         esac

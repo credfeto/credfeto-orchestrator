@@ -7,16 +7,21 @@
 # before any assignment into it. Declarations only: no function definitions, no I/O, no command
 # calls.
 
+# Keep an assignment above the first directive: shellcheck applies a directive before the first command file-wide.
+ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
+# shellcheck disable=SC2034  # read by lib/discord, lib/github and oneshot after sourcing
 PRIORITIES_URL="https://git-workflow.markridgwell.com/priorities"
+# shellcheck disable=SC2034  # read by lib/core, lib/git and interactive after sourcing
 WORK="${XDG_PROJECTS_DIR:-${HOME}/work}"
 # Base directory for mutable runtime state (session/fingerprint files, per-owner rate-limit
 # and pull-duration history, Discord notification dedup markers): XDG Base Directory
 # Specification compliant, replacing the old hard-coded ~/.orchestrator (#52).
+# shellcheck disable=SC2034  # read by lib/core, lib/discord, lib/git, lib/state and oneshot after sourcing
 ORCHESTRATOR_STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/orchestrator"
-ORCHESTRATOR_IMAGE="${ORCHESTRATOR_IMAGE:-ghcr.io/credfeto/development-agent:latest}"
 # Set to 1 by invoke_claude after its first successful pull in this process. Deliberately NOT
 # seeded from the environment (no ${VAR:-0} indirection) — an inherited value would let a stray
 # export permanently suppress image pulls for a whole run.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=0
 # Whether cleanup_dangling_images (lib/podman) runs `podman image prune` around each container
 # launch. 1 for oneshot: housekeeping on a dedicated service account's store. `interactive`
@@ -24,6 +29,7 @@ ORCHESTRATOR_IMAGE_PULLED_THIS_RUN=0
 # silently delete every untagged image, including local builds of this repository's
 # containers/. Like ORCHESTRATOR_IMAGE_PULLED_THIS_RUN above, deliberately not seeded from the
 # environment: a stray export must not be able to switch oneshot's housekeeping off.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 PRUNE_DANGLING_IMAGES=1
 # Whether prepare_claude_container_args (lib/podman) passes `podman run --replace`. 1 for
 # oneshot: it takes over a name left reserved by an unclean shutdown (#1361), and its per-owner
@@ -31,8 +37,11 @@ PRUNE_DANGLING_IMAGES=1
 # takes no lock, so two launches for the same checkout could both pass the pre-flight during
 # the image pull, and --replace would then remove the first owner's live, attached session;
 # without it the second launch fails on the name instead.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 PODMAN_REPLACE_CONTAINER=1
+# shellcheck disable=SC2034  # read by lib/git, lib/podman, lib/prompts and oneshot after sourcing
 CONTAINER_REPO_PATH="/workspace/repo"
+# shellcheck disable=SC2034  # read by lib/git, lib/podman and lib/prompts after sourcing
 CONTAINER_RULES_PATH="/workspace/rules"
 # A second registered --add-dir, distinct from CONTAINER_REPO_PATH: throwaway per-invocation
 # scratch space (mktemp -d on the host, bind-mounted read-write; entrypoint.sh exports
@@ -40,6 +49,7 @@ CONTAINER_RULES_PATH="/workspace/rules"
 # default) for the #1351 experiment testing whether Claude Code's own file-write trust
 # boundary — independent of permissions.allow — respects --add-dir for redirect targets outside
 # the repo checkout. Not one of the persistent sessions/plans/cache/backups state dirs.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 CONTAINER_SCRATCH_PATH="/workspace/tmp"
 
 # Bump whenever a field is added to or removed from fingerprint_issue_json or
@@ -50,6 +60,7 @@ CONTAINER_SCRATCH_PATH="/workspace/tmp"
 # text happens to differ (which incidental/cosmetic filter edits could otherwise trigger by
 # accident). This is NOT overridable from the environment: it describes what the code hashes,
 # not an operational tuning knob.
+# shellcheck disable=SC2034  # read by lib/fingerprints after sourcing
 FINGERPRINT_SCHEMA_VERSION=2
 
 # Conservative pre-send guard against grossly oversized prompts.
@@ -58,24 +69,30 @@ FINGERPRINT_SCHEMA_VERSION=2
 # is NOT the mechanism that prevents "Prompt is too long".  That failure comes from
 # accumulated conversation over many turns exceeding the model context window; the
 # phase-per-invocation design (fresh session, one phase, then stop) is what bounds it.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 MAX_PROMPT_CHARS=100000
 
 # Extra buffer added to the token-reset time before resuming agentic work.
 # Avoids hitting the limit again immediately after it lifts.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 RATE_LIMIT_RESUME_BUFFER_SECS=3600
 
 # The cfwf script that ships in this repository, found from BASEDIR (set by the script that sources
 # this file) rather than PATH, so the orchestrator always runs the version it was released with and
 # ignores any other cfwf that happens to be installed. An unset BASEDIR stops the script here.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 CFWF_SCRIPT="${BASEDIR:?BASEDIR must be set by the script that sources lib/globals}/containers/base/development-full/scripts/cfwf"
 
 # Where unparseable 429 rate-limit messages are reported so parse_reset_time can be extended.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 RATE_LIMIT_ISSUE_TITLE="Unparseable Claude rate-limit reset time"
 
 # Title of the issue filed in an affected repo when the orchestrator cannot obtain a
 # usable "Workflow" project for it (see report_missing_workflow_project).  A bot account
 # cannot create a project under a personal account, so the owner must run create-project.
+# shellcheck disable=SC2034  # read by lib/workflow-board after sourcing
 WF_SETUP_ISSUE_TITLE="Workflow project setup required"
 
 # Hard limit on how long a single agent container may run. Prevents a stuck
@@ -83,12 +100,15 @@ WF_SETUP_ISSUE_TITLE="Workflow project setup required"
 # Override with AGENT_TIMEOUT_MINUTES in the environment before calling oneshot.
 AGENT_TIMEOUT_MINUTES="${AGENT_TIMEOUT_MINUTES:-90}"
 [[ "${AGENT_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || AGENT_TIMEOUT_MINUTES=90
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 AGENT_TIMEOUT_SECS=$(( AGENT_TIMEOUT_MINUTES * 60 ))
 
 # Set by setup_cgroup_leaf; passed as --cgroup-parent to every podman run call.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
 PODMAN_CGROUP_PARENT=""
 
 # Minimum free disk space in kilobytes required to launch a container (10 GB).
+# shellcheck disable=SC2034  # read by lib/core after sourcing
 MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 
 # Rolling baseline for podman pull duration (#1400): how many recent successful pull durations
@@ -96,8 +116,11 @@ MIN_DISK_SPACE_KB=$(( 10 * 1024 * 1024 ))
 # minimum sample count before a baseline is trusted at all (fewer samples than this and the
 # check is skipped entirely, rather than comparing against a baseline built from too little
 # history to be meaningful).
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 PULL_DURATION_HISTORY_SIZE=10
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 PULL_DURATION_THRESHOLD_MULTIPLIER=3
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 PULL_DURATION_MIN_SAMPLES=5
 
 # Code review, security review, and coverage each get their own round budget below rather than
@@ -202,9 +225,13 @@ MIN_REVIEW_CONVERGENCE_ROUNDS="${MIN_REVIEW_CONVERGENCE_ROUNDS:-3}"
 # ("<lang> <pct>% < main <pct>% - returning to Development") — but is still defined here rather
 # than left as an independently-hardcoded literal, for the same single-source-of-truth reason as
 # the other three (see _round_marker_and_cap_for_substatus's own comment).
+# shellcheck disable=SC2034  # read by lib/prompts and lib/workflow-board after sourcing
 ROUND_MARKER_SIMPLIFY="Simplify: applied cleanups"
+# shellcheck disable=SC2034  # read by lib/prompts and lib/workflow-board after sourcing
 ROUND_MARKER_CODE_REVIEW="Code review round:"
+# shellcheck disable=SC2034  # read by lib/prompts and lib/workflow-board after sourcing
 ROUND_MARKER_SECURITY_REVIEW="Security review round:"
+# shellcheck disable=SC2034  # read by lib/prompts and lib/workflow-board after sourcing
 ROUND_MARKER_COVERAGE=" - returning to Development"
 
 # Runaway backstop: the maximum number of agent invocations the orchestrator will spend on
@@ -363,20 +390,28 @@ PR_CREATOR_LOGIN="${PR_CREATOR_LOGIN:-prpixie}"
 # own side": the AI agent ($me) or the PR create bot ($creator). One definition, so the pivot and
 # the human-driven check cannot disagree about it. GitHub logins are case-insensitive, so the
 # comparison is too. The program must be given --arg me and --arg creator.
+# shellcheck disable=SC2016  # $login, $me and $creator are jq variables, not shell expansions
 _JQ_DEF_OWN_PR_AUTHOR='def own_pr_author: ((.author.login // "") | ascii_downcase) as $login | ($login == ($me | ascii_downcase) or $login == ($creator | ascii_downcase));'
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
+# shellcheck disable=SC2034  # read by lib/github after sourcing
 WHITELISTED_USERS=""
 # Cached JSON array of trusted logins for the current repo context; reset by set_repo_context.
 _TRUSTED_LOGINS_JSON=""
 
 # Per-item mutable counters. Initialized here; populated by the load_*/save_* helpers in
 # lib/state and lib/github-status.
+# shellcheck disable=SC2034  # read by oneshot after sourcing
 INFRA_FAILURE_COUNT=0
+# shellcheck disable=SC2034  # read by lib/state and oneshot after sourcing
 PR_INVOCATION_TOTAL=0
+# shellcheck disable=SC2034  # read by lib/github-status, lib/state and oneshot after sourcing
 PR_INVOCATION_IDLE=0
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 ENV_UNBLOCK_ATTEMPTS=0
+# shellcheck disable=SC2034  # read by lib/state and oneshot after sourcing
 ISSUE_INVOCATION_TOTAL=0
+# shellcheck disable=SC2034  # read by lib/github-status and lib/state after sourcing
 ISSUE_INVOCATION_IDLE=0
 
 # Output pair for parse_two_token_counters (lib/state) — shared by load_pr_invocation_counts and
@@ -446,4 +481,5 @@ PROJECT_CACHE_TTL="${PROJECT_CACHE_TTL:-3600}"
 # value is a miss. Bump it whenever what the cache holds changes meaning, as it did when the status
 # field moved from the custom "Workflow Status" field to the built-in "Status" (#1519); without it,
 # an old entry would keep serving the deleted field's id for up to PROJECT_CACHE_TTL.
+# shellcheck disable=SC2034  # read by lib/workflow-board after sourcing
 PROJECT_CACHE_VERSION="2"
