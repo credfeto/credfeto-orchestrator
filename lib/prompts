@@ -147,7 +147,7 @@ BGRULE
 # otherwise act on the instruction files.
 _build_permission_denial_rule() {
     cat <<'PDRULE'
-MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: `git -C <dir>` instead of `cd <dir>; git`, literal values instead of `$VAR`, one simple command instead of a `;`/`&&` chain. If that form is also denied, log it per the allowlist-request process in the AI instructions and carry on with the rest of the task.
+MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: `git -C <dir>` instead of `cd <dir>; git`, literal values instead of `$VAR`, one simple command instead of a `;`/`&&` chain, and the mandated exclusions on any `find`/`grep -r` search. If that form is also denied, add a comment listing the denied command to credfeto/credfeto-orchestrator#1167 (check it is not already listed first) and carry on with the rest of the task.
 PDRULE
 }
 

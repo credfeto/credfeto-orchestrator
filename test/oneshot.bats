@@ -596,6 +596,8 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
 }
 
 @test "build_pr_claude_md says a permission denial refuses only one command and Bash is still available" {
@@ -603,6 +605,8 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
 }
 
 @test "build_pr_claude_md for dependency PR says a permission denial refuses only one command and Bash is still available" {
@@ -611,6 +615,8 @@ teardown() {
     [[ "${output}" == *"dependency update PR"* ]]
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
 }
 
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
