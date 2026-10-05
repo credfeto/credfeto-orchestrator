@@ -12,6 +12,62 @@ pr_json_has_placeholder_file() {
     printf '%s' "${pr_json}" | jq -e '(.files // []) | any(.[]; .path == ".deleteme.now")' > /dev/null 2>&1
 }
 
+# Prints pr_json with each statusCheckRollup entry's isRequired set from required_names_json (the
+# output of fetch_pr_required_check_names), matched on the check's name or legacy context.
+# GitHub's own required-check rules are keyed on that name, so a name match is the same test it
+# applies. When required_names_json is empty (the lookup failed) or "[]" (nothing on this commit is
+# required, e.g. a repo with no branch protection) pr_json is printed unchanged: entries stay
+# without isRequired, which every predicate below reads as "required-ness unknown". Annotating an
+# empty set would mark every check optional, so pending CI would stop deferring invocation on such
+# a repo and an agent would be started, and charged idle, while CI is still running.
+annotate_pr_json_required_checks() {
+    local pr_json="$1" required_names_json="${2:-}"
+    if [ -z "${required_names_json}" ] || [ "${required_names_json}" = "[]" ]; then
+        printf '%s' "${pr_json}"
+        return 0
+    fi
+    printf '%s' "${pr_json}" | jq -c --argjson required "${required_names_json}" '
+        if (.statusCheckRollup | type) == "array"
+        then .statusCheckRollup |= map(. + {isRequired: ((.name // .context) as $n | $required | index($n) != null)})
+        else .
+        end
+    ' 2>/dev/null || printf '%s' "${pr_json}"
+}
+
+# Returns 0 (true) when every statusCheckRollup entry has finished and passed: a CheckRun (it has
+# .status) whose conclusion is SUCCESS, SKIPPED or NEUTRAL, or a legacy StatusContext (no .status)
+# whose state is SUCCESS. Also true for an empty rollup. On such a PR no predicate here can come
+# out differently for knowing which checks are required, so the lookup is not worth an API call.
+pr_json_has_only_passed_checks() {
+    local pr_json="$1"
+    printf '%s' "${pr_json}" | jq -e '
+        (.statusCheckRollup // [])
+        | all(.[];
+            if (.status != null)
+            then ((.conclusion // "") | . == "SUCCESS" or . == "SKIPPED" or . == "NEUTRAL")
+            else (.state // "") == "SUCCESS"
+            end
+        )
+    ' > /dev/null 2>&1
+}
+
+# Sets the caller's pr_required_checks from fetch_pr_required_check_names (lib/github) and
+# annotates the caller's pr_json with them (annotate_pr_json_required_checks), by dynamic scoping
+# like set_pr_has_unaddressed_comment: only call from main()'s per-item loop. Shared by the
+# issue-pivot and direct-PR paths. The lookup is skipped, leaving pr_required_checks empty, when
+# every check has already passed (pr_json_has_only_passed_checks). A failed lookup also leaves it
+# empty rather than failing the item: see annotate_pr_json_required_checks for how each predicate
+# reads unknown required-ness.
+set_pr_required_checks() {
+    local item_id="$1"
+    pr_required_checks=""
+    # shellcheck disable=SC2154  # pr_json is main()'s local, read via dynamic scoping
+    if ! pr_json_has_only_passed_checks "${pr_json}"; then
+        pr_required_checks=$(fetch_pr_required_check_names "${item_id}") || pr_required_checks=""
+    fi
+    pr_json=$(annotate_pr_json_required_checks "${pr_json}" "${pr_required_checks}")
+}
+
 # Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
 # auto-merge is enabled and no required check has hard-failed (it will merge once the remaining
 # checks/approvals land).  Merged/closed PRs never reach here (filtered earlier as non-OPEN);
@@ -19,6 +75,9 @@ pr_json_has_placeholder_file() {
 # long before a later push breaks a required check, at which point GitHub will never complete
 # the merge and the orchestrator needs to step back in and fix it rather than walk away.  Uses
 # the same CheckRun-vs-legacy-StatusContext classification as pr_json_has_pending_ci_checks.
+# Unlike pr_json_has_failed_required_check, a failing check whose required-ness is unknown still
+# blocks "terminal" here: walking away from a PR that may never merge is the costlier mistake.
+# Superseded runs are ignored, as they are there.
 # GitHub's own mergeStateStatus (e.g. BLOCKED) is deliberately not consulted here — it reflects
 # GitHub's own merge-readiness computation (missing reviews, branch-protection rules, etc.), not
 # something the orchestrator itself has any part in, and is not a reliable signal that the PR
@@ -38,13 +97,14 @@ pr_json_has_placeholder_file() {
 # pipeline "finished" — either can go stale after the fact and both still need a human.
 pr_json_is_terminal() {
     local pr_json="$1" review_pipeline_finished="${2:-false}"
-    printf '%s' "${pr_json}" | jq -e --argjson finished "${review_pipeline_finished}" '
+    printf '%s' "${pr_json}" | jq -e --argjson finished "${review_pipeline_finished}" "${_JQ_DEF_LATEST_CHECK_RUNS}"'
         .isDraft != true
         and ((.files // []) | all(.[]; .path != ".deleteme.now"))
         and (.autoMergeRequest != null or $finished)
         and .reviewDecision != "CHANGES_REQUESTED"
         and (
             (.statusCheckRollup // [])
+            | latest_check_runs
             | all(.[];
                 .isRequired == false
                 or (
@@ -56,6 +116,28 @@ pr_json_is_terminal() {
             )
         )
     ' > /dev/null 2>&1
+}
+
+# Runs jq_program over pr_json with the REST-shaped review and issue comment arrays bound as
+# $reviewComments and $issueComments, and prints its output; any further arguments are jq options
+# (-r, --arg, --argjson). The arrays go through temporary files read with --rawfile rather than
+# --argjson, because a long PR thread serialises past the per-argument size limit execve enforces
+# (see fingerprint_pr_json). Returns 1 when a temporary file cannot be created or jq fails.
+_jq_pr_json_with_comment_arrays() {
+    local pr_json="$1" review_comments_json="$2" issue_comments_json="$3" jq_program="$4"
+    shift 4
+    local review_comments_file issue_comments_file output jq_status
+    review_comments_file=$(mktemp --suffix=.json) || return 1
+    printf '%s' "${review_comments_json}" > "${review_comments_file}"
+    issue_comments_file=$(mktemp --suffix=.json) || { rm -f "${review_comments_file}"; return 1; }
+    printf '%s' "${issue_comments_json}" > "${issue_comments_file}"
+    output=$(printf '%s' "${pr_json}" | jq "$@" \
+        --rawfile reviewCommentsRaw "${review_comments_file}" --rawfile issueCommentsRaw "${issue_comments_file}" \
+        '($reviewCommentsRaw | fromjson) as $reviewComments | ($issueCommentsRaw | fromjson) as $issueComments | '"${jq_program}")
+    jq_status=$?
+    rm -f "${review_comments_file}" "${issue_comments_file}"
+    [ "${jq_status}" -eq 0 ] || return 1
+    printf '%s' "${output}"
 }
 
 # Returns the newest trusted-activity timestamp in pr_json — top-level comments, reviews, inline
@@ -74,22 +156,20 @@ pr_json_is_terminal() {
 # every existing call site/test built on the latter keeps working unchanged — the two sources
 # describe the same underlying comments, so folding both into the same max-timestamp union is
 # always safe (a real edit's `updated_at` can only be >= its `created_at`/`createdAt`).
-# Used both to record what a genuine agent invocation actually saw (via
-# save_pr_last_agent_comment_seen, #1307) and, via pr_json_has_unaddressed_trusted_comment below,
-# to decide whether one is still unaddressed.
+# Used to record the newest trusted comment a genuine agent invocation was given (oneshot computes it
+# from the pre-session PR state and saves it via save_pr_last_agent_comment_seen, #1307), to detect a
+# trusted comment posted during a session (via fetch_pr_latest_trusted_comment_timestamp), and, via
+# pr_json_has_unaddressed_trusted_comment below, to decide whether one is still unaddressed.
+# Optional fifth argument exclude_login: the orchestrator's own login (_GH_ME). It is a trusted
+# collaborator, so without this its own status comments would count as new trusted activity: a
+# session whose only output was its own comment would look like progress, and would move the
+# last-seen marker as if another trusted commenter had spoken. Empty excludes nothing.
 pr_json_latest_trusted_comment_timestamp() {
-    local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}"
-    local review_comments_file issue_comments_file result jq_status
-    review_comments_file=$(mktemp --suffix=.json) || return 1
-    printf '%s' "${review_comments_json}" > "${review_comments_file}"
-    issue_comments_file=$(mktemp --suffix=.json) || { rm -f "${review_comments_file}"; return 1; }
-    printf '%s' "${issue_comments_json}" > "${issue_comments_file}"
-
-    result=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --rawfile reviewCommentsRaw "${review_comments_file}" --rawfile issueCommentsRaw "${issue_comments_file}" '
-        ($reviewCommentsRaw | fromjson) as $reviewComments
-        | ($issueCommentsRaw | fromjson) as $issueComments
-        | def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
-        def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
+    local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}" exclude_login="${5:-}"
+    # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
+    _jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}"'
+        def tc(cs): cs | map(select(counted_login(.author.login)));
+        def trc(cs): cs | map(select(counted_login(.user.login)));
         [
             (tc(.comments // [])[]? | (.updatedAt // .createdAt // "")),
             (tc(.reviews // [])[]? | (.submittedAt // .updatedAt // "")),
@@ -98,16 +178,12 @@ pr_json_latest_trusted_comment_timestamp() {
         ]
         | map(select(. != ""))
         | sort | last // ""
-    ')
-    jq_status=$?
-    rm -f "${review_comments_file}" "${issue_comments_file}"
-    [ "${jq_status}" -eq 0 ] || return 1
-    printf '%s' "${result}"
+    ' -r --argjson trusted "${trusted_logins}" --arg me "${exclude_login}"
 }
 
 # Returns 0 (true) if any trusted-activity timestamp (top-level comment, review, or inline review
-# comment) is newer than last_seen_timestamp — i.e. a human has said something an agent has not
-# actually read yet. An empty last_seen_timestamp (no prior record from
+# comment) is newer than last_seen_timestamp: a trusted commenter has said something an agent
+# has not actually read yet. An empty last_seen_timestamp (no prior record from
 # load_pr_last_agent_comment_seen) counts any trusted activity as unaddressed, so a PR with no
 # recorded history is never silently skipped. This is a deliberate one-time cost on first deploy:
 # every already-open PR with any trusted comment history gets exactly one forced real invocation
@@ -123,12 +199,49 @@ pr_json_latest_trusted_comment_timestamp() {
 # rather than a second jq pass, so the two functions cannot drift on what counts as "trusted
 # activity" — plain
 # string comparison is safe here because GitHub always emits these as fixed-width ISO-8601 UTC
-# timestamps.
+# timestamps. Optional sixth argument exclude_login is passed straight through, so the
+# orchestrator's own comments are never "unaddressed" and this agrees with the last-seen marker.
 pr_json_has_unaddressed_trusted_comment() {
-    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}"
+    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}" exclude_login="${6:-}"
     local latest
-    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${review_comments_json}" "${issue_comments_json}")
+    latest=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${review_comments_json}" "${issue_comments_json}" "${exclude_login}")
     [ -n "${latest}" ] && { [ -z "${last_seen_timestamp}" ] || [[ "${latest}" > "${last_seen_timestamp}" ]]; }
+}
+
+# Prints the trusted, non-orchestrator PR activity newer than last_seen_timestamp (the same set
+# pr_json_has_unaddressed_trusted_comment detects) as quotable text for the PR session's
+# generated CLAUDE.md, oldest first: top-level comments (REST issue comments and pr_json.comments
+# describe the same comments, so the pair is de-duplicated on author and body), reviews with a
+# body or a CHANGES_REQUESTED verdict, and inline review comments with their file path. Each body
+# is cut at PR_UNADDRESSED_COMMENT_MAX_CHARS and the whole text at
+# PR_UNADDRESSED_COMMENTS_MAX_CHARS. Prints nothing when there is none. Arguments mirror
+# pr_json_has_unaddressed_trusted_comment's; the comment arrays go through files because their
+# size is unbounded.
+pr_json_unaddressed_trusted_comments_text() {
+    local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}" exclude_login="${6:-}"
+    local text
+    # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
+    text=$(_jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}"'
+        def clip: if length > $per then .[0:$per] + " [truncated]" else . end;
+        [
+            ($issueComments[]? | {login: .user.login, ts: (.updated_at // .created_at // ""), kind: "comment", body: (.body // "")}),
+            ((.comments // [])[]? | {login: .author.login, ts: (.updatedAt // .createdAt // ""), kind: "comment", body: (.body // "")}),
+            ((.reviews // [])[]? | select((.body // "") != "" or .state == "CHANGES_REQUESTED")
+                | {login: .author.login, ts: (.submittedAt // .updatedAt // ""), kind: ("review, " + (.state // "COMMENTED")), body: (.body // "")}),
+            ($reviewComments[]? | {login: .user.login, ts: (.updated_at // ""), kind: ("inline review comment on " + (.path // "unknown file")), body: (.body // "")})
+        ]
+        | map(select(.login != null and counted_login(.login) and .ts != "" and ($last == "" or .ts > $last)))
+        | unique_by([.login, .kind, .body])
+        | sort_by(.ts)
+        | map("- \(.login) (\(.kind), \(.ts)):\n\(.body | clip)")
+        | join("\n")
+    ' -r --argjson trusted "${trusted_logins}" --arg me "${exclude_login}" \
+        --arg last "${last_seen_timestamp}" --argjson per "${PR_UNADDRESSED_COMMENT_MAX_CHARS}") || return 1
+    if [ "${#text}" -gt "${PR_UNADDRESSED_COMMENTS_MAX_CHARS}" ]; then
+        text="${text:0:${PR_UNADDRESSED_COMMENTS_MAX_CHARS}}
+[further comments truncated: read the rest on the PR]"
+    fi
+    printf '%s' "${text}"
 }
 
 # Sets the caller's `pr_has_unaddressed_comment` from the caller's pre-fetched
@@ -147,7 +260,7 @@ set_pr_has_unaddressed_comment() {
     # shellcheck disable=SC2034,SC2154  # pr_json/pr_review_comments/pr_issue_comments read here
     # are set by the caller via dynamic scoping, same as item_repo is for require_trusted_logins
     # (lib/github)
-    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" "${pr_review_comments}" "${pr_issue_comments}" \
+    pr_json_has_unaddressed_trusted_comment "${pr_json}" "${trusted_logins}" "${last_seen}" "${pr_review_comments}" "${pr_issue_comments}" "${_GH_ME:-}" \
         && pr_has_unaddressed_comment=true
 }
 
@@ -157,12 +270,17 @@ set_pr_has_unaddressed_comment() {
 # idle-parked *despite* an active failure nobody is fixing — the idle-invocation budget alone
 # cannot tell these apart.  Uses the same CheckRun-vs-legacy-StatusContext classification as
 # pr_json_has_pending_ci_checks / pr_json_is_terminal.
+# Only a check positively known to be required counts (isRequired == true, set by
+# annotate_pr_json_required_checks), and only its latest run: this feeds the human-facing "failed
+# required check" Blocked reason, which must agree with `gh pr checks --required`. A check whose
+# required-ness is unknown, or a failure a later run superseded, never produces that claim.
 pr_json_has_failed_required_check() {
     local pr_json="$1"
-    printf '%s' "${pr_json}" | jq -e '
+    printf '%s' "${pr_json}" | jq -e "${_JQ_DEF_LATEST_CHECK_RUNS}"'
         (.statusCheckRollup // [])
+        | latest_check_runs
         | any(.[];
-            .isRequired != false
+            .isRequired == true
             and (
                 if (.status != null)
                 then .conclusion == "FAILURE"
@@ -484,6 +602,132 @@ pr_should_advance_unchanged() {
     pr_json_is_terminal "${pr_json}" && [ "${has_unaddressed_comment}" != "true" ] && return 1
     load_pr_invocation_counts "${item_id}"
     [ "${PR_INVOCATION_IDLE}" -lt "${MAX_PR_IDLE_INVOCATIONS}" ]
+}
+
+# Decides whether a PR session re-invoked with no external change should be left uncharged against
+# the idle budget, from values captured either side of it: Workflow board status, newest trusted
+# comment timestamp with the orchestrator's own login excluded, and head commit. An empty post
+# comment timestamp is inconclusive: oneshot passes one when that lookup failed, when it was not
+# made, or when the pre-session value could not be computed (so the two are not comparable).
+# Prints which signal moved and returns 0 when one did; returns 1, printing nothing, when none did,
+# which is when the session is charged. A board move or a pushed commit is the agent's own
+# progress. A moved comment timestamp is not: with the orchestrator's login excluded on both sides,
+# it can only be another trusted commenter's comment that arrived while the session ran, which the
+# agent was never given and which the last-agent-comment-seen marker leaves unaddressed; it still
+# resets the idle count, so the next run that answers it is not parked by an idle cap that comment
+# reached. The orchestrator's own comments never move it, so they cannot cause a re-run loop. An
+# "Unknown" board read on either side is inconclusive rather than a move, because
+# fetch_single_item_workflow_status reports a failed lookup that way too. The head commit stands
+# in for the full fingerprint, which would also see the agent's own comment and the
+# mergeStateStatus/statusCheckRollup fields that change on their own while nothing about the PR
+# does.
+pr_session_progress_reason() {
+    local pre_board="$1" post_board="$2" pre_comment_ts="$3" post_comment_ts="$4" pre_head="$5" post_head="$6"
+    if [ -n "${pre_board}" ] && [ -n "${post_board}" ] && [ "${pre_board}" != "Unknown" ] && [ "${post_board}" != "Unknown" ] \
+        && [ "${pre_board}" != "${post_board}" ]; then
+        printf 'board moved from %s to %s' "${pre_board}" "${post_board}"
+        return 0
+    fi
+    if [ -n "${post_comment_ts}" ] && [ "${post_comment_ts}" != "${pre_comment_ts}" ]; then
+        printf 'a trusted comment arrived during the session and is left unaddressed for the next run'
+        return 0
+    fi
+    if [ -n "${pre_head}" ] && [ -n "${post_head}" ] && [ "${pre_head}" != "${post_head}" ]; then
+        printf 'a commit was pushed'
+        return 0
+    fi
+    return 1
+}
+
+# Names the build_pr_claude_md phase an unchanged, non-terminal PR should run next, from its
+# Workflow board status (the agent's own phase marker) and pr_json. Prints the phase and returns 0
+# when one can be named; returns 1 when the board says the work is Complete, so there is nothing
+# left for an agent to do; returns 2 when the status is unknown or unrecognised (no board, or a
+# custom status), where the caller falls back to invoking without naming a phase. A failed
+# required check or a CHANGES_REQUESTED review outranks the board, as it does in the prompt.
+pr_next_phase_for_board_status() {
+    local board_status="$1" pr_json="$2"
+    if pr_json_has_failed_required_check "${pr_json}"; then
+        printf 'PHASE C (fix the failed required check)'
+        return 0
+    fi
+    if printf '%s' "${pr_json}" | jq -e '.reviewDecision == "CHANGES_REQUESTED"' > /dev/null 2>&1; then
+        printf 'PHASE C (address the requested changes)'
+        return 0
+    fi
+    case "${board_status}" in
+        "Not Started"|Planning|Approved|Development)
+            printf 'PHASE C (finish any outstanding linked-issue work), otherwise PHASE D (simplify)' ;;
+        "AI Simplify")
+            printf 'PHASE D (simplify)' ;;
+        "AI Review")
+            printf 'PHASE E (code review)' ;;
+        "AI Security Review")
+            printf 'PHASE F (security review)' ;;
+        "AI Coverage")
+            printf 'PHASE G (coverage)' ;;
+        "Human Review")
+            if printf '%s' "${pr_json}" | jq -e '.autoMergeRequest == null' > /dev/null 2>&1; then
+                printf 'PHASE H (finalize)'
+            else
+                printf 'PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)'
+            fi ;;
+        Complete)
+            return 1 ;;
+        *)
+            return 2 ;;
+    esac
+}
+
+# Decides how to re-invoke a PR that pr_should_advance_unchanged has allowed to advance, and sets
+# the caller's pr_next_phase (dynamic scoping, same convention as set_pr_has_unaddressed_comment:
+# only call from main()'s per-item loop, where pr_json, pr_has_unaddressed_comment and
+# pr_next_phase are locals). Returns 0 to invoke, with pr_next_phase set to the phase to hand the
+# agent, or empty when none can be named. Returns 1 when the board names no next phase at all: the
+# PR is not invoked, since a session with nothing to do only reads state and stops. Deciding is all
+# this does; the caller charges the idle budget for that skip (skip_unchanged_pr_without_next_phase)
+# so a PR stuck in that state still escalates to a human.
+plan_unchanged_pr_reinvocation() {
+    local item_id="$1" item_repo="$2" board_status phase_rc=0
+    pr_next_phase=""
+    # shellcheck disable=SC2154  # set by the caller via dynamic scoping
+    if [ "${pr_has_unaddressed_comment}" = "true" ]; then
+        info "PR #${item_id} in ${item_repo}: unchanged but has an unaddressed trusted comment, so the agent handles that first"
+        return 0
+    fi
+    # Populated here, outside the command substitution below, so the per-tick board cache
+    # survives for every later lookup this tick instead of dying with the subshell.
+    discover_or_create_workflow_project
+    fetch_board_item_statuses
+    board_status=$(board_substatus_for_item "${item_id}")
+    pr_next_phase=$(pr_next_phase_for_board_status "${board_status}" "${pr_json}") || phase_rc=$?
+    case "${phase_rc}" in
+        0)
+            info "PR #${item_id} in ${item_repo}: board status '${board_status}', next phase is ${pr_next_phase}"
+            return 0 ;;
+        1)
+            pr_next_phase=""
+            info "PR #${item_id} in ${item_repo}: unchanged and board status '${board_status}' names no next phase; not invoking"
+            return 1 ;;
+        *)
+            pr_next_phase=""
+            info "PR #${item_id} in ${item_repo}: board status '${board_status}' names no phase, invoking without one"
+            return 0 ;;
+    esac
+}
+
+# Records an unchanged PR that plan_unchanged_pr_reinvocation decided not to invoke: charges one idle
+# step (charge_pr_idle, lib/state) and counts and logs the skip in the caller's count_unchanged and
+# item_status_log (dynamic scoping, same convention as set_pr_has_unaddressed_comment: only call
+# from main()'s per-item loop). Shared by the issue-pivot and direct-PR paths, which then continue
+# to the next item themselves.
+skip_unchanged_pr_without_next_phase() {
+    local item_id="$1" item_repo="$2"
+    charge_pr_idle "${item_id}" "${item_repo}"
+    # shellcheck disable=SC2034  # count_unchanged and item_status_log are main()'s locals
+    count_unchanged=$((count_unchanged + 1))
+    # shellcheck disable=SC2034  # see above
+    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged and the board names no next phase - idle budget charged, not invoking")")
 }
 
 # Decides whether to re-invoke an Issue whose fingerprint is UNCHANGED, mirroring
