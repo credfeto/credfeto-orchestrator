@@ -296,7 +296,7 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 5. (Implementation mode) Proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
 7. $(_build_issue_branch_step "${item_id}" "${repo_path}" "${stale_branch}")
-8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one.
+8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 10).
 9. $(_build_background_commands_rule)
 10. $(_build_permission_denial_rule)
 EOF
@@ -450,7 +450,7 @@ Steps:
      If that command fails (auto-merge not supported), mark the PR as ready instead:
      gh pr ready ${item_id} --repo ${REPO_FULL}
    - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
-4. All interaction with humans must be made as a comment to the pull request. Do NOT open issues.
+4. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues.
 5. $(_build_permission_denial_rule)
 EOF
     else
@@ -543,7 +543,7 @@ $(_build_placeholder_disarm_note "${item_id}")
 Otherwise, if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true) and nothing above applies: there is nothing to do — do NOT post a comment or make any change; just STOP.
 
 General rules:
-- All interaction with humans including status reports must be made as a comment to the pull request.
+- All interaction with humans including status reports must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below).
 - $(_build_background_commands_rule)
 - $(_build_permission_denial_rule)
 EOF

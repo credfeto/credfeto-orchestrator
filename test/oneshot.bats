@@ -598,6 +598,7 @@ teardown() {
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
     [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"if we've opened one (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 10)."* ]]
 }
 
 @test "build_pr_claude_md says a permission denial refuses only one command and Bash is still available" {
@@ -607,6 +608,7 @@ teardown() {
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
     [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below)."* ]]
 }
 
 @test "build_pr_claude_md for dependency PR says a permission denial refuses only one command and Bash is still available" {
@@ -617,6 +619,7 @@ teardown() {
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
     [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues."* ]]
 }
 
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
