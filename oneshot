@@ -144,7 +144,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
 # notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
-# rearm_closed_issue_markers and tag_pr_closed_issue are declared in lib/state.
+# rearm_closed_issue_markers, tag_pr_closed_issue, mark_item_closed, clear_closed_marker,
+# record_pivot_pr and mark_closed_pivot_prs are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -441,10 +442,12 @@ main() {
                             warn "Failed to tag PR #${open_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
                         fi
                     fi
+                    mark_item_closed "Issue" "${item_id}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - tagging linked PR #${open_pr} for investigation")")
                     continue
                 fi
+                clear_closed_marker "Issue" "${item_id}"
                 if issue_json_has_blocked_label "${issue_json}" \
                     || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
@@ -477,10 +480,13 @@ main() {
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
                 if [ "${pr_state}" != "OPEN" ]; then
                     info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
+                    mark_item_closed "PullRequest" "${open_pr}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
+                clear_closed_marker "PullRequest" "${open_pr}"
+                record_pivot_pr "${item_id}" "${open_pr}"
 
                 if pr_json_has_blocked_label "${pr_json}" \
                     || ! reset_pr_invocation_counts_if_capped "${open_pr}" "${item_repo}"; then
@@ -654,6 +660,10 @@ main() {
                 # PR is being developed by a human stands off further down, through
                 # find_human_taken_over_pr_for_issue (#1517).
 
+                # A PR this Issue pivoted to earlier may have merged or closed since; only this
+                # Issue's record can still observe that (#1365).
+                mark_closed_pivot_prs "${item_id}"
+
                 # No active PR — check the issue itself.
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then
                     warn "Failed to fetch state for Issue #${item_id} in ${item_repo} — skipping this item for now"
@@ -692,10 +702,12 @@ main() {
                         fi
                     fi
                     info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
+                    mark_item_closed "Issue" "${item_id}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
+                clear_closed_marker "Issue" "${item_id}"
 
                 if issue_json_has_blocked_label "${issue_json}" \
                     || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
@@ -897,10 +909,12 @@ main() {
             pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
             if [ "${pr_state}" != "OPEN" ]; then
                 info "PR #${item_id} in ${item_repo} is no longer open — skipping"
+                mark_item_closed "PullRequest" "${item_id}"
                 count_not_open=$((count_not_open + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "no longer open - skipping")")
                 continue
             fi
+            clear_closed_marker "PullRequest" "${item_id}"
 
             if pr_json_has_blocked_label "${pr_json}" \
                 || ! reset_pr_invocation_counts_if_capped "${item_id}" "${item_repo}"; then

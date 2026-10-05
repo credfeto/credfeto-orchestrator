@@ -364,6 +364,64 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
+# Prints the unix time recorded in a closed marker, falling back to the file's own mtime when the
+# content is not a timestamp, so a corrupt marker still ages out instead of pinning its
+# transcripts forever.
+closed_marker_unix_time() {
+    local marker="$1" recorded
+    recorded=$(cat "${marker}" 2>/dev/null)
+    if [[ "${recorded}" =~ ^[0-9]+$ ]]; then
+        printf '%s' "${recorded}"
+    else
+        stat -c %Y "${marker}" 2>/dev/null
+    fi
+}
+
+# Removes the transcript directory (and its closed marker) of every work item observed closed
+# more than TRANSCRIPT_RETENTION_DAYS ago, and every file in the shared no-item directory not
+# modified for that long. An item with no closed marker is kept: only oneshot observing the
+# closure writes one, and nothing here queries GitHub, because this runs before every container
+# launch and must never fail or stall the run. Not gated on PRUNE_DANGLING_IMAGES: that protects
+# a developer's own image store, whereas this tree is orchestrator state, and the shared directory
+# interactive uses would otherwise grow without bound.
+prune_transcripts() {
+    local transcripts_dir
+    transcripts_dir=$(transcripts_root_path)
+    [ -d "${transcripts_dir}" ] || return 0
+
+    local retention_secs=$(( TRANSCRIPT_RETENTION_DAYS * 86400 ))
+    local now_unix item_dir item_name marker closed_unix
+    now_unix=$(date +%s)
+    for item_dir in "${transcripts_dir}"/*/; do
+        [ -d "${item_dir}" ] || continue
+        item_dir="${item_dir%/}"
+        item_name="${item_dir##*/}"
+        [ "${item_name}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
+        marker=$(closed_marker_file_path "${item_name%_*}" "${item_name##*_}")
+        [ -f "${marker}" ] || continue
+        closed_unix=$(closed_marker_unix_time "${marker}")
+        [[ "${closed_unix}" =~ ^[0-9]+$ ]] || continue
+        if [ $(( now_unix - closed_unix )) -gt "${retention_secs}" ]; then
+            # The marker goes only once the directory has: without it the item is never purged,
+            # so keeping it on failure is what makes the next launch retry.
+            if rm -rf "${item_dir}" 2>/dev/null; then
+                rm -f "${marker}" 2>/dev/null || true
+            else
+                warn "Failed to purge transcripts at ${item_dir} - will retry on the next launch"
+            fi
+        fi
+    done
+
+    local shared_dir
+    shared_dir=$(transcript_dir_path)
+    if [ -d "${shared_dir}" ]; then
+        local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
+        find "${shared_dir}" -mindepth 1 -type f -mmin "+${retention_mins}" -delete 2>/dev/null || true
+        find "${shared_dir}" -mindepth 1 -type d -empty -mmin "+${retention_mins}" -delete 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
 # cgroup is clean when the next timer fires and systemd does not warn about
 # left-over processes.  Registered as an EXIT trap by main so it runs on any
@@ -693,6 +751,7 @@ ensure_agent_container_ready() {
     fi
 
     cleanup_dangling_images
+    prune_transcripts
     # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
     # and a tick with several actionable items would otherwise pay that cost once per item.
     if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
@@ -734,7 +793,8 @@ ensure_agent_container_ready() {
 # Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
 # container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
-# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, and the Podman secrets for
+# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the per-item transcript
+# directory (transcript_dir_path), and the Podman secrets for
 # the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
 # phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
 # or expose. Installs the EXIT trap that removes everything it creates
@@ -742,11 +802,11 @@ ensure_agent_container_ready() {
 # cannot leak a tmpfile or a secret (#1103); bash traps replace rather than append, so a
 # caller that needs more on EXIT passes it as extra_exit_cmd (oneshot: stop_ssh_agent). The
 # trap is a backstop only: every normal exit path in the callers runs the cleanup itself.
-# item_type and item_id are optional: when both are set they feed the WORK_ITEM_URL banner
-# and the Discord error notifications.
+# item_type and item_id are optional: when both are set they select the transcript directory
+# and feed the WORK_ITEM_URL banner and the Discord error notifications.
 prepare_claude_container_args() {
     local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}" extra_exit_cmd="${6:-}"
-    local d
+    local d transcript_dir
 
     # shellcheck disable=SC2064  # expanded now on purpose: the command is fixed at install time
     trap "cleanup_claude_invocation_tmpfiles${extra_exit_cmd:+; ${extra_exit_cmd}}" EXIT
@@ -768,6 +828,13 @@ prepare_claude_container_args() {
     #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
     #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
     #     they persist across invocations instead of being wiped every run.
+    #   - projects/: read-write, where Claude Code writes session transcripts.
+    #     Backed by a per-work-item host directory (transcript_dir_path, lib/state)
+    #     rather than one under CLAUDE_STATE_DIR, so a closed item's transcripts can
+    #     be purged as a whole (prune_transcripts). The image keeps ~/.claude itself
+    #     root-owned; like the five above, the mountpoint is writable only because
+    #     podman creates it owned by the mapped developer uid. Mode 0700 because the
+    #     transcripts hold verbatim command text and output.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
@@ -776,6 +843,10 @@ prepare_claude_container_args() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
+    transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
+    if ! { mkdir -p "${transcript_dir}" && chmod 0700 "${transcript_dir%/*}" "${transcript_dir}"; }; then
+        die "Failed to create transcript directory: ${transcript_dir}"
+    fi
     # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
     # container-ephemeral.
@@ -833,6 +904,7 @@ prepare_claude_container_args() {
     for d in sessions session-env plans cache backups; do
         PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
     done
+    PODMAN_RUN_ARGS+=( --volume "${transcript_dir}:/home/developer/.claude/projects:rw" )
     # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
     # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
     # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same
