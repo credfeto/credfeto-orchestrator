@@ -83,6 +83,7 @@
       "Bash(dotnet format style *)",
       "Bash(dotnet nuget *)",
       "Bash(dotnet pack *)",
+      "Bash(dotnet package search *)",
       "Bash(dotnet publish *)",
       "Bash(dotnet reportgenerator *)",
       "Bash(dotnet restore *)",
