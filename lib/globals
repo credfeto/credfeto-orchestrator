@@ -413,6 +413,18 @@ _JQ_DEF_LATEST_CHECK_RUNS='def latest_check_runs:
     group_by([(.name // .context // ""), (.workflowName // "")])
     | map(sort_by(.startedAt // .completedAt // "") | last);'
 
+# jq definition shared by the lib/github-status predicates that judge check results: whether one
+# statusCheckRollup entry has definitively failed, a CheckRun (it has .status) whose conclusion is
+# FAILURE or a legacy StatusContext (no .status) whose state is FAILURE or ERROR. One definition,
+# so the terminal check, the failed-required-check claim and the next-phase routing cannot
+# disagree about what counts as a failure.
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+_JQ_DEF_CHECK_FAILED='def check_failed:
+    if (.status != null)
+    then .conclusion == "FAILURE"
+    else ((.state // "") | . == "FAILURE" or . == "ERROR")
+    end;'
+
 # jq definition shared by the lib/github-status functions that decide whose PR comments count as
 # trusted activity: a login counts when it is trusted (every login when $trusted is null) and is
 # not the orchestrator's own (no login is excluded when $me is empty). One definition, so the
