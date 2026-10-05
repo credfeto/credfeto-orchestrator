@@ -591,6 +591,28 @@ teardown() {
     [[ "${output}" != *"rebase origin/main"* ]]
 }
 
+@test "build_issue_claude_md says a permission denial refuses only one command and Bash is still available" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+}
+
+@test "build_pr_claude_md says a permission denial refuses only one command and Bash is still available" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+}
+
+@test "build_pr_claude_md for dependency PR says a permission denial refuses only one command and Bash is still available" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependency update PR"* ]]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+}
+
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
