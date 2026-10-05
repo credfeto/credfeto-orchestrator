@@ -740,54 +740,25 @@ mark_item_closed() {
         || warn "Failed to write closed marker for ${item_type} #${item_id}, so its transcripts will not be purged until a later tick writes it"
 }
 
-# Lists, one per line, every PR an Issue has pivoted to. The pivot only ever sees open PRs, and a
-# merged PR drops out of the priorities feed, so without this record nothing would ever observe a
-# pivoted PR closed and its transcripts would never be purged (mark_closed_pivot_prs).
-pivot_pr_record_file_path() {
-    local issue_id="$1"
-    printf '%s/Issue_%s.pivot-pr' "${SESSION_BASE_DIR}" "${issue_id}"
-}
-
-# Append-if-absent, since an Issue can pivot to more than one PR over its life. Best-effort: a
-# failed write only means that PR's transcripts are not purged automatically.
-record_pivot_pr() {
-    local issue_id="$1" pr_number="$2" record
-    record=$(pivot_pr_record_file_path "${issue_id}")
-    grep -qx -- "${pr_number}" "${record}" 2>/dev/null && return 0
-    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
-    printf '%s\n' "${pr_number}" >> "${record}" 2>/dev/null \
-        || warn "Failed to record PR #${pr_number} against Issue #${issue_id}, so its transcripts will not be purged once it closes"
-}
-
-# Called when an Issue has no open bot-driven PR to pivot into: writes the closed marker of every
-# PR recorded against it that GitHub reports is no longer open, and drops each from the record
-# once its marker exists. A PR still open, or one whose lookup fails, stays recorded for the next
-# tick; one with no transcript directory is dropped, since there is nothing to purge. Never
-# affects the caller's flow.
-mark_closed_pivot_prs() {
-    local issue_id="$1" record pr_number pr_json remaining=""
-    record=$(pivot_pr_record_file_path "${issue_id}")
-    [ -f "${record}" ] || return 0
-    while IFS= read -r pr_number; do
-        [[ "${pr_number}" =~ ^[0-9]+$ ]] || continue
-        [ -d "$(transcript_dir_path "PullRequest" "${pr_number}")" ] || continue
-        if ! pr_json=$(fetch_pr_fields_json "${pr_number}" state); then
-            warn "Failed to fetch state for PR #${pr_number}, recorded against Issue #${issue_id}; its closure will be checked again next tick"
-            remaining+="${pr_number}"$'\n'
-            continue
-        fi
-        if [ "$(printf '%s' "${pr_json}" | jq -r '.state')" = "OPEN" ]; then
-            remaining+="${pr_number}"$'\n'
-            continue
-        fi
-        mark_item_closed "PullRequest" "${pr_number}"
-        [ -f "$(closed_marker_file_path "PullRequest" "${pr_number}")" ] || remaining+="${pr_number}"$'\n'
-    done < "${record}"
-    if [ -n "${remaining}" ]; then
-        printf '%s' "${remaining}" > "${record}" 2>/dev/null || true
-    else
-        rm -f "${record}" 2>/dev/null || true
+# Called on the Issue-to-PR pivot: makes the PR's transcript directory a relative symlink to the
+# Issue's, so the pivoted sessions' transcripts accumulate with the Issue's and are purged by the
+# Issue's own closed marker (a merged bot PR always closes its Issue). A merged PR drops out of
+# the open-PR search the pivot uses, so nothing may ever observe it closed; the link means
+# nothing needs to. The Issue directory is ensured first so a link left dangling by an earlier
+# purge of that Issue becomes live again. Any existing PullRequest_<m> entry, whether a real
+# directory or a live or dangling link, is left as it is with its own marker lifecycle.
+# Best-effort: a failure only means the pivoted sessions get a directory of their own.
+link_pivot_pr_transcripts() {
+    local issue_id="$1" pr_number="$2" issue_dir pr_path
+    issue_dir=$(transcript_dir_path "Issue" "${issue_id}")
+    pr_path=$(transcript_dir_path "PullRequest" "${pr_number}")
+    if ! { mkdir -p "${issue_dir}" && chmod 0700 "${issue_dir%/*}" "${issue_dir}"; } 2>/dev/null; then
+        warn "Failed to create transcript directory ${issue_dir}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
+        return 0
     fi
+    { [ -e "${pr_path}" ] || [ -L "${pr_path}" ]; } && return 0
+    ln -s "${issue_dir##*/}" "${pr_path}" 2>/dev/null \
+        || warn "Failed to link PR #${pr_number} transcripts to Issue #${issue_id}, so they will be kept in a directory of their own"
     return 0
 }
 
