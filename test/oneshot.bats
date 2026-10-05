@@ -17340,3 +17340,492 @@ use_file_backed_marker_and_pr_states() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"git -C /w reset HEAD"* ]]
 }
+
+# --- session transcripts: per-item mount, closed markers and retention purge -----------------
+
+stub_podman_run_logging_args() {
+    local args_log="$1"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline podman \
+        '[ "$1" = "pull" ] && exit 0' \
+        '[ "$1" = "inspect" ] && exit 1' \
+        "printf '%s\\n' \"\$@\" >> \"${args_log}\"" \
+        "printf '{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\\n'"
+}
+
+# Writes a closed marker recording a closure the given number of days ago.
+write_closed_marker_days_ago() {
+    local item_name="$1" days="$2"
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf '%s\n' "$(( $(date +%s) - days * 86400 ))" > "${SESSION_BASE_DIR}/${item_name}.closed"
+}
+
+make_transcript_dir() {
+    local item_name="$1"
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo/session.jsonl"
+}
+
+@test "transcripts_root_path is the transcripts directory under SESSION_BASE_DIR" {
+    [ "$(transcripts_root_path)" = "${SESSION_BASE_DIR}/transcripts" ]
+}
+
+@test "transcript_dir_path is per work item, under SESSION_BASE_DIR/transcripts" {
+    [ "$(transcript_dir_path Issue 42)" = "${SESSION_BASE_DIR}/transcripts/Issue_42" ]
+    [ "$(transcript_dir_path PullRequest 7)" = "${SESSION_BASE_DIR}/transcripts/PullRequest_7" ]
+}
+
+@test "transcript_dir_path falls back to the shared directory when item context is missing" {
+    [ "$(transcript_dir_path "" "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+    [ "$(transcript_dir_path)" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+    [ "$(transcript_dir_path Issue "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+}
+
+@test "invoke_claude mounts the item's own transcript directory at ~/.claude/projects with mode 0700" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    local transcript_dir="${SESSION_BASE_DIR}/transcripts/Issue_42"
+    grep -qx "${transcript_dir}:/home/developer/.claude/projects:rw" "${args_log}"
+    [ "$(grep -c ':/home/developer/.claude/projects:rw$' "${args_log}")" -eq 1 ]
+    [ "$(stat -c %a "${transcript_dir}")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+}
+
+@test "invoke_claude tightens an existing transcript directory to mode 0700" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_7"
+    chmod 0755 "${SESSION_BASE_DIR}/transcripts" "${SESSION_BASE_DIR}/transcripts/PullRequest_7"
+    invoke_claude "test prompt" "PullRequest" "7" "# per-item instructions" 2>/dev/null
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/PullRequest_7")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+}
+
+@test "invoke_claude mounts the shared transcript directory when it has no item context" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    grep -qx "${SESSION_BASE_DIR}/transcripts/_shared:/home/developer/.claude/projects:rw" "${args_log}"
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/_shared")" = "700" ]
+}
+
+@test "invoke_claude dies without launching the container when the transcript directory cannot be created" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts"
+    run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create transcript directory: ${SESSION_BASE_DIR}/transcripts/Issue_42"* ]]
+    [ "$(grep -cx 'run' "${args_log}")" -eq 0 ]
+}
+
+@test "invoke_claude purges an expired closed item's transcripts before launching" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_transcript_dir "Issue_5"
+    write_closed_marker_days_ago "Issue_5" 8
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_5" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_42" ]
+}
+
+@test "mark_item_closed records the current unix time" {
+    local before after recorded
+    make_transcript_dir "Issue_42"
+    before=$(date +%s)
+    mark_item_closed "Issue" "42"
+    after=$(date +%s)
+    recorded=$(cat "${SESSION_BASE_DIR}/Issue_42.closed")
+    [ "${recorded}" -ge "${before}" ]
+    [ "${recorded}" -le "${after}" ]
+}
+
+@test "mark_item_closed never overwrites an existing marker, so repeated observations do not delay the purge" {
+    make_transcript_dir "Issue_42"
+    printf '123\n' > "${SESSION_BASE_DIR}/Issue_42.closed"
+    mark_item_closed "Issue" "42"
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_42.closed")" = "123" ]
+}
+
+@test "mark_item_closed writes nothing for an item with no transcript directory, so no marker is left that prune_transcripts would never remove" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    mark_item_closed "PullRequest" "7"
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_7.closed" ]
+}
+
+@test "mark_item_closed warns and still succeeds when the marker cannot be written" {
+    make_transcript_dir "Issue_42"
+    mkdir -p "${SESSION_BASE_DIR}/Issue_42.closed"
+    run mark_item_closed "Issue" "42"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to write closed marker for Issue #42, so its transcripts will not be purged until a later tick writes it"* ]]
+    [ -d "${SESSION_BASE_DIR}/Issue_42.closed" ]
+}
+
+@test "clear_closed_marker removes only the .closed marker, not the other closed-issue markers" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    touch "${SESSION_BASE_DIR}/Issue_42.closed" \
+        "${SESSION_BASE_DIR}/Issue_42.closed-pr-tagged" \
+        "${SESSION_BASE_DIR}/Issue_42.closed-takeover-checked"
+    clear_closed_marker "Issue" "42"
+    [ ! -e "${SESSION_BASE_DIR}/Issue_42.closed" ]
+    [ -f "${SESSION_BASE_DIR}/Issue_42.closed-pr-tagged" ]
+    [ -f "${SESSION_BASE_DIR}/Issue_42.closed-takeover-checked" ]
+}
+
+@test "clear_closed_marker succeeds when there is no marker" {
+    run clear_closed_marker "Issue" "42"
+    [ "${status}" -eq 0 ]
+}
+
+@test "prune_transcripts is a no-op that succeeds when the transcripts tree does not exist" {
+    rm -rf "${SESSION_BASE_DIR}"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}" ]
+}
+
+@test "prune_transcripts removes an item closed more than the retention window ago, with its marker" {
+    make_transcript_dir "Issue_10"
+    write_closed_marker_days_ago "Issue_10" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+}
+
+@test "prune_transcripts keeps an item closed less than the retention window ago" {
+    make_transcript_dir "PullRequest_11"
+    write_closed_marker_days_ago "PullRequest_11" 6
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_11/-workspace-repo/session.jsonl" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_11.closed" ]
+}
+
+@test "prune_transcripts keeps an item with no closed marker, however old its files are" {
+    make_transcript_dir "Issue_12"
+    touch -d '30 days ago' "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo/session.jsonl" \
+        "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo" "${SESSION_BASE_DIR}/transcripts/Issue_12"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts ages a marker with unreadable content by its mtime" {
+    make_transcript_dir "Issue_13"
+    make_transcript_dir "Issue_14"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_13.closed"
+    touch -d '8 days ago' "${SESSION_BASE_DIR}/Issue_13.closed"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_14.closed"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_13" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_14" ]
+}
+
+@test "prune_transcripts age-purges old files from the shared directory and keeps recent ones" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}/-workspace-repo" "${shared}/-old-cwd"
+    printf '{}\n' > "${shared}/-workspace-repo/old.jsonl"
+    printf '{}\n' > "${shared}/-workspace-repo/new.jsonl"
+    printf '{}\n' > "${shared}/-old-cwd/old.jsonl"
+    touch -d '8 days ago' "${shared}/-workspace-repo/old.jsonl" "${shared}/-old-cwd/old.jsonl"
+    # A closed marker never applies to the shared directory, even if one somehow exists.
+    write_closed_marker_days_ago "_shared" 30
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${shared}/-workspace-repo/old.jsonl" ]
+    [ ! -e "${shared}/-old-cwd/old.jsonl" ]
+    [ -f "${shared}/-workspace-repo/new.jsonl" ]
+    [ -d "${shared}" ]
+}
+
+@test "prune_transcripts removes empty directories in the shared directory once they are past the window" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}/-stale-cwd" "${shared}/-fresh-cwd"
+    touch -d '8 days ago' "${shared}/-stale-cwd"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${shared}/-stale-cwd" ]
+    [ -d "${shared}/-fresh-cwd" ]
+}
+
+@test "prune_transcripts never fails the run when a purge cannot delete" {
+    make_transcript_dir "Issue_15"
+    write_closed_marker_days_ago "Issue_15" 8
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
+    # Defined inside the function so the failing rm/find only exist in run's subshell and
+    # never reach teardown, which needs the real rm. Only the directory purge (rm -rf) fails,
+    # so a marker removed regardless would show up below.
+    prune_with_failing_deletes() {
+        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
+        find() { return 1; }
+        prune_transcripts
+    }
+    run prune_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 - will retry on the next launch"* ]]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_15" ]
+    # Kept so the next launch retries the purge instead of the directory becoming permanent.
+    [ -f "${SESSION_BASE_DIR}/Issue_15.closed" ]
+}
+
+@test "main writes a closed marker for an Issue observed closed with no PR" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_164"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/Issue_164.closed")" =~ ^[0-9]+$ ]]
+}
+
+@test "main writes a closed marker for an Issue observed closed while its PR is still open" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_10"
+    make_transcript_dir "PullRequest_99"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+}
+
+@test "main writes a closed marker for the PR an Issue pivots to when that PR has merged" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    make_transcript_dir "Issue_10"
+    make_transcript_dir "PullRequest_99"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is no longer open"* ]]
+    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+}
+
+@test "main writes a closed marker for a PullRequest item observed closed" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"CLOSED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    make_transcript_dir "PullRequest_5"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo is no longer open"* ]]
+    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.closed")" =~ ^[0-9]+$ ]]
+}
+
+@test "main does not refresh an existing closed marker on a later tick" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    make_transcript_dir "PullRequest_5"
+    printf '123\n' > "${SESSION_BASE_DIR}/PullRequest_5.closed"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.closed")" = "123" ]
+}
+
+@test "main clears the closed marker of an Issue observed open again, even while it is Blocked" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    write_closed_marker_days_ago "Issue_164" 8
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_164.closed" ]
+}
+
+@test "main clears the closed markers of an Issue and its PR observed open on the pivot path" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    write_closed_marker_days_ago "Issue_10" 8
+    write_closed_marker_days_ago "PullRequest_99" 8
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+}
+
+@test "main clears the closed marker of a PullRequest item observed open again" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    write_closed_marker_days_ago "PullRequest_5" 8
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_5.closed" ]
+}
+
+@test "record_pivot_pr records each PR an Issue pivots to once, in pivot order" {
+    record_pivot_pr "10" "99"
+    record_pivot_pr "10" "99"
+    record_pivot_pr "10" "120"
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "$(printf '99\n120')" ]
+}
+
+@test "record_pivot_pr warns and still succeeds when the record cannot be written" {
+    mkdir -p "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    run record_pivot_pr "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to record PR #99 against Issue #10, so its transcripts will not be purged once it closes"* ]]
+}
+
+@test "mark_closed_pivot_prs does nothing, and never queries GitHub, when the Issue has no record" {
+    fetch_pr_fields_json() { echo "unexpected fetch" >&2; return 1; }
+    run mark_closed_pivot_prs "10"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "mark_closed_pivot_prs writes the closed marker of a merged PR and drops it from the record, keeping a PR still open" {
+    make_transcript_dir "PullRequest_99"
+    make_transcript_dir "PullRequest_120"
+    printf '99\n120\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    fetch_pr_fields_json() {
+        case "$1" in
+            99) printf '{"state":"MERGED"}\n' ;;
+            *) printf '{"state":"OPEN"}\n' ;;
+        esac
+    }
+    mark_closed_pivot_prs "10"
+    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_120.closed" ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "120" ]
+}
+
+@test "mark_closed_pivot_prs removes the record once every recorded PR is marked closed" {
+    make_transcript_dir "PullRequest_99"
+    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    fetch_pr_fields_json() { printf '{"state":"CLOSED"}\n'; }
+    mark_closed_pivot_prs "10"
+    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
+}
+
+@test "mark_closed_pivot_prs keeps a PR recorded, with a warning, when its state cannot be fetched" {
+    make_transcript_dir "PullRequest_99"
+    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    fetch_pr_fields_json() { return 1; }
+    run mark_closed_pivot_prs "10"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to fetch state for PR #99, recorded against Issue #10; its closure will be checked again next tick"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+}
+
+@test "mark_closed_pivot_prs keeps a closed PR recorded when its marker cannot be written" {
+    make_transcript_dir "PullRequest_99"
+    mkdir -p "${SESSION_BASE_DIR}/PullRequest_99.closed"
+    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
+    run mark_closed_pivot_prs "10"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+}
+
+@test "mark_closed_pivot_prs drops, without querying GitHub, a PR with no transcript directory or a non-numeric entry" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf '99\nnot-a-pr\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    fetch_pr_fields_json() { echo "unexpected fetch" >&2; return 1; }
+    run mark_closed_pivot_prs "10"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
+}
+
+@test "main records the PR an Issue pivots to" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+}
+
+@test "main writes the closed marker of a merged PR an Issue pivoted to earlier, once the Issue is closed with no open PR" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
+    make_transcript_dir "PullRequest_99"
+    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
+}
+
+@test "main writes the closed marker of a merged PR an Issue pivoted to earlier while the Issue itself stays open" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 0; }
+    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
+    make_transcript_dir "PullRequest_99"
+    printf '99\n' > "${SESSION_BASE_DIR}/Issue_164.pivot-pr"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_164.pivot-pr" ]
+}

@@ -697,6 +697,107 @@ rearm_closed_issue_markers() {
     rm -f "${SESSION_BASE_DIR}/Issue_${item_id}.closed-pr-tagged" 2>/dev/null || true
 }
 
+# Parent of every transcript directory; the one place its location is defined, so the mount
+# (transcript_dir_path) and the purge (prune_transcripts in lib/podman) cannot drift apart.
+transcripts_root_path() {
+    printf '%s/transcripts' "${SESSION_BASE_DIR}"
+}
+
+# Host directory bind-mounted at the container's ~/.claude/projects, where Claude Code writes
+# its session transcripts. One per work item so every session the item ever runs accumulates in
+# one place and the whole directory can be purged once the item is closed. Callers with no item
+# context share TRANSCRIPT_SHARED_DIR_NAME, which can never be marked closed and is purged by age
+# instead (prune_transcripts in lib/podman).
+transcript_dir_path() {
+    local item_type="${1:-}" item_id="${2:-}"
+    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
+        printf '%s/%s_%s' "$(transcripts_root_path)" "${item_type}" "${item_id}"
+    else
+        printf '%s/%s' "$(transcripts_root_path)" "${TRANSCRIPT_SHARED_DIR_NAME}"
+    fi
+}
+
+# Holds the unix time oneshot first observed the item closed or merged; prune_transcripts
+# (lib/podman) purges the item's transcript directory once this is older than
+# TRANSCRIPT_RETENTION_DAYS.
+closed_marker_file_path() {
+    local item_type="$1" item_id="$2"
+    printf '%s/%s_%s.closed' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
+}
+
+# Write-if-absent: a closed item can stay in the priorities feed and be observed closed on every
+# tick, and refreshing the timestamp each time would push the purge back forever. Writes nothing
+# for an item with no transcript directory: prune_transcripts only removes a marker together with
+# its directory, so a marker there (an item that never ran, or one already purged and still in the
+# feed) would never be removed. Best-effort: a failed write only delays the purge until a later
+# tick succeeds.
+mark_item_closed() {
+    local item_type="$1" item_id="$2" marker
+    [ -d "$(transcript_dir_path "${item_type}" "${item_id}")" ] || return 0
+    marker=$(closed_marker_file_path "${item_type}" "${item_id}")
+    [ -f "${marker}" ] && return 0
+    date +%s > "${marker}" 2>/dev/null \
+        || warn "Failed to write closed marker for ${item_type} #${item_id}, so its transcripts will not be purged until a later tick writes it"
+}
+
+# Lists, one per line, every PR an Issue has pivoted to. The pivot only ever sees open PRs, and a
+# merged PR drops out of the priorities feed, so without this record nothing would ever observe a
+# pivoted PR closed and its transcripts would never be purged (mark_closed_pivot_prs).
+pivot_pr_record_file_path() {
+    local issue_id="$1"
+    printf '%s/Issue_%s.pivot-pr' "${SESSION_BASE_DIR}" "${issue_id}"
+}
+
+# Append-if-absent, since an Issue can pivot to more than one PR over its life. Best-effort: a
+# failed write only means that PR's transcripts are not purged automatically.
+record_pivot_pr() {
+    local issue_id="$1" pr_number="$2" record
+    record=$(pivot_pr_record_file_path "${issue_id}")
+    grep -qx -- "${pr_number}" "${record}" 2>/dev/null && return 0
+    mkdir -p "${SESSION_BASE_DIR}" 2>/dev/null
+    printf '%s\n' "${pr_number}" >> "${record}" 2>/dev/null \
+        || warn "Failed to record PR #${pr_number} against Issue #${issue_id}, so its transcripts will not be purged once it closes"
+}
+
+# Called when an Issue has no open bot-driven PR to pivot into: writes the closed marker of every
+# PR recorded against it that GitHub reports is no longer open, and drops each from the record
+# once its marker exists. A PR still open, or one whose lookup fails, stays recorded for the next
+# tick; one with no transcript directory is dropped, since there is nothing to purge. Never
+# affects the caller's flow.
+mark_closed_pivot_prs() {
+    local issue_id="$1" record pr_number pr_json remaining=""
+    record=$(pivot_pr_record_file_path "${issue_id}")
+    [ -f "${record}" ] || return 0
+    while IFS= read -r pr_number; do
+        [[ "${pr_number}" =~ ^[0-9]+$ ]] || continue
+        [ -d "$(transcript_dir_path "PullRequest" "${pr_number}")" ] || continue
+        if ! pr_json=$(fetch_pr_fields_json "${pr_number}" state); then
+            warn "Failed to fetch state for PR #${pr_number}, recorded against Issue #${issue_id}; its closure will be checked again next tick"
+            remaining+="${pr_number}"$'\n'
+            continue
+        fi
+        if [ "$(printf '%s' "${pr_json}" | jq -r '.state')" = "OPEN" ]; then
+            remaining+="${pr_number}"$'\n'
+            continue
+        fi
+        mark_item_closed "PullRequest" "${pr_number}"
+        [ -f "$(closed_marker_file_path "PullRequest" "${pr_number}")" ] || remaining+="${pr_number}"$'\n'
+    done < "${record}"
+    if [ -n "${remaining}" ]; then
+        printf '%s' "${remaining}" > "${record}" 2>/dev/null || true
+    else
+        rm -f "${record}" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# Called wherever an item is observed open, so a reopened item does not have its transcripts
+# purged mid-work by a marker left over from its earlier closure.
+clear_closed_marker() {
+    local item_type="$1" item_id="$2"
+    rm -f "$(closed_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+}
+
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
 # Labels are added individually so a missing label does not prevent the others from being
 # applied.  Returns 0 when at least one action landed on the PR, 1 when every gh call failed
