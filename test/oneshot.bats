@@ -597,7 +597,8 @@ teardown() {
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
-    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
     [[ "${output}" == *"if we've opened one (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 10)."* ]]
 }
 
@@ -607,7 +608,8 @@ teardown() {
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
-    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
     [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below)."* ]]
 }
 
@@ -618,7 +620,8 @@ teardown() {
     [[ "${output}" == *"refuses only the one command"* ]]
     [[ "${output}" == *"Bash is still available"* ]]
     [[ "${output}" == *"the mandated exclusions on any"* ]]
-    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first)"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
     [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues."* ]]
 }
 
