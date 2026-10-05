@@ -84,6 +84,9 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 - `.blocked`: Discord blocked-notifier marker; `.plan-block`: plan self-heal marker; `.background-stall`: the previous session ended in the background-stall pattern (warned about in the next prompt); `.last-diagnostic`: appended to a runaway block reason by `append_last_diagnostic_to_reason`.
 - PR only: `.pending_ci` (head SHA and start time for the CI timeout), `.last-agent-comment-seen`, `.env-unblocks`, `.env-unblock-cap-notified`.
 - Written by `main` for an Issue: `.closed-pr-tagged` and `.closed-takeover-checked` (one-time closed-issue tagging).
+- `.closed`: unix time `main` first saw the item closed or merged (`mark_item_closed`, never refreshed, never written for an item with no transcript directory, removed by `clear_closed_marker` when the item is seen open). `prune_transcripts` (lib/podman) deletes the item's transcript directory and this marker 7 days later.
+- Issue only: `.pivot-pr`, the PRs the Issue has pivoted to, one per line (`record_pivot_pr`). When the Issue has no open PR, `mark_closed_pivot_prs` writes the `.closed` marker of each one GitHub reports closed or merged and drops it from the list, since a merged pivot PR is never seen by the PR paths again.
+- Per item, but a directory: `transcripts/<Type>_<id>/` (mode `0700`), bind-mounted at the container's `~/.claude/projects` so Claude Code's session transcripts persist; `transcripts/_shared/` for launches with no item, age-purged file by file. See [agent-container.md](../../agent-container.md#session-transcripts).
 - Not per item: `project-cache.json` and `board-conversion-failed` (per repo, the second holding the time a board conversion last failed), `rate-limit` and `pull-durations` (per owner, directly under `ORCHESTRATOR_STATE_DIR/<owner>`), and `locks/`.
 
 ## Tests

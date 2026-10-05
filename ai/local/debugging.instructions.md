@@ -228,6 +228,23 @@ on the next tick regardless of the general fingerprint or a "settled"/terminal P
 doesn't, that predicate itself is the place to check first. Delete the file to force this state
 back to "nothing seen yet" (same idea as deleting `.fingerprint`, above).
 
+### 6a - Session transcripts and closed markers
+
+Every agent session's full conversation is kept on the host, one directory per work item, mode `0700` (see `docs/agent-container.md` § "Session transcripts"):
+
+```bash
+ls -la ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/Issue_<n> -name '*.jsonl' | sort
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.closed' -exec echo "=== {} ===" \; -exec cat {} \;
+```
+
+- `transcripts/<ItemType>_<n>/` - every session `oneshot` has run for that item, as Claude Code JSONL. This is the first place to read when you need to know what an agent actually did, rather than inferring it from comments and commits.
+- `transcripts/_shared/` - sessions with no work item (`interactive`). Files not modified for 7 days are deleted before each launch.
+- `<ItemType>_<n>.closed` - unix time `oneshot` first saw the item closed or merged; never refreshed while the item stays closed, removed whenever the item is seen open. Seven days after that time `prune_transcripts` (`lib/podman`) deletes the item's transcript directory and the marker. The glob `*.closed` does not match the unrelated `Issue_<n>.closed-pr-tagged` / `.closed-takeover-checked` markers. No marker is written for an item with no transcript directory.
+- `Issue_<n>.pivot-pr` - the PRs that Issue has pivoted to, one per line. This is the only way a merged pivot PR gets its `.closed` marker: it is written on the Issue's next tick with no open PR. A PR number still listed long after its merge means that lookup keeps failing, the Issue has left the feed, or the Issue currently has another open bot-driven PR (the record is only checked on a tick where the Issue has no open PR, so that last case is expected).
+- Transcripts that never go away belong to an item with no `.closed` marker (one closed while `oneshot` never looked at it again), or to a repository that has not launched a container since the marker expired, because the purge only runs before a launch for that repository. Both are expected; delete the directory by hand if it matters.
+- An empty item directory after a session ran means Claude Code wrote no transcript; check the mount is present in the `podman run` arguments (`/home/developer/.claude/projects:rw`) before suspecting anything else.
+
 ### 7 — Podman containers
 
 Containers run as **rootless Podman** under the owner's own user namespace (Docker was replaced
