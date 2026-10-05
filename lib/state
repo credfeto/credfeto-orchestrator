@@ -110,6 +110,15 @@ save_pr_invocation_counts() {
         || die "Failed to write invocation guard file: ${guard_file}"
 }
 
+# Charges one idle step to a PR's invocation budget for a tick on which the agent was not invoked,
+# leaving the total untouched, and logs the new idle count.
+charge_pr_idle() {
+    local item_id="$1" item_repo="$2"
+    load_pr_invocation_counts "${item_id}"
+    save_pr_invocation_counts "${item_id}" "${PR_INVOCATION_TOTAL}" "$(( PR_INVOCATION_IDLE + 1 ))"
+    info "PR #${item_id} in ${item_repo}: idle budget charged ($(( PR_INVOCATION_IDLE + 1 ))/${MAX_PR_IDLE_INVOCATIONS})"
+}
+
 # Marks that an item is in (or is about to enter) a Blocked spell while its invocation total is
 # already at/above the cap, regardless of which mechanism applied the Blocked label — oneshot's
 # own runaway backstop, the code-review/security-review/coverage workflow's own rules (e.g.

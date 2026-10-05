@@ -177,6 +177,30 @@ fetch_pr_fields_json() {
     return 1
 }
 
+# Prints a JSON array of the names of the checks on the PR's head commit that GitHub reports as
+# required for merging this PR, read from the same GraphQL field `gh pr checks --required` filters
+# on (isRequired(pullRequestNumber:)). `gh pr view --json statusCheckRollup` never carries
+# isRequired, so this is the only way to tell a failing required check from a failing optional
+# one. Reading the GraphQL field directly, rather than parsing `gh pr checks` output, also avoids
+# the stale "pending" state that command has shown through the API proxy. Returns 1 when the call
+# fails, the response has no pull request, or the rollup has more contexts than one page holds,
+# so the caller treats required-ness as unknown instead of trusting a partial list.
+fetch_pr_required_check_names() {
+    local item_id="$1" repo_full="${2:-${REPO_FULL}}" response
+    # shellcheck disable=SC2016  # $owner/$name/$number are GraphQL variables, not shell expansions
+    local query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}}}}'
+    response=$(gh api graphql -f query="${query}" -f owner="${repo_full%%/*}" -f name="${repo_full#*/}" -F number="${item_id}" 2>/dev/null) || return 1
+    printf '%s' "${response}" | jq -ce '
+        .data.repository.pullRequest.commits.nodes as $commits
+        | if ($commits | type) != "array" then error("no pull request")
+          else ($commits[0].commit.statusCheckRollup.contexts // {nodes: [], pageInfo: {hasNextPage: false}})
+          end
+        | if .pageInfo.hasNextPage then error("more contexts than one page")
+          else [.nodes[] | select(.isRequired == true) | (.name // .context)] | unique
+          end
+    ' 2>/dev/null
+}
+
 # Reads JSON with a .commits array on stdin and succeeds when any commit matches the given
 # identity — by resolved GitHub login (of that commit's author OR co-author), or, ONLY when that
 # ENTIRE COMMIT has no resolved login at all (neither author nor any co-author), by raw

@@ -255,7 +255,10 @@ pr_last_agent_comment_file_path() {
     printf '%s/PullRequest_%s.last-agent-comment-seen' "${SESSION_BASE_DIR}" "${item_id}"
 }
 
-# Writes the newest trusted top-level PR comment timestamp a real agent invocation actually saw.
+# Writes the newest trusted, non-orchestrator PR activity timestamp a real agent invocation was
+# actually given: oneshot passes the value it captured from the pre-session PR state, the same data
+# the session's unaddressed-comment text was quoted from, never a post-session re-fetch, so a trusted
+# comment posted while the session ran stays unaddressed and triggers the next run.
 # Deliberately never called by the non-agentic-rebase path or the terminal/"settled" skip in
 # oneshot — only a genuine agent turn is allowed to advance this, so a trusted comment left while
 # a PR is BEHIND or already "settled" still forces a real invocation instead of being silently
@@ -281,24 +284,25 @@ load_pr_last_agent_comment_seen() {
     fi
 }
 
-# Fetches fresh PR state and returns the newest trusted-activity timestamp in it (top-level
-# comments, reviews, inline review comments, and REST-fetched top-level issue comments — mirrors
-# compute_pr_fingerprint's own fetch-then-derive pattern). Deliberately re-fetches rather than
-# reusing this tick's pre-invocation pr_json/pr_review_comments/pr_issue_comments: the whole point
-# of this call is to capture state AFTER the agent's session, including any top-level comment the
-# agent itself just posted with its own (trusted) login — reusing stale pre-invocation data would
-# leave that comment (or one a human posted mid-session) permanently unaccounted for, forcing a
-# spurious re-invocation every subsequent tick until the PR's total-invocation cap trips (#1307
-# review). Issue comments are fetched after review comments so a review-comments fetch failure
-# still short-circuits before the extra call (#1309).
-compute_pr_last_agent_comment_seen() {
-    local item_id="$1"
-    local pr_json trusted review_comments issue_comments
-    pr_json=$(fetch_pr_json "${item_id}") || return 1
+# Returns the newest trusted-activity timestamp in fresh PR state (top-level comments, reviews,
+# inline review comments, and REST-fetched top-level issue comments), mirroring
+# compute_pr_fingerprint's own fetch-then-derive pattern. oneshot calls it after an idle-advance
+# session so pr_session_progress_reason can see a trusted comment posted while the session ran; it
+# must never feed save_pr_last_agent_comment_seen, because the agent was not given that comment.
+# The orchestrator's own login (optional second argument, normally _GH_ME) is excluded, exactly as
+# pr_json_has_unaddressed_trusted_comment excludes it: the agent's own status comment is neither
+# progress nor something another trusted commenter said. Optional third argument pr_json: PR state
+# the caller has already fetched after the session, used instead of fetching it again; the
+# comment arrays are always fetched here. Issue comments are fetched after review comments so a
+# review-comments fetch failure still short-circuits before the extra call.
+fetch_pr_latest_trusted_comment_timestamp() {
+    local item_id="$1" exclude_login="${2:-}" pr_json="${3:-}"
+    local trusted review_comments issue_comments
+    [ -n "${pr_json}" ] || pr_json=$(fetch_pr_json "${item_id}") || return 1
     trusted=$(get_trusted_logins) || return 1
     review_comments=$(fetch_pr_review_comments "${item_id}") || return 1
     issue_comments=$(fetch_pr_issue_comments "${item_id}") || return 1
-    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}" "${review_comments}" "${issue_comments}"
+    pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted}" "${review_comments}" "${issue_comments}" "${exclude_login}"
 }
 
 # Returns the path to the fingerprint file for a given Issue ID.

@@ -208,8 +208,13 @@ rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n>
 rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/Issue_<n>.fingerprint
 ```
 
-A separate `PullRequest_<n>.last-agent-comment-seen` file (#1307) tracks the newest trusted top-
-level PR comment a genuine agent invocation has actually read — distinct from the general PR
+A separate `PullRequest_<n>.last-agent-comment-seen` file tracks the newest trusted PR
+comment a genuine agent invocation was actually given. It is saved after the session from the
+timestamp captured before `invoke_claude` (the same PR state the prompt's unaddressed-comment text
+was quoted from), never from a post-session re-fetch, so a trusted comment posted while a session ran
+stays newer than the marker and forces the next run. The orchestrator's own login is excluded, so
+its own status comments never move this marker past another trusted commenter's comment, and never count as progress
+for the idle budget. This file is distinct from the general PR
 fingerprint above, which the non-agentic-rebase path is still allowed to update on its own. If a
 human's PR comment is being ignored despite `.fingerprint` looking current, check this file:
 
