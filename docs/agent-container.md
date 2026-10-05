@@ -107,6 +107,13 @@ ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/_share
 directories are created mode `0700`: transcripts contain verbatim command text and output, and
 nothing redacts them.
 
+When an Issue pivots to its PR, `oneshot` makes `PullRequest_<m>` a relative symlink to
+`Issue_<n>` (`link_pivot_pr_transcripts` in `lib/state`), so the PR's sessions are written into
+the Issue's directory and the two share one history. It creates `Issue_<n>/` first if needed, and
+only creates the link when there is no `PullRequest_<m>` entry already: an existing directory or
+link, whether live or dangling, is left alone and keeps its own marker. A failure to link is a
+warning, and the PR's sessions then get a directory of their own.
+
 Retention is 7 days (`TRANSCRIPT_RETENTION_DAYS` in `lib/globals`), enforced before every
 container launch by `prune_transcripts` (`lib/podman`):
 
@@ -115,19 +122,21 @@ container launch by `prune_transcripts` (`lib/podman`):
   overwrites an existing marker, because a closed item can stay in the priorities feed and would
   otherwise keep pushing its own purge back. An item seen open again has its marker removed, and
   an item with no transcript directory gets no marker, since there is nothing to purge.
-- A PR an Issue pivots to is never a priorities-feed item itself, and once merged it no longer
-  shows up in the open-PR search the pivot uses, so `oneshot` records it in
-  `<owner>/<repo>/Issue_<n>.pivot-pr`. Whenever that Issue next has no open PR, each recorded PR
-  GitHub reports closed or merged gets its marker and leaves the record.
 - An item's whole transcript directory, and its marker, is deleted 7 days after that time.
   An item with no marker is never purged.
+- A pivoted PR's link is never followed. A merged bot PR always closes its Issue, so the Issue's
+  marker purges the directory they share, and the link it leaves dangling is deleted in the same
+  pass, along with any marker of its own. A link whose own marker expires first (the PR was seen
+  merged while its Issue stayed open) is deleted with that marker, and the Issue's directory and
+  files stay until the Issue's marker expires.
 - `_shared` can never be closed, so its files are deleted individually once they have not been
   modified for 7 days.
 
 The purge never queries GitHub and never fails the run. As a result, an item that is closed
 while `oneshot` never looks at it again (for example because it dropped out of the priorities
-feed first), or a PR whose Issue drops out of the feed before its next tick with no open PR, gets
-no marker, and its transcripts stay until someone deletes them. The purge also only covers the
+feed first) gets no marker, and its transcripts stay until someone deletes them. That includes a
+pivoted PR's sessions, since they live in the Issue's directory: they go when the Issue's
+marker expires, and stay while the Issue never closes. The purge also only covers the
 repository being launched for, so an expired marker in a repository with no further launches
 waits until that repository's next one. Unlike
 `podman image prune`, the purge also runs for `interactive`: this is orchestrator state, not
