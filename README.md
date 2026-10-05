@@ -171,11 +171,14 @@ Like `oneshot`, every launch pulls `ORCHESTRATOR_IMAGE` first so the session run
 agent image; when the registry is unreachable the cached local image is used instead. Unlike
 `oneshot`, it never runs `podman image prune`: your own image store is left alone.
 
-Sessions are not resumable across launches. The Claude state directories `oneshot` mounts
-(`sessions`, `session-env`, `plans`, `cache`, `backups` under
-`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, but the conversation transcripts
-Claude Code resumes from live under `~/.claude/projects`, which is neither mounted nor writable
-inside the container, so `/resume` and `claude --continue` find nothing next time.
+Sessions can be resumed across launches for 7 days. The Claude state directories `oneshot`
+mounts (`sessions`, `session-env`, `plans`, `cache`, `backups` under
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, and the
+conversation transcripts Claude Code resumes from (`~/.claude/projects` in the container) are
+kept in `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/transcripts/_shared`,
+mode `0700`, so `/resume` and `claude --continue` find them next time. Files there that have not
+been modified for 7 days are deleted before each launch; see
+[docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### What the container can reach
 

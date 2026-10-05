@@ -32,6 +32,7 @@ Files it reads or writes:
 - Reads the checkout's `.git/config`, hooks directory, `.ai-instructions` and `.claude/settings.json`, `.claude/settings.local.json` and `.mcp.json` (`check_repo_claude_config`).
 - Creates `$XDG_CONFIG_HOME/orchestrator/.env` (mode 600) and `tokens/<owner>` (mode 600) on first run only; existing files are never rewritten.
 - Creates the shared Claude state directories (`sessions`, `session-env`, `plans`, `cache`, `backups`) and `orchestrator-cache/global` under `ORCHESTRATOR_STATE_DIR/<owner>/<repo>`.
+- Creates `transcripts/_shared` (mode 0700) under `ORCHESTRATOR_STATE_DIR/<owner>/<repo>` and mounts it at the container's `~/.claude/projects`, so session transcripts survive for `/resume`. Before each launch `prune_transcripts` (`lib/podman`) deletes files there not modified for 7 days, plus the transcript directory and `.closed` marker of any work item `oneshot` saw closed more than 7 days ago; unlike the image prune this is not gated on `PRUNE_DANGLING_IMAGES`. See [agent-container.md](../../agent-container.md#session-transcripts).
 - Moves a legacy `~/.orchestrator` to `ORCHESTRATOR_STATE_DIR` once, if the target does not exist (`migrate_legacy_orchestrator_state`, run at the start of `main`); it also creates the config and tokens directories with mode 0700.
 - Creates temporary files and podman secrets that are removed when the session ends (`cleanup_claude_invocation_tmpfiles`).
 
@@ -53,7 +54,7 @@ External tools: `git jq podman gh claude ssh-add awk gpg gpg-connect-agent gpgco
 
 ## Tests
 
-The tests are in `test/interactive.bats`, 81 tests covering the `lib/git`, `lib/core`, `lib/prompts` and `lib/podman` functions that `interactive` relies on, and `main` itself. Run just this file with:
+The tests are in `test/interactive.bats`, 84 tests covering the `lib/git`, `lib/core`, `lib/prompts` and `lib/podman` functions that `interactive` relies on, and `main` itself. Run just this file with:
 
 ```sh
 bats test/interactive.bats
