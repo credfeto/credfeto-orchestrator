@@ -55,6 +55,8 @@ Those functions produce a short, fixed bootstrap message (< 2 KB). They intentio
 
 The agent reads `.ai-instructions` (which indexes those files) at the start of every session, so rules placed there are always loaded without consuming any of the bootstrap prompt budget.
 
+Exception: the "don't ask mode" permission-denial rule (`_build_permission_denial_rule` in `lib/prompts`) is deliberately duplicated in the generated CLAUDE.md as well as in cs-template, because every container session reads that file directly and a session that misreads a denial as Bash being disabled stops before it acts on the instruction files.
+
 ## Prompt Content Guidelines
 
 If something genuinely must be in the bootstrap prompt (e.g. a GitHub CLI quirk that must be stated before any tool call fires), keep it:
