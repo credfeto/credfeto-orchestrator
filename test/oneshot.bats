@@ -16475,12 +16475,44 @@ JSON
     [ "$(printf '%s' "${output}" | jq -c '[.statusCheckRollup[].isRequired]')" = '[true,false,true]' ]
 }
 
-@test "annotate_pr_json_required_checks leaves pr_json untouched when required-ness is unknown or nothing is required" {
+@test "annotate_pr_json_required_checks leaves pr_json untouched when required-ness is unknown" {
     local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"}]}'
     run annotate_pr_json_required_checks "${pr}" ""
     [ "${output}" = "${pr}" ]
+}
+
+@test "annotate_pr_json_required_checks marks every check required when nothing is required (#1557)" {
+    local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"},{"context":"legacy/ci","state":"PENDING"}]}'
     run annotate_pr_json_required_checks "${pr}" "[]"
-    [ "${output}" = "${pr}" ]
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -c '[.statusCheckRollup[].isRequired]')" = '[true,true]' ]
+}
+
+@test "a failing check on a repo with no required checks is failed-required, non-terminal and routed to PHASE C (#1557)" {
+    local pr
+    pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}' "[]")
+    run pr_json_has_failed_required_check "${pr}"
+    [ "${status}" -eq 0 ]
+    run pr_json_is_terminal "${pr}" true
+    [ "${status}" -eq 1 ]
+    run pr_next_phase_for_board_status "Human Review" "${pr}"
+    [ "${output}" = "PHASE C (fix the failed required check)" ]
+    run pr_next_phase_for_board_status "Complete" "${pr}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PHASE C (fix the failed required check)" ]
+}
+
+@test "a failing check GitHub says is optional is not failed-required and does not block terminal (#1557)" {
+    local pr
+    pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}' '["build"]')
+    run pr_json_has_failed_required_check "${pr}"
+    [ "${status}" -eq 1 ]
+    run pr_json_has_failed_check_of_unknown_requiredness "${pr}"
+    [ "${status}" -eq 1 ]
+    run pr_json_is_terminal "${pr}" true
+    [ "${status}" -eq 0 ]
+    run pr_next_phase_for_board_status "Human Review" "${pr}" true
+    [ "${output}" = "PHASE H (finalize)" ]
 }
 
 @test "pr_json_has_only_passed_checks is true only when every check has finished and passed" {
@@ -16505,6 +16537,12 @@ JSON
     pr_json='{"statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}'
     set_pr_required_checks 42
     [ "${pr_required_checks}" = '["build"]' ]
+    [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "true" ]
+    fetch_pr_required_check_names() { printf '[]'; }
+    pr_json='{"statusCheckRollup":[{"name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    set_pr_required_checks 42
+    [ "${pr_required_checks}" = '[]' ]
+    [ "${pr_required_checks_lookup_failed}" = "false" ]
     [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "true" ]
 }
 
@@ -16630,6 +16668,23 @@ JSON
     [ "${output}" = "PHASE C (fix the failed required check)" ]
     run pr_next_phase_for_board_status "AI Review" '{"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[]}'
     [ "${output}" = "PHASE C (address the requested changes)" ]
+}
+
+@test "pr_next_phase_for_board_status sends a failing check to PHASE C when the required-check lookup failed (#1557)" {
+    local pr='{"autoMergeRequest":null,"statusCheckRollup":[{"name":"ci","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    run pr_next_phase_for_board_status "Human Review" "${pr}" true
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PHASE C (fix the failed check: whether it is required could not be looked up)" ]
+    run pr_next_phase_for_board_status "Complete" "${pr}" true
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PHASE C (fix the failed check: whether it is required could not be looked up)" ]
+    run pr_next_phase_for_board_status "Human Review" '{"autoMergeRequest":null,"statusCheckRollup":[{"context":"legacy","state":"ERROR"}]}' true
+    [ "${output}" = "PHASE C (fix the failed check: whether it is required could not be looked up)" ]
+    # A superseded failure no longer counts, as for pr_json_is_terminal.
+    run pr_next_phase_for_board_status "Human Review" '{"autoMergeRequest":null,"statusCheckRollup":[{"name":"ci","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-01T10:00:00Z"},{"name":"ci","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-01T11:00:00Z"}]}' true
+    [ "${output}" = "PHASE H (finalize)" ]
+    run pr_next_phase_for_board_status "Human Review" "${pr}" false
+    [ "${output}" = "PHASE H (finalize)" ]
 }
 
 @test "pr_next_phase_for_board_status names no phase for Complete and does not guess for an unknown status" {
@@ -17040,6 +17095,47 @@ use_file_backed_marker_and_pr_states() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Failed to look up the required checks for PR #5"* ]]
     [ "$(cat "${TEST_TMP}/required_checks_unknown")" = "true" ]
+}
+
+@test "main reports a failed required check on a repo with no required checks (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    fetch_pr_required_check_names() { printf '[]'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    block_pr_for_idle_exhausted_failure() { printf 'failure\n' >> "${TEST_TMP}/blocked"; }
+    block_pr_for_idle_exhausted_no_progress() { printf 'no_progress\n' >> "${TEST_TMP}/blocked"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"idle budget exhausted with a failed required check"* ]]
+    [ "$(cat "${TEST_TMP}/blocked")" = "failure" ]
+}
+
+@test "main invokes an unchanged PR at Complete with a failing check on a repo with no required checks (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    fetch_pr_required_check_names() { printf '[]'; }
+    fetch_board_item_statuses() { return 0; }
+    board_substatus_for_item() { printf 'Complete'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"next phase is PHASE C (fix the failed required check)"* ]]
+    [[ "${output}" != *"names no next phase; not invoking"* ]]
+}
+
+@test "main invokes an unchanged PR at Complete with a failing check when the required-check lookup failed (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    fetch_board_item_statuses() { return 0; }
+    board_substatus_for_item() { printf 'Complete'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"next phase is PHASE C (fix the failed check: whether it is required could not be looked up)"* ]]
+    [[ "${output}" != *"names no next phase; not invoking"* ]]
 }
 
 @test "main still reports a failed required check GitHub says is required" {
