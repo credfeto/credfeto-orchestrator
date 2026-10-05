@@ -201,6 +201,35 @@ fetch_pr_required_check_names() {
     ' 2>/dev/null
 }
 
+# Prints "true" when the base branch has any required status check configured, through classic
+# branch protection or a ruleset, and "false" when it has none. This is read from the branch
+# itself rather than from a head commit, so it tells apart the two cases where
+# fetch_pr_required_check_names prints "[]": a branch that requires nothing, and one whose required
+# checks have not reported on this commit yet (just after a push, or a workflow whose paths filter
+# this PR does not match). The branch endpoint is used instead of .../protection/required_status_checks
+# because it needs only read access and reports an unprotected branch as enforcement_level "off"
+# rather than as a 404 that a permission failure also produces. Returns 1 when either call fails or
+# base_branch is empty, so the caller treats required-ness as unknown.
+fetch_branch_requires_status_checks() {
+    local base_branch="$1" repo_full="${2:-${REPO_FULL}}" encoded_branch protection rules
+    [ -n "${base_branch}" ] || return 1
+    # A branch name may contain "/", "#" or "%", so it is encoded as a single path segment.
+    encoded_branch=$(printf '%s' "${base_branch}" | jq -sRr '@uri') || return 1
+    protection=$(gh api "repos/${repo_full}/branches/${encoded_branch}" 2>/dev/null) || return 1
+    rules=$(gh api "repos/${repo_full}/rules/branches/${encoded_branch}?per_page=100" 2>/dev/null) || return 1
+    jq -nr --argjson protection "${protection}" --argjson rules "${rules}" '
+        ($protection.protection.required_status_checks // {}) as $classic
+        | if ($protection | type) != "object" or $protection.name == null or ($rules | type) != "array"
+          then error("unexpected branch or rules response")
+          else (
+              (($classic.enforcement_level // "off") != "off"
+                  and ((($classic.contexts // []) | length) > 0 or (($classic.checks // []) | length) > 0))
+              or ($rules | any(.[]; .type == "required_status_checks"))
+          )
+          end
+    ' 2>/dev/null
+}
+
 # Reads JSON with a .commits array on stdin and succeeds when any commit matches the given
 # identity — by resolved GitHub login (of that commit's author OR co-author), or, ONLY when that
 # ENTIRE COMMIT has no resolved login at all (neither author nor any co-author), by raw
