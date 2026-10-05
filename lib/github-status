@@ -16,24 +16,41 @@ pr_json_has_placeholder_file() {
 # output of fetch_pr_required_check_names), matched on the check's name or legacy context.
 # GitHub's own required-check rules are keyed on that name, so a name match is the same test it
 # applies. When required_names_json is "[]" (the lookup succeeded but nothing on this commit is
-# required, e.g. a repo with no branch protection) every entry is marked required instead, which is
-# how such a repo was treated before required-ness was looked up at all: with no rule saying a
-# check can be ignored, a failing check still has to be fixed and pending CI still has to finish
-# first. Marking them all optional would let the predicates below disagree about the same failing
-# check, pr_json_is_terminal waiting on it while pr_json_has_failed_required_check denied it. When
-# required_names_json is empty (the lookup failed, or set_pr_required_checks skipped it because
+# required) base_requires_checks (fetch_branch_requires_status_checks: "true", "false", or empty
+# when unknown) says which of two cases that is:
+# - "false", the base branch requires nothing (no branch protection): every entry is marked
+#   required, which is how such a repo was treated before required-ness was looked up at all.
+#   With no rule saying a check can be ignored, a failing check still has to be fixed and pending
+#   CI still has to finish first. Marking them all optional would let the predicates below
+#   disagree about the same failing check, pr_json_is_terminal waiting on it while
+#   pr_json_has_failed_required_check denied it.
+# - "true", the base branch requires checks but none has reported on this commit yet (just after a
+#   push, or a required workflow whose paths filter this PR does not match): every present entry is
+#   marked not required, since GitHub says so for each of them, and requiredChecksNotYetReported
+#   is set so pr_json_has_pending_ci_checks still waits for the required ones rather than treating
+#   CI as finished. A failing optional check is then neither a failed required check nor a reason
+#   to stop waiting.
+# - empty: pr_json is printed unchanged, as below.
+# When required_names_json is empty (the lookup failed, or set_pr_required_checks skipped it because
 # every check passed) pr_json is printed unchanged: entries stay without isRequired, which every
 # predicate below reads as "required-ness unknown".
 annotate_pr_json_required_checks() {
-    local pr_json="$1" required_names_json="${2:-}"
+    local pr_json="$1" required_names_json="${2:-}" base_requires_checks="${3:-}"
     if [ -z "${required_names_json}" ]; then
         printf '%s' "${pr_json}"
         return 0
     fi
-    printf '%s' "${pr_json}" | jq -c --argjson required "${required_names_json}" '
-        if (.statusCheckRollup | type) == "array"
-        then .statusCheckRollup |= map(. + {isRequired: (($required | length) == 0 or ((.name // .context) as $n | $required | index($n) != null))})
-        else .
+    if [ "${required_names_json}" = "[]" ] && [ "${base_requires_checks}" != "true" ] && [ "${base_requires_checks}" != "false" ]; then
+        printf '%s' "${pr_json}"
+        return 0
+    fi
+    printf '%s' "${pr_json}" | jq -c --argjson required "${required_names_json}" --argjson baseRequires "${base_requires_checks:-false}" '
+        if (.statusCheckRollup | type) != "array" then .
+        elif ($required | length) > 0
+        then .statusCheckRollup |= map(. + {isRequired: ((.name // .context) as $n | $required | index($n) != null)})
+        elif $baseRequires
+        then (.statusCheckRollup |= map(. + {isRequired: false})) | .requiredChecksNotYetReported = true
+        else .statusCheckRollup |= map(. + {isRequired: true})
         end
     ' 2>/dev/null || printf '%s' "${pr_json}"
 }
@@ -59,19 +76,25 @@ pr_json_has_only_passed_checks() {
 # annotates the caller's pr_json with them (annotate_pr_json_required_checks), by dynamic scoping
 # like set_pr_has_unaddressed_comment: only call from main()'s per-item loop. Shared by the
 # issue-pivot and direct-PR paths. The lookup is skipped, leaving pr_required_checks empty, when
-# every check has already passed (pr_json_has_only_passed_checks). A failed lookup also leaves it
-# empty rather than failing the item: see annotate_pr_json_required_checks for how each predicate
-# reads unknown required-ness. A failed lookup is warned about, once per item per tick since this
-# runs once per item, and sets the caller's pr_required_checks_lookup_failed to "true" ("false"
-# otherwise): with required-ness unknown, pr_json_has_failed_required_check cannot see a failed
-# required check, so a lookup that keeps failing would otherwise quietly turn that detection off.
-# oneshot passes the flag to block_pr_for_idle_exhausted_no_progress, whose Blocked reason then
-# says a failed required check could not be ruled out instead of claiming none failed, and
-# plan_unchanged_pr_reinvocation passes it to pr_next_phase_for_board_status, which then still
+# every check has already passed (pr_json_has_only_passed_checks). When it returns "[]" the base
+# branch (pr_json's baseRefName) is also asked whether it requires any check at all
+# (fetch_branch_requires_status_checks), and the answer is kept in the caller's
+# pr_base_requires_checks for the post-session re-read; that call is made only then, since a
+# non-empty list already says which checks are required. A failed lookup, of either kind, leaves
+# pr_required_checks empty rather than failing the item: see annotate_pr_json_required_checks for
+# how each predicate reads unknown required-ness. A failed lookup is warned about, once per item per
+# tick since this runs once per item, and sets the caller's pr_required_checks_lookup_failed to
+# "true" ("false" otherwise): with required-ness unknown, pr_json_has_failed_required_check cannot
+# see a failed required check, so a lookup that keeps failing would otherwise quietly turn that
+# detection off. oneshot passes the flag to block_pr_for_idle_exhausted_no_progress, whose Blocked
+# reason then says a failed required check could not be ruled out instead of claiming none failed,
+# and plan_unchanged_pr_reinvocation passes it to pr_next_phase_for_board_status, which then still
 # routes a failing check to PHASE C.
 set_pr_required_checks() {
-    local item_id="$1"
+    local item_id="$1" base_branch
     pr_required_checks=""
+    # shellcheck disable=SC2034  # pr_base_requires_checks is main()'s local
+    pr_base_requires_checks=""
     # shellcheck disable=SC2034  # pr_required_checks_lookup_failed is main()'s local
     pr_required_checks_lookup_failed=false
     # shellcheck disable=SC2154  # pr_json is main()'s local, read via dynamic scoping
@@ -81,9 +104,18 @@ set_pr_required_checks() {
             # shellcheck disable=SC2034  # see above
             pr_required_checks_lookup_failed=true
             warn "Failed to look up the required checks for PR #${item_id}: a failed required check cannot be detected this tick"
+        elif [ "${pr_required_checks}" = "[]" ]; then
+            base_branch=$(printf '%s' "${pr_json}" | jq -r '.baseRefName // ""')
+            if ! pr_base_requires_checks=$(fetch_branch_requires_status_checks "${base_branch}"); then
+                pr_required_checks=""
+                pr_base_requires_checks=""
+                # shellcheck disable=SC2034  # see above
+                pr_required_checks_lookup_failed=true
+                warn "Failed to look up whether the base branch of PR #${item_id} requires any check: a failed required check cannot be detected this tick"
+            fi
         fi
     fi
-    pr_json=$(annotate_pr_json_required_checks "${pr_json}" "${pr_required_checks}")
+    pr_json=$(annotate_pr_json_required_checks "${pr_json}" "${pr_required_checks}" "${pr_base_requires_checks}")
 }
 
 # Returns 0 (true) if the PR has reached a terminal state the orchestrator should stop driving:
@@ -667,15 +699,20 @@ pr_session_progress_reason() {
 
 # Names the build_pr_claude_md phase an unchanged, non-terminal PR should run next, from its
 # Workflow board status (the agent's own phase marker) and pr_json. Prints the phase and returns 0
-# when one can be named; returns 1 when the board says the work is Complete, so there is nothing
-# left for an agent to do; returns 2 when the status is unknown or unrecognised (no board, or a
-# custom status), where the caller falls back to invoking without naming a phase. A failed
-# required check or a CHANGES_REQUESTED review outranks the board, as it does in the prompt.
+# when one can be named; returns 2 when it cannot, where the caller falls back to invoking without
+# naming a phase. That covers an unknown or unrecognised status (no board, or a custom status) and
+# Complete. Complete is deliberately not read as "nothing left to do" on a PR that is still open
+# and non-terminal: sync_pr_workflow_status_from_linked_issues (lib/workflow-board) raises a PR's
+# card to the highest status among its linked issues, so one already-closed linked issue sets the
+# card to Complete before the PR's own work is done. Invoking without a phase is how every
+# unchanged PR was invoked before the board was consulted, and the agent then works out the phase
+# from the PR itself. A failed required check or a CHANGES_REQUESTED review outranks the board, as
+# it does in the prompt.
 # Optional third argument required_checks_unknown ("true"/"false", default "false"): set when the
 # required-check lookup failed this tick (set_pr_required_checks). A failing check whose
 # required-ness is then unknown also outranks the board, as it already blocks pr_json_is_terminal:
-# otherwise a Complete board would skip the PR, and a Human Review one would hand it PHASE H, while
-# the failure may be on a required check nobody is fixing.
+# otherwise a Human Review board would hand the PR PHASE H while the failure may be on a required
+# check nobody is fixing.
 pr_next_phase_for_board_status() {
     local board_status="$1" pr_json="$2" required_checks_unknown="${3:-false}"
     if pr_json_has_failed_required_check "${pr_json}"; then
@@ -707,8 +744,6 @@ pr_next_phase_for_board_status() {
             else
                 printf 'PHASE C (auto-merge is armed but the PR cannot merge: find and fix what is stopping it)'
             fi ;;
-        Complete)
-            return 1 ;;
         *)
             return 2 ;;
     esac
@@ -717,13 +752,10 @@ pr_next_phase_for_board_status() {
 # Decides how to re-invoke a PR that pr_should_advance_unchanged has allowed to advance, and sets
 # the caller's pr_next_phase (dynamic scoping, same convention as set_pr_has_unaddressed_comment:
 # only call from main()'s per-item loop, where pr_json, pr_has_unaddressed_comment,
-# pr_required_checks_lookup_failed and pr_next_phase are locals). Returns 0 to invoke, with pr_next_phase set to the phase to hand the
-# agent, or empty when none can be named. Returns 1 when the board names no next phase at all: the
-# PR is not invoked, since a session with nothing to do only reads state and stops. Deciding is all
-# this does; the caller charges the idle budget for that skip (skip_unchanged_pr_without_next_phase)
-# so a PR stuck in that state still escalates to a human.
+# pr_required_checks_lookup_failed and pr_next_phase are locals) to the phase to hand the agent, or
+# to empty when none can be named. The PR is always invoked; this only chooses what it is told.
 plan_unchanged_pr_reinvocation() {
-    local item_id="$1" item_repo="$2" board_status phase_rc=0
+    local item_id="$1" item_repo="$2" board_status
     pr_next_phase=""
     # shellcheck disable=SC2154  # set by the caller via dynamic scoping
     if [ "${pr_has_unaddressed_comment}" = "true" ]; then
@@ -736,34 +768,12 @@ plan_unchanged_pr_reinvocation() {
     fetch_board_item_statuses
     board_status=$(board_substatus_for_item "${item_id}")
     # shellcheck disable=SC2154  # set by the caller via dynamic scoping
-    pr_next_phase=$(pr_next_phase_for_board_status "${board_status}" "${pr_json}" "${pr_required_checks_lookup_failed:-false}") || phase_rc=$?
-    case "${phase_rc}" in
-        0)
-            info "PR #${item_id} in ${item_repo}: board status '${board_status}', next phase is ${pr_next_phase}"
-            return 0 ;;
-        1)
-            pr_next_phase=""
-            info "PR #${item_id} in ${item_repo}: unchanged and board status '${board_status}' names no next phase; not invoking"
-            return 1 ;;
-        *)
-            pr_next_phase=""
-            info "PR #${item_id} in ${item_repo}: board status '${board_status}' names no phase, invoking without one"
-            return 0 ;;
-    esac
-}
-
-# Records an unchanged PR that plan_unchanged_pr_reinvocation decided not to invoke: charges one idle
-# step (charge_pr_idle, lib/state) and counts and logs the skip in the caller's count_unchanged and
-# item_status_log (dynamic scoping, same convention as set_pr_has_unaddressed_comment: only call
-# from main()'s per-item loop). Shared by the issue-pivot and direct-PR paths, which then continue
-# to the next item themselves.
-skip_unchanged_pr_without_next_phase() {
-    local item_id="$1" item_repo="$2"
-    charge_pr_idle "${item_id}" "${item_repo}"
-    # shellcheck disable=SC2034  # count_unchanged and item_status_log are main()'s locals
-    count_unchanged=$((count_unchanged + 1))
-    # shellcheck disable=SC2034  # see above
-    item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "unchanged and the board names no next phase - idle budget charged, not invoking")")
+    if pr_next_phase=$(pr_next_phase_for_board_status "${board_status}" "${pr_json}" "${pr_required_checks_lookup_failed:-false}"); then
+        info "PR #${item_id} in ${item_repo}: board status '${board_status}', next phase is ${pr_next_phase}"
+    else
+        pr_next_phase=""
+        info "PR #${item_id} in ${item_repo}: board status '${board_status}' names no phase, invoking without one"
+    fi
 }
 
 # Decides whether to re-invoke an Issue whose fingerprint is UNCHANGED, mirroring
@@ -793,7 +803,11 @@ issue_should_advance_unchanged() {
 # Returns 0 (true) if the pre-fetched PR JSON has at least one required check that has not yet
 # reached a terminal result. Returns 1 (false) when statusCheckRollup is absent, empty, or every
 # required entry is terminal. Non-required (optional) checks are ignored so they cannot gate agent
-# invocation.
+# invocation. Also returns 0 when annotate_pr_json_required_checks set requiredChecksNotYetReported
+# (the base branch requires checks but none has reported on this commit): those required checks
+# are pending even though no rollup entry stands for them. Right after a push that is a short wait.
+# For a required workflow whose paths filter this PR does not match it never ends, but GitHub will
+# not merge such a PR either, so the ci_checks_timed_out escalation to a human is the right outcome.
 pr_json_has_pending_ci_checks() {
     local pr_json="$1"
     # statusCheckRollup mixes two GraphQL node types: CheckRun (modern GitHub Actions
@@ -811,7 +825,8 @@ pr_json_has_pending_ci_checks() {
     # as a new CheckRun node whose own conclusion starts out unset: null in raw GraphQL/REST, but
     # "" in `gh pr view --json statusCheckRollup` (what this is fed), so both count (#1483).
     printf '%s' "${pr_json}" | jq -e '
-        (.statusCheckRollup // [])
+        .requiredChecksNotYetReported == true
+        or ((.statusCheckRollup // [])
         | (length > 0) and any(.[];
             .isRequired != false
             and (
@@ -820,7 +835,7 @@ pr_json_has_pending_ci_checks() {
                 else ((.state // "") | . == "PENDING" or . == "EXPECTED")
                 end
             )
-        )
+        ))
     ' > /dev/null
 }
 

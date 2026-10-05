@@ -6039,7 +6039,7 @@ stub_plan_already_self_heal_marked() {
 
 @test "main re-runs an unchanged pivot PR that needs a rebase even when the board is Complete (#1557)" {
     # The direct-PR path re-runs an unchanged BEHIND/DIRTY PR before it consults the board; the
-    # pivot path must too, or a Complete board skips it and only charges idle, so no rebase ever runs.
+    # pivot path must too, or the board's phase is handed to the agent instead of the rebase.
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -6061,7 +6061,6 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #99 in org/repo unchanged but DIRTY - re-running"* ]]
-    [[ "${output}" != *"names no next phase"* ]]
     [ ! -f "${TEST_TMP}/board_lookups" ]
     [ -f "${_invoke_log}" ]
 }
@@ -16468,6 +16467,50 @@ JSON
     [ "${status}" -ne 0 ]
 }
 
+@test "fetch_branch_requires_status_checks reads classic protection and rulesets for the encoded branch (#1557)" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"
+case "$*" in
+    *"/rules/branches/"*) cat "'"${TEST_TMP}"'/rules.json" ;;
+    *"/branches/"*) cat "'"${TEST_TMP}"'/branch.json" ;;
+    *) exit 1 ;;
+esac'
+    printf '%s' '{"name":"release/1.0","protection":{"enabled":true,"required_status_checks":{"enforcement_level":"non_admins","contexts":["build"],"checks":[{"context":"build","app_id":1}]}}}' > "${TEST_TMP}/branch.json"
+    printf '%s' '[]' > "${TEST_TMP}/rules.json"
+    run fetch_branch_requires_status_checks "release/1.0" "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "true" ]
+    grep -qF 'api repos/org/repo/branches/release%2F1.0' "${TEST_TMP}/gh_args"
+    grep -qF 'api repos/org/repo/rules/branches/release%2F1.0?per_page=100' "${TEST_TMP}/gh_args"
+
+    printf '%s' '{"name":"main","protected":false,"protection":{"enabled":false,"required_status_checks":{"enforcement_level":"off","contexts":[],"checks":[]}}}' > "${TEST_TMP}/branch.json"
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "false" ]
+
+    printf '%s' '[{"type":"pull_request"},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"build"}]}}]' > "${TEST_TMP}/rules.json"
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "true" ]
+}
+
+@test "fetch_branch_requires_status_checks fails on an empty base, a failed call or an unexpected response (#1557)" {
+    run fetch_branch_requires_status_checks "" "org/repo"
+    [ "${status}" -ne 0 ]
+    make_stub gh 'case "$*" in *"/rules/branches/"*) exit 1 ;; *) printf "%s" "{\"name\":\"main\"}" ;; esac'
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -ne 0 ]
+    make_stub gh 'case "$*" in *"/rules/branches/"*) printf "[]" ;; *) exit 1 ;; esac'
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -ne 0 ]
+    make_stub gh 'case "$*" in *"/rules/branches/"*) printf "{}" ;; *) printf "%s" "{\"name\":\"main\"}" ;; esac'
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -ne 0 ]
+    make_stub gh 'case "$*" in *"/rules/branches/"*) printf "[]" ;; *) printf "{}" ;; esac'
+    run fetch_branch_requires_status_checks "main" "org/repo"
+    [ "${status}" -ne 0 ]
+}
+
 @test "annotate_pr_json_required_checks marks each check required or not by name or context" {
     local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"},{"name":"badge","conclusion":"FAILURE","status":"COMPLETED"},{"context":"legacy/ci","state":"SUCCESS"}]}'
     run annotate_pr_json_required_checks "${pr}" '["build","legacy/ci"]'
@@ -16481,16 +16524,51 @@ JSON
     [ "${output}" = "${pr}" ]
 }
 
-@test "annotate_pr_json_required_checks marks every check required when nothing is required (#1557)" {
+@test "annotate_pr_json_required_checks marks every check required when the base branch requires none (#1557)" {
     local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"},{"context":"legacy/ci","state":"PENDING"}]}'
-    run annotate_pr_json_required_checks "${pr}" "[]"
+    run annotate_pr_json_required_checks "${pr}" "[]" false
     [ "${status}" -eq 0 ]
     [ "$(printf '%s' "${output}" | jq -c '[.statusCheckRollup[].isRequired]')" = '[true,true]' ]
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported // "unset"')" = "unset" ]
+}
+
+@test "annotate_pr_json_required_checks marks every present check optional when the base branch requires checks none of which has reported (#1557)" {
+    local pr='{"statusCheckRollup":[{"name":"badge","conclusion":"FAILURE","status":"COMPLETED"},{"context":"bot/status","state":"FAILURE"}]}'
+    run annotate_pr_json_required_checks "${pr}" "[]" true
+    [ "${status}" -eq 0 ]
+    [ "$(printf '%s' "${output}" | jq -c '[.statusCheckRollup[].isRequired]')" = '[false,false]' ]
+    [ "$(printf '%s' "${output}" | jq -r '.requiredChecksNotYetReported')" = "true" ]
+}
+
+@test "annotate_pr_json_required_checks leaves pr_json untouched for an empty list when whether the base branch requires checks is unknown (#1557)" {
+    local pr='{"statusCheckRollup":[{"name":"build","conclusion":"FAILURE","status":"COMPLETED"}]}'
+    run annotate_pr_json_required_checks "${pr}" "[]" ""
+    [ "${output}" = "${pr}" ]
+    run annotate_pr_json_required_checks "${pr}" "[]"
+    [ "${output}" = "${pr}" ]
+}
+
+@test "a failing optional check on a branch whose required checks have not reported is not failed-required and still waits for CI (#1557)" {
+    local pr
+    pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}' "[]" true)
+    run pr_json_has_failed_required_check "${pr}"
+    [ "${status}" -eq 1 ]
+    run pr_json_has_failed_check_of_unknown_requiredness "${pr}"
+    [ "${status}" -eq 1 ]
+    run pr_json_has_pending_ci_checks "${pr}"
+    [ "${status}" -eq 0 ]
+    run pr_next_phase_for_board_status "Human Review" "${pr}"
+    [ "${output}" = "PHASE H (finalize)" ]
+}
+
+@test "pr_json_has_pending_ci_checks is false for finished optional checks without the not-yet-reported marker" {
+    run pr_json_has_pending_ci_checks '{"statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}]}'
+    [ "${status}" -eq 1 ]
 }
 
 @test "a failing check on a repo with no required checks is failed-required, non-terminal and routed to PHASE C (#1557)" {
     local pr
-    pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}' "[]")
+    pr=$(annotate_pr_json_required_checks '{"isDraft":false,"autoMergeRequest":null,"reviewDecision":"REVIEW_REQUIRED","statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}' "[]" false)
     run pr_json_has_failed_required_check "${pr}"
     [ "${status}" -eq 0 ]
     run pr_json_is_terminal "${pr}" true
@@ -16539,11 +16617,45 @@ JSON
     [ "${pr_required_checks}" = '["build"]' ]
     [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "true" ]
     fetch_pr_required_check_names() { printf '[]'; }
-    pr_json='{"statusCheckRollup":[{"name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    fetch_branch_requires_status_checks() { printf '%s\n' "$1" >> "${TEST_TMP}/base_lookups"; printf 'false'; }
+    pr_json='{"baseRefName":"main","statusCheckRollup":[{"name":"lint","status":"COMPLETED","conclusion":"FAILURE"}]}'
     set_pr_required_checks 42
     [ "${pr_required_checks}" = '[]' ]
+    [ "${pr_base_requires_checks}" = "false" ]
     [ "${pr_required_checks_lookup_failed}" = "false" ]
     [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "true" ]
+    [ "$(cat "${TEST_TMP}/base_lookups")" = "main" ]
+}
+
+@test "set_pr_required_checks asks the base branch only when nothing on the commit is required (#1557)" {
+    fetch_branch_requires_status_checks() { printf 'called\n' >> "${TEST_TMP}/base_lookups"; printf 'true'; }
+    local pr_required_checks="" pr_base_requires_checks="stale" pr_required_checks_lookup_failed=false
+    local pr_json='{"baseRefName":"main","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    fetch_pr_required_check_names() { printf '["build"]'; }
+    set_pr_required_checks 42
+    [ -z "${pr_base_requires_checks}" ]
+    [ ! -f "${TEST_TMP}/base_lookups" ]
+    fetch_pr_required_check_names() { printf '[]'; }
+    pr_json='{"baseRefName":"main","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    set_pr_required_checks 42
+    [ "${pr_base_requires_checks}" = "true" ]
+    [ "${pr_required_checks_lookup_failed}" = "false" ]
+    [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "false" ]
+    [ "$(printf '%s' "${pr_json}" | jq -r '.requiredChecksNotYetReported')" = "true" ]
+}
+
+@test "set_pr_required_checks warns and flags a failed base-branch lookup, leaving pr_json unannotated (#1557)" {
+    fetch_pr_required_check_names() { printf '[]'; }
+    fetch_branch_requires_status_checks() { return 1; }
+    local pr_required_checks="stale" pr_base_requires_checks="stale" pr_required_checks_lookup_failed=false
+    local pr_json='{"baseRefName":"main","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    set_pr_required_checks 42 2> "${TEST_TMP}/stderr"
+    [ -z "${pr_required_checks}" ]
+    [ -z "${pr_base_requires_checks}" ]
+    [ "${pr_required_checks_lookup_failed}" = "true" ]
+    grep -q 'Failed to look up whether the base branch of PR #42 requires any check' "${TEST_TMP}/stderr"
+    [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired // "unset"')" = "unset" ]
+    [ "$(printf '%s' "${pr_json}" | jq -r '.requiredChecksNotYetReported // "unset"')" = "unset" ]
 }
 
 @test "set_pr_required_checks warns and flags a failed lookup, leaving pr_json unannotated (#1557)" {
@@ -16687,9 +16799,9 @@ JSON
     [ "${output}" = "PHASE H (finalize)" ]
 }
 
-@test "pr_next_phase_for_board_status names no phase for Complete and does not guess for an unknown status" {
+@test "pr_next_phase_for_board_status names no phase for Complete or an unknown status, so the caller still invokes (#1557)" {
     run pr_next_phase_for_board_status "Complete" '{}'
-    [ "${status}" -eq 1 ]
+    [ "${status}" -eq 2 ]
     [ -z "${output}" ]
     run pr_next_phase_for_board_status "Unknown" '{}'
     [ "${status}" -eq 2 ]
@@ -16702,29 +16814,22 @@ JSON
     [[ "${output}" == "PHASE C"* ]]
 }
 
-@test "plan_unchanged_pr_reinvocation declines to invoke, without charging idle, when the board names no next phase" {
+@test "plan_unchanged_pr_reinvocation invokes without a phase, and without touching the idle budget, when the board is Complete (#1557)" {
     discover_or_create_workflow_project() { return 0; }
     fetch_board_item_statuses() { return 0; }
     board_substatus_for_item() { printf 'Complete'; }
     pr_json='{"isDraft":true,"statusCheckRollup":[]}'
     pr_has_unaddressed_comment=false
+    pr_next_phase="stale"
     save_pr_invocation_counts 42 7 2
     run plan_unchanged_pr_reinvocation 42 "org/repo"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"names no next phase; not invoking"* ]]
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"board status 'Complete' names no phase, invoking without one"* ]]
+    plan_unchanged_pr_reinvocation 42 "org/repo" > /dev/null
+    [ -z "${pr_next_phase}" ]
     load_pr_invocation_counts 42
     [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
     [ "${PR_INVOCATION_IDLE}" -eq 2 ]
-}
-
-@test "charge_pr_idle adds one idle step and leaves the total alone" {
-    save_pr_invocation_counts 42 7 2
-    run charge_pr_idle 42 "org/repo"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #42 in org/repo: idle budget charged (3/${MAX_PR_IDLE_INVOCATIONS})"* ]]
-    load_pr_invocation_counts 42
-    [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
-    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
 }
 
 @test "plan_unchanged_pr_reinvocation names the phase for a draft mid-way through the review loop" {
@@ -17101,6 +17206,7 @@ use_file_backed_marker_and_pr_states() {
     setup_unchanged_direct_draft_pr
     fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
     fetch_pr_required_check_names() { printf '[]'; }
+    fetch_branch_requires_status_checks() { printf 'false'; }
     save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
     block_pr_for_idle_exhausted_failure() { printf 'failure\n' >> "${TEST_TMP}/blocked"; }
     block_pr_for_idle_exhausted_no_progress() { printf 'no_progress\n' >> "${TEST_TMP}/blocked"; }
@@ -17115,6 +17221,7 @@ use_file_backed_marker_and_pr_states() {
     setup_unchanged_direct_draft_pr
     fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
     fetch_pr_required_check_names() { printf '[]'; }
+    fetch_branch_requires_status_checks() { printf 'false'; }
     fetch_board_item_statuses() { return 0; }
     board_substatus_for_item() { printf 'Complete'; }
 
@@ -17122,7 +17229,6 @@ use_file_backed_marker_and_pr_states() {
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"next phase is PHASE C (fix the failed required check)"* ]]
-    [[ "${output}" != *"names no next phase; not invoking"* ]]
 }
 
 @test "main invokes an unchanged PR at Complete with a failing check when the required-check lookup failed (#1557)" {
@@ -17135,7 +17241,6 @@ use_file_backed_marker_and_pr_states() {
     [ "${status}" -eq 0 ]
     [ -f "${TEST_TMP}/claude_log" ]
     [[ "${output}" == *"next phase is PHASE C (fix the failed check: whether it is required could not be looked up)"* ]]
-    [[ "${output}" != *"names no next phase; not invoking"* ]]
 }
 
 @test "main still reports a failed required check GitHub says is required" {
@@ -17150,19 +17255,53 @@ use_file_backed_marker_and_pr_states() {
     [[ "${output}" == *"idle budget exhausted with a failed required check"* ]]
 }
 
-@test "main does not invoke an unchanged draft whose board names no next phase, and charges idle" {
+@test "main invokes an unchanged open PR whose board is Complete, without naming a phase (#1557)" {
+    # Board sync raises a PR's card to its linked issues' highest status, so an open PR can read
+    # Complete before its own work is done; it must still be invoked, as it was before the board
+    # was consulted.
     setup_unchanged_direct_draft_pr
     fetch_board_item_statuses() { return 0; }
     board_substatus_for_item() { printf 'Complete'; }
+    build_pr_claude_md() { printf '%s' "${11}" > "${TEST_TMP}/next_phase"; printf 'mock-pr-claude-md\n'; }
 
     run main
     [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/claude_log" ]
+    [[ "${output}" == *"board status 'Complete' names no phase, invoking without one"* ]]
+    [[ "${output}" == *"PR #5 in org/repo unchanged "*"re-invoking to advance the next workflow phase"* ]]
+    [ ! -s "${TEST_TMP}/next_phase" ]
+}
+
+@test "main waits for CI, rather than reporting a failed required check, when the base branch requires checks none of which has reported (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    fetch_pr_required_check_names() { printf '[]'; }
+    fetch_branch_requires_status_checks() { printf 'true'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    block_pr_for_idle_exhausted_failure() { printf 'failure\n' >> "${TEST_TMP}/blocked"; }
+    block_pr_for_idle_exhausted_no_progress() { printf 'no_progress\n' >> "${TEST_TMP}/blocked"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo: CI checks pending"* ]]
+    [ ! -f "${TEST_TMP}/blocked" ]
     [ ! -f "${TEST_TMP}/claude_log" ]
-    [[ "${output}" == *"names no next phase; not invoking"* ]]
-    [[ "${output}" == *"PR #5 in org/repo: idle budget charged (3/${MAX_PR_IDLE_INVOCATIONS})"* ]]
-    load_pr_invocation_counts 5
-    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
-    [ "${PR_INVOCATION_TOTAL}" -eq 2 ]
+}
+
+@test "main leaves required-ness unknown when the base-branch lookup fails (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    fetch_pr_required_check_names() { printf '[]'; }
+    fetch_branch_requires_status_checks() { return 1; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    block_pr_for_idle_exhausted_failure() { printf 'failure\n' >> "${TEST_TMP}/blocked"; }
+    block_pr_for_idle_exhausted_no_progress() { printf '%s\n' "${3:-}" > "${TEST_TMP}/required_checks_unknown"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to look up whether the base branch of PR #5 requires any check"* ]]
+    [ ! -f "${TEST_TMP}/blocked" ]
+    [ "$(cat "${TEST_TMP}/required_checks_unknown")" = "true" ]
 }
 
 @test "main hands an unchanged draft with passing required checks the next review-loop phase, without looking up required checks" {
