@@ -46,7 +46,7 @@ File-backed bookkeeping between ticks. Invocation guard files (`load_pr_invocati
 
 ### prompts
 
-Builds the CLAUDE.md and launch prompts (`build_issue_claude_md`, `build_pr_claude_md`, `build_interactive_claude_md`, `_build_wf_section`). The heredoc bodies are read by the agent, so a wording change is a behaviour change. `_build_wf_section` reads the `_WF_*` globals directly. Depends on: `github-status` (`human_plan_approval_jq_literal`).
+Builds the CLAUDE.md and launch prompts (`build_issue_claude_md`, `build_pr_claude_md`, `build_interactive_claude_md`, `_build_wf_section`). The heredoc bodies are read by the agent, so a wording change is a behaviour change. `_build_permission_denial_rule` tells the agent that a "don't ask mode" permission denial refuses only the one command it names, so it rewrites and retries the command instead of ending the session; it is emitted in the general rules of the issue, PR and dependency-PR variants, and duplicates the matching cs-template rule on purpose (see [oneshot-prompts.instructions.md](../../ai/local/oneshot-prompts.instructions.md)). `_build_wf_section` reads the `_WF_*` globals directly. Depends on: `github-status` (`human_plan_approval_jq_literal`).
 
 ### project-status
 

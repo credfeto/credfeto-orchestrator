@@ -591,6 +591,40 @@ teardown() {
     [[ "${output}" != *"rebase origin/main"* ]]
 }
 
+@test "build_issue_claude_md says a permission denial refuses only one command and Bash is still available" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
+    [[ "${output}" == *"if we've opened one (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 10)."* ]]
+}
+
+@test "build_pr_claude_md says a permission denial refuses only one command and Bash is still available" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
+    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below)."* ]]
+}
+
+@test "build_pr_claude_md for dependency PR says a permission denial refuses only one command and Bash is still available" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dependency update PR"* ]]
+    [[ "${output}" == *"refuses only the one command"* ]]
+    [[ "${output}" == *"Bash is still available"* ]]
+    [[ "${output}" == *"the mandated exclusions on any"* ]]
+    [[ "${output}" == *"credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name"* ]]
+    [[ "${output}" == *"never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private."* ]]
+    [[ "${output}" == *"comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues."* ]]
+}
+
 @test "main passes DIRTY merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
