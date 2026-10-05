@@ -17347,8 +17347,8 @@ stub_podman_run_logging_args() {
     local args_log="$1"
     mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
     make_stub_multiline podman \
-        '[ "$1" = "pull" ] && exit 0' \
-        '[ "$1" = "inspect" ] && exit 1' \
+        "[ \"\$1\" = \"pull\" ] && exit 0" \
+        "[ \"\$1\" = \"inspect\" ] && exit 1" \
         "printf '%s\\n' \"\$@\" >> \"${args_log}\"" \
         "printf '{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\\n'"
 }
