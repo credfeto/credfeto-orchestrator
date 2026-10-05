@@ -145,7 +145,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
 # rearm_closed_issue_markers, tag_pr_closed_issue, mark_item_closed, clear_closed_marker,
-# record_pivot_pr and mark_closed_pivot_prs are declared in lib/state.
+# and link_pivot_pr_transcripts are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -495,7 +495,7 @@ main() {
                     continue
                 fi
                 clear_closed_marker "PullRequest" "${open_pr}"
-                record_pivot_pr "${item_id}" "${open_pr}"
+                link_pivot_pr_transcripts "${item_id}" "${open_pr}"
 
                 if pr_json_has_blocked_label "${pr_json}" \
                     || ! reset_pr_invocation_counts_if_capped "${open_pr}" "${item_repo}"; then
@@ -685,10 +685,6 @@ main() {
                 # PRs do, and the pivot above has already handled those. An issue whose own linked
                 # PR is being developed by a human stands off further down, through
                 # find_human_taken_over_pr_for_issue (#1517).
-
-                # A PR this Issue pivoted to earlier may have merged or closed since; only this
-                # Issue's record can still observe that (#1365).
-                mark_closed_pivot_prs "${item_id}"
 
                 # No active PR — check the issue itself.
                 if ! issue_json=$(fetch_issue_json "${item_id}"); then

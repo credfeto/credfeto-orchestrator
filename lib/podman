@@ -377,6 +377,16 @@ closed_marker_unix_time() {
     fi
 }
 
+# Succeeds when the closed marker exists and records a closure more than retention_secs before
+# now_unix.
+closed_marker_expired() {
+    local marker="$1" now_unix="$2" retention_secs="$3" closed_unix
+    [ -f "${marker}" ] || return 1
+    closed_unix=$(closed_marker_unix_time "${marker}")
+    [[ "${closed_unix}" =~ ^[0-9]+$ ]] || return 1
+    [ $(( now_unix - closed_unix )) -gt "${retention_secs}" ]
+}
+
 # Removes the transcript directory (and its closed marker) of every work item observed closed
 # more than TRANSCRIPT_RETENTION_DAYS ago, and every file in the shared no-item directory not
 # modified for that long. An item with no closed marker is kept: only oneshot observing the
@@ -384,31 +394,50 @@ closed_marker_unix_time() {
 # launch and must never fail or stall the run. Not gated on PRUNE_DANGLING_IMAGES: that protects
 # a developer's own image store, whereas this tree is orchestrator state, and the shared directory
 # interactive uses would otherwise grow without bound.
+# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
+# lib/state) is never followed: only the link and its own marker are removed, once its target is
+# gone or that marker has expired, and the target is purged only by its own marker.
 prune_transcripts() {
     local transcripts_dir
     transcripts_dir=$(transcripts_root_path)
     [ -d "${transcripts_dir}" ] || return 0
 
     local retention_secs=$(( TRANSCRIPT_RETENTION_DAYS * 86400 ))
-    local now_unix item_dir item_name marker closed_unix
+    local now_unix entry item_name marker
     now_unix=$(date +%s)
-    for item_dir in "${transcripts_dir}"/*/; do
-        [ -d "${item_dir}" ] || continue
-        item_dir="${item_dir%/}"
-        item_name="${item_dir##*/}"
+    # Real directories first, so a link this pass leaves dangling by purging its target is
+    # removed by the link pass below in the same run.
+    for entry in "${transcripts_dir}"/*; do
+        # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
+        [ -L "${entry}" ] && continue
+        [ -d "${entry}" ] || continue
+        item_name="${entry##*/}"
         [ "${item_name}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
         marker=$(closed_marker_file_path "${item_name%_*}" "${item_name##*_}")
-        [ -f "${marker}" ] || continue
-        closed_unix=$(closed_marker_unix_time "${marker}")
-        [[ "${closed_unix}" =~ ^[0-9]+$ ]] || continue
-        if [ $(( now_unix - closed_unix )) -gt "${retention_secs}" ]; then
-            # The marker goes only once the directory has: without it the item is never purged,
-            # so keeping it on failure is what makes the next launch retry.
-            if rm -rf "${item_dir}" 2>/dev/null; then
-                rm -f "${marker}" 2>/dev/null || true
-            else
-                warn "Failed to purge transcripts at ${item_dir} - will retry on the next launch"
-            fi
+        closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}" || continue
+        # The marker goes only once the directory has: without it the item is never purged,
+        # so keeping it on failure is what makes the next launch retry.
+        if rm -rf "${entry}" 2>/dev/null; then
+            rm -f "${marker}" 2>/dev/null || true
+        else
+            warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+        fi
+    done
+
+    for entry in "${transcripts_dir}"/*; do
+        [ -L "${entry}" ] || continue
+        item_name="${entry##*/}"
+        marker=$(closed_marker_file_path "${item_name%_*}" "${item_name##*_}")
+        # -e follows the link, so it is false only when the target is missing.
+        if [ -e "${entry}" ] && ! closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}"; then
+            continue
+        fi
+        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
+        # never anything it points at.
+        if rm -f "${entry}" 2>/dev/null; then
+            rm -f "${marker}" 2>/dev/null || true
+        else
+            warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
         fi
     done
 
@@ -834,7 +863,10 @@ prepare_claude_container_args() {
     #     be purged as a whole (prune_transcripts). The image keeps ~/.claude itself
     #     root-owned; like the five above, the mountpoint is writable only because
     #     podman creates it owned by the mapped developer uid. Mode 0700 because the
-    #     transcripts hold verbatim command text and output.
+    #     transcripts hold verbatim command text and output. A pivoted PR's directory
+    #     is a symlink to its Issue's (link_pivot_pr_transcripts, lib/state): mkdir -p
+    #     accepts a live link, chmod applies to the Issue directory it points at, and
+    #     prune_transcripts has already removed any dangling one before this runs.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
