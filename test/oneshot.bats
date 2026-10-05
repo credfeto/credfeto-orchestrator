@@ -1812,6 +1812,19 @@ teardown() {
     grep -q "notified PullRequest #5 reason=This PR.s automation idle-invocation budget" "${TEST_TMP}/discord_calls"
 }
 
+@test "block_pr_for_idle_exhausted_no_progress says a failed required check could not be ruled out when the required-check lookup failed (#1557)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { return 0; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "true"
+    [ "${status}" -eq 0 ]
+    grep -q "the lookup of which checks are required failed, so a failed required check could not be ruled out" "${call_log}"
+    run grep -c "no required check has failed" "${call_log}"
+    [ "${output}" = "0" ]
+}
+
 @test "block_pr_for_idle_exhausted_no_progress marks forgiveness immediately once the label is verified present, so an unblock before any later tick still resets the budget (#1463)" {
     # shellcheck disable=SC2016
     make_stub gh 'case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
@@ -6021,6 +6034,35 @@ stub_plan_already_self_heal_marked() {
     run main
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PR #99 in org/repo unchanged — re-invoking to advance the next workflow phase"* ]]
+    [ -f "${_invoke_log}" ]
+}
+
+@test "main re-runs an unchanged pivot PR that needs a rebase even when the board is Complete (#1557)" {
+    # The direct-PR path re-runs an unchanged BEHIND/DIRTY PR before it consults the board; the
+    # pivot path must too, or a Complete board skips it and only charges idle, so no rebase ever runs.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"fix/x","comments":[],"reviews":[],"statusCheckRollup":[],"mergeStateStatus":"DIRTY"}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    fetch_board_item_statuses() { return 0; }
+    board_substatus_for_item()  { printf 'called\n' >> "${TEST_TMP}/board_lookups"; printf 'Complete'; }
+    save_pr_invocation_counts 99 2 2
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf 'invoked\n' >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo unchanged but DIRTY - re-running"* ]]
+    [[ "${output}" != *"names no next phase"* ]]
+    [ ! -f "${TEST_TMP}/board_lookups" ]
     [ -f "${_invoke_log}" ]
 }
 
@@ -16466,6 +16508,21 @@ JSON
     [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired')" = "true" ]
 }
 
+@test "set_pr_required_checks warns and flags a failed lookup, leaving pr_json unannotated (#1557)" {
+    fetch_pr_required_check_names() { return 1; }
+    local pr_required_checks="stale" pr_required_checks_lookup_failed=false
+    local pr_json='{"statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    set_pr_required_checks 42 2> "${TEST_TMP}/stderr"
+    [ -z "${pr_required_checks}" ]
+    [ "${pr_required_checks_lookup_failed}" = "true" ]
+    grep -q 'Failed to look up the required checks for PR #42: a failed required check cannot be detected this tick' "${TEST_TMP}/stderr"
+    [ "$(printf '%s' "${pr_json}" | jq -r '.statusCheckRollup[0].isRequired // "unset"')" = "unset" ]
+    fetch_pr_required_check_names() { printf '["build"]'; }
+    set_pr_required_checks 42 2> "${TEST_TMP}/stderr"
+    [ "${pr_required_checks_lookup_failed}" = "false" ]
+    [ ! -s "${TEST_TMP}/stderr" ]
+}
+
 @test "pr_json_has_failed_required_check is false for a failing check whose required-ness is unknown" {
     run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE"}]}'
     [ "${status}" -eq 1 ]
@@ -16520,6 +16577,18 @@ JSON
 
 @test "pr_session_progress_reason reports a trusted comment that arrived during the session, not as agent progress" {
     run pr_session_progress_reason "AI Review" "AI Review" "2026-10-01T10:00:00Z" "2026-10-01T11:00:00Z" "abc" "abc"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "a trusted comment arrived during the session and is left unaddressed for the next run" ]
+}
+
+@test "pr_session_progress_reason does not treat a deleted newest comment as one arriving (#1557)" {
+    run pr_session_progress_reason "AI Review" "AI Review" "2026-10-01T11:00:00Z" "2026-10-01T10:00:00Z" "abc" "abc"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "pr_session_progress_reason counts a trusted comment when there was none before the session" {
+    run pr_session_progress_reason "AI Review" "AI Review" "" "2026-10-01T10:00:00Z" "abc" "abc"
     [ "${status}" -eq 0 ]
     [ "${output}" = "a trusted comment arrived during the session and is left unaddressed for the next run" ]
 }
@@ -16959,6 +17028,18 @@ use_file_backed_marker_and_pr_states() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"idle budget exhausted with no known blocking reason"* ]]
     [ "$(printf '%s\n' "${output}" | grep -c 'with a failed required check')" -eq 0 ]
+}
+
+@test "main tells the no-progress escalation when the required-check lookup failed (#1557)" {
+    setup_unchanged_direct_draft_pr
+    fetch_pr_json() { draft_pr5_json '[]' '[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]'; }
+    save_pr_invocation_counts 5 4 "${MAX_PR_IDLE_INVOCATIONS}"
+    block_pr_for_idle_exhausted_no_progress() { printf '%s\n' "${3:-}" > "${TEST_TMP}/required_checks_unknown"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to look up the required checks for PR #5"* ]]
+    [ "$(cat "${TEST_TMP}/required_checks_unknown")" = "true" ]
 }
 
 @test "main still reports a failed required check GitHub says is required" {

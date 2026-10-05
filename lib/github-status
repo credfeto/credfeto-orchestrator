@@ -57,13 +57,25 @@ pr_json_has_only_passed_checks() {
 # issue-pivot and direct-PR paths. The lookup is skipped, leaving pr_required_checks empty, when
 # every check has already passed (pr_json_has_only_passed_checks). A failed lookup also leaves it
 # empty rather than failing the item: see annotate_pr_json_required_checks for how each predicate
-# reads unknown required-ness.
+# reads unknown required-ness. A failed lookup is warned about, once per item per tick since this
+# runs once per item, and sets the caller's pr_required_checks_lookup_failed to "true" ("false"
+# otherwise): with required-ness unknown, pr_json_has_failed_required_check cannot see a failed
+# required check, so a lookup that keeps failing would otherwise quietly turn that detection off.
+# oneshot passes the flag to block_pr_for_idle_exhausted_no_progress, whose Blocked reason then
+# says a failed required check could not be ruled out instead of claiming none failed.
 set_pr_required_checks() {
     local item_id="$1"
     pr_required_checks=""
+    # shellcheck disable=SC2034  # pr_required_checks_lookup_failed is main()'s local
+    pr_required_checks_lookup_failed=false
     # shellcheck disable=SC2154  # pr_json is main()'s local, read via dynamic scoping
     if ! pr_json_has_only_passed_checks "${pr_json}"; then
-        pr_required_checks=$(fetch_pr_required_check_names "${item_id}") || pr_required_checks=""
+        if ! pr_required_checks=$(fetch_pr_required_check_names "${item_id}"); then
+            pr_required_checks=""
+            # shellcheck disable=SC2034  # see above
+            pr_required_checks_lookup_failed=true
+            warn "Failed to look up the required checks for PR #${item_id}: a failed required check cannot be detected this tick"
+        fi
     fi
     pr_json=$(annotate_pr_json_required_checks "${pr_json}" "${pr_required_checks}")
 }
@@ -466,9 +478,16 @@ block_pr_for_idle_exhausted_review() {
 # and commenting. Same shape as its two siblings; the "no known blocking reason" wording mirrors
 # block_issue_for_idle_exhausted_no_progress below so a human immediately understands why the PR
 # was blocked despite nothing being visibly wrong.
+# Optional third argument required_checks_unknown ("true"/"false", default "false"): set when the
+# required-check lookup failed this tick (set_pr_required_checks), so "no required check has
+# failed" is not something the orchestrator knows; the reason then says so, pointing the human at
+# the lookup rather than asserting the PR has no failed required check.
 block_pr_for_idle_exhausted_no_progress() {
-    local item_id="$1" item_repo="$2"
+    local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}"
     local reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason — no required check has failed and there is no unaddressed review request. Blocking this PR until a human investigates."
+    if [ "${required_checks_unknown}" = "true" ]; then
+        reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason, but the lookup of which checks are required failed, so a failed required check could not be ruled out. There is no unaddressed review request. Blocking this PR until a human investigates."
+    fi
     reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
 }
@@ -611,7 +630,7 @@ pr_should_advance_unchanged() {
 # made, or when the pre-session value could not be computed (so the two are not comparable).
 # Prints which signal moved and returns 0 when one did; returns 1, printing nothing, when none did,
 # which is when the session is charged. A board move or a pushed commit is the agent's own
-# progress. A moved comment timestamp is not: with the orchestrator's login excluded on both sides,
+# progress. A later comment timestamp is not: with the orchestrator's login excluded on both sides,
 # it can only be another trusted commenter's comment that arrived while the session ran, which the
 # agent was never given and which the last-agent-comment-seen marker leaves unaddressed; it still
 # resets the idle count, so the next run that answers it is not parked by an idle cap that comment
@@ -628,7 +647,10 @@ pr_session_progress_reason() {
         printf 'board moved from %s to %s' "${pre_board}" "${post_board}"
         return 0
     fi
-    if [ -n "${post_comment_ts}" ] && [ "${post_comment_ts}" != "${pre_comment_ts}" ]; then
+    # Strictly later, not merely different: a newest comment deleted (or dropping out of the
+    # trusted set) during the session leaves an older timestamp, which is not a comment arriving.
+    # ISO-8601 UTC timestamps compare correctly as strings, and an empty pre sorts before any post.
+    if [ -n "${post_comment_ts}" ] && [[ "${post_comment_ts}" > "${pre_comment_ts}" ]]; then
         printf 'a trusted comment arrived during the session and is left unaddressed for the next run'
         return 0
     fi
