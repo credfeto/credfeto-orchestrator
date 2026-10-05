@@ -17700,85 +17700,83 @@ make_transcript_dir() {
     [ ! -e "${SESSION_BASE_DIR}/PullRequest_5.closed" ]
 }
 
-@test "record_pivot_pr records each PR an Issue pivots to once, in pivot order" {
-    record_pivot_pr "10" "99"
-    record_pivot_pr "10" "99"
-    record_pivot_pr "10" "120"
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "$(printf '99\n120')" ]
-}
+# --- session transcripts: pivoted PR linked to its Issue's directory --------------------------
 
-@test "record_pivot_pr warns and still succeeds when the record cannot be written" {
-    mkdir -p "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    run record_pivot_pr "10" "99"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to record PR #99 against Issue #10, so its transcripts will not be purged once it closes"* ]]
-}
-
-@test "mark_closed_pivot_prs does nothing, and never queries GitHub, when the Issue has no record" {
-    fetch_pr_fields_json() { echo "unexpected fetch" >&2; return 1; }
-    run mark_closed_pivot_prs "10"
+@test "link_pivot_pr_transcripts links the PR's transcript directory to the Issue's with a relative symlink" {
+    run link_pivot_pr_transcripts "10" "99"
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/Issue_10")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
 }
 
-@test "mark_closed_pivot_prs writes the closed marker of a merged PR and drops it from the record, keeping a PR still open" {
-    make_transcript_dir "PullRequest_99"
-    make_transcript_dir "PullRequest_120"
-    printf '99\n120\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    fetch_pr_fields_json() {
-        case "$1" in
-            99) printf '{"state":"MERGED"}\n' ;;
-            *) printf '{"state":"OPEN"}\n' ;;
-        esac
-    }
-    mark_closed_pivot_prs "10"
-    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_120.closed" ]
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "120" ]
-}
-
-@test "mark_closed_pivot_prs removes the record once every recorded PR is marked closed" {
-    make_transcript_dir "PullRequest_99"
-    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    fetch_pr_fields_json() { printf '{"state":"CLOSED"}\n'; }
-    mark_closed_pivot_prs "10"
-    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
-}
-
-@test "mark_closed_pivot_prs keeps a PR recorded, with a warning, when its state cannot be fetched" {
-    make_transcript_dir "PullRequest_99"
-    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    fetch_pr_fields_json() { return 1; }
-    run mark_closed_pivot_prs "10"
+@test "link_pivot_pr_transcripts keeps the Issue's existing transcripts and is idempotent" {
+    make_transcript_dir "Issue_10"
+    link_pivot_pr_transcripts "10" "99"
+    run link_pivot_pr_transcripts "10" "99"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to fetch state for PR #99, recorded against Issue #10; its closure will be checked again next tick"* ]]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+    [ -z "${output}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
 }
 
-@test "mark_closed_pivot_prs keeps a closed PR recorded when its marker cannot be written" {
+@test "link_pivot_pr_transcripts leaves an existing real PR transcript directory untouched" {
     make_transcript_dir "PullRequest_99"
-    mkdir -p "${SESSION_BASE_DIR}/PullRequest_99.closed"
-    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
-    run mark_closed_pivot_prs "10"
+    run link_pivot_pr_transcripts "10" "99"
     [ "${status}" -eq 0 ]
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
 }
 
-@test "mark_closed_pivot_prs drops, without querying GitHub, a PR with no transcript directory or a non-numeric entry" {
+@test "link_pivot_pr_transcripts leaves an existing link to another Issue untouched" {
+    make_transcript_dir "Issue_7"
+    ln -s "Issue_7" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_7" ]
+}
+
+@test "link_pivot_pr_transcripts leaves a dangling link untouched" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_7" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_7" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_7" ]
+}
+
+@test "link_pivot_pr_transcripts recreates the Issue directory a dangling link to it points at" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still succeeds when the Issue directory cannot be created" {
     mkdir -p "${SESSION_BASE_DIR}"
-    printf '99\nnot-a-pr\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
-    fetch_pr_fields_json() { echo "unexpected fetch" >&2; return 1; }
-    run mark_closed_pivot_prs "10"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts"
+    run link_pivot_pr_transcripts "10" "99"
     [ "${status}" -eq 0 ]
-    [ -z "${output}" ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
+    [[ "${output}" == *"Failed to create transcript directory ${SESSION_BASE_DIR}/transcripts/Issue_10, so PR #99 transcripts will not be linked to Issue #10"* ]]
 }
 
-@test "main records the PR an Issue pivots to" {
+@test "link_pivot_pr_transcripts warns and still succeeds when the link cannot be created" {
+    make_stub ln "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to link PR #99 transcripts to Issue #10, so they will be kept in a directory of their own"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "main links the transcripts of the PR an Issue pivots to into the Issue's directory" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
@@ -17792,40 +17790,153 @@ make_transcript_dir() {
 
     run main
     [ "${status}" -eq 0 ]
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_10.pivot-pr")" = "99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
 }
 
-@test "main writes the closed marker of a merged PR an Issue pivoted to earlier, once the Issue is closed with no open PR" {
+@test "main still processes a pivoted PR when its transcripts cannot be linked" {
     setup_main_mocks
     fetch_all_priorities() {
         printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
-    make_transcript_dir "PullRequest_99"
-    printf '99\n' > "${SESSION_BASE_DIR}/Issue_10.pivot-pr"
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    make_stub ln "exit 1"
 
     run main
     [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.pivot-pr" ]
+    [[ "${output}" == *"Failed to link PR #99 transcripts to Issue #10"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
 }
 
-@test "main writes the closed marker of a merged PR an Issue pivoted to earlier while the Issue itself stays open" {
+@test "main writes the closed marker of a merged pivoted PR on its link, not on the Issue" {
     setup_main_mocks
     fetch_all_priorities() {
-        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 0; }
-    fetch_pr_fields_json() { printf '{"state":"MERGED"}\n'; }
-    make_transcript_dir "PullRequest_99"
-    printf '99\n' > "${SESSION_BASE_DIR}/Issue_164.pivot-pr"
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
 
     run main
     [ "${status}" -eq 0 ]
     [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_164.pivot-pr" ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+}
+
+@test "invoke_claude mounts a pivoted PR's linked transcript directory and tightens the Issue directory it points at" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    chmod 0755 "${SESSION_BASE_DIR}/transcripts" "${SESSION_BASE_DIR}/transcripts/Issue_10"
+    invoke_claude "test prompt" "PullRequest" "99" "# per-item instructions" 2>/dev/null
+    grep -qx "${SESSION_BASE_DIR}/transcripts/PullRequest_99:/home/developer/.claude/projects:rw" "${args_log}"
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/Issue_10")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes a dangling link with its marker" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    write_closed_marker_days_ago "PullRequest_99" 1
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+}
+
+@test "prune_transcripts removes a link left dangling by the same pass's purge of its Issue" {
+    make_transcript_dir "Issue_10"
+    write_closed_marker_days_ago "Issue_10" 8
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "prune_transcripts keeps a live link with no marker or an unexpired one, and its target" {
+    make_transcript_dir "Issue_10"
+    make_transcript_dir "Issue_11"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    ln -s "Issue_11" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
+    write_closed_marker_days_ago "PullRequest_100" 6
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_100")" = "Issue_11" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_100.closed" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_11/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes only a live link and its own expired marker, never the target's files" {
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    write_closed_marker_days_ago "PullRequest_99" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts warns and keeps the marker when a link cannot be removed" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    write_closed_marker_days_ago "PullRequest_99" 8
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_with_failing_link_delete() {
+        rm() { [ "$2" = "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_with_failing_link_delete
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to remove transcript link at ${SESSION_BASE_DIR}/transcripts/PullRequest_99 - will retry on the next launch"* ]]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+}
+
+@test "prune_transcripts never calls gh, including when it removes links" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf '%s\n' \"\$*\" >> \"${gh_log}\"; exit 1"
+    make_transcript_dir "Issue_10"
+    write_closed_marker_days_ago "Issue_10" 8
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    make_transcript_dir "Issue_11"
+    ln -s "Issue_11" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
+    write_closed_marker_days_ago "PullRequest_100" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${gh_log}" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_100" ]
+}
+
+@test "prune_transcripts keeps an item and a live link whose marker time cannot be read at all" {
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_10.closed"
+    printf 'garbage\n' > "${SESSION_BASE_DIR}/PullRequest_99.closed"
+    make_stub stat "exit 1"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/Issue_10.closed" ]
+    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
 }
