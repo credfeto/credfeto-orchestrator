@@ -326,6 +326,16 @@ MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 [[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
 
+# How long Claude session transcripts are kept on the host (prune_transcripts in lib/podman):
+# counted from when oneshot first observed a work item closed or merged, or, for the shared
+# directory used by launches without an item, from each file's last modification.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TRANSCRIPT_RETENTION_DAYS=7
+# Transcript directory name for launches with no work item (interactive, ad-hoc invoke_claude
+# calls). Starts with an underscore so it can never collide with an <ItemType>_<id> directory.
+# shellcheck disable=SC2034  # read by lib/state and lib/podman after sourcing
+TRANSCRIPT_SHARED_DIR_NAME="_shared"
+
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
 # An invalid value falls back to the same default, from one constant so the two cannot diverge
