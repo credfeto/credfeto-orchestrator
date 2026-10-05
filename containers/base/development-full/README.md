@@ -143,8 +143,8 @@ user's home when installed on a host via `install-claude-hooks` below). This rem
 which fails the build if any hook command string contains `/home/developer` instead of `$HOME`).
 `oneshot` does not bind-mount over any of these
 paths at runtime (see `containers/agent/Dockerfile` for the full mount contract) — only `CLAUDE.md` and
-the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) are
-mounted per invocation.
+the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) and the
+per-work-item transcript directory (`projects/`) are mounted per invocation.
 
 The repo-root `install-claude-hooks` script installs this same settings.json and hook set into the
 current host user's `~/.claude`, so the hooks can be exercised directly outside the container: hook/data
