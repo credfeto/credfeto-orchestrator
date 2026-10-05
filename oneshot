@@ -303,7 +303,7 @@ main() {
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
     local pr_has_unaddressed_comment review_pipeline_finished
-    local pr_required_checks pr_next_phase pr_unaddressed_comments_text
+    local pr_required_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
@@ -352,9 +352,10 @@ main() {
         pr_idle_advance=0
         # The phase plan_unchanged_pr_reinvocation names for an unchanged PR, and the PR's
         # required check names (set_pr_required_checks), reused for the post-session re-read of
-        # the same PR.
+        # the same PR, and whether that lookup failed.
         pr_next_phase=""
         pr_required_checks=""
+        pr_required_checks_lookup_failed=false
         # Same idea as pr_idle_advance, for an Issue (plan-approved, or never planned at all)
         # re-invoked only because its idle budget allows another try, not because anything
         # actually changed (#1264).
@@ -632,7 +633,14 @@ main() {
                         # gets a real chance to fire once genuinely exhausted instead of being
                         # silently defeated for as long as the comment stays unaddressed
                         # (#1307 review).
-                        if pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                        # A PR that needs a rebase is re-run before the board is consulted, as on
+                        # the direct-PR path: plan_unchanged_pr_reinvocation does not look at
+                        # mergeStateStatus, so a Complete board would otherwise skip it and only
+                        # charge idle, and neither the non-agentic rebase nor an agent rebase
+                        # would ever run.
+                        if [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
+                            info "PR #${open_pr} in ${item_repo} unchanged but ${pr_merge_state} - re-running"
+                        elif pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
                             if ! plan_unchanged_pr_reinvocation "${open_pr}" "${item_repo}"; then
                                 skip_unchanged_pr_without_next_phase "${open_pr}" "${item_repo}"
                                 continue
@@ -650,7 +658,7 @@ main() {
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                             else
                                 info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                             fi
                             count_unchanged=$((count_unchanged + 1))
@@ -1115,7 +1123,7 @@ main() {
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
