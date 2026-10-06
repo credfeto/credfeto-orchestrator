@@ -150,23 +150,25 @@ file, so every line belongs to that owner's sessions):
 (YYYY-MM-DD+1 is the following date.) Then, in a SEPARATE Bash call per file, count the
 sessions whose final message says Claude quit because a tool was denied, per repo. Each
 session's final message is printed after the scheduler's "Checking <type> #<id> in <repo>"
-line for that item, and one message can span several journal lines, so a match is credited to
-the most recent "Checking" line and each session is counted once:
+line for that item, and one message can span several journal lines, so every line is gathered
+under the most recent "Checking" line and each session is classified and counted once:
 
-  awk '/ Checking .* #[0-9]+ in [^ ]+ / { session = $0; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); next }
-       session == "" || (session in counted) { next }
-       { line = tolower($0) }
-       line ~ /bash (tool )?(is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
-         || line ~ /bash (tool )?(is|was|has been) (denied|disabled)[^.;]*(rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))/ \
-         || line ~ /don.t ask mode[^.;]*( now (denies|denied|disabled|blocks|blocked)|rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))/ \
-         || line ~ /(stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))[^.;]*don.t ask mode/ \
-         { counted[session] = 1; quits[repo]++ }
-       END { for (r in quits) print quits[r], r }' /tmp/quit-credfeto-YYYY-MM-DD.log
+  awk 'function classify() {
+         if (text ~ /bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)|bash( tool)? (is|was|has been) no longer (allowed|available|permitted)|don.t ask mode/ \
+             && text ~ /(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed)|(cannot|can not|can.t|couldn.t|could not|unable to) make any progress|no progress|stopping here|have stopped|stopped (work|the session)|giving up|gave up|nothing (below|else) (has been|was) done|rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session|bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
+             && text !~ /(^|[^a-z])(instead|finished|completed|pushed|succeeded)([^a-z]|$)|worked (round|around)|(is|are|was|were) complete([^a-z]|$)/) quits[repo]++
+       }
+       / Checking .* #[0-9]+ in [^ ]+ / { if (session != "") classify(); session = $0; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); text = ""; next }
+       session != "" { text = text " " tolower($0) }
+       END { if (session != "") classify(); for (r in quits) print quits[r], r }' /tmp/quit-credfeto-YYYY-MM-DD.log
 
-The four regexes are TOOL_DENIED_QUIT_PATTERNS from lib/globals, lower-cased because the
-orchestrator matches them without regard to case. lib/globals is the source of truth for the
-quit wording: if those patterns change, update these to match. Report these counts
-in the summary as quit sessions found from the journal, per repo and date, and say that the
+Each session's lines are joined into one lower-cased message and classified as a whole, the
+same way the orchestrator does: a quit needs a denial mention, AND a session-level give-up
+phrase, AND no workaround phrase. The three regexes are TOOL_DENIAL_MENTION_PATTERNS,
+TOOL_DENIED_GIVE_UP_PATTERNS and TOOL_DENIED_WORKAROUND_PATTERNS from lib/globals, each joined
+with "|" and lower-cased because the orchestrator matches them without regard to case.
+lib/globals is the source of truth for the quit wording: if those patterns change, update these
+to match. Report these counts in the summary as quit sessions found from the journal, per repo and date, and say that the
 item numbers and denied command names are not available for that date. If the journal no
 longer covers the date either (check the first timestamp in the file), say the date could not
 be checked rather than reporting zero quits. The PRIVATE rule below applies in full to these
