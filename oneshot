@@ -144,8 +144,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
 # notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
-# rearm_closed_issue_markers, tag_pr_closed_issue, mark_item_closed, clear_closed_marker,
-# and link_pivot_pr_transcripts are declared in lib/state.
+# rearm_closed_issue_markers, tag_pr_closed_issue, sync_closed_marker and
+# link_pivot_pr_transcripts are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -432,6 +432,7 @@ main() {
                     continue
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
+                sync_closed_marker "Issue" "${item_id}" "${issue_state}"
                 if [ "${issue_state}" != "OPEN" ]; then
                     # The marker file makes this a one-time tagging per closed issue — without
                     # it, a feed that retains closed issues would re-post the investigation
@@ -451,12 +452,10 @@ main() {
                             warn "Failed to tag PR #${open_pr} in ${item_repo} for closed Issue #${item_id} — will retry next tick"
                         fi
                     fi
-                    mark_item_closed "Issue" "${item_id}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - tagging linked PR #${open_pr} for investigation")")
                     continue
                 fi
-                clear_closed_marker "Issue" "${item_id}"
                 if issue_json_has_blocked_label "${issue_json}" \
                     || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
                     info "Issue #${item_id} in ${item_repo} is blocked — skipping"
@@ -487,14 +486,13 @@ main() {
                 fi
 
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
+                sync_closed_marker "PullRequest" "${open_pr}" "${pr_state}"
                 if [ "${pr_state}" != "OPEN" ]; then
                     info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
-                    mark_item_closed "PullRequest" "${open_pr}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
-                clear_closed_marker "PullRequest" "${open_pr}"
                 link_pivot_pr_transcripts "${item_id}" "${open_pr}"
 
                 if pr_json_has_blocked_label "${pr_json}" \
@@ -695,6 +693,7 @@ main() {
                 fi
 
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
+                sync_closed_marker "Issue" "${item_id}" "${issue_state}"
                 if [ "${issue_state}" != "OPEN" ]; then
                     # A taken-over PR is invisible to the pivot above, so the closed-issue-
                     # with-open-PR anomaly tagging the pivot performs must also happen here
@@ -724,12 +723,10 @@ main() {
                         fi
                     fi
                     info "Issue #${item_id} in ${item_repo} is no longer open — skipping"
-                    mark_item_closed "Issue" "${item_id}"
                     count_not_open=$((count_not_open + 1))
                     item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
-                clear_closed_marker "Issue" "${item_id}"
 
                 if issue_json_has_blocked_label "${issue_json}" \
                     || ! reset_issue_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
@@ -929,14 +926,13 @@ main() {
             fi
 
             pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
+            sync_closed_marker "PullRequest" "${item_id}" "${pr_state}"
             if [ "${pr_state}" != "OPEN" ]; then
                 info "PR #${item_id} in ${item_repo} is no longer open — skipping"
-                mark_item_closed "PullRequest" "${item_id}"
                 count_not_open=$((count_not_open + 1))
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "no longer open - skipping")")
                 continue
             fi
-            clear_closed_marker "PullRequest" "${item_id}"
 
             if pr_json_has_blocked_label "${pr_json}" \
                 || ! reset_pr_invocation_counts_if_capped "${item_id}" "${item_repo}"; then
