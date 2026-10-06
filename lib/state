@@ -709,12 +709,17 @@ transcripts_root_path() {
 # context share TRANSCRIPT_SHARED_DIR_NAME, which can never be marked closed and is purged by age
 # instead (prune_transcripts in lib/podman).
 transcript_dir_path() {
-    local item_type="${1:-}" item_id="${2:-}"
-    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
-        printf '%s/%s_%s' "$(transcripts_root_path)" "${item_type}" "${item_id}"
-    else
-        printf '%s/%s' "$(transcripts_root_path)" "${TRANSCRIPT_SHARED_DIR_NAME}"
-    fi
+    local item_type="${1:-}" item_id="${2:-}" name="${TRANSCRIPT_SHARED_DIR_NAME}"
+    [ -n "${item_type}" ] && [ -n "${item_id}" ] && name="${item_type}_${item_id}"
+    printf '%s/%s' "$(transcripts_root_path)" "${name}"
+}
+
+# Creates a transcript directory and restricts both it and the transcripts root to the owner,
+# because the transcripts hold verbatim command text and output. Returns non-zero on failure and
+# leaves the caller to decide whether that is fatal.
+ensure_transcript_dir() {
+    local dir="$1"
+    mkdir -p "${dir}" && chmod 0700 "${dir%/*}" "${dir}"
 }
 
 # Holds the unix time oneshot first observed the item closed or merged; prune_transcripts
@@ -752,7 +757,7 @@ link_pivot_pr_transcripts() {
     local issue_id="$1" pr_number="$2" issue_dir pr_path
     issue_dir=$(transcript_dir_path "Issue" "${issue_id}")
     pr_path=$(transcript_dir_path "PullRequest" "${pr_number}")
-    if ! { mkdir -p "${issue_dir}" && chmod 0700 "${issue_dir%/*}" "${issue_dir}"; } 2>/dev/null; then
+    if ! ensure_transcript_dir "${issue_dir}" 2>/dev/null; then
         warn "Failed to create transcript directory ${issue_dir}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
         return 0
     fi
@@ -765,8 +770,21 @@ link_pivot_pr_transcripts() {
 # Called wherever an item is observed open, so a reopened item does not have its transcripts
 # purged mid-work by a marker left over from its earlier closure.
 clear_closed_marker() {
-    local item_type="$1" item_id="$2"
-    rm -f "$(closed_marker_file_path "${item_type}" "${item_id}")" 2>/dev/null || true
+    local item_type="$1" item_id="$2" marker
+    marker=$(closed_marker_file_path "${item_type}" "${item_id}")
+    [ -e "${marker}" ] || return 0
+    rm -f "${marker}" 2>/dev/null || true
+}
+
+# Keeps an item's closed marker in step with the state oneshot just fetched for it: written
+# (if absent) when the item is not open, removed when it is.
+sync_closed_marker() {
+    local item_type="$1" item_id="$2" state="$3"
+    if [ "${state}" = "OPEN" ]; then
+        clear_closed_marker "${item_type}" "${item_id}"
+    else
+        mark_item_closed "${item_type}" "${item_id}"
+    fi
 }
 
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.

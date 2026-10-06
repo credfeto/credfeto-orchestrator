@@ -369,12 +369,18 @@ cleanup_dangling_images() {
 # transcripts forever.
 closed_marker_unix_time() {
     local marker="$1" recorded
-    recorded=$(cat "${marker}" 2>/dev/null)
+    { recorded=$(< "${marker}"); } 2>/dev/null
     if [[ "${recorded}" =~ ^[0-9]+$ ]]; then
         printf '%s' "${recorded}"
     else
         stat -c %Y "${marker}" 2>/dev/null
     fi
+}
+
+# Prints the closed marker path for a transcript entry named <ItemType>_<id>.
+transcript_entry_closed_marker() {
+    local item_name="${1##*/}"
+    closed_marker_file_path "${item_name%_*}" "${item_name##*_}"
 }
 
 # Succeeds when the closed marker exists and records a closure more than retention_secs before
@@ -403,7 +409,7 @@ prune_transcripts() {
     [ -d "${transcripts_dir}" ] || return 0
 
     local retention_secs=$(( TRANSCRIPT_RETENTION_DAYS * 86400 ))
-    local now_unix entry item_name marker
+    local now_unix entry marker
     now_unix=$(date +%s)
     # Real directories first, so a link this pass leaves dangling by purging its target is
     # removed by the link pass below in the same run.
@@ -411,9 +417,8 @@ prune_transcripts() {
         # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
-        item_name="${entry##*/}"
-        [ "${item_name}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
-        marker=$(closed_marker_file_path "${item_name%_*}" "${item_name##*_}")
+        [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
+        marker=$(transcript_entry_closed_marker "${entry}")
         closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}" || continue
         # The marker goes only once the directory has: without it the item is never purged,
         # so keeping it on failure is what makes the next launch retry.
@@ -426,8 +431,7 @@ prune_transcripts() {
 
     for entry in "${transcripts_dir}"/*; do
         [ -L "${entry}" ] || continue
-        item_name="${entry##*/}"
-        marker=$(closed_marker_file_path "${item_name%_*}" "${item_name##*_}")
+        marker=$(transcript_entry_closed_marker "${entry}")
         # -e follows the link, so it is false only when the target is missing.
         if [ -e "${entry}" ] && ! closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}"; then
             continue
@@ -445,8 +449,9 @@ prune_transcripts() {
     shared_dir=$(transcript_dir_path)
     if [ -d "${shared_dir}" ]; then
         local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
-        find "${shared_dir}" -mindepth 1 -type f -mmin "+${retention_mins}" -delete 2>/dev/null || true
-        find "${shared_dir}" -mindepth 1 -type d -empty -mmin "+${retention_mins}" -delete 2>/dev/null || true
+        # -delete implies -depth, so a directory is tested for -empty only after its old files
+        # have gone.
+        find "${shared_dir}" -mindepth 1 \( -type f -o -type d -empty \) -mmin "+${retention_mins}" -delete 2>/dev/null || true
     fi
     return 0
 }
@@ -857,16 +862,13 @@ prepare_claude_container_args() {
     #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
     #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
     #     they persist across invocations instead of being wiped every run.
-    #   - projects/: read-write, where Claude Code writes session transcripts.
-    #     Backed by a per-work-item host directory (transcript_dir_path, lib/state)
-    #     rather than one under CLAUDE_STATE_DIR, so a closed item's transcripts can
-    #     be purged as a whole (prune_transcripts). The image keeps ~/.claude itself
-    #     root-owned; like the five above, the mountpoint is writable only because
-    #     podman creates it owned by the mapped developer uid. Mode 0700 because the
-    #     transcripts hold verbatim command text and output. A pivoted PR's directory
-    #     is a symlink to its Issue's (link_pivot_pr_transcripts, lib/state): mkdir -p
-    #     accepts a live link, chmod applies to the Issue directory it points at, and
-    #     prune_transcripts has already removed any dangling one before this runs.
+    #   - projects/: read-write, session transcripts, backed by the per-work-item
+    #     directory from transcript_dir_path (lib/state, which explains the layout and
+    #     purge). Like the five above, the mountpoint is writable only because podman
+    #     creates it owned by the mapped developer uid. A pivoted PR's directory may be
+    #     a symlink to its Issue's: mkdir -p accepts a live link, chmod applies to the
+    #     Issue directory it points at, and prune_transcripts has already removed any
+    #     dangling one before this runs.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
@@ -876,9 +878,7 @@ prepare_claude_container_args() {
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
     transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
-    if ! { mkdir -p "${transcript_dir}" && chmod 0700 "${transcript_dir%/*}" "${transcript_dir}"; }; then
-        die "Failed to create transcript directory: ${transcript_dir}"
-    fi
+    ensure_transcript_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
     # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
     # container-ephemeral.
