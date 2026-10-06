@@ -75,7 +75,7 @@ Where to make a common change:
 | Container flags, mounts, secrets | `prepare_claude_container_args` and `ensure_agent_container_ready`, both shared with `interactive` via `invoke_claude_interactive`. |
 | Workflow state names or order | `PROJECT_STATUS_OPTIONS` (lib/project-status) and `_WF_STATUS_ORDER` (lib/globals); `cfwf` has its own `WORKFLOW_STATES`, and `test/status-mapping-parity.bats` checks all three agree. |
 | A Discord message | The `notify_discord_*` function in lib/discord and [discord-notifications.md](../../discord-notifications.md). |
-| What counts as a stalled session | `TOOL_DENIED_QUIT_PATTERNS` (lib/globals), `claude_result_indicates_tool_denied_quit` (lib/podman), `session_outcome_is_stalled` (lib/state), and where `pr_session_no_progress` is set in `main`. |
+| What counts as a stalled session | `TOOL_DENIAL_MENTION_PATTERNS`, `TOOL_DENIED_GIVE_UP_PATTERNS` and `TOOL_DENIED_WORKAROUND_PATTERNS` (lib/globals), `claude_result_indicates_tool_denied_quit` (lib/podman), `session_outcome_is_stalled` (lib/state), and where `pr_session_no_progress` is set in `main`. |
 
 State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHESTRATOR_STATE_DIR/<owner>/<repo>`) unless noted:
 
