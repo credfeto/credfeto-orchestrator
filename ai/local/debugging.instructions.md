@@ -157,6 +157,7 @@ cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/last-digest-sent
 - `<owner>/last-digest-sent` holds the date the owner's last daily digest went out, or was due and had nothing to send (no file for yesterday or the day before). A missing digest with this file still on an older date means every post failed (each tick retries; look for the `Daily digest for <owner>:` warnings, which name the failing step); a digest sent twice in a day means the marker could not be written (look for the "Failed to write the daily digest marker" warning).
 - `<owner>/.digest.lock` is the per-owner digest lock, held only while a run decides on and sends the digest; an `--owner` run and a no-owner run can otherwise overlap on the same owner.
 - Files older than `SESSION_DENIALS_RETENTION_DAYS` (lib/globals) are pruned on every rollover attempt, whether or not the digest was sent.
+- A date with no file (before the per-day record existed, or already pruned) can still be checked for quit sessions from the service journal: check 7 in `tasks/healthcheck.md` describes the per-repo count.
 
 ### 5 — PR invocation-guard files
 

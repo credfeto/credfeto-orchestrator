@@ -133,10 +133,44 @@ Every agent session appends one tab-separated line to a per-owner, per-day file:
 
 Fields: timestamp, repo, item type, item id, denial count, stalled (1/0), quit after a tool
 denial (1/0), denied command names (comma-separated, "-" for none). Read today's and
-yesterday's files for each owner (run from a cwd other than /home/markr):
+yesterday's files for each owner, or every date in the window when asked to check a longer
+period (run from a cwd other than /home/markr):
 
   ssh nanoclaw.lan 'sudo -n -u credfeto cat /home/credfeto/.local/state/orchestrator/credfeto/session-denials.YYYY-MM-DD'
   ssh nanoclaw.lan 'sudo -n -u funfair-tech cat /home/funfair-tech/.local/state/orchestrator/funfair-tech/session-denials.YYYY-MM-DD'
+
+Fallback for a date with no session-denials file (the cat above fails with "No such file"):
+the date predates the file, or it was pruned, so count the quit sessions from the journal
+instead. Pull that date's journal ONCE per service into its own file, as above (one unit per
+file, so every line belongs to that owner's sessions):
+
+  ssh nanoclaw.lan 'sudo journalctl --since "YYYY-MM-DD" --until "YYYY-MM-DD+1" -u credfeto-orchestrator-credfeto-credfeto.service --no-pager 2>&1' > /tmp/quit-credfeto-YYYY-MM-DD.log
+  ssh nanoclaw.lan 'sudo journalctl --since "YYYY-MM-DD" --until "YYYY-MM-DD+1" -u credfeto-orchestrator-funfair-tech-funfair-tech.service --no-pager 2>&1' > /tmp/quit-funfair-tech-YYYY-MM-DD.log
+
+(YYYY-MM-DD+1 is the following date.) Then, in a SEPARATE Bash call per file, count the
+sessions whose final message says Claude quit because a tool was denied, per repo. Each
+session's final message is printed after the scheduler's "Checking <type> #<id> in <repo>"
+line for that item, and one message can span several journal lines, so a match is credited to
+the most recent "Checking" line and each session is counted once:
+
+  awk '/ Checking .* #[0-9]+ in [^ ]+ / { session = $0; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); next }
+       session == "" || (session in counted) { next }
+       { line = tolower($0) }
+       line ~ /bash (tool )?(is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
+         || line ~ /bash (tool )?(is|was|has been) (denied|disabled)[^.;]*(rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))/ \
+         || line ~ /don.t ask mode[^.;]*( now (denies|denied|disabled|blocks|blocked)|rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))/ \
+         || line ~ /(stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))[^.;]*don.t ask mode/ \
+         { counted[session] = 1; quits[repo]++ }
+       END { for (r in quits) print quits[r], r }' /tmp/quit-credfeto-YYYY-MM-DD.log
+
+The four regexes are TOOL_DENIED_QUIT_PATTERNS from lib/globals, lower-cased because the
+orchestrator matches them without regard to case. lib/globals is the source of truth for the
+quit wording: if those patterns change, update these to match. Report these counts
+in the summary as quit sessions found from the journal, per repo and date, and say that the
+item numbers and denied command names are not available for that date. If the journal no
+longer covers the date either (check the first timestamp in the file), say the date could not
+be checked rather than reporting zero quits. The PRIVATE rule below applies in full to these
+counts: they go to this summary and the private Discord channel only, never to GitHub.
 
 A session is stalled when it quit believing a tool was denied or disabled (the quit column),
 or when it hit denials and its PR made no progress. REPORT EVERY stalled or quit session in
