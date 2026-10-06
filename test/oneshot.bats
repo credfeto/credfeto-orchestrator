@@ -3836,6 +3836,92 @@ STUBEOF
     [[ "${output}" != *HOME* ]]
 }
 
+@test "claude_result_denied_command_names skips sudo's options and the value of sudo -u" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"sudo -u x /usr/bin/gh api user"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "gh" ]
+    [[ "${output}" != */* ]]
+}
+
+@test "claude_result_denied_command_names skips an xargs option with no value" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"xargs -0 rm"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "rm" ]
+}
+
+@test "claude_result_denied_command_names skips the value of an xargs option that takes one" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"xargs -I {} -n 1 cp {} /x"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "cp" ]
+}
+
+@test "claude_result_denied_command_names skips env's options" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"env -i foo"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "foo" ]
+}
+
+@test "claude_result_denied_command_names skips the value of env -u and later assignments without printing them" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"env -u GH_TOKEN FOO=ghp_abc123 gh pr list"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "gh" ]
+    [[ "${output}" != *GH_TOKEN* ]]
+    [[ "${output}" != *ghp_* ]]
+}
+
+@test "claude_result_denied_command_names skips time's options and the value of time -o" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"time -p cmd"}},{"tool_name":"Bash","tool_input":{"command":"time -o /home/someone/secret.log make"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "cmd,make" ]
+    [[ "${output}" != *secret* ]]
+}
+
+@test "claude_result_denied_command_names stops skipping wrapper options at --" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"nohup -- dotnet build"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "dotnet" ]
+}
+
+@test "claude_result_denied_command_names skips long wrapper options and their values through nested wrappers" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"sudo --user root env -i FOO=bar nohup make"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "make" ]
+    [[ "${output}" != *root* ]]
+}
+
+@test "claude_result_denied_command_names gives (other) for a quoted option value that spans several words" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"sudo -p \"Enter s3cret\" gh"}},{"tool_name":"Bash","tool_input":{"command":"sudo -u"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "(other)" ]
+    [[ "${output}" != *s3cret* ]]
+}
+
+@test "claude_result_denied_command_names keeps cd as the program of a subshell that starts with cd" {
+    local result_file="${TEST_TMP}/result.json"
+    printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"(cd /x && git status)"}}]}' > "${result_file}"
+    run claude_result_denied_command_names "${result_file}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "cd" ]
+}
+
 @test "claude_result_denied_command_names prints nothing when there are no denials" {
     local result_file="${TEST_TMP}/result.json"
     printf '%s\n' '{"result":"done"}' > "${result_file}"

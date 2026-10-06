@@ -290,17 +290,43 @@ claude_result_indicates_tool_denied_quit() {
 # deduplicated, or nothing when there were none: the program a denied Bash command runs, or the
 # tool name for any other tool. For Bash, leading NAME=value assignments are skipped because an
 # assignment can carry a token. Bare "(" or "{" words and wrapper words (env, sudo, command, exec,
-# nohup, time, xargs) are skipped too. A leading "(", "{" or quote is then dropped from the word
-# that is left, and only the basename of a path is kept. Anything that is still not a plain short
-# name becomes "(other)" rather than being trimmed into shape, so no secret, path or argument can
-# reach the tab-separated state line or a Discord field.
+# nohup, time, xargs) are skipped too, along with each wrapper's options (any word starting with
+# "-") and the separate value of the options known to take one, such as sudo -u, so the program
+# the wrapper runs is reported rather than an option or its value. A quoted option value that
+# spans several words gives "(other)", since a word from inside the quotes is not the program. A
+# leading "(", "{" or quote is then dropped from the word that is left, and only the basename of a
+# path is kept. Anything that is still not a plain short name becomes "(other)" rather than being
+# trimmed into shape, so no secret, path or argument can reach the tab-separated state line or a
+# Discord field.
 claude_result_denied_command_names() {
     local tmpfile="$1"
     jq -r '
+        def options_with_value:
+            {
+                "sudo": ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U",
+                         "--user", "--group", "--close-from", "--chdir", "--host", "--prompt", "--role", "--type", "--other-user"],
+                "env": ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+                "xargs": ["-I", "-n", "-d", "-L", "-P", "-s", "-E", "-a",
+                          "--max-args", "--delimiter", "--max-procs", "--max-chars", "--arg-file"],
+                "time": ["-o", "-f", "--output", "--format"]
+            };
+        def skip_wrapper_options($wrapper):
+            if length == 0 then .
+            elif .[0] == "--" then .[1:]
+            elif .[0] | startswith("-")
+            then (if (.[0] | IN(options_with_value[$wrapper] // [] | .[])) | not then .[1:]
+                  elif (.[1] // "") | test("^[\"'\''][^\"'\'']*$") then []
+                  else .[2:]
+                  end)
+                 | skip_wrapper_options($wrapper)
+            else .
+            end;
         def program_word:
             if length == 0 then ""
-            elif (.[0] | test("^([A-Za-z_][A-Za-z0-9_]*=|[({]+$)")) or (.[0] | IN("env", "sudo", "command", "exec", "nohup", "time", "xargs"))
+            elif .[0] | test("^([A-Za-z_][A-Za-z0-9_]*=|[({]+$)")
             then .[1:] | program_word
+            elif .[0] | IN("env", "sudo", "command", "exec", "nohup", "time", "xargs")
+            then .[0] as $wrapper | .[1:] | skip_wrapper_options($wrapper) | program_word
             else .[0]
             end;
         def plain_name($re): if test($re) then . else "(other)" end;
