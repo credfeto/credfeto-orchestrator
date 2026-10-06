@@ -17373,7 +17373,7 @@ setup_main_pivot_mocks() {
 
 # The PR is open and Blocked, so main stops at the Blocked check without a container launch.
 stub_pr_open_blocked() {
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":10}]}\n'; }
     pr_json_has_blocked_label() { return 0; }
     try_auto_unblock_env_diagnosed_pr() { return 1; }
 }
@@ -17616,6 +17616,79 @@ stub_pr_merged() {
     [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
 }
 
+@test "main does not mark an Issue closed while the open PR it pivots to shares its transcript directory" {
+    setup_main_pivot_mocks
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo is no longer open"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+}
+
+@test "main removes an existing closed marker from an Issue whose directory the open PR it pivots to shares, so the PR's transcripts survive the purge" {
+    setup_main_pivot_mocks
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    write_closed_marker_days_ago "Issue_10" 8
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "main still marks a closed Issue when the open PR's transcripts are linked to another Issue" {
+    setup_main_pivot_mocks
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_10"
+    make_transcript_dir "Issue_20"
+    ln -s "Issue_20" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
+    [ ! -e "${SESSION_BASE_DIR}/Issue_20.closed" ]
+}
+
+@test "main marks a closed Issue with a linked PR once no open PR remains, so their shared transcripts are purged" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
+    }
+    find_open_nonblocked_pr_for_repo() { printf ''; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
+}
+
+@test "pr_transcripts_linked_to_issue succeeds only for a link to that Issue's directory" {
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    ln -s "Issue_20" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
+    make_transcript_dir "PullRequest_101"
+    pr_transcripts_linked_to_issue "99" "10"
+    run pr_transcripts_linked_to_issue "99" "1"
+    [ "${status}" -ne 0 ]
+    run pr_transcripts_linked_to_issue "100" "10"
+    [ "${status}" -ne 0 ]
+    run pr_transcripts_linked_to_issue "101" "101"
+    [ "${status}" -ne 0 ]
+    run pr_transcripts_linked_to_issue "102" "10"
+    [ "${status}" -ne 0 ]
+}
+
 @test "main writes a closed marker for the PR an Issue pivots to when that PR has merged" {
     setup_main_pivot_mocks
     stub_pr_merged
@@ -17781,6 +17854,104 @@ stub_pr_merged() {
     [ "${status}" -eq 0 ]
     [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
     [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main links a pivoted PR's transcripts to the Issue it closes, not the Issue being processed" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    # The feed lists Issue #10, but the repository's open bot PR #99 closes #20.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":20}]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_20" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_20" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main does not link a pivoted PR's transcripts when the PR closes no Issue" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo does not close any Issue in the repository, so its transcripts are not linked to an Issue's"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main links a pivoted PR's transcripts to the lowest-numbered Issue when the PR closes more than one" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":30},{"number":20},{"number":25}]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"does not close any Issue in the repository"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_20" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_20" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_25" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_30" ]
+}
+
+@test "pr_json_lowest_closing_issue prints the Issue the PR closes when it closes only one" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue counts a reference in the same repository, matched case-insensitively" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164,"repository":{"owner":{"login":"Org"},"name":"Repo"}}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue ignores a reference to another repository" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":7,"repository":{"owner":{"login":"org"},"name":"other"}},{"number":164,"repository":{"owner":{"login":"org"},"name":"repo"}}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":7,"repository":{"owner":{"login":"org"},"name":"other"}}]}' "org/repo"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "pr_json_lowest_closing_issue counts the same Issue referenced twice as one" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164},{"number":164}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue prints the lowest-numbered Issue when the PR closes several" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":200},{"number":9},{"number":164},{"number":9}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "9" ]
+}
+
+@test "pr_json_lowest_closing_issue picks the lowest-numbered Issue in this repository, ignoring a lower one elsewhere" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":3,"repository":{"owner":{"login":"org"},"name":"other"}},{"number":164,"repository":{"owner":{"login":"ORG"},"name":"REPO"}},{"number":50}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "50" ]
+}
+
+@test "pr_json_lowest_closing_issue fails when the PR closes no Issue, or the field is absent or malformed" {
+    local pr_json
+    for pr_json in '{"closingIssuesReferences":[]}' '{"closingIssuesReferences":null}' '{}' \
+        '{"closingIssuesReferences":[{"number":"x"}]}' '{"closingIssuesReferences":[{}]}' \
+        '{"closingIssuesReferences":[{"number":"x"},{"number":5}]}' 'not json'; do
+        run pr_json_lowest_closing_issue "${pr_json}" "org/repo"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+    done
+}
+
+@test "fetch_pr_json asks gh for closingIssuesReferences in the same call" {
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"; printf "{}"'
+    fetch_pr_json 42 > /dev/null
+    [ "$(wc -l < "${TEST_TMP}/gh_args")" -eq 1 ]
+    grep -q "closingIssuesReferences" "${TEST_TMP}/gh_args"
 }
 
 @test "main still processes a pivoted PR when its transcripts cannot be linked" {

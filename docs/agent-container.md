@@ -109,10 +109,16 @@ nothing redacts them.
 
 When an Issue pivots to its PR, `oneshot` makes `PullRequest_<m>` a relative symlink to
 `Issue_<n>` (`link_pivot_pr_transcripts` in `lib/state`), so the PR's sessions are written into
-the Issue's directory and the two share one history. It creates `Issue_<n>/` first if needed, and
-only creates the link when there is no `PullRequest_<m>` entry already: an existing directory or
-link, whether live or dangling, is left alone and keeps its own marker. A failure to link is a
-warning, and the PR's sessions then get a directory of their own.
+the Issue's directory and the two share one history. `Issue_<n>` is the Issue in the
+repository that the PR closes (its `closingIssuesReferences`, read from the PR state `oneshot`
+has already fetched), not the Issue it was processing when it pivoted: the pivot takes the
+repository's open bot PR, which need not belong to that Issue. A PR that closes more than one
+Issue there is linked to the lowest-numbered of them; one that closes no Issue there is not
+linked (an info message says so), and its sessions get a directory of their own. It creates
+`Issue_<n>/` first if needed, and only creates the link when there is no `PullRequest_<m>` entry
+already: an existing directory or link, whether live or dangling, is left alone and keeps its
+own marker. A failure to link is a warning, and the PR's sessions then get a directory of their
+own.
 
 Retention is 7 days (`TRANSCRIPT_RETENTION_DAYS` in `lib/globals`), enforced before every
 container launch by `prune_transcripts` (`lib/podman`):
@@ -122,6 +128,12 @@ container launch by `prune_transcripts` (`lib/podman`):
   overwrites an existing marker, because a closed item can stay in the priorities feed and would
   otherwise keep pushing its own purge back. An item seen open again has its marker removed, and
   an item with no transcript directory gets no marker, since there is nothing to purge.
+- An Issue seen closed while the open PR it pivots to still shares its directory through the
+  link gets no marker either, and loses any it has, because the marker would purge that PR's
+  sessions too. Once that PR is no longer open the pivot no longer finds it, and the Issue is
+  marked on the next tick that sees it closed. `prune_transcripts` itself cannot tell an open PR
+  from a merged one without querying GitHub, so this is decided when `oneshot` has the PR's
+  state, not at purge time.
 - An item's whole transcript directory, and its marker, is deleted 7 days after that time.
   An item with no marker is never purged.
 - A pivoted PR's link is never followed. A merged bot PR always closes its Issue, so the Issue's

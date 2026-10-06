@@ -135,7 +135,7 @@ source "${ONESHOT_DIR}/lib/podman" \
 # compute_issue_fingerprint, save_issue_fingerprint, and load_issue_fingerprint are declared in
 # lib/fingerprints.
 
-# issue_json_has_blocked_label is declared in lib/github-status.
+# issue_json_has_blocked_label and pr_json_lowest_closing_issue are declared in lib/github-status.
 
 # load_env_config and validate_config are declared in lib/core.
 
@@ -144,8 +144,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
 # notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
-# rearm_closed_issue_markers, tag_pr_closed_issue, sync_closed_marker and
-# link_pivot_pr_transcripts are declared in lib/state.
+# rearm_closed_issue_markers, tag_pr_closed_issue, sync_closed_marker, clear_closed_marker,
+# link_pivot_pr_transcripts and pr_transcripts_linked_to_issue are declared in lib/state.
 
 main() {
     local owner_filter=""
@@ -298,7 +298,7 @@ main() {
     # iteration) avoids stale-value bugs.
     local item item_repo item_id item_type item_priority item_title
     local skip_repo is_skipped original_issue_id pr_idle_advance issue_idle_advance
-    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments pr_issue_comments
+    local open_pr pr_json pr_state pr_fp saved_fp merge_state branch_name pr_review_comments pr_issue_comments pivot_closing_issue
     local issue_json issue_state issue_fp saved_issue_fp plan_approved plan_approved_or_later
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
@@ -432,7 +432,15 @@ main() {
                     continue
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
-                sync_closed_marker "Issue" "${item_id}" "${issue_state}"
+                # A closed Issue whose directory still holds the open PR's linked transcripts is not
+                # marked closed (and loses any marker it has): the marker would purge the PR's
+                # sessions with it. Once the PR is no longer open, the Issue reaches the no-PR path
+                # below, which marks it.
+                if [ "${issue_state}" != "OPEN" ] && pr_transcripts_linked_to_issue "${open_pr}" "${item_id}"; then
+                    clear_closed_marker "Issue" "${item_id}"
+                else
+                    sync_closed_marker "Issue" "${item_id}" "${issue_state}"
+                fi
                 if [ "${issue_state}" != "OPEN" ]; then
                     # The marker file makes this a one-time tagging per closed issue — without
                     # it, a feed that retains closed issues would re-post the investigation
@@ -493,7 +501,13 @@ main() {
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "no longer open - skipping")")
                     continue
                 fi
-                link_pivot_pr_transcripts "${item_id}" "${open_pr}"
+                # Linked to the Issue the PR closes, not to item_id: the pivot's PR is the repository's
+                # open bot PR, which need not belong to the Issue being processed.
+                if pivot_closing_issue=$(pr_json_lowest_closing_issue "${pr_json}" "${item_repo}"); then
+                    link_pivot_pr_transcripts "${pivot_closing_issue}" "${open_pr}"
+                else
+                    info "PR #${open_pr} in ${item_repo} does not close any Issue in the repository, so its transcripts are not linked to an Issue's"
+                fi
 
                 if pr_json_has_blocked_label "${pr_json}" \
                     || ! reset_pr_invocation_counts_if_capped "${open_pr}" "${item_repo}"; then
