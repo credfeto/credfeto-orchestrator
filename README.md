@@ -13,7 +13,9 @@ bookkeeping files named `<ItemType>_<id>.<suffix>` (change-detection fingerprint
 counters and block markers) and each item's session transcripts in
 `transcripts/<ItemType>_<id>/`, kept so a human can read what the agent did.  When an issue
 pivots to its PR, the PR's transcript directory is linked to the issue's, so both share one
-history.
+history.  An item's transcripts are deleted once none of them has been modified for 14 days,
+whether the item is open or closed; see
+[docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### Usage
 

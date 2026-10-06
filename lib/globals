@@ -336,11 +336,15 @@ MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 [[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
 
-# How long Claude session transcripts are kept on the host (prune_transcripts in lib/podman):
-# counted from when oneshot first observed a work item closed or merged, or, for the shared
-# directory used by launches without an item, from each file's last modification.
+# How long a file in the shared transcript directory (launches without a work item) is kept on
+# the host after its last modification (prune_transcripts in lib/podman).
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TRANSCRIPT_RETENTION_DAYS=7
+# How long a work item's transcript directory is kept on the host after the last modification of
+# any file in it (prune_transcripts in lib/podman). Age-based because oneshot never observes most
+# items closing: a merged PR and the Issue it closes drop out of the priorities feed first.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TRANSCRIPT_ITEM_RETENTION_DAYS=14
 # Transcript directory name for launches with no work item (interactive, ad-hoc invoke_claude
 # calls). Starts with an underscore so it can never collide with an <ItemType>_<id> directory.
 # shellcheck disable=SC2034  # read by lib/state and lib/podman after sourcing

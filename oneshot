@@ -144,8 +144,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
 # notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
 
-# rearm_closed_issue_markers, tag_pr_closed_issue, sync_closed_marker, clear_closed_marker,
-# link_pivot_pr_transcripts and pr_transcripts_linked_to_issue are declared in lib/state.
+# rearm_closed_issue_markers, tag_pr_closed_issue and link_pivot_pr_transcripts are declared in
+# lib/state.
 
 main() {
     local owner_filter=""
@@ -432,15 +432,6 @@ main() {
                     continue
                 fi
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
-                # A closed Issue whose directory still holds the open PR's linked transcripts is not
-                # marked closed (and loses any marker it has): the marker would purge the PR's
-                # sessions with it. Once the PR is no longer open, the Issue reaches the no-PR path
-                # below, which marks it.
-                if [ "${issue_state}" != "OPEN" ] && pr_transcripts_linked_to_issue "${open_pr}" "${item_id}"; then
-                    clear_closed_marker "Issue" "${item_id}"
-                else
-                    sync_closed_marker "Issue" "${item_id}" "${issue_state}"
-                fi
                 if [ "${issue_state}" != "OPEN" ]; then
                     # The marker file makes this a one-time tagging per closed issue — without
                     # it, a feed that retains closed issues would re-post the investigation
@@ -494,7 +485,6 @@ main() {
                 fi
 
                 pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
-                sync_closed_marker "PullRequest" "${open_pr}" "${pr_state}"
                 if [ "${pr_state}" != "OPEN" ]; then
                     info "PR #${open_pr} in ${item_repo} is no longer open — skipping"
                     count_not_open=$((count_not_open + 1))
@@ -707,7 +697,6 @@ main() {
                 fi
 
                 issue_state=$(printf '%s' "${issue_json}" | jq -r '.state')
-                sync_closed_marker "Issue" "${item_id}" "${issue_state}"
                 if [ "${issue_state}" != "OPEN" ]; then
                     # A taken-over PR is invisible to the pivot above, so the closed-issue-
                     # with-open-PR anomaly tagging the pivot performs must also happen here
@@ -940,7 +929,6 @@ main() {
             fi
 
             pr_state=$(printf '%s' "${pr_json}" | jq -r '.state')
-            sync_closed_marker "PullRequest" "${item_id}" "${pr_state}"
             if [ "${pr_state}" != "OPEN" ]; then
                 info "PR #${item_id} in ${item_repo} is no longer open — skipping"
                 count_not_open=$((count_not_open + 1))

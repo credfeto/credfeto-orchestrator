@@ -705,9 +705,9 @@ transcripts_root_path() {
 
 # Host directory bind-mounted at the container's ~/.claude/projects, where Claude Code writes
 # its session transcripts. One per work item so every session the item ever runs accumulates in
-# one place and the whole directory can be purged once the item is closed. Callers with no item
-# context share TRANSCRIPT_SHARED_DIR_NAME, which can never be marked closed and is purged by age
-# instead (prune_transcripts in lib/podman).
+# one place and the whole directory can be purged once the item has been idle for
+# TRANSCRIPT_ITEM_RETENTION_DAYS. Callers with no item context share TRANSCRIPT_SHARED_DIR_NAME,
+# which is purged file by file instead (prune_transcripts in lib/podman).
 transcript_dir_path() {
     local item_type="${1:-}" item_id="${2:-}" name="${TRANSCRIPT_SHARED_DIR_NAME}"
     [ -n "${item_type}" ] && [ -n "${item_id}" ] && name="${item_type}_${item_id}"
@@ -722,36 +722,13 @@ ensure_transcript_dir() {
     mkdir -p "${dir}" && chmod 0700 "${dir%/*}" "${dir}"
 }
 
-# Holds the unix time oneshot first observed the item closed or merged; prune_transcripts
-# (lib/podman) purges the item's transcript directory once this is older than
-# TRANSCRIPT_RETENTION_DAYS.
-closed_marker_file_path() {
-    local item_type="$1" item_id="$2"
-    printf '%s/%s_%s.closed' "${SESSION_BASE_DIR}" "${item_type}" "${item_id}"
-}
-
-# Write-if-absent: a closed item can stay in the priorities feed and be observed closed on every
-# tick, and refreshing the timestamp each time would push the purge back forever. Writes nothing
-# for an item with no transcript directory: prune_transcripts only removes a marker together with
-# its directory, so a marker there (an item that never ran, or one already purged and still in the
-# feed) would never be removed. Best-effort: a failed write only delays the purge until a later
-# tick succeeds.
-mark_item_closed() {
-    local item_type="$1" item_id="$2" marker
-    [ -d "$(transcript_dir_path "${item_type}" "${item_id}")" ] || return 0
-    marker=$(closed_marker_file_path "${item_type}" "${item_id}")
-    [ -f "${marker}" ] && return 0
-    date +%s > "${marker}" 2>/dev/null \
-        || warn "Failed to write closed marker for ${item_type} #${item_id}, so its transcripts will not be purged until a later tick writes it"
-}
-
 # Called on the Issue-to-PR pivot: makes the PR's transcript directory a relative symlink to the
-# Issue's, so the pivoted sessions' transcripts accumulate with the Issue's and are purged by the
-# Issue's own closed marker (a merged bot PR always closes its Issue). A merged PR drops out of
-# the open-PR search the pivot uses, so nothing may ever observe it closed; the link means
-# nothing needs to. The Issue directory is ensured first so a link left dangling by an earlier
-# purge of that Issue becomes live again. Any existing PullRequest_<m> entry, whether a real
-# directory or a live or dangling link, is left as it is with its own marker lifecycle.
+# Issue's, so the pivoted sessions' transcripts accumulate with the Issue's, keep that directory
+# fresh while the PR is worked, and are purged with it once it has been idle for
+# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts in lib/podman, which then removes the dangling
+# link). The Issue directory is ensured first so a link left dangling by an earlier purge of that
+# Issue becomes live again. Any existing PullRequest_<m> entry, whether a real directory or a live
+# or dangling link, is left as it is.
 # Best-effort: a failure only means the pivoted sessions get a directory of their own.
 link_pivot_pr_transcripts() {
     local issue_id="$1" pr_number="$2" issue_dir pr_path
@@ -765,36 +742,6 @@ link_pivot_pr_transcripts() {
     ln -s "${issue_dir##*/}" "${pr_path}" 2>/dev/null \
         || warn "Failed to link PR #${pr_number} transcripts to Issue #${issue_id}, so they will be kept in a directory of their own"
     return 0
-}
-
-# Succeeds when the PR's transcript entry is a link (link_pivot_pr_transcripts) to the Issue's
-# directory, read with readlink and never followed, so the two share one history. Used to keep an
-# Issue's closed marker unwritten while that PR is still open: the marker purges the shared
-# directory, and the PR's sessions with it.
-pr_transcripts_linked_to_issue() {
-    local pr_number="$1" issue_id="$2" pr_path issue_dir
-    pr_path=$(transcript_dir_path "PullRequest" "${pr_number}")
-    issue_dir=$(transcript_dir_path "Issue" "${issue_id}")
-    [ -L "${pr_path}" ] && [ "$(readlink "${pr_path}" 2>/dev/null)" = "${issue_dir##*/}" ]
-}
-
-# Called wherever an item is observed open, so a reopened item does not have its transcripts
-# purged mid-work by a marker left over from its earlier closure.
-clear_closed_marker() {
-    local item_type="$1" item_id="$2" marker
-    marker=$(closed_marker_file_path "${item_type}" "${item_id}")
-    rm -f "${marker}" 2>/dev/null || true
-}
-
-# Keeps an item's closed marker in step with the state oneshot just fetched for it: written
-# (if absent) when the item is not open, removed when it is.
-sync_closed_marker() {
-    local item_type="$1" item_id="$2" state="$3"
-    if [ "${state}" = "OPEN" ]; then
-        clear_closed_marker "${item_type}" "${item_id}"
-    else
-        mark_item_closed "${item_type}" "${item_id}"
-    fi
 }
 
 # Tags an open PR whose linked issue has been closed, and leaves a comment for investigation.
