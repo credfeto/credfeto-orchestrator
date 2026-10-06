@@ -38,6 +38,11 @@ run_claude_fresh() {
             podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
             notify_discord_claude_error "${item_type}" "${item_id}" \
                 "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+            # Claude did run, so this is a real session and gets its line in the per-day record
+            # before the die; there is no result to read, so it is recorded with no denials, no
+            # quit and not stalled.
+            reset_session_outcome
+            record_session_outcome "${item_type}" "${item_id}" 0
             die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
         fi
         if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
@@ -269,6 +274,81 @@ claude_result_indicates_diagnostic_refusal() {
     refusal_re+='|need you to [^.]*(confirm|allowlist)'
 
     match_nocase "${result_text}" "${refusal_re}"
+}
+
+# Returns 0 (true) if the session's final message says it stopped because it believed a tool was
+# denied or disabled for the rest of the session (see TOOL_DENIED_QUIT_PATTERNS in lib/globals).
+# Kept separate from claude_result_indicates_diagnostic_refusal so the .last-diagnostic marker it
+# feeds keeps its own, narrower rules.
+claude_result_indicates_tool_denied_quit() {
+    local result_text="$1" quit_re
+    quit_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_QUIT_PATTERNS[*]}")
+    match_nocase "${result_text}" "${quit_re}"
+}
+
+# Prints the names of the tool calls denied in a Claude JSON result, comma-separated and
+# deduplicated, or nothing when there were none: the program a denied Bash command runs, or the
+# tool name for any other tool. For Bash, leading NAME=value assignments, bare "(" or "{" words
+# and wrapper words (env, sudo, command, exec, nohup, time, xargs) are skipped, since an
+# assignment can carry a token, a
+# leading "(", "{" or quote is dropped, and only the basename of a path is kept. Anything that is
+# still not a plain short name becomes "(other)" rather than being trimmed into shape, so no
+# secret, path or argument can reach the tab-separated state line or a Discord field.
+claude_result_denied_command_names() {
+    local tmpfile="$1"
+    jq -r '
+        def program_word:
+            if length == 0 then ""
+            elif (.[0] | test("^([A-Za-z_][A-Za-z0-9_]*=|[({]+$)")) or (.[0] | IN("env", "sudo", "command", "exec", "nohup", "time", "xargs"))
+            then .[1:] | program_word
+            else .[0]
+            end;
+        def plain_name($re): if test($re) then . else "(other)" end;
+        (.permission_denials // []) | if type == "array" then . else [] end
+        | map(select(type == "object")
+            | if .tool_name == "Bash"
+              then ((.tool_input // {}) | if type == "object" then (.command // "") else "" end
+                    | tostring | [splits("\\s+") | select(length > 0)] | program_word
+                    | sub("^[({\"'\'']+"; "") | sub("[\"'\'')}]+$"; "") | split("/") | last // ""
+                    | plain_name("^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$"))
+              else (.tool_name // "") | tostring | plain_name("^[A-Za-z0-9][A-Za-z0-9_.+-]{0,59}$")
+              end)
+        | unique | join(",")
+        ' "${tmpfile}" 2>/dev/null
+}
+
+# Clears the SESSION_* outcome globals (lib/globals), so a session that dies before reaching the
+# capture below can never leave the previous session's outcome behind for the caller to read.
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state and oneshot after sourcing
+reset_session_outcome() {
+    SESSION_DENIAL_COUNT=0
+    SESSION_DENIED_COMMANDS=""
+    SESSION_TOOL_DENIED_QUIT=0
+    SESSION_RESULT_TEXT=""
+}
+
+# Sets every SESSION_* outcome global from this session's result. Arguments: tmpfile (the Claude
+# JSON result), denials_summary (handle_claude_permission_denials' rendered "- tool: detail"
+# lines), result_text. The count is taken from the rendered lines, as
+# handle_claude_permission_denials does, so it always agrees with what was logged. Each global is
+# assigned on every path, so nothing depends on the reset at the top of invoke_claude.
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state and oneshot after sourcing
+capture_session_outcome() {
+    local tmpfile="$1" denials_summary="$2" result_text="$3"
+    SESSION_RESULT_TEXT="${result_text}"
+    if [ -n "${denials_summary}" ]; then
+        SESSION_DENIAL_COUNT=$(printf '%s\n' "${denials_summary}" | grep -c '^- ')
+        SESSION_DENIED_COMMANDS=$(claude_result_denied_command_names "${tmpfile}")
+    else
+        SESSION_DENIAL_COUNT=0
+        SESSION_DENIED_COMMANDS=""
+    fi
+    if claude_result_indicates_tool_denied_quit "${result_text}"; then
+        SESSION_TOOL_DENIED_QUIT=1
+    else
+        SESSION_TOOL_DENIED_QUIT=0
+    fi
+    return 0
 }
 
 # Persists this session's diagnostic signal (#1448) so a later idle-exhaustion/runaway Blocked
@@ -534,6 +614,8 @@ invoke_claude() {
     local prompt="$1" item_type="${2:-}" item_id="${3:-}" claude_md_content="${4:-}"
     local tmpfile owner_token container_name
 
+    reset_session_outcome
+
     local prompt_len=${#prompt}
     if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
         notify_discord_claude_error "${item_type}" "${item_id}" \
@@ -601,9 +683,15 @@ invoke_claude() {
     # otherwise skip this entirely on exactly the runs where the diagnostic matters most.
     record_last_session_diagnostic "${item_type}" "${item_id}" "${result_text}" "${denials_summary}"
 
+    # Captured before the is_error check for the same reason: oneshot's post-session block never
+    # runs once handle_claude_is_error dies, so an errored session is recorded here instead, with
+    # only the quit flag to judge it by.
+    capture_session_outcome "${tmpfile}" "${denials_summary}" "${result_text}"
+
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
+        record_session_outcome "${item_type}" "${item_id}" "${SESSION_TOOL_DENIED_QUIT}"
         handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
@@ -623,7 +711,7 @@ invoke_claude() {
     # or a stream fragment — a fresh run that dies before the final result would otherwise be
     # treated as a silent success.
     jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
+        || { record_session_outcome "${item_type}" "${item_id}" "${SESSION_TOOL_DENIED_QUIT}"; rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 
     cleanup_claude_invocation_tmpfiles

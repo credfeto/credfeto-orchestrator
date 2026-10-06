@@ -133,6 +133,32 @@ PULL_DURATION_THRESHOLD_MULTIPLIER=3
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 PULL_DURATION_MIN_SAMPLES=5
 
+# How many days of per-owner session-denials.YYYY-MM-DD files (lib/state) to keep. The daily
+# digest only ever reads yesterday and the day before, so this is for a human (or the
+# tasks/healthcheck.md prompt) looking back over a longer stretch.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
+SESSION_DENIALS_RETENTION_DAYS=30
+
+# Phrasings of a session's final message that mean it ended because it believed a tool, usually
+# Bash, was denied or disabled for the rest of the session (claude_result_indicates_tool_denied_
+# quit, lib/podman). A "don't ask mode" denial refuses only the one command it names, so a session
+# that says this has stopped early on a misreading. Joined with "|" and matched case-insensitively;
+# "don.t" accepts either apostrophe. Every entry needs session-ending phrasing (now denied, no
+# longer, the rest of the session, stopped, giving up, or cannot continue/proceed) in the same
+# clause as the denial, with [^.;]* so the match never runs past a full stop or semicolon: a
+# message that reports one denial and then says how it carried on ("can't delete it that way;
+# used git clean instead") must not match. A bare "can't" or "couldn't" is not enough, because a
+# session that worked round a denial says that too. No length cap, unlike
+# claude_result_indicates_diagnostic_refusal: a session that gives up can still write a long
+# summary first.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TOOL_DENIED_QUIT_PATTERNS=(
+    'Bash (tool )?(is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))'
+    'Bash (tool )?(is|was|has been) (denied|disabled)[^.;]*(rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))'
+    "don.t ask mode[^.;]*( now (denies|denied|disabled|blocks|blocked)|rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))"
+    "(stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))[^.;]*don.t ask mode"
+)
+
 # Code review, security review, and coverage each get their own round budget below rather than
 # sharing one constant: each round is its own fresh invocation (one /code-review, one
 # /security-review, or one coverage round, then stop), so these are advisory guidance passed
@@ -453,6 +479,23 @@ ENV_UNBLOCK_ATTEMPTS=0
 ISSUE_INVOCATION_TOTAL=0
 # shellcheck disable=SC2034  # read by lib/github-status and lib/state after sourcing
 ISSUE_INVOCATION_IDLE=0
+
+# The outcome of the most recent invoke_claude session (lib/podman), reset at the start of every
+# call and set before its is_error check, so oneshot's post-session block can judge whether the
+# session stalled without re-reading the result JSON, which invoke_claude deletes.
+# SESSION_DENIED_COMMANDS holds names only, comma-separated and deduplicated: the program each
+# denied Bash command runs (leading assignments and wrapper words skipped, basename only), or the
+# tool name for any other tool, and "(other)" for anything that is not a plain short name. Never
+# arguments, values or paths, which can hold tokens or other detail that must not reach Discord
+# or the per-day state file.
+# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+SESSION_DENIAL_COUNT=0
+# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+SESSION_DENIED_COMMANDS=""
+# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+SESSION_TOOL_DENIED_QUIT=0
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+SESSION_RESULT_TEXT=""
 
 # Output pair for parse_two_token_counters (lib/state) — shared by load_pr_invocation_counts and
 # load_issue_invocation_counts, populated fresh on every call.

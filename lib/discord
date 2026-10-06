@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # Discord webhook notifications: work-item start/resume, no-work, low-disk-space,
 # priorities-unreachable, blocked-item, PR-needs-approval, Claude container error,
-# permission-denials, and rate-limited notices. Also the shared item-URL builder they use.
+# permission-denials, session-stalled, daily session digest, and rate-limited notices. Also the
+# shared item-URL builder they use.
 
 # Builds the GitHub URL for a work item. Arguments: item_type (Issue|PullRequest|other),
 # item_id, repo (optional, defaults to REPO_FULL). Falls back to the bare repo URL for an
@@ -841,6 +842,112 @@ notify_discord_permission_denials() {
         || { warn "Discord: failed to build permission-denials payload"; return 0; }
 
     _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
+}
+
+# Sends a Discord embed notification for a session that stalled (see session_outcome_is_stalled
+# in lib/state): it quit believing a tool was denied, or hit denials and made no progress.
+# Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty), denial_count,
+#            command_names (comma-separated names only, never full command lines),
+#            final_message (the session's final result text; tokens and anything path-like are
+#            masked, then only its first 240 characters are sent)
+# Deduplicated per item, at most one per hour, under its own key: notify_discord_permission_
+# denials' per-repo hourly key would otherwise let an ordinary denial alert elsewhere in the repo
+# swallow this one. Routed like the permission-denials alert, via DISCORD_WEBHOOK_URL_PERMISSIONS
+# if set, else DISCORD_WEBHOOK_URL; silent when the resolved URL is empty.
+notify_discord_session_stalled() {
+    local webhook_url
+    _discord_webhook_for permissions
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
+    [ -n "${webhook_url}" ] || return 0
+    local item_type="${1:-}" item_id="${2:-}" denial_count="${3:-0}" command_names="${4:-}" final_message="${5:-}"
+
+    local state_file now
+    state_file=$(_discord_dedup_state_file session_stalled "${REPO_FULL}_${item_type}_${item_id}")
+    now=$(date +%s)
+    _discord_dedup_allowed "${state_file}" "${now}" || return 0
+
+    local url payload
+    url="$(build_item_url "${item_type}" "${item_id}")"
+
+    payload=$(jq --null-input \
+        --argjson color 15105570 \
+        --arg repo "${REPO_FULL}" \
+        --arg item "${item_type} #${item_id}" \
+        --arg url "${url}" \
+        --arg count "${denial_count}" \
+        --arg commands "${command_names}" \
+        --arg message "${final_message}" \
+        '
+        # GitHub tokens and long hex runs first, then any whitespace-delimited run with a "/" in
+        # it (paths and URLs, and a base64 value that happens to hold one), then any other long
+        # token-like run; only then cut to 240 characters, so the cut can never leave an unmasked
+        # fragment of a value behind.
+        def masked:
+            gsub("(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"; "[token]")
+            | gsub("[0-9a-fA-F]{32,}"; "[token]")
+            | gsub("[^\\s]*/[^\\s]*"; "[path]")
+            | gsub("[A-Za-z0-9+=_-]{40,}"; "[token]");
+        {embeds:[{title:("Session stalled: " + $repo)[0:240],url:$url,color:$color,fields:[
+            {name:"Item",value:$item,inline:true},
+            {name:"Denials",value:$count,inline:true},
+            {name:"Denied commands",value:(if $commands == "" then "none" else ($commands | split(",") | join(", ") | .[0:1000]) end),inline:false},
+            {name:"Final message",value:(if $message == "" then "(empty)" else ($message | masked | .[0:240]) end),inline:false}
+        ]}]}') \
+        || { warn "Discord: failed to build session-stalled payload"; return 0; }
+
+    _discord_send_and_record "${payload}" "${state_file}" "${now}" "${webhook_url}"
+}
+
+# Sends the daily session digest for one owner (send_daily_digest_if_due in lib/state).
+# Arguments: owner, day (the YYYY-MM-DD the digest covers), summary and previous (JSON from
+# summarise_session_denials_day for that day and the day before; either may be null when no file
+# was recorded). Routed like the permission-denials alert. Returns 0 when there is nothing to do
+# (no webhook) or the post succeeded, and 1 when building or posting failed, so the caller only
+# advances its once-a-day marker once the digest has really gone.
+notify_discord_daily_digest() {
+    local webhook_url
+    _discord_webhook_for permissions
+    webhook_url="${DISCORD_RESOLVED_WEBHOOK_URL}"
+    [ -n "${webhook_url}" ] || return 0
+    local owner="$1" day="$2" summary="${3:-null}" previous="${4:-null}" payload
+
+    payload=$(jq --null-input \
+        --arg owner "${owner}" \
+        --arg day "${day}" \
+        --argjson s "${summary}" \
+        --argjson p "${previous}" \
+        '
+        def delta($cur; $prev):
+            if $prev == null then "no record for the day before"
+            else ($cur - $prev) as $d
+                | (if $d > 0 then "+\($d)" elif $d < 0 then "\($d)" else "no change" end) + " vs the day before"
+            end;
+        ($s // {sessions: 0, denials: 0, stalled: 0, quits: 0, repos: [], top_commands: []}) as $c
+        | {embeds:[{
+            title: ("Daily session digest: \($owner), \($day)")[0:240],
+            color: 3447003,
+            description: (if $s == null then "No sessions were recorded for this day." else "Agent sessions, permission denials and stalled sessions for this day." end),
+            fields: [
+                {name: "Sessions", value: "\($c.sessions) (\(delta($c.sessions; $p.sessions)))", inline: true},
+                {name: "Denials", value: "\($c.denials) (\(delta($c.denials; $p.denials)))", inline: true},
+                {name: "Stalled sessions", value: "\($c.stalled) (\(delta($c.stalled; $p.stalled)))", inline: true},
+                {name: "Quit after a tool denial", value: "\($c.quits)", inline: true},
+                {name: "Per repository", value: ([$c.repos[] | "\(.repo): \(.denials) denial(s), \(.stalled) stalled, \(.sessions) session(s)"]
+                    | if length == 0 then "none" else (.[0:15] | join("\n") | .[0:1000]) end), inline: false},
+                {name: "Top denied commands", value: ([$c.top_commands[] | "\(.name) (\(.count))"]
+                    | if length == 0 then "none" else (join(", ") | .[0:1000]) end), inline: false}
+            ]}]}
+        ') \
+        || { warn "Discord: failed to build daily digest payload"; return 1; }
+
+    if ! curl --silent --fail --max-time 5 \
+        -H "Content-Type: application/json" \
+        -d "${payload}" \
+        "${webhook_url}" > /dev/null 2>&1; then
+        warn "Discord daily digest notification failed: will retry on the next run"
+        return 1
+    fi
+    return 0
 }
 
 # Sends a Discord embed notification when Claude returns a rate-limit error (HTTP 429).
