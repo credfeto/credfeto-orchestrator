@@ -145,11 +145,17 @@ SESSION_DENIALS_RETENTION_DAYS=30
 # the one command it names, so a session that says this has stopped early on a misreading. Each
 # array is joined with "|" and matched case-insensitively against the whole message, not one
 # clause, because the denial and the give-up are often in different sentences ("All Bash
-# commands are being denied. I cannot continue."). "don.t" and "can.t" accept either apostrophe.
+# commands are being denied. I cannot continue."). "don[^a-z ]{1,3}t", "can[^a-z ]{1,3}t" and
+# "couldn[^a-z ]{1,3}t" accept a straight or a curly apostrophe: the curly one is one character
+# to bash under a UTF-8 locale but three bytes to the healthcheck awk under a C locale, so one
+# "." would let the two disagree. Excluding letters and spaces keeps "can it" and "can not" out.
+# "ask.{0,2} mode" accepts the closing quote agents write ("don't ask" mode) as well as none.
 # The message is a quit only when all three hold:
 #   (i)   it mentions a denial (TOOL_DENIAL_MENTION_PATTERNS);
-#   (ii)  it says the session as a whole gave up (TOOL_DENIED_GIVE_UP_PATTERNS). "Stopped" counts
-#         only in a session-level form, so "stopped short of merging" does not;
+#   (ii)  it says the session as a whole gave up (TOOL_DENIED_GIVE_UP_PATTERNS), including asking
+#         to be re-invoked once Bash is allowed. "Stopped" counts only in a session-level form
+#         ("stopped before doing any", "a denial stopped me from"), so "stopped short of
+#         merging" does not;
 #   (iii) it does not say how the session carried on (TOOL_DENIED_WORKAROUND_PATTERNS), so "I
 #         could not continue with cleanup, but the rest of the work is complete" does not count.
 # Limits: this is a keyword heuristic over free text. A session that gives up but also reports
@@ -163,14 +169,16 @@ SESSION_DENIALS_RETENTION_DAYS=30
 TOOL_DENIAL_MENTION_PATTERNS=(
     'Bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)'
     'Bash( tool)? (is|was|has been) no longer (allowed|available|permitted)'
-    "don.t ask mode"
+    'don[^a-z ]{1,3}t ask.{0,2} mode'
 )
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TOOL_DENIED_GIVE_UP_PATTERNS=(
-    '(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed)'
-    '(cannot|can not|can.t|couldn.t|could not|unable to) make any progress|no progress'
-    'stopping here|have stopped|stopped (work|the session)|giving up|gave up'
-    'nothing (below|else) (has been|was) done'
+    '(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) (continue|proceed)'
+    '(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) make any progress|no progress'
+    'stopping here|have stopped|stopped (work|the session)|stopped before (doing|starting|any)|giving up|gave up'
+    '(a |the )?(permission )?denial stopped me|stopped me from'
+    'nothing( below| else)? (has been|was) done|(couldn[^a-z ]{1,3}t|could not) do anything'
+    're-?invoke me|to continue, (either )?allow'
     'rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session'
     'Bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))'
 )

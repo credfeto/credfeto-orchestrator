@@ -3831,6 +3831,38 @@ STUBEOF
     claude_result_indicates_tool_denied_quit "I couldn't make any progress on #1042, because the Bash tool is denied in this session"
 }
 
+@test "claude_result_indicates_tool_denied_quit matches the quoted don't ask mode wording agents write" {
+    claude_result_indicates_tool_denied_quit "Claude Code is in \"don't ask\" mode and denied my first Bash call. To continue, either allow Bash, then re-invoke me."
+    claude_result_indicates_tool_denied_quit "Claude Code is in \"don't ask\" mode, so I couldn't do anything on this PR."
+    claude_result_indicates_tool_denied_quit "Bash is denied (\"don't ask\" mode). To continue, allow Bash for this repository."
+    claude_result_indicates_tool_denied_quit "Claude Code is in \"don't ask\" mode; nothing has been done."
+}
+
+@test "claude_result_indicates_tool_denied_quit matches a session that stopped before starting or was stopped by a denial" {
+    claude_result_indicates_tool_denied_quit "I stopped before doing any phase work because Bash is denied"
+    claude_result_indicates_tool_denied_quit "A permission denial stopped me from running the build in \"don't ask\" mode"
+}
+
+@test "claude_result_indicates_tool_denied_quit does not match a denial that stopped one step when a workaround follows" {
+    run claude_result_indicates_tool_denied_quit "A permission denial stopped me from running rm in \"don't ask\" mode, so I used git clean instead"
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit accepts a curly apostrophe" {
+    claude_result_indicates_tool_denied_quit "Claude Code is in don’t ask mode, so I can’t continue."
+    claude_result_indicates_tool_denied_quit "Bash is denied, so I couldn’t do anything."
+}
+
+@test "claude_result_indicates_tool_denied_quit does not treat a letter or space as an apostrophe" {
+    run claude_result_indicates_tool_denied_quit "The Bash tool was denied once; can it continue after the retry?"
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit does not match quoted don't ask mode wording that reports a workaround" {
+    run claude_result_indicates_tool_denied_quit "Claude Code is in \"don't ask\" mode and denied one Bash call, so I used gh pr view instead and finished. Re-invoke me if the merge is still needed."
+    [ "${status}" -ne 0 ]
+}
+
 @test "claude_result_denied_command_names gives Bash first words and other tool names, deduplicated, never arguments" {
     local result_file="${TEST_TMP}/result.json"
     printf '%s\n' '{"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"git fetch origin --token=s3cret"}},{"tool_name":"Bash","tool_input":{"command":"  gh api user"}},{"tool_name":"Bash","tool_input":{"command":"git status"}},{"tool_name":"Read","tool_input":{"file_path":"/home/x/.ssh/id_rsa"}},"malformed"]}' > "${result_file}"
