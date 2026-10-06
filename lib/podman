@@ -277,13 +277,18 @@ claude_result_indicates_diagnostic_refusal() {
 }
 
 # Returns 0 (true) if the session's final message says it stopped because it believed a tool was
-# denied or disabled for the rest of the session (see TOOL_DENIED_QUIT_PATTERNS in lib/globals).
-# Kept separate from claude_result_indicates_diagnostic_refusal so the .last-diagnostic marker it
-# feeds keeps its own, narrower rules.
+# denied or disabled for the rest of the session: it mentions a denial, says the session gave up,
+# and does not say how it carried on (see TOOL_DENIAL_MENTION_PATTERNS and the two arrays after it
+# in lib/globals). Kept separate from claude_result_indicates_diagnostic_refusal so the
+# .last-diagnostic marker it feeds keeps its own, narrower rules.
 claude_result_indicates_tool_denied_quit() {
-    local result_text="$1" quit_re
-    quit_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_QUIT_PATTERNS[*]}")
-    match_nocase "${result_text}" "${quit_re}"
+    local result_text="$1" mention_re give_up_re workaround_re
+    mention_re=$(IFS='|'; printf '%s' "${TOOL_DENIAL_MENTION_PATTERNS[*]}")
+    give_up_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_GIVE_UP_PATTERNS[*]}")
+    workaround_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_WORKAROUND_PATTERNS[*]}")
+    match_nocase "${result_text}" "${mention_re}" \
+        && match_nocase "${result_text}" "${give_up_re}" \
+        && ! match_nocase "${result_text}" "${workaround_re}"
 }
 
 # Prints the names of the tool calls denied in a Claude JSON result, comma-separated and
