@@ -75,7 +75,7 @@ The script can post notifications to a Discord channel via a webhook whenever:
 - An issue or PR is found to be **blocked** (has the `Blocked` label), with a link to the item.
 - **No actionable work items** are found after scanning all priorities.
 - A session **stalled**: it stopped because it believed a tool was denied, or hit permission denials and its PR made no progress.
-- A new day starts: a **daily session digest** of the previous day's sessions, denials and stalled sessions per repository.
+- A new day starts: a **daily session digest** of the previous day's sessions, denials and stalled sessions per repository (one per missed day when the host was down across midnight).
 
 See [How Discord notifications work](docs/discord-notifications.md) for the full list.
 

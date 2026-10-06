@@ -133,9 +133,10 @@ PULL_DURATION_THRESHOLD_MULTIPLIER=3
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 PULL_DURATION_MIN_SAMPLES=5
 
-# How many days of per-owner session-denials.YYYY-MM-DD files (lib/state) to keep. The daily
-# digest only ever reads yesterday and the day before, so this is for a human (or the
-# tasks/healthcheck.md prompt) looking back over a longer stretch.
+# How many days of per-owner session-denials.YYYY-MM-DD files (lib/state) to keep, for a human
+# (or the tasks/healthcheck.md prompt) looking back over a longer stretch. It also caps how far
+# back the daily digest catches up after the host has been down across several midnights, since
+# older files have been pruned.
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_DENIALS_RETENTION_DAYS=30
 

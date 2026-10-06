@@ -4246,6 +4246,78 @@ STUBEOF
     [ -f "${ORCHESTRATOR_STATE_DIR}/org/session-denials.2026-10-04" ]
 }
 
+@test "send_daily_digest_if_due catches up one digest per missed day, oldest first, after the host was down" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() { printf '%s %s %s\n' "$1" "$2" "$(printf '%s' "$4" | jq -c '.sessions // null')" >> "${digest_log}"; }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-10-02\n' > "${dir}/last-digest-sent"
+    printf '2026-10-01T01:00:00+00:00\torg/a\tIssue\t1\t0\t0\t0\t-\n' > "${dir}/session-denials.2026-10-01"
+    printf '2026-10-02T01:00:00+00:00\torg/a\tIssue\t2\t0\t0\t0\t-\n%s\n' "$(printf '2026-10-02T02:00:00+00:00\torg/a\tIssue\t3\t0\t0\t0\t-')" > "${dir}/session-denials.2026-10-02"
+
+    send_daily_digest_if_due "org"
+    # 10-02 against 10-01, then 10-03 (no file) against 10-02, then nothing for 10-04: neither
+    # 10-04 nor 10-03 has a file.
+    [ "$(cat "${digest_log}")" = "$(printf 'org 2026-10-02 1\norg 2026-10-03 2')" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-05" ]
+    [ ! -f "${dir}/last-digest-sent.tmp" ]
+}
+
+@test "send_daily_digest_if_due stops at a failed day during catch-up, keeps the marker there, and resumes from it" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() {
+        [ "$2" = "2026-10-03" ] && return 1
+        printf '%s %s\n' "$1" "$2" >> "${digest_log}"
+    }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-10-02\n' > "${dir}/last-digest-sent"
+    touch "${dir}/session-denials.2026-10-02" "${dir}/session-denials.2026-10-03" "${dir}/session-denials.2026-10-04"
+
+    run send_daily_digest_if_due "org"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Daily digest for org: sending the digest for 2026-10-03 failed"* ]]
+    [ "$(cat "${digest_log}")" = "org 2026-10-02" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-03" ]
+
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    send_daily_digest_if_due "org"
+    [ "$(cat "${digest_log}")" = "$(printf 'org 2026-10-02\norg 2026-10-03\norg 2026-10-04')" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-05" ]
+}
+
+@test "send_daily_digest_if_due catches up no further back than SESSION_DENIALS_RETENTION_DAYS" {
+    orchestrator_today() { printf '2026-10-05'; }
+    SESSION_DENIALS_RETENTION_DAYS=3
+    local days_log="${TEST_TMP}/days.log"
+    local digest_log="${TEST_TMP}/digest.log"
+    send_daily_digest_for_day() { printf '%s\n' "$3" >> "${days_log}"; }
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-08-01\n' > "${dir}/last-digest-sent"
+
+    run send_daily_digest_if_due "org"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"catching up from 2026-10-02 only"* ]]
+    [ "$(cat "${days_log}")" = "$(printf '2026-10-02\n2026-10-03\n2026-10-04')" ]
+}
+
+@test "send_daily_digest_if_due with no marker sends only yesterday's digest, not older days" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    touch "${dir}/session-denials.2026-10-01" "${dir}/session-denials.2026-10-02" "${dir}/session-denials.2026-10-04"
+
+    send_daily_digest_if_due "org"
+    [ "$(cat "${digest_log}")" = "org 2026-10-04" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-05" ]
+}
+
 @test "send_daily_digest_if_due sends nothing when neither yesterday nor the day before has a record, but still advances the marker" {
     orchestrator_today() { printf '2026-10-05'; }
     local digest_log="${TEST_TMP}/digest.log"

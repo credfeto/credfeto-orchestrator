@@ -801,6 +801,12 @@ date_days_before() {
     date -d "${day} -${days} day" +%Y-%m-%d
 }
 
+# Prints the date the given number of days after day (both YYYY-MM-DD).
+date_days_after() {
+    local day="$1" days="$2"
+    date -d "${day} +${days} day" +%Y-%m-%d
+}
+
 # Per-owner, per-day record of every agent session's denial outcome, read by the daily digest
 # (send_daily_digest_if_due) and by the tasks/healthcheck.md prompt.
 session_denials_file_path() {
@@ -899,12 +905,13 @@ daily_digest_marker_path() {
     printf '%s/%s/last-digest-sent' "${ORCHESTRATOR_STATE_DIR}" "${owner}"
 }
 
-# Lazy daily rollover: when the owner's digest marker is older than today (or missing), sends
-# yesterday's digest, compared with the day before, then advances the marker to today. Runs on
-# whichever tick first sees the new day, so no timer of its own is needed. A per-owner lock
-# (.digest.lock in the owner's state directory) is held while it runs, because oneshot's own lock
-# is keyed by --owner (or "_global" with none), so an --owner run and a no-owner run overlap; a
-# tick that finds the lock held skips the digest and leaves it to the holder.
+# Lazy daily rollover: when the owner's digest marker is older than today (or missing), sends one
+# digest for each day not yet reported, oldest first, each compared with the day before it, and
+# advances the marker after each day. Runs on whichever tick first sees the new day, so no timer of
+# its own is needed. A per-owner lock (.digest.lock in the owner's state directory) is held while
+# it runs, because oneshot's own lock is keyed by --owner (or "_global" with none), so an --owner
+# run and a no-owner run overlap; a tick that finds the lock held skips the digest and leaves it to
+# the holder.
 send_daily_digest_if_due() {
     local owner="$1" lock_file lock_fd
     lock_file="${ORCHESTRATOR_STATE_DIR}/${owner}/.digest.lock"
@@ -921,56 +928,81 @@ send_daily_digest_if_due() {
     return 0
 }
 
-# Summarises yesterday and the day before and sends the daily digest for yesterday. Arguments:
-# owner, yesterday, yesterday_file, day_before_file. Returns 1, after warning with the owner and
-# the failing step, when either summary or the send fails, so the caller leaves the marker alone
-# and the digest is retried on the next tick.
+# Summarises one day and the day before it and sends the daily digest for that day. Arguments:
+# owner, day, day_file, day_before_file. Returns 1, after warning with the owner and the failing
+# step, when either summary or the send fails, so the caller leaves the marker alone and the
+# digest is retried on the next tick.
 summarise_and_send_daily_digest() {
-    local owner="$1" yesterday="$2" yesterday_file="$3" day_before_file="$4" summary previous
-    if ! summary=$(summarise_session_denials_day "${yesterday_file}"); then
-        warn "Daily digest for ${owner}: failed to summarise ${yesterday_file}, will retry on the next tick"
+    local owner="$1" day="$2" day_file="$3" day_before_file="$4" summary previous
+    if ! summary=$(summarise_session_denials_day "${day_file}"); then
+        warn "Daily digest for ${owner}: failed to summarise ${day_file}, will retry on the next tick"
         return 1
     fi
     if ! previous=$(summarise_session_denials_day "${day_before_file}"); then
         warn "Daily digest for ${owner}: failed to summarise ${day_before_file}, will retry on the next tick"
         return 1
     fi
-    if ! notify_discord_daily_digest "${owner}" "${yesterday}" "${summary}" "${previous}"; then
-        warn "Daily digest for ${owner}: sending the digest for ${yesterday} failed, will retry on the next tick"
+    if ! notify_discord_daily_digest "${owner}" "${day}" "${summary}" "${previous}"; then
+        warn "Daily digest for ${owner}: sending the digest for ${day} failed, will retry on the next tick"
         return 1
     fi
     return 0
 }
 
-# The body of send_daily_digest_if_due, run with the owner's digest lock held. The marker is read
-# here, after the lock is taken, so a run that waited behind one that has just sent the digest
-# sees the new date and does nothing. No digest is sent when neither yesterday nor the day before
-# has a session-denials file, since there is nothing to report, but the marker still advances.
-# Otherwise the marker only moves once notify_discord_daily_digest succeeds (including when no
-# webhook is configured), so a Discord failure retries on the next tick and a day is never sent
-# twice. Old per-day files are pruned on every rollover attempt, whatever the send result.
+# Sends the digest for one day, then moves the marker to the day after it (the date that day's
+# digest is normally sent). No digest is sent when neither the day nor the day before has a
+# session-denials file, since there is nothing to report, but the marker still moves. Otherwise
+# the marker only moves once notify_discord_daily_digest succeeds (including when no webhook is
+# configured). Returns 1, leaving the marker on this day, when the day cannot be worked out or
+# sent, so the caller stops and the next tick resumes from this day. Arguments: owner, marker, day.
+send_daily_digest_for_day() {
+    local owner="$1" marker="$2" day="$3" day_before next_day day_file day_before_file
+    day_before=$(date_days_before "${day}" 1) || { warn "Daily digest for ${owner}: could not work out the day before ${day}, will retry on the next tick"; return 1; }
+    next_day=$(date_days_after "${day}" 1) || { warn "Daily digest for ${owner}: could not work out the day after ${day}, will retry on the next tick"; return 1; }
+    day_file=$(session_denials_file_path "${owner}" "${day}")
+    day_before_file=$(session_denials_file_path "${owner}" "${day_before}")
+    if [ -f "${day_file}" ] || [ -f "${day_before_file}" ]; then
+        summarise_and_send_daily_digest "${owner}" "${day}" "${day_file}" "${day_before_file}" || return 1
+    else
+        info "Daily digest for ${owner}: no session record for ${day} or ${day_before}, nothing to send"
+    fi
+    mkdir -p "${marker%/*}" 2>/dev/null
+    { printf '%s\n' "${next_day}" > "${marker}.tmp" && mv "${marker}.tmp" "${marker}"; } 2>/dev/null \
+        || warn "Failed to write the daily digest marker ${marker}: the digest may be sent again"
+    return 0
+}
+
+# The body of send_daily_digest_if_due, run with the owner's digest lock held. The marker holds
+# the date the last digest was sent, which is the day after the last day reported, so the first
+# day still due is the marker's own date. The marker is read here, after the lock is taken, so a
+# run that waited behind one that has just sent the digest sees the new date and does nothing.
+# Each day from the marker's date up to and including yesterday gets its own digest, oldest
+# first, and the marker moves after each one, so a crash or a failed send part-way through
+# resumes from the first day not yet reported and a day is never sent twice. With no marker (or
+# an unreadable one) only yesterday is due. The catch-up reaches back at most
+# SESSION_DENIALS_RETENTION_DAYS days, since older per-day files have been pruned. Old per-day
+# files are pruned on every rollover attempt, whatever the send result.
 send_daily_digest_under_lock() {
-    local owner="$1" today marker last_sent="" yesterday day_before yesterday_file day_before_file sent=1
+    local owner="$1" today marker last_sent="" earliest day
     today=$(orchestrator_today) || { warn "Daily digest for ${owner}: could not work out today's date, skipping the digest"; return 0; }
     marker=$(daily_digest_marker_path "${owner}")
     [ -f "${marker}" ] && read -r last_sent < "${marker}"
-    if [[ "${last_sent}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && ! [[ "${last_sent}" < "${today}" ]]; then
-        return 0
-    fi
-    yesterday=$(date_days_before "${today}" 1) || { warn "Daily digest for ${owner}: could not work out the day before ${today}, skipping the digest"; return 0; }
-    day_before=$(date_days_before "${today}" 2) || { warn "Daily digest for ${owner}: could not work out two days before ${today}, skipping the digest"; return 0; }
-    yesterday_file=$(session_denials_file_path "${owner}" "${yesterday}")
-    day_before_file=$(session_denials_file_path "${owner}" "${day_before}")
-    if [ -f "${yesterday_file}" ] || [ -f "${day_before_file}" ]; then
-        summarise_and_send_daily_digest "${owner}" "${yesterday}" "${yesterday_file}" "${day_before_file}" || sent=0
+    if [[ "${last_sent}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        if ! [[ "${last_sent}" < "${today}" ]]; then
+            return 0
+        fi
+        day="${last_sent}"
     else
-        info "Daily digest for ${owner}: no session record for ${yesterday} or ${day_before}, nothing to send"
+        day=$(date_days_before "${today}" 1) || { warn "Daily digest for ${owner}: could not work out the day before ${today}, skipping the digest"; prune_session_denials_files "${owner}" "${today}"; return 0; }
     fi
-    if [ "${sent}" -eq 1 ]; then
-        mkdir -p "${marker%/*}" 2>/dev/null
-        { printf '%s\n' "${today}" > "${marker}.tmp" && mv "${marker}.tmp" "${marker}"; } 2>/dev/null \
-            || warn "Failed to write the daily digest marker ${marker}: the digest may be sent again"
+    if earliest=$(date_days_before "${today}" "${SESSION_DENIALS_RETENTION_DAYS}") && [[ "${day}" < "${earliest}" ]]; then
+        info "Daily digest for ${owner}: the last digest went out on ${last_sent}, catching up from ${earliest} only (SESSION_DENIALS_RETENTION_DAYS)"
+        day="${earliest}"
     fi
+    while [[ "${day}" < "${today}" ]]; do
+        send_daily_digest_for_day "${owner}" "${marker}" "${day}" || break
+        day=$(date_days_after "${day}" 1) || break
+    done
     prune_session_denials_files "${owner}" "${today}"
 }
 
