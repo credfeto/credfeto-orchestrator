@@ -13,8 +13,8 @@
 #   - scratch space is a fresh directory under $XDG_RUNTIME_DIR, mounted at /workspace/tmp;
 #   - the persistent Claude state directories (sessions, session-env, plans, cache, backups)
 #     are shared with oneshot under ${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/
-#     <repo>, and conversation transcripts (~/.claude/projects) are kept in that
-#     repository's transcripts/_shared directory (mode 0700), so a later launch can resume
+#     <repo>/claude, and conversation transcripts (~/.claude/projects) are kept alongside it
+#     in <owner>/<repo>/transcripts/_shared (mode 0700), so a later launch can resume
 #     any session modified in the last 7 days; older files are purged before each launch
 #     (lib/podman prune_transcripts);
 #   - the git identity is the one git itself would use in that checkout (includeIf and
