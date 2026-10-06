@@ -17335,7 +17335,7 @@ use_file_backed_marker_and_pr_states() {
     [[ "${output}" == *"git -C /w reset HEAD"* ]]
 }
 
-# --- session transcripts: per-item mount, closed markers and retention purge -----------------
+# --- session transcripts: per-item mount and age-based retention purge ----------------------
 
 stub_podman_run_logging_args() {
     local args_log="$1"
@@ -17347,17 +17347,16 @@ stub_podman_run_logging_args() {
         "printf '{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\\n'"
 }
 
-# Writes a closed marker recording a closure the given number of days ago.
-write_closed_marker_days_ago() {
-    local item_name="$1" days="$2"
-    mkdir -p "${SESSION_BASE_DIR}"
-    printf '%s\n' "$(( $(date +%s) - days * 86400 ))" > "${SESSION_BASE_DIR}/${item_name}.closed"
-}
-
 make_transcript_dir() {
     local item_name="$1"
     mkdir -p "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo"
     printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo/session.jsonl"
+}
+
+# Sets every file under an item's transcript directory (not the directories) to the given age.
+age_transcript_files() {
+    local item_name="$1" days="$2"
+    find "${SESSION_BASE_DIR}/transcripts/${item_name}" -type f -exec touch -d "${days} days ago" {} +
 }
 
 # main mocks for Issue 10, open and not Blocked, pivoting to PR 99; the caller stubs the PR's state.
@@ -17438,63 +17437,14 @@ stub_pr_merged() {
     [ "$(grep -cx 'run' "${args_log}")" -eq 0 ]
 }
 
-@test "invoke_claude purges an expired closed item's transcripts before launching" {
+@test "invoke_claude purges an idle item's transcripts before launching" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
     make_transcript_dir "Issue_5"
-    write_closed_marker_days_ago "Issue_5" 8
+    age_transcript_files "Issue_5" 15
     invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_5" ]
     [ -d "${SESSION_BASE_DIR}/transcripts/Issue_42" ]
-}
-
-@test "mark_item_closed records the current unix time" {
-    local before after recorded
-    make_transcript_dir "Issue_42"
-    before=$(date +%s)
-    mark_item_closed "Issue" "42"
-    after=$(date +%s)
-    recorded=$(cat "${SESSION_BASE_DIR}/Issue_42.closed")
-    [ "${recorded}" -ge "${before}" ]
-    [ "${recorded}" -le "${after}" ]
-}
-
-@test "mark_item_closed never overwrites an existing marker, so repeated observations do not delay the purge" {
-    make_transcript_dir "Issue_42"
-    printf '123\n' > "${SESSION_BASE_DIR}/Issue_42.closed"
-    mark_item_closed "Issue" "42"
-    [ "$(cat "${SESSION_BASE_DIR}/Issue_42.closed")" = "123" ]
-}
-
-@test "mark_item_closed writes nothing for an item with no transcript directory, so no marker is left that prune_transcripts would never remove" {
-    mkdir -p "${SESSION_BASE_DIR}"
-    mark_item_closed "PullRequest" "7"
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_7.closed" ]
-}
-
-@test "mark_item_closed warns and still succeeds when the marker cannot be written" {
-    make_transcript_dir "Issue_42"
-    mkdir -p "${SESSION_BASE_DIR}/Issue_42.closed"
-    run mark_item_closed "Issue" "42"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to write closed marker for Issue #42, so its transcripts will not be purged until a later tick writes it"* ]]
-    [ -d "${SESSION_BASE_DIR}/Issue_42.closed" ]
-}
-
-@test "clear_closed_marker removes only the .closed marker, not the other closed-issue markers" {
-    mkdir -p "${SESSION_BASE_DIR}"
-    touch "${SESSION_BASE_DIR}/Issue_42.closed" \
-        "${SESSION_BASE_DIR}/Issue_42.closed-pr-tagged" \
-        "${SESSION_BASE_DIR}/Issue_42.closed-takeover-checked"
-    clear_closed_marker "Issue" "42"
-    [ ! -e "${SESSION_BASE_DIR}/Issue_42.closed" ]
-    [ -f "${SESSION_BASE_DIR}/Issue_42.closed-pr-tagged" ]
-    [ -f "${SESSION_BASE_DIR}/Issue_42.closed-takeover-checked" ]
-}
-
-@test "clear_closed_marker succeeds when there is no marker" {
-    run clear_closed_marker "Issue" "42"
-    [ "${status}" -eq 0 ]
 }
 
 @test "prune_transcripts is a no-op that succeeds when the transcripts tree does not exist" {
@@ -17504,43 +17454,96 @@ stub_pr_merged() {
     [ ! -e "${SESSION_BASE_DIR}" ]
 }
 
-@test "prune_transcripts removes an item closed more than the retention window ago, with its marker" {
+@test "prune_transcripts keeps an item directory with a recently modified file" {
     make_transcript_dir "Issue_10"
-    write_closed_marker_days_ago "Issue_10" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts keeps an item directory whose files are older than the shared window but within the item window" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes an item directory whose files are all older than the item window, whatever the directory's own mtime" {
+    make_transcript_dir "Issue_10"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/other.jsonl"
+    age_transcript_files "Issue_10" 15
+    # The directories stay fresh: appending to a transcript does not change them, so they are
+    # not evidence of recent work.
+    touch "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo"
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
 }
 
-@test "prune_transcripts keeps an item closed less than the retention window ago" {
-    make_transcript_dir "PullRequest_11"
-    write_closed_marker_days_ago "PullRequest_11" 6
+@test "prune_transcripts keeps an item directory with one recent file among old ones" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/new.jsonl"
     run prune_transcripts
     [ "${status}" -eq 0 ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_11/-workspace-repo/session.jsonl" ]
-    [ -f "${SESSION_BASE_DIR}/PullRequest_11.closed" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/new.jsonl" ]
 }
 
-@test "prune_transcripts keeps an item with no closed marker, however old its files are" {
-    make_transcript_dir "Issue_12"
-    touch -d '30 days ago' "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo/session.jsonl" \
-        "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo" "${SESSION_BASE_DIR}/transcripts/Issue_12"
+@test "prune_transcripts ages an item directory with no files by its own mtime" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_11/-workspace-repo" \
+        "${SESSION_BASE_DIR}/transcripts/Issue_12"
+    touch -d '15 days ago' "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_11"
     run prune_transcripts
     [ "${status}" -eq 0 ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_12/-workspace-repo/session.jsonl" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_11" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_12" ]
 }
 
-@test "prune_transcripts ages a marker with unreadable content by its mtime" {
-    make_transcript_dir "Issue_13"
-    make_transcript_dir "Issue_14"
-    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_13.closed"
-    touch -d '8 days ago' "${SESSION_BASE_DIR}/Issue_13.closed"
-    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_14.closed"
+@test "prune_transcripts does not follow a link inside an item directory when ageing it, and never deletes through it" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    local outside="${TEST_TMP}/outside"
+    mkdir -p "${outside}"
+    printf 'keep\n' > "${outside}/fresh.jsonl"
+    ln -s "${outside}" "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/elsewhere"
     run prune_transcripts
     [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_13" ]
-    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_14" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ -f "${outside}/fresh.jsonl" ]
+}
+
+@test "prune_transcripts never fails the run when a purge cannot delete" {
+    make_transcript_dir "Issue_15"
+    age_transcript_files "Issue_15" 15
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_with_failing_deletes() {
+        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 - will retry on the next launch"* ]]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_15" ]
+}
+
+@test "prune_transcripts warns and keeps an item directory when its age cannot be read" {
+    make_transcript_dir "Issue_15"
+    age_transcript_files "Issue_15" 15
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
+    # A failing find prints nothing, which must not be read as "nothing recent".
+    prune_with_failing_find() {
+        find() { return 1; }
+        prune_transcripts
+    }
+    run prune_with_failing_find
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to read transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 to check their age - keeping them until the next launch"* ]]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_15/-workspace-repo/session.jsonl" ]
 }
 
 @test "prune_transcripts age-purges old files from the shared directory and keeps recent ones" {
@@ -17550,8 +17553,6 @@ stub_pr_merged() {
     printf '{}\n' > "${shared}/-workspace-repo/new.jsonl"
     printf '{}\n' > "${shared}/-old-cwd/old.jsonl"
     touch -d '8 days ago' "${shared}/-workspace-repo/old.jsonl" "${shared}/-old-cwd/old.jsonl"
-    # A closed marker never applies to the shared directory, even if one somehow exists.
-    write_closed_marker_days_ago "_shared" 30
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ ! -e "${shared}/-workspace-repo/old.jsonl" ]
@@ -17568,206 +17569,6 @@ stub_pr_merged() {
     [ "${status}" -eq 0 ]
     [ ! -e "${shared}/-stale-cwd" ]
     [ -d "${shared}/-fresh-cwd" ]
-}
-
-@test "prune_transcripts never fails the run when a purge cannot delete" {
-    make_transcript_dir "Issue_15"
-    write_closed_marker_days_ago "Issue_15" 8
-    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
-    # Defined inside the function so the failing rm/find only exist in run's subshell and
-    # never reach teardown, which needs the real rm. Only the directory purge (rm -rf) fails,
-    # so a marker removed regardless would show up below.
-    prune_with_failing_deletes() {
-        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
-        find() { return 1; }
-        prune_transcripts
-    }
-    run prune_with_failing_deletes
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 - will retry on the next launch"* ]]
-    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_15" ]
-    # Kept so the next launch retries the purge instead of the directory becoming permanent.
-    [ -f "${SESSION_BASE_DIR}/Issue_15.closed" ]
-}
-
-@test "main writes a closed marker for an Issue observed closed with no PR" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_164"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/Issue_164.closed")" =~ ^[0-9]+$ ]]
-}
-
-@test "main writes a closed marker for an Issue observed closed while its PR is still open" {
-    setup_main_pivot_mocks
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_10"
-    make_transcript_dir "PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-}
-
-@test "main does not mark an Issue closed while the open PR it pivots to shares its transcript directory" {
-    setup_main_pivot_mocks
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Issue #10 in org/repo is no longer open"* ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-}
-
-@test "main removes an existing closed marker from an Issue whose directory the open PR it pivots to shares, so the PR's transcripts survive the purge" {
-    setup_main_pivot_mocks
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    write_closed_marker_days_ago "Issue_10" 8
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
-}
-
-@test "main still marks a closed Issue when the open PR's transcripts are linked to another Issue" {
-    setup_main_pivot_mocks
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_10"
-    make_transcript_dir "Issue_20"
-    ln -s "Issue_20" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_20.closed" ]
-}
-
-@test "main marks a closed Issue with a linked PR once no open PR remains, so their shared transcripts are purged" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/Issue_10.closed")" =~ ^[0-9]+$ ]]
-}
-
-@test "pr_transcripts_linked_to_issue succeeds only for a link to that Issue's directory" {
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    ln -s "Issue_20" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
-    make_transcript_dir "PullRequest_101"
-    pr_transcripts_linked_to_issue "99" "10"
-    run pr_transcripts_linked_to_issue "99" "1"
-    [ "${status}" -ne 0 ]
-    run pr_transcripts_linked_to_issue "100" "10"
-    [ "${status}" -ne 0 ]
-    run pr_transcripts_linked_to_issue "101" "101"
-    [ "${status}" -ne 0 ]
-    run pr_transcripts_linked_to_issue "102" "10"
-    [ "${status}" -ne 0 ]
-}
-
-@test "main writes a closed marker for the PR an Issue pivots to when that PR has merged" {
-    setup_main_pivot_mocks
-    stub_pr_merged
-    make_transcript_dir "Issue_10"
-    make_transcript_dir "PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #99 in org/repo is no longer open"* ]]
-    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
-}
-
-@test "main writes a closed marker for a PullRequest item observed closed" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    fetch_pr_json() { printf '{"state":"CLOSED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    make_transcript_dir "PullRequest_5"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"PR #5 in org/repo is no longer open"* ]]
-    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.closed")" =~ ^[0-9]+$ ]]
-}
-
-@test "main does not refresh an existing closed marker on a later tick" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    stub_pr_merged
-    make_transcript_dir "PullRequest_5"
-    printf '123\n' > "${SESSION_BASE_DIR}/PullRequest_5.closed"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ "$(cat "${SESSION_BASE_DIR}/PullRequest_5.closed")" = "123" ]
-}
-
-@test "main clears the closed marker of an Issue observed open again, even while it is Blocked" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '[{"id":164,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]\n'
-    }
-    find_open_nonblocked_pr_for_repo() { printf ''; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[{"name":"Blocked"}],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 0; }
-    write_closed_marker_days_ago "Issue_164" 8
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_164.closed" ]
-}
-
-@test "main clears the closed markers of an Issue and its PR observed open on the pivot path" {
-    setup_main_pivot_mocks
-    stub_pr_open_blocked
-    write_closed_marker_days_ago "Issue_10" 8
-    write_closed_marker_days_ago "PullRequest_99" 8
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-}
-
-@test "main clears the closed marker of a PullRequest item observed open again" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    stub_pr_open_blocked
-    write_closed_marker_days_ago "PullRequest_5" 8
-
-    run main
-    [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_5.closed" ]
 }
 
 # --- session transcripts: pivoted PR linked to its Issue's directory --------------------------
@@ -17965,18 +17766,6 @@ stub_pr_merged() {
     [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
 }
 
-@test "main writes the closed marker of a merged pivoted PR on its link, not on the Issue" {
-    setup_main_pivot_mocks
-    stub_pr_merged
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-
-    run main
-    [ "${status}" -eq 0 ]
-    [[ "$(cat "${SESSION_BASE_DIR}/PullRequest_99.closed")" =~ ^[0-9]+$ ]]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
-}
-
 @test "invoke_claude mounts a pivoted PR's linked transcript directory and tightens the Issue directory it points at" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
@@ -17992,58 +17781,49 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts removes a dangling link with its marker" {
+@test "prune_transcripts removes a dangling link" {
     mkdir -p "${SESSION_BASE_DIR}/transcripts"
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    write_closed_marker_days_ago "PullRequest_99" 1
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
 }
 
 @test "prune_transcripts removes a link left dangling by the same pass's purge of its Issue" {
     make_transcript_dir "Issue_10"
-    write_closed_marker_days_ago "Issue_10" 8
+    age_transcript_files "Issue_10" 15
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
-    [ ! -e "${SESSION_BASE_DIR}/Issue_10.closed" ]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
 }
 
-@test "prune_transcripts keeps a live link with no marker or an unexpired one, and its target" {
+@test "prune_transcripts keeps a live link and its target's files, however old the link is" {
     make_transcript_dir "Issue_10"
-    make_transcript_dir "Issue_11"
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    ln -s "Issue_11" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
-    write_closed_marker_days_ago "PullRequest_100" 6
+    touch -h -d '30 days ago' "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
-    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_100")" = "Issue_11" ]
-    [ -f "${SESSION_BASE_DIR}/PullRequest_100.closed" ]
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_11/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts removes only a live link and its own expired marker, never the target's files" {
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    write_closed_marker_days_ago "PullRequest_99" 8
+@test "prune_transcripts never deletes through a live link to a directory outside the transcripts tree" {
+    local outside="${TEST_TMP}/outside"
+    mkdir -p "${outside}" "${SESSION_BASE_DIR}/transcripts"
+    printf '{}\n' > "${outside}/old.jsonl"
+    touch -d '30 days ago' "${outside}/old.jsonl" "${outside}"
+    ln -s "${outside}" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
     run prune_transcripts
     [ "${status}" -eq 0 ]
-    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
-    [ ! -e "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
-    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${outside}/old.jsonl" ]
 }
 
-@test "prune_transcripts warns and keeps the marker when a link cannot be removed" {
+@test "prune_transcripts warns when a dangling link cannot be removed" {
     mkdir -p "${SESSION_BASE_DIR}/transcripts"
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    write_closed_marker_days_ago "PullRequest_99" 8
     # Defined inside the function so the failing rm only exists in run's subshell and never
     # reaches teardown, which needs the real rm.
     prune_with_failing_link_delete() {
@@ -18054,35 +17834,20 @@ stub_pr_merged() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Failed to remove transcript link at ${SESSION_BASE_DIR}/transcripts/PullRequest_99 - will retry on the next launch"* ]]
     [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
-    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
 }
 
-@test "prune_transcripts never calls gh, including when it removes links" {
+@test "prune_transcripts never calls gh, including when it removes directories and links" {
     local gh_log="${TEST_TMP}/gh_calls"
     make_stub gh "printf '%s\n' \"\$*\" >> \"${gh_log}\"; exit 1"
     make_transcript_dir "Issue_10"
-    write_closed_marker_days_ago "Issue_10" 8
+    age_transcript_files "Issue_10" 15
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
     make_transcript_dir "Issue_11"
     ln -s "Issue_11" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
-    write_closed_marker_days_ago "PullRequest_100" 8
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ ! -e "${gh_log}" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
-    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_100" ]
-}
-
-@test "prune_transcripts keeps an item and a live link whose marker time cannot be read at all" {
-    make_transcript_dir "Issue_10"
-    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
-    printf 'garbage\n' > "${SESSION_BASE_DIR}/Issue_10.closed"
-    printf 'garbage\n' > "${SESSION_BASE_DIR}/PullRequest_99.closed"
-    make_stub stat "exit 1"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
-    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
-    [ -f "${SESSION_BASE_DIR}/Issue_10.closed" ]
-    [ -f "${SESSION_BASE_DIR}/PullRequest_99.closed" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_100" ]
 }

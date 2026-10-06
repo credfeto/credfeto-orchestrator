@@ -364,53 +364,43 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
-# Prints the unix time recorded in a closed marker, falling back to the file's own mtime when the
-# content is not a timestamp, so a corrupt marker still ages out instead of pinning its
-# transcripts forever.
-closed_marker_unix_time() {
-    local marker="$1" recorded
-    { recorded=$(< "${marker}"); } 2>/dev/null
-    if [[ "${recorded}" =~ ^[0-9]+$ ]]; then
-        printf '%s' "${recorded}"
+# Succeeds when a work item's transcript directory has been idle for more than retention_mins:
+# no file under it was modified within that time, or, when it contains no file at all (only empty
+# subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
+# ignored, because appending to a transcript does not change it. find runs without following
+# links (its default), so a link inside the directory never counts. The age test is the exact
+# complement of the shared directory's -mmin "+N" rule. Returns 2 when find cannot read the
+# directory, so the caller keeps it rather than reading empty output as idle.
+transcript_item_idle() {
+    local dir="$1" retention_mins="$2" any_file recent
+    any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
+    if [ -z "${any_file}" ]; then
+        recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
     else
-        stat -c %Y "${marker}" 2>/dev/null
+        recent=$(find "${dir}" -type f ! -mmin "+${retention_mins}" -print -quit 2>/dev/null) || return 2
     fi
+    [ -z "${recent}" ]
 }
 
-# Prints the closed marker path for a transcript entry named <ItemType>_<id>.
-transcript_entry_closed_marker() {
-    local item_name="${1##*/}"
-    closed_marker_file_path "${item_name%_*}" "${item_name##*_}"
-}
-
-# Succeeds when the closed marker exists and records a closure more than retention_secs before
-# now_unix.
-closed_marker_expired() {
-    local marker="$1" now_unix="$2" retention_secs="$3" closed_unix
-    [ -f "${marker}" ] || return 1
-    closed_unix=$(closed_marker_unix_time "${marker}")
-    [[ "${closed_unix}" =~ ^[0-9]+$ ]] || return 1
-    [ $(( now_unix - closed_unix )) -gt "${retention_secs}" ]
-}
-
-# Removes the transcript directory (and its closed marker) of every work item observed closed
-# more than TRANSCRIPT_RETENTION_DAYS ago, and every file in the shared no-item directory not
-# modified for that long. An item with no closed marker is kept: only oneshot observing the
-# closure writes one, and nothing here queries GitHub, because this runs before every container
-# launch and must never fail or stall the run. Not gated on PRUNE_DANGLING_IMAGES: that protects
-# a developer's own image store, whereas this tree is orchestrator state, and the shared directory
-# interactive uses would otherwise grow without bound.
+# Removes the transcript directory of every work item idle for more than
+# TRANSCRIPT_ITEM_RETENTION_DAYS (transcript_item_idle), every link to a directory that no longer
+# exists, and every file in the shared no-item directory not modified for TRANSCRIPT_RETENTION_DAYS.
+# Age-based rather than tied to an item closing, because oneshot never observes most closures (a
+# merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
+# queries GitHub, because this runs before every container launch and must never fail or stall
+# the run. Not gated on PRUNE_DANGLING_IMAGES: that protects a developer's own image store,
+# whereas this tree is orchestrator state, and the shared directory interactive uses would
+# otherwise grow without bound.
 # A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
-# lib/state) is never followed: only the link and its own marker are removed, once its target is
-# gone or that marker has expired, and the target is purged only by its own marker.
+# lib/state) is never followed and never removed while its target exists: the PR's sessions write
+# through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
 prune_transcripts() {
     local transcripts_dir
     transcripts_dir=$(transcripts_root_path)
     [ -d "${transcripts_dir}" ] || return 0
 
-    local retention_secs=$(( TRANSCRIPT_RETENTION_DAYS * 86400 ))
-    local now_unix entry marker
-    now_unix=$(date +%s)
+    local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
+    local entry idle_status
     # Real directories first, so a link this pass leaves dangling by purging its target is
     # removed by the link pass below in the same run.
     for entry in "${transcripts_dir}"/*; do
@@ -418,31 +408,25 @@ prune_transcripts() {
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
         [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
-        marker=$(transcript_entry_closed_marker "${entry}")
-        closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}" || continue
-        # The marker goes only once the directory has: without it the item is never purged,
-        # so keeping it on failure is what makes the next launch retry.
-        if rm -rf "${entry}" 2>/dev/null; then
-            rm -f "${marker}" 2>/dev/null || true
-        else
-            warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+        idle_status=0
+        transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
+        if [ "${idle_status}" -eq 2 ]; then
+            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+            continue
         fi
+        [ "${idle_status}" -eq 0 ] || continue
+        rm -rf "${entry}" 2>/dev/null \
+            || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
     done
 
     for entry in "${transcripts_dir}"/*; do
         [ -L "${entry}" ] || continue
-        marker=$(transcript_entry_closed_marker "${entry}")
         # -e follows the link, so it is false only when the target is missing.
-        if [ -e "${entry}" ] && ! closed_marker_expired "${marker}" "${now_unix}" "${retention_secs}"; then
-            continue
-        fi
+        [ -e "${entry}" ] && continue
         # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
         # never anything it points at.
-        if rm -f "${entry}" 2>/dev/null; then
-            rm -f "${marker}" 2>/dev/null || true
-        else
-            warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
-        fi
+        rm -f "${entry}" 2>/dev/null \
+            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
     done
 
     local shared_dir

@@ -228,21 +228,21 @@ on the next tick regardless of the general fingerprint or a "settled"/terminal P
 doesn't, that predicate itself is the place to check first. Delete the file to force this state
 back to "nothing seen yet" (same idea as deleting `.fingerprint`, above).
 
-### 6a - Session transcripts and closed markers
+### 6a - Session transcripts
 
 Every agent session's full conversation is kept on the host, one directory per work item, mode `0700` (see `docs/agent-container.md` § "Session transcripts"):
 
 ```bash
 ls -la ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/Issue_<n> -name '*.jsonl' | sort
-find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.closed' -exec echo "=== {} ===" \; -exec cat {} \;
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/Issue_<n> -type f -printf '%TY-%Tm-%Td %TH:%TM %p\n' | sort | tail -n 1
 ```
 
-- `transcripts/<ItemType>_<n>/` - every session `oneshot` has run for that item, as Claude Code JSONL. This is the first place to read when you need to know what an agent actually did, rather than inferring it from comments and commits.
+- `transcripts/<ItemType>_<n>/` - every session `oneshot` has run for that item in the last 14 days of activity, as Claude Code JSONL. This is the first place to read when you need to know what an agent actually did, rather than inferring it from comments and commits.
 - `transcripts/_shared/` - sessions with no work item (`interactive`). Files not modified for 7 days are deleted before each launch.
-- `<ItemType>_<n>.closed` - unix time `oneshot` first saw the item closed or merged; never refreshed while the item stays closed, removed whenever the item is seen open. Seven days after that time `prune_transcripts` (`lib/podman`) deletes the item's transcript directory and the marker. The glob `*.closed` does not match the unrelated `Issue_<n>.closed-pr-tagged` / `.closed-takeover-checked` markers. No marker is written for an item with no transcript directory.
-- `transcripts/PullRequest_<m>` as a symlink - a PR an Issue pivoted to, linked to `Issue_<n>` so its sessions are in the Issue's directory; read them there. `ls -la` shows the target. A link whose target is missing is deleted by the next purge, and the purge never follows a link, so it only ever deletes the link and the link's own `.closed` marker.
-- Transcripts that never go away belong to an item with no `.closed` marker (one closed while `oneshot` never looked at it again), or to a repository that has not launched a container since the marker expired, because the purge only runs before a launch for that repository. Both are expected; delete the directory by hand if it matters.
+- Before each launch `prune_transcripts` (`lib/podman`) deletes an item's whole transcript directory once no file in it has been modified for 14 days (`TRANSCRIPT_ITEM_RETENTION_DAYS`), whether the item is open or closed; the third command above shows the newest file, which is what that age is measured from. A directory with no files is aged by its own modification time.
+- `transcripts/PullRequest_<m>` as a symlink - a PR an Issue pivoted to, linked to `Issue_<n>` so its sessions are in the Issue's directory; read them there. `ls -la` shows the target. A live link is never deleted on its own; a link whose target is missing is deleted by the next purge, and the purge never follows a link, so it only ever deletes the link itself.
+- Transcripts missing for an item that is still open mean it had no session for 14 days; that is expected, since `oneshot` never resumes a session. Transcripts older than 14 days that are still present belong to a repository that has not launched a container since, because the purge only runs before a launch for that repository; delete the directory by hand if it matters.
 - An empty item directory after a session ran means Claude Code wrote no transcript; check the mount is present in the `podman run` arguments (`/home/developer/.claude/projects:rw`) before suspecting anything else.
 
 ### 7 — Podman containers
