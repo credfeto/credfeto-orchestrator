@@ -852,6 +852,27 @@ send_daily_digest_if_due() {
     return 0
 }
 
+# Summarises yesterday and the day before and sends the daily digest for yesterday. Arguments:
+# owner, yesterday, yesterday_file, day_before_file. Returns 1, after warning with the owner and
+# the failing step, when either summary or the send fails, so the caller leaves the marker alone
+# and the digest is retried on the next tick.
+summarise_and_send_daily_digest() {
+    local owner="$1" yesterday="$2" yesterday_file="$3" day_before_file="$4" summary previous
+    if ! summary=$(summarise_session_denials_day "${yesterday_file}"); then
+        warn "Daily digest for ${owner}: failed to summarise ${yesterday_file}, will retry on the next tick"
+        return 1
+    fi
+    if ! previous=$(summarise_session_denials_day "${day_before_file}"); then
+        warn "Daily digest for ${owner}: failed to summarise ${day_before_file}, will retry on the next tick"
+        return 1
+    fi
+    if ! notify_discord_daily_digest "${owner}" "${yesterday}" "${summary}" "${previous}"; then
+        warn "Daily digest for ${owner}: sending the digest for ${yesterday} failed, will retry on the next tick"
+        return 1
+    fi
+    return 0
+}
+
 # The body of send_daily_digest_if_due, run with the owner's digest lock held. The marker is read
 # here, after the lock is taken, so a run that waited behind one that has just sent the digest
 # sees the new date and does nothing. No digest is sent when neither yesterday nor the day before
@@ -860,7 +881,7 @@ send_daily_digest_if_due() {
 # webhook is configured), so a Discord failure retries on the next tick and a day is never sent
 # twice. Old per-day files are pruned on every rollover attempt, whatever the send result.
 send_daily_digest_under_lock() {
-    local owner="$1" today marker last_sent="" yesterday day_before yesterday_file day_before_file summary previous
+    local owner="$1" today marker last_sent="" yesterday day_before yesterday_file day_before_file sent=1
     today=$(orchestrator_today) || { warn "Daily digest for ${owner}: could not work out today's date, skipping the digest"; return 0; }
     marker=$(daily_digest_marker_path "${owner}")
     [ -f "${marker}" ] && read -r last_sent < "${marker}"
@@ -872,27 +893,15 @@ send_daily_digest_under_lock() {
     yesterday_file=$(session_denials_file_path "${owner}" "${yesterday}")
     day_before_file=$(session_denials_file_path "${owner}" "${day_before}")
     if [ -f "${yesterday_file}" ] || [ -f "${day_before_file}" ]; then
-        if ! summary=$(summarise_session_denials_day "${yesterday_file}"); then
-            warn "Daily digest for ${owner}: failed to summarise ${yesterday_file}, will retry on the next tick"
-            prune_session_denials_files "${owner}" "${today}"
-            return 0
-        fi
-        if ! previous=$(summarise_session_denials_day "${day_before_file}"); then
-            warn "Daily digest for ${owner}: failed to summarise ${day_before_file}, will retry on the next tick"
-            prune_session_denials_files "${owner}" "${today}"
-            return 0
-        fi
-        if ! notify_discord_daily_digest "${owner}" "${yesterday}" "${summary}" "${previous}"; then
-            warn "Daily digest for ${owner}: sending the digest for ${yesterday} failed, will retry on the next tick"
-            prune_session_denials_files "${owner}" "${today}"
-            return 0
-        fi
+        summarise_and_send_daily_digest "${owner}" "${yesterday}" "${yesterday_file}" "${day_before_file}" || sent=0
     else
         info "Daily digest for ${owner}: no session record for ${yesterday} or ${day_before}, nothing to send"
     fi
-    mkdir -p "${marker%/*}" 2>/dev/null
-    { printf '%s\n' "${today}" > "${marker}.tmp" && mv "${marker}.tmp" "${marker}"; } 2>/dev/null \
-        || warn "Failed to write the daily digest marker ${marker}: the digest may be sent again"
+    if [ "${sent}" -eq 1 ]; then
+        mkdir -p "${marker%/*}" 2>/dev/null
+        { printf '%s\n' "${today}" > "${marker}.tmp" && mv "${marker}.tmp" "${marker}"; } 2>/dev/null \
+            || warn "Failed to write the daily digest marker ${marker}: the digest may be sent again"
+    fi
     prune_session_denials_files "${owner}" "${today}"
 }
 

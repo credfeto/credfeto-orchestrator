@@ -40,8 +40,8 @@ run_claude_fresh() {
                 "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
             # Claude did run, so this is a real session and gets its line in the per-day record
             # before the die; there is no result to read, so it is recorded with no denials, no
-            # quit and not stalled.
-            reset_session_outcome
+            # quit and not stalled. The SESSION_* globals still hold the reset invoke_claude did
+            # before calling this function, so nothing needs clearing here.
             record_session_outcome "${item_type}" "${item_id}" 0
             die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
         fi
@@ -288,12 +288,12 @@ claude_result_indicates_tool_denied_quit() {
 
 # Prints the names of the tool calls denied in a Claude JSON result, comma-separated and
 # deduplicated, or nothing when there were none: the program a denied Bash command runs, or the
-# tool name for any other tool. For Bash, leading NAME=value assignments, bare "(" or "{" words
-# and wrapper words (env, sudo, command, exec, nohup, time, xargs) are skipped, since an
-# assignment can carry a token, a
-# leading "(", "{" or quote is dropped, and only the basename of a path is kept. Anything that is
-# still not a plain short name becomes "(other)" rather than being trimmed into shape, so no
-# secret, path or argument can reach the tab-separated state line or a Discord field.
+# tool name for any other tool. For Bash, leading NAME=value assignments are skipped because an
+# assignment can carry a token. Bare "(" or "{" words and wrapper words (env, sudo, command, exec,
+# nohup, time, xargs) are skipped too. A leading "(", "{" or quote is then dropped from the word
+# that is left, and only the basename of a path is kept. Anything that is still not a plain short
+# name becomes "(other)" rather than being trimmed into shape, so no secret, path or argument can
+# reach the tab-separated state line or a Discord field.
 claude_result_denied_command_names() {
     local tmpfile="$1"
     jq -r '
