@@ -278,17 +278,27 @@ claude_result_indicates_diagnostic_refusal() {
 
 # Returns 0 (true) if the session's final message says it stopped because it believed a tool was
 # denied or disabled for the rest of the session: it mentions a denial, says the session gave up,
-# and does not say how it carried on (see TOOL_DENIAL_MENTION_PATTERNS and the two arrays after it
-# in lib/globals). Kept separate from claude_result_indicates_diagnostic_refusal so the
-# .last-diagnostic marker it feeds keeps its own, narrower rules.
+# and does not say how it carried on (see TOOL_DENIAL_MENTION_PATTERNS and the arrays after it in
+# lib/globals). Negated workaround phrases ("Nothing was pushed") are removed, leftmost first and
+# each replaced by a space, before the workaround test, so they do not hide a quit. Kept separate
+# from claude_result_indicates_diagnostic_refusal so the .last-diagnostic marker it feeds keeps
+# its own, narrower rules.
 claude_result_indicates_tool_denied_quit() {
-    local result_text="$1" mention_re give_up_re workaround_re
+    local result_text="$1" mention_re give_up_re workaround_re negated_re without_negated
     mention_re=$(IFS='|'; printf '%s' "${TOOL_DENIAL_MENTION_PATTERNS[*]}")
     give_up_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_GIVE_UP_PATTERNS[*]}")
     workaround_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_WORKAROUND_PATTERNS[*]}")
-    match_nocase "${result_text}" "${mention_re}" \
-        && match_nocase "${result_text}" "${give_up_re}" \
-        && ! match_nocase "${result_text}" "${workaround_re}"
+    negated_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS[*]}")
+    if ! match_nocase "${result_text}" "${mention_re}" || ! match_nocase "${result_text}" "${give_up_re}"; then
+        return 1
+    fi
+    # Lower-cased first so the removal below does not depend on nocasematch; the healthcheck awk
+    # lower-cases the same way.
+    without_negated="${result_text,,}"
+    while match_nocase "${without_negated}" "${negated_re}"; do
+        without_negated="${without_negated/"${BASH_REMATCH[0]}"/ }"
+    done
+    ! match_nocase "${without_negated}" "${workaround_re}"
 }
 
 # Prints the names of the tool calls denied in a Claude JSON result, comma-separated and

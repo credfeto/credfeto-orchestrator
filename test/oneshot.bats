@@ -3848,6 +3848,35 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
+@test "claude_result_indicates_tool_denied_quit matches a quit that says nothing was pushed or completed" {
+    claude_result_indicates_tool_denied_quit "Bash is denied. I cannot proceed. Nothing was pushed."
+    claude_result_indicates_tool_denied_quit "All Bash commands are being denied. I cannot continue; the task was not completed."
+    claude_result_indicates_tool_denied_quit "Bash is denied; nothing else has been completed. Stopping here."
+    claude_result_indicates_tool_denied_quit "Bash is denied; no commits were pushed. Giving up."
+}
+
+@test "claude_result_indicates_tool_denied_quit matches a quit with not, never or n't right before the workaround word" {
+    claude_result_indicates_tool_denied_quit "Bash is denied, so I have not finished. I cannot continue."
+    claude_result_indicates_tool_denied_quit "Bash is denied; the PR has not yet been pushed. Stopping here."
+    claude_result_indicates_tool_denied_quit "Bash is denied; I never pushed. Stopping here."
+    claude_result_indicates_tool_denied_quit "Bash was denied; I haven't pushed anything and cannot proceed."
+    claude_result_indicates_tool_denied_quit "Bash was denied; I haven't pushed anything and cannot proceed."
+    claude_result_indicates_tool_denied_quit "Bash is denied so I couldn't push. I cannot continue."
+}
+
+@test "claude_result_indicates_tool_denied_quit still sees a real workaround next to a negated one" {
+    run claude_result_indicates_tool_denied_quit "Bash is denied in don't ask mode. The docs were not completed, but I pushed the code. I cannot continue with the docs."
+    [ "${status}" -ne 0 ]
+    run claude_result_indicates_tool_denied_quit "Bash was denied; nothing was pushed by the first attempt, so I could not continue that way and used gh instead."
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit treats negation as whole words only" {
+    # "piano" ends in "no" and "knot" ends in "not", but neither is a negation.
+    run claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue the piano pushed task; the knot finished."
+    [ "${status}" -ne 0 ]
+}
+
 @test "claude_result_indicates_tool_denied_quit accepts a curly apostrophe" {
     claude_result_indicates_tool_denied_quit "Claude Code is in don’t ask mode, so I can’t continue."
     claude_result_indicates_tool_denied_quit "Bash is denied, so I couldn’t do anything."
