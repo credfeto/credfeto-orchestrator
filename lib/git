@@ -51,7 +51,8 @@ set_repo_context() {
     # Host-side persistent store for the parts of the container's ~/.claude that
     # must survive across invocations (sessions, session-env, plans, cache,
     # backups). Nested under SESSION_BASE_DIR so state stays scoped per-repo,
-    # matching how fingerprint/resume-session bookkeeping already works above.
+    # matching the per-item bookkeeping files lib/fingerprints and lib/state keep
+    # directly in SESSION_BASE_DIR.
     # shellcheck disable=SC2034  # read by lib/podman after sourcing
     CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
     # Host-side persistent store backing the container's ~/.cache/orchestrator/global

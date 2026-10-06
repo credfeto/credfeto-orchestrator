@@ -6,10 +6,14 @@ Orchestrator tooling for driving Claude Code agents to work on GitHub issues and
 
 The `oneshot` script fetches the top-priority open work item for `credfeto/credfeto-orchestrator`
 from the [priorities API](https://git-workflow.markridgwell.com/priorities) and invokes a
-Claude Code session to work on it.  One session file is stored per issue or pull request at
-`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/credfeto/credfeto-orchestrator/<ItemType>_<id>.env` so that subsequent
-runs resume the correct Claude session.  When a PR has no session of its own the script
-inherits the session from any linked closing issue.
+Claude Code session to work on it.  Every run starts a fresh session and never resumes an
+earlier one; the state that carries between runs lives in GitHub.  Under
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>` the script keeps per-item
+bookkeeping files named `<ItemType>_<id>.<suffix>` (change-detection fingerprints, invocation
+counters and block markers) and each item's session transcripts in
+`transcripts/<ItemType>_<id>/`, kept so a human can read what the agent did.  When an issue
+pivots to its PR, the PR's transcript directory is linked to the issue's, so both share one
+history.
 
 ### Usage
 
@@ -64,7 +68,7 @@ preserving the existing behaviour for installations that do not require per-owne
 
 The script can post notifications to a Discord channel via a webhook whenever:
 
-- An issue or PR is **picked up** (new session started or existing session resumed), with a link to the item.
+- An issue or PR is **picked up** (a fresh session is about to start on it), with a link to the item.
 - An issue or PR is found to be **blocked** (has the `Blocked` label), with a link to the item.
 - **No actionable work items** are found after scanning all priorities.
 
