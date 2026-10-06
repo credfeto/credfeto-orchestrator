@@ -17377,15 +17377,15 @@ setup_main_pivot_mocks() {
     issue_json_has_blocked_label() { return 1; }
 }
 
-# The pivoted PR 99 is open and Blocked, so main stops at the Blocked check without a container launch.
-stub_pivot_pr_open_blocked() {
+# The PR is open and Blocked, so main stops at the Blocked check without a container launch.
+stub_pr_open_blocked() {
     fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     pr_json_has_blocked_label() { return 0; }
     try_auto_unblock_env_diagnosed_pr() { return 1; }
 }
 
-# The pivoted PR 99 has merged.
-stub_pivot_pr_merged() {
+# The PR has merged.
+stub_pr_merged() {
     fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
 }
 
@@ -17611,11 +17611,7 @@ stub_pivot_pr_merged() {
 }
 
 @test "main writes a closed marker for an Issue observed closed while its PR is still open" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    setup_main_pivot_mocks
     fetch_issue_json() { printf '{"title":"T","body":"","state":"CLOSED","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
     make_transcript_dir "Issue_10"
     make_transcript_dir "PullRequest_99"
@@ -17628,7 +17624,7 @@ stub_pivot_pr_merged() {
 
 @test "main writes a closed marker for the PR an Issue pivots to when that PR has merged" {
     setup_main_pivot_mocks
-    stub_pivot_pr_merged
+    stub_pr_merged
     make_transcript_dir "Issue_10"
     make_transcript_dir "PullRequest_99"
 
@@ -17658,7 +17654,7 @@ stub_pivot_pr_merged() {
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    stub_pr_merged
     make_transcript_dir "PullRequest_5"
     printf '123\n' > "${SESSION_BASE_DIR}/PullRequest_5.closed"
 
@@ -17684,7 +17680,7 @@ stub_pivot_pr_merged() {
 
 @test "main clears the closed markers of an Issue and its PR observed open on the pivot path" {
     setup_main_pivot_mocks
-    stub_pivot_pr_open_blocked
+    stub_pr_open_blocked
     write_closed_marker_days_ago "Issue_10" 8
     write_closed_marker_days_ago "PullRequest_99" 8
 
@@ -17699,9 +17695,7 @@ stub_pivot_pr_merged() {
     fetch_all_priorities() {
         printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
     }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    pr_json_has_blocked_label() { return 0; }
-    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    stub_pr_open_blocked
     write_closed_marker_days_ago "PullRequest_5" 8
 
     run main
@@ -17787,7 +17781,7 @@ stub_pivot_pr_merged() {
 
 @test "main links the transcripts of the PR an Issue pivots to into the Issue's directory" {
     setup_main_pivot_mocks
-    stub_pivot_pr_open_blocked
+    stub_pr_open_blocked
 
     run main
     [ "${status}" -eq 0 ]
@@ -17797,7 +17791,7 @@ stub_pivot_pr_merged() {
 
 @test "main still processes a pivoted PR when its transcripts cannot be linked" {
     setup_main_pivot_mocks
-    stub_pivot_pr_open_blocked
+    stub_pr_open_blocked
     make_stub ln "exit 1"
 
     run main
@@ -17808,7 +17802,7 @@ stub_pivot_pr_merged() {
 
 @test "main writes the closed marker of a merged pivoted PR on its link, not on the Issue" {
     setup_main_pivot_mocks
-    stub_pivot_pr_merged
+    stub_pr_merged
     make_transcript_dir "Issue_10"
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
 
