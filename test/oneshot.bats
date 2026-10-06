@@ -16343,6 +16343,29 @@ make_transcript_dir() {
     printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo/session.jsonl"
 }
 
+# main mocks for Issue 10, open and not Blocked, pivoting to PR 99; the caller stubs the PR's state.
+setup_main_pivot_mocks() {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+}
+
+# The pivoted PR 99 is open and Blocked, so main stops at the Blocked check without a container launch.
+stub_pivot_pr_open_blocked() {
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+}
+
+# The pivoted PR 99 has merged.
+stub_pivot_pr_merged() {
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+}
+
 @test "transcripts_root_path is the transcripts directory under SESSION_BASE_DIR" {
     [ "$(transcripts_root_path)" = "${SESSION_BASE_DIR}/transcripts" ]
 }
@@ -16581,14 +16604,8 @@ make_transcript_dir() {
 }
 
 @test "main writes a closed marker for the PR an Issue pivots to when that PR has merged" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    setup_main_pivot_mocks
+    stub_pivot_pr_merged
     make_transcript_dir "Issue_10"
     make_transcript_dir "PullRequest_99"
 
@@ -16643,16 +16660,8 @@ make_transcript_dir() {
 }
 
 @test "main clears the closed markers of an Issue and its PR observed open on the pivot path" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    pr_json_has_blocked_label() { return 0; }
-    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    setup_main_pivot_mocks
+    stub_pivot_pr_open_blocked
     write_closed_marker_days_ago "Issue_10" 8
     write_closed_marker_days_ago "PullRequest_99" 8
 
@@ -16754,16 +16763,8 @@ make_transcript_dir() {
 }
 
 @test "main links the transcripts of the PR an Issue pivots to into the Issue's directory" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    pr_json_has_blocked_label() { return 0; }
-    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    setup_main_pivot_mocks
+    stub_pivot_pr_open_blocked
 
     run main
     [ "${status}" -eq 0 ]
@@ -16772,16 +16773,8 @@ make_transcript_dir() {
 }
 
 @test "main still processes a pivoted PR when its transcripts cannot be linked" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
-    pr_json_has_blocked_label() { return 0; }
-    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    setup_main_pivot_mocks
+    stub_pivot_pr_open_blocked
     make_stub ln "exit 1"
 
     run main
@@ -16791,14 +16784,8 @@ make_transcript_dir() {
 }
 
 @test "main writes the closed marker of a merged pivoted PR on its link, not on the Issue" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
-    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    setup_main_pivot_mocks
+    stub_pivot_pr_merged
     make_transcript_dir "Issue_10"
     ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
 
