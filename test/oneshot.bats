@@ -4317,6 +4317,64 @@ STUBEOF
     [ "$(cat "${dir}/last-digest-sent")" = "2026-10-05" ]
 }
 
+@test "send_daily_digest_if_due stops at a day whose day before cannot be worked out, keeps the marker there, and warns" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    date_days_before() {
+        [ "$1" = "2026-10-03" ] && [ "$2" = "1" ] && return 1
+        date -d "$1 -$2 day" +%Y-%m-%d
+    }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-10-02\n' > "${dir}/last-digest-sent"
+    touch "${dir}/session-denials.2026-10-02" "${dir}/session-denials.2026-10-03" "${dir}/session-denials.2026-10-04"
+
+    run send_daily_digest_if_due "org"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Daily digest for org: could not work out the day before 2026-10-03, will retry on the next tick"* ]]
+    [ "$(cat "${digest_log}")" = "org 2026-10-02" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-03" ]
+}
+
+@test "send_daily_digest_if_due stops at a day whose day after cannot be worked out, keeps the marker there, and warns" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    date_days_after() {
+        [ "$1" = "2026-10-03" ] && return 1
+        date -d "$1 +$2 day" +%Y-%m-%d
+    }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-10-02\n' > "${dir}/last-digest-sent"
+    touch "${dir}/session-denials.2026-10-02" "${dir}/session-denials.2026-10-03" "${dir}/session-denials.2026-10-04"
+
+    run send_daily_digest_if_due "org"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Daily digest for org: could not work out the day after 2026-10-03, will retry on the next tick"* ]]
+    [ "$(cat "${digest_log}")" = "org 2026-10-02" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-03" ]
+}
+
+@test "send_daily_digest_if_due warns when the marker cannot be written, leaves it unmoved, and carries on with the catch-up" {
+    orchestrator_today() { printf '2026-10-05'; }
+    local digest_log="${TEST_TMP}/digest.log"
+    notify_discord_daily_digest() { printf '%s %s\n' "$1" "$2" >> "${digest_log}"; }
+    local dir="${ORCHESTRATOR_STATE_DIR}/org"
+    mkdir -p "${dir}"
+    printf '2026-10-03\n' > "${dir}/last-digest-sent"
+    touch "${dir}/session-denials.2026-10-03" "${dir}/session-denials.2026-10-04"
+    # A directory in the way of the temporary file makes the marker write fail.
+    mkdir "${dir}/last-digest-sent.tmp"
+
+    run send_daily_digest_if_due "org"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to write the daily digest marker ${dir}/last-digest-sent: the digest may be sent again"* ]]
+    [ "$(cat "${digest_log}")" = "$(printf 'org 2026-10-03\norg 2026-10-04')" ]
+    [ "$(cat "${dir}/last-digest-sent")" = "2026-10-03" ]
+}
+
 @test "send_daily_digest_if_due catches up no further back than SESSION_DENIALS_RETENTION_DAYS" {
     orchestrator_today() { printf '2026-10-05'; }
     SESSION_DENIALS_RETENTION_DAYS=3
