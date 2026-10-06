@@ -139,24 +139,45 @@ PULL_DURATION_MIN_SAMPLES=5
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_DENIALS_RETENTION_DAYS=30
 
-# Phrasings of a session's final message that mean it ended because it believed a tool, usually
-# Bash, was denied or disabled for the rest of the session (claude_result_indicates_tool_denied_
-# quit, lib/podman). A "don't ask mode" denial refuses only the one command it names, so a session
-# that says this has stopped early on a misreading. Joined with "|" and matched case-insensitively;
-# "don.t" accepts either apostrophe. Every entry needs session-ending phrasing (now denied, no
-# longer, the rest of the session, stopped, giving up, or cannot continue/proceed) in the same
-# clause as the denial, with [^.;]* so the match never runs past a full stop or semicolon: a
-# message that reports one denial and then says how it carried on ("can't delete it that way;
-# used git clean instead") must not match. A bare "can't" or "couldn't" is not enough, because a
-# session that worked round a denial says that too. No length cap, unlike
-# claude_result_indicates_diagnostic_refusal: a session that gives up can still write a long
-# summary first.
+# Phrasings that classify a session's final message as a quit: the session ended because it
+# believed a tool, usually Bash, was denied or disabled for the rest of the session
+# (claude_result_indicates_tool_denied_quit, lib/podman). A "don't ask mode" denial refuses only
+# the one command it names, so a session that says this has stopped early on a misreading. Each
+# array is joined with "|" and matched case-insensitively against the whole message, not one
+# clause, because the denial and the give-up are often in different sentences ("All Bash
+# commands are being denied. I cannot continue."). "don.t" and "can.t" accept either apostrophe.
+# The message is a quit only when all three hold:
+#   (i)   it mentions a denial (TOOL_DENIAL_MENTION_PATTERNS);
+#   (ii)  it says the session as a whole gave up (TOOL_DENIED_GIVE_UP_PATTERNS). "Stopped" counts
+#         only in a session-level form, so "stopped short of merging" does not;
+#   (iii) it does not say how the session carried on (TOOL_DENIED_WORKAROUND_PATTERNS), so "I
+#         could not continue with cleanup, but the rest of the work is complete" does not count.
+# Limits: this is a keyword heuristic over free text. A session that gives up but also reports
+# an earlier step it finished or pushed is missed, as is one whose give-up wording is not listed
+# here. Workaround terms must stand as whole words (a non-letter or the message edge on each
+# side), so "unpushed", "unfinished" and "completely" do not count, and "pushed" never matches
+# "push", which a quit names as the denied command. No length cap, unlike claude_result_indicates_diagnostic_refusal: a session
+# that gives up can still write a long summary first. tasks/healthcheck.md mirrors these
+# patterns in an awk classifier; update it whenever they change.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
-TOOL_DENIED_QUIT_PATTERNS=(
-    'Bash (tool )?(is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))'
-    'Bash (tool )?(is|was|has been) (denied|disabled)[^.;]*(rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))'
-    "don.t ask mode[^.;]*( now (denies|denied|disabled|blocks|blocked)|rest of (the|this) session|no longer|stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))"
-    "(stopp|giving up|gave up|(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed))[^.;]*don.t ask mode"
+TOOL_DENIAL_MENTION_PATTERNS=(
+    'Bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)'
+    'Bash( tool)? (is|was|has been) no longer (allowed|available|permitted)'
+    "don.t ask mode"
+)
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TOOL_DENIED_GIVE_UP_PATTERNS=(
+    '(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed)'
+    '(cannot|can not|can.t|couldn.t|could not|unable to) make any progress|no progress'
+    'stopping here|have stopped|stopped (work|the session)|giving up|gave up'
+    'nothing (below|else) (has been|was) done'
+    'rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session'
+    'Bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))'
+)
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TOOL_DENIED_WORKAROUND_PATTERNS=(
+    '(^|[^a-z])(instead|finished|completed|pushed|succeeded)([^a-z]|$)'
+    'worked (round|around)|(is|are|was|were) complete([^a-z]|$)'
 )
 
 # Code review, security review, and coverage each get their own round budget below rather than

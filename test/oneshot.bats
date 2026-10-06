@@ -3763,7 +3763,7 @@ STUBEOF
     claude_result_indicates_tool_denied_quit "Bash is now denied (don't ask mode), so I couldn't run the build. Stopping here."
 }
 
-@test "claude_result_indicates_tool_denied_quit matches don't ask mode with a giving-up word in the same sentence" {
+@test "claude_result_indicates_tool_denied_quit matches don't ask mode with a session-level stop" {
     claude_result_indicates_tool_denied_quit "Because of don't ask mode I couldn't run git fetch, so I have stopped."
     claude_result_indicates_tool_denied_quit "I stopped work after a denial in don't ask mode."
 }
@@ -3785,16 +3785,50 @@ STUBEOF
     [ "${status}" -ne 0 ]
 }
 
-@test "claude_result_indicates_tool_denied_quit does not match a can't that is not about continuing, nor across a semicolon" {
+@test "claude_result_indicates_tool_denied_quit does not match a can't that is not about continuing when a workaround follows" {
     run claude_result_indicates_tool_denied_quit "don't ask mode blocked rm, so I can't delete it that way; used git clean instead and pushed."
     [ "${status}" -ne 0 ]
 }
 
-@test "claude_result_indicates_tool_denied_quit matches session-ending phrasing within one clause" {
+@test "claude_result_indicates_tool_denied_quit does not match a session that stopped short of one step and worked round it" {
+    run claude_result_indicates_tool_denied_quit "In don't ask mode, the gh pr merge call was blocked, so I stopped short of merging and left a comment instead"
+    [ "${status}" -ne 0 ]
+    run claude_result_indicates_tool_denied_quit "In don't ask mode, the gh pr merge call was blocked, so I stopped short of merging."
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit does not match a session that could not continue one step but completed the rest" {
+    run claude_result_indicates_tool_denied_quit "Bash was denied for rm, and I could not continue with cleanup, but the rest of the work is complete"
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit does not match a give-up phrase with no denial mention" {
+    run claude_result_indicates_tool_denied_quit "The build failed twice, so I cannot continue."
+    [ "${status}" -ne 0 ]
+}
+
+@test "claude_result_indicates_tool_denied_quit matches session-ending phrasing" {
     claude_result_indicates_tool_denied_quit "Bash is no longer available, so the rest of the work is left for a human."
     claude_result_indicates_tool_denied_quit "The Bash tool was denied, so I cannot continue."
     claude_result_indicates_tool_denied_quit "In don't ask mode I am unable to proceed with the build."
     claude_result_indicates_tool_denied_quit "Giving up: don't ask mode refused the push."
+}
+
+@test "claude_result_indicates_tool_denied_quit matches a give-up phrase in a different clause or sentence from the denial" {
+    claude_result_indicates_tool_denied_quit "Bash tool was denied for git push; I cannot proceed"
+    claude_result_indicates_tool_denied_quit "All Bash commands are being denied. I cannot continue."
+}
+
+@test "claude_result_indicates_tool_denied_quit treats workaround terms as whole words only" {
+    claude_result_indicates_tool_denied_quit "The branch is unpushed: Bash was denied, so I cannot proceed."
+    claude_result_indicates_tool_denied_quit "The work is unfinished because Bash is denied; I cannot continue."
+    claude_result_indicates_tool_denied_quit "Bash is completely denied now. I cannot continue."
+}
+
+@test "claude_result_indicates_tool_denied_quit matches session-level denial wording" {
+    claude_result_indicates_tool_denied_quit "I couldn't post the plan: Bash is now denied (\"don't ask mode\"), so nothing below has been done."
+    claude_result_indicates_tool_denied_quit "Bash was denied partway through the session (\"don't ask mode\"). Earlier Bash calls worked."
+    claude_result_indicates_tool_denied_quit "I couldn't make any progress on #1042, because the Bash tool is denied in this session"
 }
 
 @test "claude_result_denied_command_names gives Bash first words and other tool names, deduplicated, never arguments" {
