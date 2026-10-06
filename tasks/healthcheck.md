@@ -125,12 +125,40 @@ container name.
   grep -ci "rate limit\|429" /tmp/fleet.log
   grep -c '"is_error":true' /tmp/fleet.log
 
---- 7. NEW PERMISSION DENIALS ---
+--- 7. STALLED SESSIONS AND PERMISSION DENIALS ---
+
+Every agent session appends one tab-separated line to a per-owner, per-day file:
+
+  ~<owner>/.local/state/orchestrator/<owner>/session-denials.YYYY-MM-DD
+
+Fields: timestamp, repo, item type, item id, denial count, stalled (1/0), quit after a tool
+denial (1/0), denied command names (comma-separated, "-" for none). Read today's and
+yesterday's files for each owner (run from a cwd other than /home/markr):
+
+  ssh nanoclaw.lan 'sudo -n -u credfeto cat /home/credfeto/.local/state/orchestrator/credfeto/session-denials.YYYY-MM-DD'
+  ssh nanoclaw.lan 'sudo -n -u funfair-tech cat /home/funfair-tech/.local/state/orchestrator/funfair-tech/session-denials.YYYY-MM-DD'
+
+A session is stalled when it quit believing a tool was denied or disabled (the quit column),
+or when it hit denials and its PR made no progress. REPORT EVERY stalled or quit session in
+this health check's own summary, with its repo, item, denial count and command names: a
+denial that ended a session is a finding whatever the command, including those in the
+by-design list below. The same sessions are alerted to the private Discord channel as
+"Session stalled" (one per item per hour) and totalled in the "Daily session digest"; check
+both reached that channel, and say so in the summary if the file shows a stalled session
+with no matching alert.
+
+PRIVATE: stalled and quit sessions belong in this summary and the private Discord channel
+ONLY. NEVER post them, or any repository name, item number or command name taken from the
+session-denials files, to GitHub: the tracking issues below are on a PUBLIC repository and
+some of the repositories in these files are private.
+
+Then the raw denial arrays, for gaps that did not end a session:
 
   grep -o '"permission_denials":\[[^]]*\]' /tmp/fleet.log | sort | uniq -c
 
-Empty arrays are NOT findings. For non-empty ones, report ONLY genuinely new gaps. Do not
-re-report anything already known to be blocked by design:
+Empty arrays are NOT findings. For non-empty ones from sessions that carried on, report ONLY
+genuinely new gaps. Do not re-report anything already known to be blocked by design (this
+exclusion never applies to a denial that ended a session; those are reported above):
 
   - git commands missing the `git -C <dir>` prefix
   - git worktree add
@@ -142,7 +170,8 @@ re-report anything already known to be blocked by design:
   - gh api user (deliberately excluded)
   - gh api graphql piped into python3 -c (known compound-pipe behaviour)
 
-Post genuinely new findings as comments on the standing tracking issues:
+Post genuinely new findings from the raw arrays above (never a stalled or quit session,
+see PRIVATE above) as comments on the standing tracking issues:
   - simple single commands            -> credfeto/credfeto-orchestrator#1342
   - complex commands / scripts        -> credfeto/credfeto-orchestrator#1343
 
@@ -167,6 +196,9 @@ Rules:
   - Do NOT make code changes, open PRs, or run destructive/production commands
     (podman rm -f, systemctl restart, killing processes) without asking first.
   - Do file or comment on tracking issues for genuinely new findings.
+  - Never treat a stalled or quit session as "known by design"; it always goes in the report.
+  - Never post a stalled or quit session (repo, item or command names) to any GitHub issue
+    or PR; it goes in this summary and the private Discord channel only.
 ````
 
 ## Related

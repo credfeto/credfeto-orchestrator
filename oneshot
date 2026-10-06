@@ -88,8 +88,9 @@ source "${ONESHOT_DIR}/lib/podman" \
 # env_unblock_attempts_file_path, env_unblock_cap_notice_marker_file_path,
 # load_env_unblock_attempts, save_env_unblock_attempts, reset_env_unblock_attempts,
 # try_auto_unblock_env_diagnosed_pr, issue_invocation_guard_file_path,
-# load_issue_invocation_counts, save_issue_invocation_counts, and
-# reset_issue_invocation_counts_if_capped are declared in lib/state.
+# load_issue_invocation_counts, save_issue_invocation_counts,
+# reset_issue_invocation_counts_if_capped, session_outcome_is_stalled, record_session_outcome,
+# and run_daily_digest_rollover are declared in lib/state.
 
 # pr_json_is_terminal, pr_json_has_placeholder_file, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, item_confirmed_not_blocked_live,
@@ -142,7 +143,11 @@ source "${ONESHOT_DIR}/lib/podman" \
 # build_item_url, notify_discord_work_item, notify_discord_no_work,
 # notify_discord_low_disk_space, notify_discord_priorities_unreachable, notify_discord_blocked_item,
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
-# notify_discord_rate_limited, and notify_discord_host_health are declared in lib/discord.
+# notify_discord_session_stalled, notify_discord_daily_digest, notify_discord_rate_limited, and
+# notify_discord_host_health are declared in lib/discord.
+
+# The SESSION_* outcome globals of the most recent invoke_claude session (SESSION_DENIAL_COUNT,
+# SESSION_TOOL_DENIED_QUIT and the rest) are declared in lib/globals.
 
 # rearm_closed_issue_markers, tag_pr_closed_issue and link_pivot_pr_transcripts are declared in
 # lib/state.
@@ -239,6 +244,12 @@ main() {
         info "Another oneshot instance is already running for '${owner_filter:-global}' — exiting cleanly"
         exit 0
     fi
+
+    # Before the priorities fetch, so a tick that finds no work (or cannot reach the feed) still
+    # rolls over. The lock above is keyed by --owner (or "_global" without one), so it does not
+    # stop an --owner run and a no-owner run overlapping on the same owner; send_daily_digest_if_
+    # due takes its own per-owner digest lock for that.
+    run_daily_digest_rollover "${owner_filter}"
 
     local items_json item_count fetch_rc
     info "Fetching priorities from ${PRIORITIES_URL}..."
@@ -1442,6 +1453,9 @@ main() {
         # progress). A real session running — regardless of how it ends — also clears the
         # consecutive-infra-failure streak: the container is demonstrably working again.
         clear_infra_failure_count "${item_type}" "${item_id}"
+        # Set only where the PR no-progress branch below runs; with any denial in the session,
+        # that makes the session stalled (session_outcome_is_stalled, lib/state).
+        local pr_session_no_progress=0
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
             if [ "${pr_idle_advance}" = "1" ]; then
@@ -1504,13 +1518,26 @@ main() {
                         pr_new_idle=0
                     else
                         info "PR #${item_id} in ${item_repo}: no progress this session (board, non-orchestrator trusted comments and head commit unchanged), idle budget charged (${pr_new_idle}/${MAX_PR_IDLE_INVOCATIONS})"
+                        pr_session_no_progress=1
                     fi
                 fi
             fi
-            save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
         elif [ "${item_type}" = "Issue" ]; then
             local issue_new_idle=0
             [ "${issue_idle_advance}" = "1" ] && issue_new_idle=$(( ISSUE_INVOCATION_IDLE + 1 ))
+        fi
+
+        # Recorded before the counters are saved: either save can die, and a real session that
+        # ran must still reach the per-day record and, when stalled, the alert.
+        local session_stalled=0
+        if session_outcome_is_stalled "${SESSION_TOOL_DENIED_QUIT}" "${SESSION_DENIAL_COUNT}" "${pr_session_no_progress}"; then
+            session_stalled=1
+        fi
+        record_session_outcome "${item_type}" "${item_id}" "${session_stalled}"
+
+        if [ "${item_type}" = "PullRequest" ]; then
+            save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"
+        elif [ "${item_type}" = "Issue" ]; then
             save_issue_invocation_counts "${item_id}" "$(( ISSUE_INVOCATION_TOTAL + 1 ))" "${issue_new_idle}"
         fi
 

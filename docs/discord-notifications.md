@@ -27,16 +27,19 @@ rule, matched to what actually makes sense for that alert:
 | Workflow board conversion failed (#1519) | Converting a repository's Workflow board to the built-in Status field was refused at some step (see [workflow-board.md](workflow-board.md)). The embed names the repository and the step; the repository is skipped until the conversion succeeds, and its Workflow Status field is kept. | At most one per hour, per repository. |
 | Claude error | The agent session itself returned an application-level error. | None — fires every time, every tick. |
 | Rate limited | The Claude API rate-limited the current owner; work pauses until the reported reset time. | None — fires every time, every tick. |
+| Permission denials | A session's result lists one or more denied tool calls (`permission_denials`). The embed lists each denied call. | At most one per hour, per repository. |
+| Session stalled | A session stalled: its final message says it stopped because a tool (usually Bash) was denied or disabled, on an Issue or a PR whatever progress it made; or it hit at least one denial and its PR made no progress (the branch that charges the idle budget). Issues have no per-session progress check, so for them only the first case applies. The embed carries the repository, a link to the item, the denial count, the denied command *names* (the program each denied Bash command runs, after skipping leading `NAME=value` assignments and wrapper words such as `env` or `sudo`, basename only; or the tool name for any other tool; `(other)` for anything that is not a plain short name; never arguments, values or paths) and the first 240 characters of the session's final message, after GitHub tokens, long hex or token-like runs (shown as `[token]`) and anything containing a `/`, such as a path or URL (shown as `[path]`), are masked. Errored sessions are judged on the first case only, before the run dies; a session cut off by the agent timeout has no result to judge, so it is recorded in the per-day file but never alerted. | At most one per hour, **per item**, under its own key, so a permission-denials alert elsewhere in the same repository never swallows it. |
+| Daily session digest | The first tick of a new day, per owner, sends the digest for the day before: sessions, denials and stalled sessions (each with the change against the day before, or "no record" when that day has no file), sessions that quit after a tool denial, per-repository totals and the five most often denied command names. Built from the per-day `session-denials.YYYY-MM-DD` files (see [oneshot.md](development/scripts/oneshot.md)). There is no timer of its own: whichever tick first sees the new day sends it, including a tick with no work. Nothing is sent when neither yesterday nor the day before has a file (a fresh install, or an owner with no sessions for two days). A run with no `--owner` sends one digest for each owner directory that holds a `session-denials` file. | Once per day, per owner: the `last-digest-sent` marker only moves to today once the post succeeds (or no webhook is configured, or there was nothing to send), so a failed post retries on the next tick. A per-owner digest lock stops an `--owner` run and a no-owner run overlapping on the same owner from both sending it. |
 | Image pull failed (#1400) | A `podman pull` of `ORCHESTRATOR_IMAGE` fails outright with no cached local image to fall back to. Distinct from "Claude error": the two used to share the same misleadingly-titled alert, which read "Claude Error" for a registry/pull failure that has nothing to do with Claude itself erroring. | None: fires every time, every tick; the caller dies immediately after, so this is already self-limiting the same way Claude error/rate limited are. |
 
-Three different suppression shapes are in play, not one universal rule:
+Four different suppression shapes are in play, not one universal rule:
 
 1. **No suppression** (work started, Claude error, rate limited, image pull failed): these are
    expected to be rare or already self-limiting (a rate limit, once hit, stops further work, and
    further alerts, until it clears; a pull failure kills the run immediately after), so nothing
    extra is layered on top.
 2. **A rolling one-hour window** (low disk space, slow image pull, priorities unreachable, Workflow board conversion failed, PR
-   needs approval, self-update stale, and no-work *when the content is unchanged*): a small
+   needs approval, self-update stale, permission denials, session stalled, and no-work *when the content is unchanged*): a small
    state file records the last time this alert actually sent, and a repeat within the hour is
    dropped. The no-work alert compares a hash of its title and item breakdown rather than the raw
    text, since the breakdown can now be long and multi-line.
@@ -46,10 +49,12 @@ Three different suppression shapes are in play, not one universal rule:
    item observed waiting re-arms the moment its content (substatus, progress reason, or priority)
    actually changes — including simply advancing to a later round of the same phase, since that
    changes the enriched substatus text too.
+4. **Once per calendar day** (daily session digest): a per-owner marker holds the date the last
+   digest went out, and the digest is only sent when that date is older than today.
 
 For the rolling-window alerts, whether a **failed** attempt to reach Discord counts as "sent"
 differs by alert, and this is a real, known gap rather than a settled guarantee: low disk space,
-priorities-unreachable, board-conversion-failed, PR-needs-approval, and self-update-stale all use a shared helper that
+priorities-unreachable, board-conversion-failed, PR-needs-approval, self-update-stale, permission-denials and session-stalled all use a shared helper that
 only records the send after a *successful* POST, so a Discord outage at the exact moment any of
 them fires means the next tick retries immediately. The no-work and item-blocked alerts do
 **not** have this protection — both
@@ -77,7 +82,7 @@ key without the `_URL` infix; `load_env_config` sets the matching internal varia
 | --- | --- | --- | --- |
 | Blocked | `DISCORD_WEBHOOK_BLOCKED` | `DISCORD_WEBHOOK_URL_BLOCKED` | Item blocked |
 | Awaiting Approval | `DISCORD_WEBHOOK_AWAITING_APPROVAL` | `DISCORD_WEBHOOK_URL_AWAITING_APPROVAL` | PR needs approval |
-| Permissions | `DISCORD_WEBHOOK_PERMISSIONS` | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`) |
+| Permissions | `DISCORD_WEBHOOK_PERMISSIONS` | `DISCORD_WEBHOOK_URL_PERMISSIONS` | A run denying one or more tool calls (parsed from Claude Code's own `permission_denials`), a stalled session, and the daily session digest |
 | Slow image pull | `DISCORD_WEBHOOK_SLOW_PULL` | `DISCORD_WEBHOOK_URL_SLOW_PULL` | Slow image pull |
 
 Each is opt-in and independent: set none, some, or all four. Whichever category vars are left
