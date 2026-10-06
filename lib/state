@@ -767,6 +767,17 @@ link_pivot_pr_transcripts() {
     return 0
 }
 
+# Succeeds when the PR's transcript entry is a link (link_pivot_pr_transcripts) to the Issue's
+# directory, read with readlink and never followed, so the two share one history. Used to keep an
+# Issue's closed marker unwritten while that PR is still open: the marker purges the shared
+# directory, and the PR's sessions with it.
+pr_transcripts_linked_to_issue() {
+    local pr_number="$1" issue_id="$2" pr_path issue_dir
+    pr_path=$(transcript_dir_path "PullRequest" "${pr_number}")
+    issue_dir=$(transcript_dir_path "Issue" "${issue_id}")
+    [ -L "${pr_path}" ] && [ "$(readlink "${pr_path}" 2>/dev/null)" = "${issue_dir##*/}" ]
+}
+
 # Called wherever an item is observed open, so a reopened item does not have its transcripts
 # purged mid-work by a marker left over from its earlier closure.
 clear_closed_marker() {
