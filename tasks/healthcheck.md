@@ -177,9 +177,11 @@ character under UTF-8, and both fit. One message can span several journal lines,
 most recent "Checking" line and each session is classified and counted once:
 
   awk 'function classify() {
+         t = text
+         while (match(t, /([a-z]n[^a-z ]{1,3}t|(^|[^a-z])(not|never|no))( yet)?( been)? (finished|completed|pushed|succeeded)|(^|[^a-z])(nothing|no)( [a-z]+){0,3} (was|were|has been|have been|is|are) (finished|completed|pushed|succeeded)/)) t = substr(t, 1, RSTART - 1) " " substr(t, RSTART + RLENGTH)
          if (text ~ /bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)|bash( tool)? (is|was|has been) no longer (allowed|available|permitted)|don[^a-z ]{1,3}t ask.{0,2} mode/ \
              && text ~ /(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) (continue|proceed)|(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) make any progress|no progress|stopping here|have stopped|stopped (work|the session)|stopped before (doing|starting|any)|giving up|gave up|(a |the )?(permission )?denial stopped me|stopped me from|nothing( below| else)? (has been|was) done|(couldn[^a-z ]{1,3}t|could not) do anything|re-?invoke me|to continue, (either )?allow|rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session|bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
-             && text !~ /(^|[^a-z])(instead|finished|completed|pushed|succeeded)([^a-z]|$)|worked (round|around)|(is|are|was|were) complete([^a-z]|$)/) quits[repo]++
+             && t !~ /(^|[^a-z])(instead|finished|completed|pushed|succeeded)([^a-z]|$)|worked (round|around)|(is|are|was|were) complete([^a-z]|$)/) quits[repo]++
        }
        / Checking .* #[0-9]+ in [^ ]+ / { if (pid != "") classify(); pid = $5; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); text = ""; started = 0; next }
        $5 != pid { next }
@@ -194,9 +196,11 @@ line is missed.
 
 Each session's lines are joined into one lower-cased message and classified as a whole, the
 same way the orchestrator does: a quit needs a denial mention, AND a session-level give-up
-phrase, AND no workaround phrase. The three regexes are TOOL_DENIAL_MENTION_PATTERNS,
-TOOL_DENIED_GIVE_UP_PATTERNS and TOOL_DENIED_WORKAROUND_PATTERNS from lib/globals, each joined
-with "|" and lower-cased because the orchestrator matches them without regard to case.
+phrase, AND no workaround phrase once every negated workaround phrase ("nothing was pushed",
+"not completed") has been removed, leftmost first, each replaced by a space. The four regexes
+are TOOL_DENIAL_MENTION_PATTERNS, TOOL_DENIED_GIVE_UP_PATTERNS, TOOL_DENIED_WORKAROUND_PATTERNS
+and TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS from lib/globals, each joined with "|" and
+lower-cased because the orchestrator matches them without regard to case.
 lib/globals is the source of truth for the quit wording: if those patterns change, update these
 to match. Report these counts in the summary as quit sessions found from the journal, per repo and date, and say that the
 item numbers and denied command names are not available for that date. If the journal no
