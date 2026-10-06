@@ -302,7 +302,8 @@ main() {
     local has_plan_comment
     local ai_instructions container_ai_instructions prompt claude_md_content post_fp
     local post_pr_fp_ok post_issue_fp_ok post_issue_fp
-    local pr_has_unaddressed_comment post_comment_seen review_pipeline_finished
+    local pr_has_unaddressed_comment review_pipeline_finished
+    local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
     local stale_issue_branch resumable_branch
@@ -349,6 +350,14 @@ main() {
         # Set when an unchanged non-terminal PR is re-invoked only to advance its next phase
         # (no external change); consumed when persisting the PR idle counter before invocation.
         pr_idle_advance=0
+        # The phase plan_unchanged_pr_reinvocation names for an unchanged PR, and the PR's
+        # required check names and whether its base branch requires any check
+        # (set_pr_required_checks), reused for the post-session re-read of the same PR, and
+        # whether that lookup failed.
+        pr_next_phase=""
+        pr_required_checks=""
+        pr_base_requires_checks=""
+        pr_required_checks_lookup_failed=false
         # Same idea as pr_idle_advance, for an Issue (plan-approved, or never planned at all)
         # re-invoked only because its idle budget allows another try, not because anything
         # actually changed (#1264).
@@ -521,6 +530,16 @@ main() {
                     item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to fetch issue comments - skipping this item for now")")
                     continue
                 fi
+                # The pivot's own PR lookup resolved _GH_ME inside a command substitution, so it
+                # is not set here yet. It must be before set_pr_has_unaddressed_comment below,
+                # which excludes the orchestrator's own comments by that login.
+                if ! resolve_gh_me; then
+                    warn "Failed to determine current GitHub user for PR #${open_pr} in ${item_repo} - skipping this item for now"
+                    count_error=$((count_error + 1))
+                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "failed to determine current GitHub user - skipping this item for now")")
+                    continue
+                fi
+                set_pr_required_checks "${open_pr}"
                 pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                     || die "Failed to compute fingerprint for PR #${open_pr} in ${item_repo}"
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
@@ -616,7 +635,14 @@ main() {
                         # gets a real chance to fire once genuinely exhausted instead of being
                         # silently defeated for as long as the comment stays unaddressed
                         # (#1307 review).
-                        if pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                        # A PR that needs a rebase is re-run before the board is consulted, as on
+                        # the direct-PR path: plan_unchanged_pr_reinvocation does not look at
+                        # mergeStateStatus, so the board's phase would otherwise be handed to the
+                        # agent instead of the rebase the Work block runs first.
+                        if [ "${pr_merge_state}" = "BEHIND" ] || [ "${pr_merge_state}" = "DIRTY" ]; then
+                            info "PR #${open_pr} in ${item_repo} unchanged but ${pr_merge_state} - re-running"
+                        elif pr_should_advance_unchanged "${open_pr}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                            plan_unchanged_pr_reinvocation "${open_pr}" "${item_repo}"
                             info "PR #${open_pr} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                             pr_idle_advance=1
                         else
@@ -630,7 +656,7 @@ main() {
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                             else
                                 info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                             fi
                             count_unchanged=$((count_unchanged + 1))
@@ -992,6 +1018,7 @@ main() {
                 item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "failed to fetch issue comments - skipping this item for now")")
                 continue
             fi
+            set_pr_required_checks "${item_id}"
             pr_fp=$(fingerprint_pr_json "${pr_json}" "${trusted_logins}" "${pr_review_comments}") \
                 || die "Failed to compute fingerprint for PR #${item_id} in ${item_repo}"
             saved_fp=$(load_pr_fingerprint "${item_id}")
@@ -1077,6 +1104,7 @@ main() {
                 # enabling auto-merge on one, so special-casing drafts out of this whole flow was
                 # never protecting against anything real.
                 elif pr_should_advance_unchanged "${item_id}" "${pr_json}" "${pr_has_unaddressed_comment}"; then
+                    plan_unchanged_pr_reinvocation "${item_id}" "${item_repo}"
                     info "PR #${item_id} in ${item_repo} unchanged — re-invoking to advance the next workflow phase"
                     pr_idle_advance=1
                 else
@@ -1090,7 +1118,7 @@ main() {
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
@@ -1300,8 +1328,14 @@ main() {
             else
                 is_dependency_pr=false
             fi
+            # Quoted into the generated CLAUDE.md so the agent sees exactly what a trusted commenter asked
+            # since the last session read this PR. Best-effort: a failure only loses the quote,
+            # the prompt still tells the agent to read both comment surfaces itself.
+            pr_unaddressed_comments_text=$(pr_json_unaddressed_trusted_comments_text "${pr_json}" "${trusted_logins}" \
+                "$(load_pr_last_agent_comment_seen "${item_id}")" "${pr_review_comments}" "${pr_issue_comments}" "${_GH_ME:-}") \
+                || pr_unaddressed_comments_text=""
             prompt=$(build_pr_prompt "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}")
-            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}")
+            claude_md_content=$(build_pr_claude_md "${item_id}" "${container_ai_instructions}" "${merge_state}" "${branch_name}" "${CONTAINER_REPO_PATH}" "${DIRTY_BRANCH}" "${is_dependency_pr}" "${trusted_logins}" "${background_stall}" "${pr_unaddressed_comments_text}" "${pr_next_phase}")
         fi
 
         [ -n "${prompt}" ] || die "prompt is empty for ${item_type} #${item_id} in ${item_repo}"
@@ -1336,10 +1370,22 @@ main() {
         # silent parked-forever skip). Only worth capturing when pr_idle_advance is already known
         # to apply — a PR whose fingerprint changed this tick (a real commit) never reaches the
         # idle-accounting branch that reads these, so capturing them for it would be wasted work.
-        local pre_session_board_status="" pre_session_comment_ts=""
-        if [ "${item_type}" = "PullRequest" ] && [ "${pr_idle_advance}" = "1" ]; then
-            pre_session_board_status=$(fetch_single_item_workflow_status "PullRequest" "${item_id}")
-            pre_session_comment_ts=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${pr_review_comments}" "${pr_issue_comments}")
+        # The comment timestamp is the exception: it is captured for every PR session, because it
+        # is also the value the last-agent-comment-seen marker is saved as afterwards. It is
+        # derived from the same pr_json and comment arrays the unaddressed-comment text above was
+        # quoted from, so it is the newest trusted comment the agent was actually given; a comment
+        # posted while the session runs is newer than it and stays unaddressed for the next run.
+        # It costs no API call. It excludes the orchestrator's own login: the agent's own status
+        # comment is the one thing every session posts, so counting it made every read-only
+        # session look like progress, and it must never move the marker past another trusted comment.
+        local pre_session_board_status="" pre_session_comment_ts="" pre_session_head="" pre_session_comment_ts_ok=1
+        if [ "${item_type}" = "PullRequest" ]; then
+            pre_session_comment_ts=$(pr_json_latest_trusted_comment_timestamp "${pr_json}" "${trusted_logins}" "${pr_review_comments}" "${pr_issue_comments}" "${_GH_ME:-}") \
+                && pre_session_comment_ts_ok=0
+            if [ "${pr_idle_advance}" = "1" ]; then
+                pre_session_board_status=$(fetch_single_item_workflow_status "PullRequest" "${item_id}")
+                pre_session_head=$(printf '%s' "${pr_json}" | jq -r '.headRefOid // empty')
+            fi
         fi
 
         invoke_claude "${prompt}" "${item_type}" "${item_id}" "${claude_md_content}"
@@ -1388,21 +1434,6 @@ main() {
         # progress). A real session running — regardless of how it ends — also clears the
         # consecutive-infra-failure streak: the container is demonstrably working again.
         clear_infra_failure_count "${item_type}" "${item_id}"
-        # Computed here, once, for PRs — ahead of both the idle-accounting block below (which
-        # reads it to detect a reply-only real-progress session) and the fingerprint/last-seen
-        # save block further down (which used to recompute it independently). Deliberately
-        # re-fetches fresh PR state (compute_pr_last_agent_comment_seen) rather than reusing this
-        # tick's pre-invocation pr_json: it must capture any top-level comment, review, or inline
-        # review comment posted during the invocation itself, including one the agent's own
-        # trusted login just posted — reusing stale data would leave that permanently unaccounted
-        # for and force a spurious re-invocation every subsequent tick (#1307 review). A failure
-        # here is benign (worst case: a trusted comment is re-treated as unaddressed next tick,
-        # and this tick's idle check falls back to charging as before) so it is warned rather
-        # than died on.
-        local post_comment_seen post_comment_seen_ok=1
-        if [ "${item_type}" = "PullRequest" ]; then
-            post_comment_seen=$(compute_pr_last_agent_comment_seen "${item_id}") && post_comment_seen_ok=0
-        fi
         if [ "${item_type}" = "PullRequest" ]; then
             local pr_new_idle=0
             if [ "${pr_idle_advance}" = "1" ]; then
@@ -1418,35 +1449,53 @@ main() {
                 # so it must not count against the budget (confirmed live on PR #1473,
                 # whose own idle budget was exhausted by exactly this race one minute
                 # before its CI run finished). A failed fetch here falls back to charging
-                # the tick as before, rather than risk the budget never advancing at all.
-                local post_run_pr_json
-                if post_run_pr_json=$(fetch_pr_json "${item_id}") && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
+                # the tick as before, rather than risk the budget never advancing at all. The
+                # re-read is annotated with the required check names, and whether the base branch
+                # requires any check, fetched before the session, so it judges pending CI exactly
+                # as the pre-invocation check did.
+                local post_run_pr_json="" post_run_ok=1
+                if post_run_pr_json=$(fetch_pr_json "${item_id}"); then
+                    post_run_ok=0
+                    post_run_pr_json=$(annotate_pr_json_required_checks "${post_run_pr_json}" "${pr_required_checks}" "${pr_base_requires_checks}")
+                fi
+                if [ "${post_run_ok}" -eq 0 ] && pr_json_has_pending_ci_checks "${post_run_pr_json}"; then
                     info "PR #${item_id} in ${item_repo}: still CI-pending after this session — not counting it against the idle budget"
                     pr_new_idle="${PR_INVOCATION_IDLE}"
-                elif [ -n "${post_run_pr_json:-}" ]; then
-                    # Not CI-pending — but a clean phase advance (e.g. "Simplify clean -
-                    # advancing to code review") or a reply-only PHASE C round pushes no commit
-                    # and may not change the PR's fingerprint either, so it is otherwise
-                    # indistinguishable from genuine idleness here. Re-check the two other
-                    # GitHub-visible signs of real progress a no-commit session can leave: the
-                    # Workflow Status board moved, or a new trusted comment/review/inline-review
-                    # comment appeared (post_comment_seen, computed once above and reused here —
-                    # the same trusted-filtered helper the last-agent-comment-seen save below
-                    # already relies on, rather than a separate untrusted raw comment count that
-                    # a random stranger's comment could also satisfy). fetch_single_item_workflow_
-                    # status reads this one item's own card directly, rather than forcing
-                    # board_substatus_for_item's per-repo-per-tick cache to re-walk every item on
-                    # the board just to answer this one question. Either signal changing means
-                    # the session made real progress and gets the same "reset to 0" treatment a
-                    # genuine commit already gets via the changed-fingerprint path (confirmed
-                    # live: PR #799 in funfair-server-common was falsely Blocked after only
-                    # three clean phase advances, #1474).
-                    local post_session_board_status
+                else
+                    # Not CI-pending, but a clean phase advance (e.g. "Simplify clean, advancing
+                    # to code review") pushes no commit and may not change the PR's fingerprint
+                    # either, so check the GitHub-visible signs of real progress a session can
+                    # leave (pr_session_progress_reason), plus a trusted comment that arrived while
+                    # the session ran: the agent never saw that one, so it is not the agent's
+                    # progress, but charging the session would park the PR at the idle cap before
+                    # the next run can answer it. These run even when the re-read above failed:
+                    # the board and comment reads are separate calls, and skipping them on that
+                    # failure charged a session that had moved the board.
+                    # fetch_single_item_workflow_status reads this one item's own card directly
+                    # rather than re-walking the whole board. The board and the head commit cost
+                    # no further PR read, so they are judged first, with the comment timestamp
+                    # left empty (inconclusive); only when neither moved are the comments fetched,
+                    # reusing the post-session re-read when it succeeded. That timestamp excludes
+                    # the orchestrator's own login, as the pre-session one does. It is only
+                    # comparable with a pre-session value that was actually computed, so it is
+                    # not fetched when that failed; a failed fetch also leaves it empty.
+                    local post_session_board_status post_session_head="" post_session_comment_ts="" progress_reason
                     post_session_board_status=$(fetch_single_item_workflow_status "PullRequest" "${item_id}")
-                    if [ "${post_session_board_status}" != "${pre_session_board_status}" ] \
-                        || { [ "${post_comment_seen_ok}" -eq 0 ] && [ -n "${post_comment_seen}" ] && [ "${post_comment_seen}" != "${pre_session_comment_ts}" ]; }; then
-                        info "PR #${item_id} in ${item_repo}: made real progress this session (board moved or a new trusted comment was posted) — not counting it against the idle budget"
+                    [ "${post_run_ok}" -eq 0 ] && post_session_head=$(printf '%s' "${post_run_pr_json}" | jq -r '.headRefOid // empty')
+                    if ! progress_reason=$(pr_session_progress_reason "${pre_session_board_status}" "${post_session_board_status}" \
+                        "${pre_session_comment_ts}" "" "${pre_session_head}" "${post_session_head}") \
+                        && [ "${pre_session_comment_ts_ok}" -eq 0 ]; then
+                        [ "${post_run_ok}" -eq 0 ] || post_run_pr_json=""
+                        post_session_comment_ts=$(fetch_pr_latest_trusted_comment_timestamp "${item_id}" "${_GH_ME:-}" "${post_run_pr_json}") \
+                            || post_session_comment_ts=""
+                        progress_reason=$(pr_session_progress_reason "${pre_session_board_status}" "${post_session_board_status}" \
+                            "${pre_session_comment_ts}" "${post_session_comment_ts}" "${pre_session_head}" "${post_session_head}")
+                    fi
+                    if [ -n "${progress_reason}" ]; then
+                        info "PR #${item_id} in ${item_repo}: not charging this session against the idle budget (${progress_reason})"
                         pr_new_idle=0
+                    else
+                        info "PR #${item_id} in ${item_repo}: no progress this session (board, non-orchestrator trusted comments and head commit unchanged), idle budget charged (${pr_new_idle}/${MAX_PR_IDLE_INVOCATIONS})"
                     fi
                 fi
             fi
@@ -1483,16 +1532,18 @@ main() {
             else
                 warn "Failed to compute post-run fingerprint(s) for ${item_type} #${item_id} in ${item_repo} — skipping save, will re-evaluate next tick"
             fi
-            # Only a real agent turn (this point) is allowed to advance what counts as "seen".
-            # post_comment_seen was already computed once, right after invoke_claude — reused
-            # here rather than recomputed. A failure there (post_comment_seen_ok != 0) is benign
-            # (worst case: a trusted comment is re-treated as unaddressed next tick, forcing one
+            # Only a real agent turn (this point) is allowed to advance what counts as "seen", and
+            # only as far as the newest trusted comment this session was given
+            # (pre_session_comment_ts, captured before invoke_claude). Never re-fetched here: a
+            # trusted comment posted while the session ran was never in the agent's prompt, so it
+            # must stay unaddressed and earn the next run. A failure computing it is benign (worst
+            # case: a trusted comment is re-treated as unaddressed next tick, forcing one
             # redundant real invocation, not a stuck PR) so it only warns, matching the
             # fingerprint save above.
-            if [ "${post_comment_seen_ok}" -eq 0 ]; then
-                save_pr_last_agent_comment_seen "${item_id}" "${post_comment_seen}"
+            if [ "${pre_session_comment_ts_ok}" -eq 0 ]; then
+                save_pr_last_agent_comment_seen "${item_id}" "${pre_session_comment_ts}"
             else
-                warn "Failed to compute post-run last-agent-comment-seen for PR #${item_id} in ${item_repo} — a trusted comment may be re-evaluated as unaddressed next tick"
+                warn "Failed to compute the pre-session last-agent-comment-seen for PR #${item_id} in ${item_repo}: a trusted comment may be re-evaluated as unaddressed next tick"
             fi
         elif [ "${item_type}" = "Issue" ]; then
             if post_fp=$(compute_issue_fingerprint "${item_id}"); then

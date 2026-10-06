@@ -72,6 +72,16 @@ FINGERPRINT_SCHEMA_VERSION=2
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 MAX_PROMPT_CHARS=100000
 
+# Upper bound on the unaddressed trusted PR comment text quoted into a PR session's generated
+# CLAUDE.md (pr_json_unaddressed_trusted_comments_text, lib/github-status), and on any one comment
+# within it. The quote is a convenience so the agent cannot miss what a trusted commenter asked; the full text
+# is always one gh call away, so a long thread is truncated rather than allowed to crowd out the
+# session's own context.
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+PR_UNADDRESSED_COMMENTS_MAX_CHARS=8000
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+PR_UNADDRESSED_COMMENT_MAX_CHARS=2000
+
 # Extra buffer added to the token-reset time before resuming agentic work.
 # Avoids hitting the limit again immediately after it lifts.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
@@ -392,6 +402,36 @@ PR_CREATOR_LOGIN="${PR_CREATOR_LOGIN:-prpixie}"
 # comparison is too. The program must be given --arg me and --arg creator.
 # shellcheck disable=SC2016  # $login, $me and $creator are jq variables, not shell expansions
 _JQ_DEF_OWN_PR_AUTHOR='def own_pr_author: ((.author.login // "") | ascii_downcase) as $login | ($login == ($me | ascii_downcase) or $login == ($creator | ascii_downcase));'
+
+# jq definition shared by the lib/github-status predicates that judge check results: keeps only
+# the most recent run of each check, keyed on name (or a legacy StatusContext's context) and
+# workflow, so a failure that a later run of the same check has superseded no longer counts.
+# `gh pr checks` makes the same reduction, which is why its verdict and the raw rollup can
+# disagree without it.
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+_JQ_DEF_LATEST_CHECK_RUNS='def latest_check_runs:
+    group_by([(.name // .context // ""), (.workflowName // "")])
+    | map(sort_by(.startedAt // .completedAt // "") | last);'
+
+# jq definition shared by the lib/github-status predicates that judge check results: whether one
+# statusCheckRollup entry has definitively failed, a CheckRun (it has .status) whose conclusion is
+# FAILURE or a legacy StatusContext (no .status) whose state is FAILURE or ERROR. One definition,
+# so the terminal check, the failed-required-check claim and the next-phase routing cannot
+# disagree about what counts as a failure.
+# shellcheck disable=SC2034  # read by lib/github-status after sourcing
+_JQ_DEF_CHECK_FAILED='def check_failed:
+    if (.status != null)
+    then .conclusion == "FAILURE"
+    else ((.state // "") | . == "FAILURE" or . == "ERROR")
+    end;'
+
+# jq definition shared by the lib/github-status functions that decide whose PR comments count as
+# trusted activity: a login counts when it is trusted (every login when $trusted is null) and is
+# not the orchestrator's own (no login is excluded when $me is empty). One definition, so the
+# last-agent-comment-seen marker and the quoted unaddressed-comment text cannot disagree about
+# whose comments they count. The program must be given --argjson trusted and --arg me.
+# shellcheck disable=SC2016,SC2034  # $trusted, $me and $l are jq variables; read by lib/github-status after sourcing
+_JQ_DEF_COUNTED_LOGIN='def counted_login($l): ($trusted == null or ($trusted | index($l)) != null) and ($me == "" or $l != $me);'
 
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 # shellcheck disable=SC2034  # read by lib/github after sourcing
