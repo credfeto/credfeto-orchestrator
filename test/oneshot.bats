@@ -5803,7 +5803,7 @@ stub_plan_already_self_heal_marked() {
         printf '%d' "${_count}" > "${_pr_call_file}"
         [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
     }
-    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    stub_pr_merged
     # Issue #10 (first call, pivot path): open, not blocked — allows the PR-state check to fire.
     # Issue #20 (second call, no-PR path): open, blocked.
     local _issue_call_file="${TEST_TMP}/_issue_call"
@@ -8022,13 +8022,7 @@ ENVEOF
 }
 
 @test "main sends blocked notification for Issue when the Issue has a linked PR that is blocked" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
+    setup_main_pivot_mocks
     fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     pr_json_has_blocked_label() { return 0; }
     local _notif_log="${TEST_TMP}/notif_log"
