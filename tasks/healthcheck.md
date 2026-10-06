@@ -148,19 +148,49 @@ file, so every line belongs to that owner's sessions):
   ssh nanoclaw.lan 'sudo journalctl --since "YYYY-MM-DD" --until "YYYY-MM-DD+1" -u credfeto-orchestrator-funfair-tech-funfair-tech.service --no-pager 2>&1' > /tmp/quit-funfair-tech-YYYY-MM-DD.log
 
 (YYYY-MM-DD+1 is the following date.) Then, in a SEPARATE Bash call per file, count the
-sessions whose final message says Claude quit because a tool was denied, per repo. Each
-session's final message is printed after the scheduler's "Checking <type> #<id> in <repo>"
-line for that item, and one message can span several journal lines, so every line is gathered
-under the most recent "Checking" line and each session is classified and counted once:
+sessions whose final message says Claude quit because a tool was denied, per repo. Only the
+agent's final message is classified, never the orchestrator's own log lines around it: its
+"✓ Completed one workflow phase" line would otherwise match the workaround rule for every
+session, and its "no progress this session" line the give-up rule. oneshot echoes the final
+message as plain lines, with no prefix, from the same oneshot[PID] as that item's "Checking
+<type> #<id> in <repo>" line, after its "Starting new Claude session" line. So the awk below
+keeps a line only when all of these hold:
+
+  - it carries the same oneshot[PID] field as the "Checking" line. This drops the container's
+    own output (including its JSON result line), podman and systemd lines, and the "Claude
+    reported N permission denial(s)" warning with its "- Bash: ..." list, which oneshot prints
+    from a command-substitution subshell with a different PID;
+  - it comes after "Starting new Claude session", which drops the dirty-branch warning and its
+    git status lines printed before the session;
+  - it does not start with "! " or with a non-ASCII character. lib/core's die, success, info
+    and warn helpers prefix every orchestrator line with ✗, ✓, → or !, so this drops "✓
+    Completed one workflow phase", "→ PR #N ...: no progress this session", "→ PR #N ...: not
+    charging" and the rest. The exception is "→ Claude error: <message>": a session that ended
+    in error prints its final message only there, so that prefix is removed and the message
+    kept.
+
+The awk is plain ASCII on purpose (it tests for a non-ASCII first character rather than
+naming the markers), and reads the PID from field 5 of journalctl's default short output
+format. For the same reason "don[^a-z ]{1,3}t", "can[^a-z ]{1,3}t" and "couldn[^a-z ]{1,3}t"
+accept a curly apostrophe without naming it: it is three bytes under a C locale and one
+character under UTF-8, and both fit. One message can span several journal lines, so the kept lines are gathered under the
+most recent "Checking" line and each session is classified and counted once:
 
   awk 'function classify() {
-         if (text ~ /bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)|bash( tool)? (is|was|has been) no longer (allowed|available|permitted)|don.t ask mode/ \
-             && text ~ /(cannot|can not|can.t|couldn.t|could not|unable to) (continue|proceed)|(cannot|can not|can.t|couldn.t|could not|unable to) make any progress|no progress|stopping here|have stopped|stopped (work|the session)|giving up|gave up|nothing (below|else) (has been|was) done|rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session|bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
+         if (text ~ /bash( tool| commands?| calls?)? (is|are|was|were|has been|have been|(is|are) being) (now |completely |entirely |fully )?(denied|disabled|blocked)|bash( tool)? (is|was|has been) no longer (allowed|available|permitted)|don[^a-z ]{1,3}t ask.{0,2} mode/ \
+             && text ~ /(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) (continue|proceed)|(cannot|can not|can[^a-z ]{1,3}t|couldn[^a-z ]{1,3}t|could not|unable to) make any progress|no progress|stopping here|have stopped|stopped (work|the session)|stopped before (doing|starting|any)|giving up|gave up|(a |the )?(permission )?denial stopped me|stopped me from|nothing( below| else)? (has been|was) done|(couldn[^a-z ]{1,3}t|could not) do anything|re-?invoke me|to continue, (either )?allow|rest of (the|this) session|(partway|part way|halfway) through (the|this) session|(denied|disabled|blocked) (in|for) (the|this) session|bash( tool)? (is|was|has been) (now (denied|disabled)|no longer (allowed|available|permitted))/ \
              && text !~ /(^|[^a-z])(instead|finished|completed|pushed|succeeded)([^a-z]|$)|worked (round|around)|(is|are|was|were) complete([^a-z]|$)/) quits[repo]++
        }
-       / Checking .* #[0-9]+ in [^ ]+ / { if (session != "") classify(); session = $0; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); text = ""; next }
-       session != "" { text = text " " tolower($0) }
-       END { if (session != "") classify(); for (r in quits) print quits[r], r }' /tmp/quit-credfeto-YYYY-MM-DD.log
+       / Checking .* #[0-9]+ in [^ ]+ / { if (pid != "") classify(); pid = $5; repo = $0; sub(/.* in /, "", repo); sub(/ .*/, "", repo); text = ""; started = 0; next }
+       $5 != pid { next }
+       / Starting new Claude session / { started = 1; next }
+       started { line = $0; sub(/^[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ /, "", line); sub(/^[^ ]+ Claude error: /, "", line)
+                 if (line !~ /^! / && substr(line, 1, 1) ~ /[ -~]/) text = text " " tolower(line) }
+       END { if (pid != "") classify(); for (r in quits) print quits[r], r }' /tmp/quit-credfeto-YYYY-MM-DD.log
+
+One known gap: a line of the agent's own message that starts with a marker character (an
+agent sometimes writes "✓ ..." itself) is dropped as well, so a workaround phrase on such a
+line is missed.
 
 Each session's lines are joined into one lower-cased message and classified as a whole, the
 same way the orchestrator does: a quit needs a denial mention, AND a session-level give-up
