@@ -772,7 +772,6 @@ link_pivot_pr_transcripts() {
 clear_closed_marker() {
     local item_type="$1" item_id="$2" marker
     marker=$(closed_marker_file_path "${item_type}" "${item_id}")
-    [ -e "${marker}" ] || return 0
     rm -f "${marker}" 2>/dev/null || true
 }
 
