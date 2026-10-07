@@ -3860,8 +3860,15 @@ STUBEOF
     claude_result_indicates_tool_denied_quit "Bash is denied; the PR has not yet been pushed. Stopping here."
     claude_result_indicates_tool_denied_quit "Bash is denied; I never pushed. Stopping here."
     claude_result_indicates_tool_denied_quit "Bash was denied; I haven't pushed anything and cannot proceed."
-    claude_result_indicates_tool_denied_quit "Bash was denied; I haven't pushed anything and cannot proceed."
+    claude_result_indicates_tool_denied_quit "Bash was denied; I haven’t pushed anything and cannot proceed."
     claude_result_indicates_tool_denied_quit "Bash is denied so I couldn't push. I cannot continue."
+}
+
+@test "claude_result_indicates_tool_denied_quit matches a quit with cannot or a negation before be and the workaround word" {
+    claude_result_indicates_tool_denied_quit "Bash is denied, so I cannot continue; the merge could not be completed."
+    claude_result_indicates_tool_denied_quit "Bash is denied; the branch cannot be pushed. Stopping here."
+    claude_result_indicates_tool_denied_quit "Bash is denied; the branch can't be pushed. Giving up."
+    claude_result_indicates_tool_denied_quit "Bash is denied; the fix won't be pushed. I cannot continue."
 }
 
 @test "claude_result_indicates_tool_denied_quit still sees a real workaround next to a negated one" {
