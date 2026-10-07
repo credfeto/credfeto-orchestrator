@@ -838,7 +838,7 @@ setup_interactive_run() {
     mkdir -p "${transcript_dir}/-workspace-repo" "${transcript_dir}/-old-cwd"
     printf '{}\n' > "${transcript_dir}/-old-cwd/old.jsonl"
     printf '{}\n' > "${transcript_dir}/-workspace-repo/new.jsonl"
-    touch -d '8 days ago' "${transcript_dir}/-old-cwd/old.jsonl"
+    touch -d '8 days ago' "${transcript_dir}/-old-cwd/old.jsonl" "${transcript_dir}/-old-cwd"
     invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
     [ ! -e "${transcript_dir}/-old-cwd" ]
     [ -f "${transcript_dir}/-workspace-repo/new.jsonl" ]

@@ -336,8 +336,8 @@ MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 [[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
 
-# How long each top-level entry of the shared transcript directory (launches without a work item)
-# is kept on the host after the last modification of any file under it (prune_transcripts in
+# How long each session in the shared transcript directory (launches without a work item) is kept
+# on the host after the last modification of any file of the session (prune_transcripts in
 # lib/podman).
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TRANSCRIPT_RETENTION_DAYS=7

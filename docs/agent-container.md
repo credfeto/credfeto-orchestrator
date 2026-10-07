@@ -149,14 +149,20 @@ out of the priorities feed, so `oneshot` almost never sees an item closed.
   PR is being worked, and both go together once it has been idle for 14 days. A link whose
   target no longer exists is deleted (the link only, never anything through it), including one
   left dangling by the same pass.
-- `_shared` is aged per top-level entry, one per project directory Claude Code creates under
-  `~/.claude/projects`, by the newest file modification time under it, the same way as an item
-  directory, and a whole entry is deleted once nothing under it has been modified for 7 days
-  (`TRANSCRIPT_RETENTION_DAYS`). It is never purged file by file: a session spans
-  `<session>.jsonl`, which every turn appends to, plus side files under `<session>/` (tool
-  results, subagents) that keep their original modification times, so a resumed session keeps
-  all of them. A top-level file is aged by its own modification time, and a top-level link
-  follows the link rule above.
+- `_shared` is aged per session, inside each project directory Claude Code creates under
+  `~/.claude/projects`. `interactive` always runs in `/workspace/repo`, so one project directory
+  holds every session, and ageing it as a whole would let any recent session keep every older
+  one forever. A session is `<session>.jsonl`, which every turn appends to, plus its side
+  directory `<session>/` (tool results, subagents), whose files keep their original
+  modification times. It is aged by the newest file of the session, across both, and both are
+  deleted together once nothing in the session has been modified for 7 days
+  (`TRANSCRIPT_RETENTION_DAYS`), so a resumed session keeps all of its side files. Any other
+  entry in a project directory (a `<session>/` with no `.jsonl`, another file or directory) is
+  aged on its own the same way. A project directory is deleted only once it is empty and its own
+  modification time, read before its sessions are purged, is older than 7 days; a non-empty one
+  is never deleted as a whole. A top-level file is aged by its own modification time, a
+  top-level link follows the link rule above, and a link inside a project directory is never
+  followed or deleted.
 
 The purge never queries GitHub and never fails the run: a directory it cannot read or delete is
 kept, with a warning, until the next launch. As a result, an item that is still open but has had

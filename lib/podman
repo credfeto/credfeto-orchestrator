@@ -382,19 +382,61 @@ transcript_item_idle() {
     [ -z "${recent}" ]
 }
 
-# Removes one transcript entry (a real directory or regular file, never a link) when it has been
-# idle for more than retention_mins (transcript_item_idle). Keeps it and warns when its age
-# cannot be read or it cannot be removed; never fails.
+# Removes one or more transcript entries (real directories or regular files, never links)
+# together once every one of them has been idle for more than retention_mins
+# (transcript_item_idle), so a session's .jsonl and its side directory go together or not at all.
+# Keeps them all and warns when the age of any cannot be read, or warns when they cannot be
+# removed; never fails.
 purge_idle_transcript_entry() {
-    local entry="$1" retention_mins="$2" idle_status=0
-    transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
-    if [ "${idle_status}" -eq 2 ]; then
-        warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
-        return 0
-    fi
-    [ "${idle_status}" -eq 0 ] || return 0
-    rm -rf "${entry}" 2>/dev/null \
-        || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+    local retention_mins="$1" entry idle_status
+    shift
+    for entry in "$@"; do
+        idle_status=0
+        transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
+        if [ "${idle_status}" -eq 2 ]; then
+            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+            return 0
+        fi
+        [ "${idle_status}" -eq 0 ] || return 0
+    done
+    rm -rf "$@" 2>/dev/null \
+        || warn "Failed to purge transcripts at ${1} - will retry on the next launch"
+    return 0
+}
+
+# Ages one project directory of the shared transcript directory per session, never as a whole:
+# interactive always runs in the same container cwd, so one project directory holds every session
+# and any recent session would otherwise keep years of older ones. A session is <id>.jsonl, which
+# every turn appends to, plus its side directory <id>/ (tool results, subagents), whose files keep
+# their original mtimes; both are aged by the newest file across the two and removed together, so
+# a resumed session never loses its side files. Every other entry (an <id>/ with no .jsonl, any
+# other file or directory) is aged on its own. A link is never followed, aged or removed, so a
+# project directory holding one is never emptied. The project directory itself is removed only
+# once it is empty and its own mtime was already outside the window before this pass, which is
+# read first because removing sessions below updates it.
+prune_shared_project_dir() {
+    local project="$1" retention_mins="$2" stale entry
+    stale=$(find "${project}" -maxdepth 0 -mmin "+${retention_mins}" -print 2>/dev/null) || {
+        warn "Failed to read transcripts at ${project} to check their age - keeping them until the next launch"
+        stale=""
+    }
+    for entry in "${project}"/* "${project}"/.[!.]* "${project}"/..?*; do
+        # -L first: -d and -f are also true for a live link.
+        [ -L "${entry}" ] && continue
+        if [ -f "${entry}" ] && [ "${entry%.jsonl}" != "${entry}" ] \
+            && [ -d "${entry%.jsonl}" ] && [ ! -L "${entry%.jsonl}" ]; then
+            purge_idle_transcript_entry "${retention_mins}" "${entry}" "${entry%.jsonl}"
+        elif [ -d "${entry}" ] && [ -f "${entry}.jsonl" ] && [ ! -L "${entry}.jsonl" ]; then
+            # Aged and removed with its .jsonl above.
+            continue
+        elif [ -d "${entry}" ] || [ -f "${entry}" ]; then
+            purge_idle_transcript_entry "${retention_mins}" "${entry}"
+        fi
+    done
+    [ -n "${stale}" ] || return 0
+    [ -z "$(find "${project}" -mindepth 1 -print -quit 2>/dev/null || printf 'unreadable')" ] || return 0
+    rmdir "${project}" 2>/dev/null \
+        || warn "Failed to purge transcripts at ${project} - will retry on the next launch"
     return 0
 }
 
@@ -416,14 +458,13 @@ remove_dangling_transcript_links() {
 
 # Removes the transcript directory of every work item idle for more than
 # TRANSCRIPT_ITEM_RETENTION_DAYS (transcript_item_idle), every link to a directory that no longer
-# exists, and every top-level entry of the shared no-item directory idle for more than
+# exists, and every session of the shared no-item directory idle for more than
 # TRANSCRIPT_RETENTION_DAYS.
-# The shared directory is aged per top-level entry (each project directory Claude Code creates
-# under ~/.claude/projects) by the newest file under it, never file by file: a session spans
-# <session>.jsonl, which every turn appends to, plus side files under <session>/ (tool results,
-# subagents) that keep their original mtimes, so a per-file purge would strip the side files of a
-# session resumed within the window and break /resume. A top-level regular file is aged by its own
-# mtime, and a top-level link follows the same rule as an item link.
+# The shared directory is aged per session inside each project directory Claude Code creates
+# under ~/.claude/projects (prune_shared_project_dir), by the newest file of the session, never
+# file by file, so a session resumed within the window keeps its older side files and /resume
+# still works. A top-level regular file is aged by its own mtime, and a top-level link follows the
+# same rule as an item link.
 # Age-based rather than tied to an item closing, because oneshot never observes most closures (a
 # merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
 # queries GitHub, because this runs before every container launch and must never fail or stall
@@ -447,7 +488,7 @@ prune_transcripts() {
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
         [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
-        purge_idle_transcript_entry "${entry}" "${item_retention_mins}"
+        purge_idle_transcript_entry "${item_retention_mins}" "${entry}"
     done
     remove_dangling_transcript_links "${transcripts_dir}"
 
@@ -458,8 +499,11 @@ prune_transcripts() {
         local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
         for entry in "${shared_dir}"/* "${shared_dir}"/.[!.]* "${shared_dir}"/..?*; do
             [ -L "${entry}" ] && continue
-            [ -d "${entry}" ] || [ -f "${entry}" ] || continue
-            purge_idle_transcript_entry "${entry}" "${retention_mins}"
+            if [ -d "${entry}" ]; then
+                prune_shared_project_dir "${entry}" "${retention_mins}"
+            elif [ -f "${entry}" ]; then
+                purge_idle_transcript_entry "${retention_mins}" "${entry}"
+            fi
         done
         remove_dangling_transcript_links "${shared_dir}"
     fi
