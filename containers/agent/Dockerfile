@@ -20,6 +20,7 @@
 #   /home/developer/.claude/plans/             — Claude plan files               (read/write, persists across invocations)
 #   /home/developer/.claude/cache/             — Claude cache                    (read/write, persists across invocations)
 #   /home/developer/.claude/backups/           — Claude backups                  (read/write, persists across invocations)
+#   /home/developer/.claude/projects/          - Claude session transcripts      (read/write, one host directory per work item, purged after 14 days idle)
 #   /home/developer/.claude/settings.json      — Claude Code settings            (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/policy-limits.json — Claude Code policy limits       (baked into development-full image, read-only, not mounted)
 #   /home/developer/.claude/hooks/             — Claude Code hooks (enforce-git-dash-c, etc.) (baked into development-full image, read-only, not mounted)

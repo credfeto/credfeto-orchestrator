@@ -364,6 +364,152 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
+# Succeeds when a transcript entry has been idle for more than retention_mins: no file under it
+# was modified within that time, or, when it contains no file at all (only empty subdirectories
+# at most), the directory itself was not. The directory's own mtime is otherwise ignored, because
+# appending to a transcript does not change it. A regular file is its own only file, so it is
+# aged by its own mtime. find runs without following links (its default), so a link inside the
+# directory never counts. Returns 2 when find cannot read the entry, so the caller keeps it
+# rather than reading empty output as idle.
+transcript_item_idle() {
+    local dir="$1" retention_mins="$2" any_file recent
+    any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
+    if [ -z "${any_file}" ]; then
+        recent=$(find "${dir}" -maxdepth 0 ! -mmin "+${retention_mins}" -print 2>/dev/null) || return 2
+    else
+        recent=$(find "${dir}" -type f ! -mmin "+${retention_mins}" -print -quit 2>/dev/null) || return 2
+    fi
+    [ -z "${recent}" ]
+}
+
+# Removes one or more transcript entries (real directories or regular files, never links)
+# together once every one of them has been idle for more than retention_mins
+# (transcript_item_idle), so a session's .jsonl and its side directory go together or not at all.
+# Keeps them all and warns when the age of any cannot be read, or warns when they cannot be
+# removed; never fails.
+purge_idle_transcript_entry() {
+    local retention_mins="$1" entry idle_status
+    shift
+    for entry in "$@"; do
+        idle_status=0
+        transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
+        if [ "${idle_status}" -eq 2 ]; then
+            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+            return 0
+        fi
+        [ "${idle_status}" -eq 0 ] || return 0
+    done
+    rm -rf "$@" 2>/dev/null \
+        || warn "Failed to purge transcripts at ${1} - will retry on the next launch"
+    return 0
+}
+
+# Ages one project directory of the shared transcript directory per session, never as a whole:
+# interactive always runs in the same container cwd, so one project directory holds every session
+# and any recent session would otherwise keep years of older ones. A session is <id>.jsonl, which
+# every turn appends to, plus its side directory <id>/ (tool results, subagents), whose files keep
+# their original mtimes; both are aged by the newest file across the two and removed together, so
+# a resumed session never loses its side files. Every other entry (an <id>/ with no .jsonl, any
+# other file or directory) is aged on its own. A link is never followed, aged or removed, so a
+# project directory holding one is never emptied. The project directory itself is removed only
+# once it is empty and its own mtime was already outside the window before this pass, which is
+# read first because removing sessions below updates it.
+prune_shared_project_dir() {
+    local project="$1" retention_mins="$2" stale entry
+    stale=$(find "${project}" -maxdepth 0 -mmin "+${retention_mins}" -print 2>/dev/null) || {
+        warn "Failed to read transcripts at ${project} to check their age - keeping them until the next launch"
+        stale=""
+    }
+    for entry in "${project}"/* "${project}"/.[!.]* "${project}"/..?*; do
+        # -L first: -d and -f are also true for a live link.
+        [ -L "${entry}" ] && continue
+        if [ -f "${entry}" ] && [ "${entry%.jsonl}" != "${entry}" ] \
+            && [ -d "${entry%.jsonl}" ] && [ ! -L "${entry%.jsonl}" ]; then
+            purge_idle_transcript_entry "${retention_mins}" "${entry}" "${entry%.jsonl}"
+        elif [ -d "${entry}" ] && [ -f "${entry}.jsonl" ] && [ ! -L "${entry}.jsonl" ]; then
+            # Aged and removed with its .jsonl above.
+            continue
+        elif [ -d "${entry}" ] || [ -f "${entry}" ]; then
+            purge_idle_transcript_entry "${retention_mins}" "${entry}"
+        fi
+    done
+    [ -n "${stale}" ] || return 0
+    [ -z "$(find "${project}" -mindepth 1 -print -quit 2>/dev/null || printf 'unreadable')" ] || return 0
+    rmdir "${project}" 2>/dev/null \
+        || warn "Failed to purge transcripts at ${project} - will retry on the next launch"
+    return 0
+}
+
+# Removes every top-level link in dir whose target no longer exists. A live link is never
+# followed, aged or removed.
+remove_dangling_transcript_links() {
+    local dir="$1" entry
+    for entry in "${dir}"/*; do
+        [ -L "${entry}" ] || continue
+        # -e follows the link, so it is false only when the target is missing.
+        [ -e "${entry}" ] && continue
+        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
+        # never anything it points at.
+        rm -f "${entry}" 2>/dev/null \
+            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
+    done
+    return 0
+}
+
+# Removes the transcript directory of every work item idle for more than
+# TRANSCRIPT_ITEM_RETENTION_DAYS (transcript_item_idle), every link to a directory that no longer
+# exists, and every session of the shared no-item directory idle for more than
+# TRANSCRIPT_RETENTION_DAYS.
+# The shared directory is aged per session inside each project directory Claude Code creates
+# under ~/.claude/projects (prune_shared_project_dir), by the newest file of the session, never
+# file by file, so a session resumed within the window keeps its older side files and /resume
+# still works. A top-level regular file is aged by its own mtime, and a top-level link follows the
+# same rule as an item link.
+# Age-based rather than tied to an item closing, because oneshot never observes most closures (a
+# merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
+# queries GitHub, because this runs before every container launch and must never fail or stall
+# the run. Not gated on PRUNE_DANGLING_IMAGES: that protects a developer's own image store,
+# whereas this tree is orchestrator state, and the shared directory interactive uses would
+# otherwise grow without bound.
+# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
+# lib/state) is never followed and never removed while its target exists: the PR's sessions write
+# through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
+prune_transcripts() {
+    local transcripts_dir
+    transcripts_dir=$(transcripts_root_path)
+    [ -d "${transcripts_dir}" ] || return 0
+
+    local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
+    local entry
+    # Real directories first, so a link this pass leaves dangling by purging its target is
+    # removed by the link pass below in the same run.
+    for entry in "${transcripts_dir}"/*; do
+        # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
+        [ -L "${entry}" ] && continue
+        [ -d "${entry}" ] || continue
+        [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
+        purge_idle_transcript_entry "${item_retention_mins}" "${entry}"
+    done
+    remove_dangling_transcript_links "${transcripts_dir}"
+
+    local shared_dir
+    shared_dir=$(transcript_dir_path)
+    # -L first: never prune through a shared directory that is itself a link.
+    if [ -d "${shared_dir}" ] && [ ! -L "${shared_dir}" ]; then
+        local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
+        for entry in "${shared_dir}"/* "${shared_dir}"/.[!.]* "${shared_dir}"/..?*; do
+            [ -L "${entry}" ] && continue
+            if [ -d "${entry}" ]; then
+                prune_shared_project_dir "${entry}" "${retention_mins}"
+            elif [ -f "${entry}" ]; then
+                purge_idle_transcript_entry "${retention_mins}" "${entry}"
+            fi
+        done
+        remove_dangling_transcript_links "${shared_dir}"
+    fi
+    return 0
+}
+
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
 # cgroup is clean when the next timer fires and systemd does not warn about
 # left-over processes.  Registered as an EXIT trap by main so it runs on any
@@ -693,6 +839,7 @@ ensure_agent_container_ready() {
     fi
 
     cleanup_dangling_images
+    prune_transcripts
     # One pull per oneshot run, not one per item: a moved :latest can take many minutes to pull,
     # and a tick with several actionable items would otherwise pay that cost once per item.
     if [ "${ORCHESTRATOR_IMAGE_PULLED_THIS_RUN}" = "1" ]; then
@@ -734,7 +881,8 @@ ensure_agent_container_ready() {
 # Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
 # container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
-# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, and the Podman secrets for
+# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the per-item transcript
+# directory (transcript_dir_path), and the Podman secrets for
 # the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
 # phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
 # or expose. Installs the EXIT trap that removes everything it creates
@@ -742,11 +890,11 @@ ensure_agent_container_ready() {
 # cannot leak a tmpfile or a secret (#1103); bash traps replace rather than append, so a
 # caller that needs more on EXIT passes it as extra_exit_cmd (oneshot: stop_ssh_agent). The
 # trap is a backstop only: every normal exit path in the callers runs the cleanup itself.
-# item_type and item_id are optional: when both are set they feed the WORK_ITEM_URL banner
-# and the Discord error notifications.
+# item_type and item_id are optional: when both are set they select the transcript directory
+# and feed the WORK_ITEM_URL banner and the Discord error notifications.
 prepare_claude_container_args() {
     local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}" extra_exit_cmd="${6:-}"
-    local d
+    local d transcript_dir
 
     # shellcheck disable=SC2064  # expanded now on purpose: the command is fixed at install time
     trap "cleanup_claude_invocation_tmpfiles${extra_exit_cmd:+; ${extra_exit_cmd}}" EXIT
@@ -768,6 +916,13 @@ prepare_claude_container_args() {
     #   - sessions/, session-env/, plans/, cache/, backups/: read-write, each
     #     backed by a per-owner-per-repo host directory under CLAUDE_STATE_DIR so
     #     they persist across invocations instead of being wiped every run.
+    #   - projects/: read-write, session transcripts, backed by the per-work-item
+    #     directory from transcript_dir_path (lib/state, which explains the layout and
+    #     purge). Like the five above, the mountpoint is writable only because podman
+    #     creates it owned by the mapped developer uid. A pivoted PR's directory may be
+    #     a symlink to its Issue's: mkdir -p accepts a live link, chmod applies to the
+    #     Issue directory it points at, and prune_transcripts has already removed any
+    #     dangling one before this runs.
     CLAUDE_MD_TMPFILE=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp --suffix=.claude-md) || die "Failed to create temp file for CLAUDE.md"
     printf '%s' "${claude_md_content}" > "${CLAUDE_MD_TMPFILE}"
     CLAUDE_SCRATCH_TMPDIR=$(TMPDIR="${XDG_RUNTIME_DIR:-/tmp}" mktemp -d --suffix=.claude-scratch) || die "Failed to create scratch directory"
@@ -776,6 +931,8 @@ prepare_claude_container_args() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
+    transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
+    ensure_transcript_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
     # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
     # container-ephemeral.
@@ -833,6 +990,7 @@ prepare_claude_container_args() {
     for d in sessions session-env plans cache backups; do
         PODMAN_RUN_ARGS+=( --volume "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" )
     done
+    PODMAN_RUN_ARGS+=( --volume "${transcript_dir}:/home/developer/.claude/projects:rw" )
     # /home/developer/.cache/orchestrator/global (#1380): this fixed, known-in-advance mount
     # target assumes XDG_CACHE_HOME is unset in this image, matching entrypoint.sh's and
     # cache-gh-lookups' own "${XDG_CACHE_HOME:-${HOME}/.cache}" fallback for the same

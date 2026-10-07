@@ -882,6 +882,27 @@ pr_json_env_block_image_sha() {
     printf '%s' "${sha}"
 }
 
+# Prints the lowest number among the Issues in repo_full that the pre-fetched PR JSON closes (its
+# closingIssuesReferences, which fetch_pr_json includes), and returns 1 when it closes none, or
+# when the field is absent or malformed. A bot PR rarely closes more than one Issue, so linking
+# to the lowest-numbered one is preferred to leaving its transcripts unlinked. The Issue-to-PR
+# pivot links a PR's transcripts by this rather than by the Issue it happened to be processing,
+# because the pivot's PR is the repository's open bot PR, not one tied to that Issue. A reference
+# that names no repository is taken to be in repo_full; one in another repository never counts,
+# as its transcripts live in that repository's state tree.
+pr_json_lowest_closing_issue() {
+    local pr_json="$1" repo_full="$2" issue
+    issue=$(printf '%s' "${pr_json}" | jq -er --arg repo "${repo_full}" '
+        [(.closingIssuesReferences // [])[]
+            | select(.repository == null
+                or (((.repository.owner.login // "") + "/" + (.repository.name // "")) | ascii_downcase) == ($repo | ascii_downcase))
+            | .number]
+        | if length > 0 and all(type == "number") then min else empty end
+    ' 2>/dev/null) || return 1
+    [[ "${issue}" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "${issue}"
+}
+
 # Returns 0 (true) if the pre-fetched Issue JSON contains a label named 'blocked' (case-insensitive).
 issue_json_has_blocked_label() {
     _json_has_blocked_label "$1"

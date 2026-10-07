@@ -336,6 +336,27 @@ MAX_PR_ENV_AUTO_UNBLOCKS="${MAX_PR_ENV_AUTO_UNBLOCKS:-3}"
 MAX_CONSECUTIVE_INFRA_FAILURES="${MAX_CONSECUTIVE_INFRA_FAILURES:-5}"
 [[ "${MAX_CONSECUTIVE_INFRA_FAILURES}" =~ ^[1-9][0-9]*$ ]] || MAX_CONSECUTIVE_INFRA_FAILURES=5
 
+# How long each session in the shared transcript directory (launches without a work item) is kept
+# on the host after the last modification of any file of the session (prune_transcripts in
+# lib/podman).
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TRANSCRIPT_RETENTION_DAYS=7
+# How long a work item's transcript directory is kept on the host after the last modification of
+# any file in it (prune_transcripts in lib/podman). Age-based because oneshot never observes most
+# items closing: a merged PR and the Issue it closes drop out of the priorities feed first.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+TRANSCRIPT_ITEM_RETENTION_DAYS=14
+# File touched in an Issue's transcript directory on every Issue-to-PR pivot
+# (link_pivot_pr_transcripts in lib/state), so the pivot counts as activity and the prune before
+# the launch cannot purge an Issue that has been idle. A dot-file at the root of the mounted
+# ~/.claude/projects, beside Claude Code's per-project subdirectories rather than inside one.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
+TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME=".orchestrator-last-pivot"
+# Transcript directory name for launches with no work item (interactive, ad-hoc invoke_claude
+# calls). Starts with an underscore so it can never collide with an <ItemType>_<id> directory.
+# shellcheck disable=SC2034  # read by lib/state and lib/podman after sourcing
+TRANSCRIPT_SHARED_DIR_NAME="_shared"
+
 # How long (in minutes) to wait for CI checks to complete before flagging a PR as Blocked.
 # Override with CI_CHECK_TIMEOUT_MINUTES in the environment or in .env.
 # An invalid value falls back to the same default, from one constant so the two cannot diverge

@@ -6,10 +6,17 @@ Orchestrator tooling for driving Claude Code agents to work on GitHub issues and
 
 The `oneshot` script fetches the top-priority open work item for `credfeto/credfeto-orchestrator`
 from the [priorities API](https://git-workflow.markridgwell.com/priorities) and invokes a
-Claude Code session to work on it.  One session file is stored per issue or pull request at
-`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/credfeto/credfeto-orchestrator/<ItemType>_<id>.env` so that subsequent
-runs resume the correct Claude session.  When a PR has no session of its own the script
-inherits the session from any linked closing issue.
+Claude Code session to work on it.  Every run starts a fresh session and never resumes an
+earlier one; the state that carries between runs lives in GitHub.  Under
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>` the script keeps per-item
+bookkeeping files named `<ItemType>_<id>.<suffix>` (change-detection fingerprints, invocation
+counters and block markers) and each item's session transcripts in
+`transcripts/<ItemType>_<id>/`, kept so a human can read what the agent did.  When an issue
+pivots to its PR, the PR's transcript directory is linked to the issue's, so both share one
+history.  An item's transcripts are deleted once none of them has been modified for 14 days,
+whether the item is open or closed.  An issue that pivots to its PR keeps its transcripts for as
+long as it keeps pivoting, because each pivot counts as activity; see
+[docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### Usage
 
@@ -64,7 +71,7 @@ preserving the existing behaviour for installations that do not require per-owne
 
 The script can post notifications to a Discord channel via a webhook whenever:
 
-- An issue or PR is **picked up** (new session started or existing session resumed), with a link to the item.
+- An issue or PR is **picked up** (a fresh session is about to start on it), with a link to the item.
 - An issue or PR is found to be **blocked** (has the `Blocked` label), with a link to the item.
 - **No actionable work items** are found after scanning all priorities.
 
@@ -171,11 +178,15 @@ Like `oneshot`, every launch pulls `ORCHESTRATOR_IMAGE` first so the session run
 agent image; when the registry is unreachable the cached local image is used instead. Unlike
 `oneshot`, it never runs `podman image prune`: your own image store is left alone.
 
-Sessions are not resumable across launches. The Claude state directories `oneshot` mounts
-(`sessions`, `session-env`, `plans`, `cache`, `backups` under
-`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, but the conversation transcripts
-Claude Code resumes from live under `~/.claude/projects`, which is neither mounted nor writable
-inside the container, so `/resume` and `claude --continue` find nothing next time.
+Sessions can be resumed across launches for 7 days. The Claude state directories `oneshot`
+mounts (`sessions`, `session-env`, `plans`, `cache`, `backups` under
+`${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, and the
+conversation transcripts Claude Code resumes from (`~/.claude/projects` in the container) are
+kept in `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/transcripts/_shared`,
+mode `0700`, so `/resume` and `claude --continue` find them next time. A session there, aged by
+the newest file of the session, is deleted as a whole before each launch once none of its files
+has been modified for 7 days; see
+[docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### What the container can reach
 

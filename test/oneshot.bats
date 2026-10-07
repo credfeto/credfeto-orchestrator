@@ -5803,7 +5803,7 @@ stub_plan_already_self_heal_marked() {
         printf '%d' "${_count}" > "${_pr_call_file}"
         [ "${_count}" -eq 1 ] && printf '99\n' || printf ''
     }
-    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    stub_pr_merged
     # Issue #10 (first call, pivot path): open, not blocked — allows the PR-state check to fire.
     # Issue #20 (second call, no-PR path): open, blocked.
     local _issue_call_file="${TEST_TMP}/_issue_call"
@@ -8022,13 +8022,7 @@ ENVEOF
 }
 
 @test "main sends blocked notification for Issue when the Issue has a linked PR that is blocked" {
-    setup_main_mocks
-    fetch_all_priorities() {
-        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
-    }
-    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
-    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
-    issue_json_has_blocked_label() { return 1; }
+    setup_main_pivot_mocks
     fetch_pr_json()             { printf '{"state":"OPEN","title":"PR title","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
     pr_json_has_blocked_label() { return 0; }
     local _notif_log="${TEST_TMP}/notif_log"
@@ -17339,4 +17333,747 @@ use_file_backed_marker_and_pr_states() {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "feat/x" "/w" "fix/other" "false" ""
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"git -C /w reset HEAD"* ]]
+}
+
+# --- session transcripts: per-item mount and age-based retention purge ----------------------
+
+stub_podman_run_logging_args() {
+    local args_log="$1"
+    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
+    make_stub_multiline podman \
+        "[ \"\$1\" = \"pull\" ] && exit 0" \
+        "[ \"\$1\" = \"inspect\" ] && exit 1" \
+        "printf '%s\\n' \"\$@\" >> \"${args_log}\"" \
+        "printf '{\"session_id\":\"12345678-1234-1234-1234-123456789abc\",\"result\":\"done\"}\\n'"
+}
+
+make_transcript_dir() {
+    local item_name="$1"
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/${item_name}/-workspace-repo/session.jsonl"
+}
+
+# Sets every file under an item's transcript directory (not the directories) to the given age.
+age_transcript_files() {
+    local item_name="$1" days="$2"
+    find "${SESSION_BASE_DIR}/transcripts/${item_name}" -type f -exec touch -d "${days} days ago" {} +
+}
+
+# main mocks for Issue 10, open and not Blocked, pivoting to PR 99; the caller stubs the PR's state.
+setup_main_pivot_mocks() {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+}
+
+# The PR is open and Blocked, so main stops at the Blocked check without a container launch.
+stub_pr_open_blocked() {
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":10}]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+}
+
+# The PR has merged.
+stub_pr_merged() {
+    fetch_pr_json() { printf '{"state":"MERGED","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+}
+
+@test "transcripts_root_path is the transcripts directory under SESSION_BASE_DIR" {
+    [ "$(transcripts_root_path)" = "${SESSION_BASE_DIR}/transcripts" ]
+}
+
+@test "transcript_dir_path is per work item, under SESSION_BASE_DIR/transcripts" {
+    [ "$(transcript_dir_path Issue 42)" = "${SESSION_BASE_DIR}/transcripts/Issue_42" ]
+    [ "$(transcript_dir_path PullRequest 7)" = "${SESSION_BASE_DIR}/transcripts/PullRequest_7" ]
+}
+
+@test "transcript_dir_path falls back to the shared directory when item context is missing" {
+    [ "$(transcript_dir_path "" "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+    [ "$(transcript_dir_path)" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+    [ "$(transcript_dir_path Issue "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+}
+
+@test "invoke_claude mounts the item's own transcript directory at ~/.claude/projects with mode 0700" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    local transcript_dir="${SESSION_BASE_DIR}/transcripts/Issue_42"
+    grep -qx "${transcript_dir}:/home/developer/.claude/projects:rw" "${args_log}"
+    [ "$(grep -c ':/home/developer/.claude/projects:rw$' "${args_log}")" -eq 1 ]
+    [ "$(stat -c %a "${transcript_dir}")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+}
+
+@test "invoke_claude tightens an existing transcript directory to mode 0700" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_7"
+    chmod 0755 "${SESSION_BASE_DIR}/transcripts" "${SESSION_BASE_DIR}/transcripts/PullRequest_7"
+    invoke_claude "test prompt" "PullRequest" "7" "# per-item instructions" 2>/dev/null
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/PullRequest_7")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+}
+
+@test "invoke_claude mounts the shared transcript directory when it has no item context" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    grep -qx "${SESSION_BASE_DIR}/transcripts/_shared:/home/developer/.claude/projects:rw" "${args_log}"
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/_shared")" = "700" ]
+}
+
+@test "invoke_claude dies without launching the container when the transcript directory cannot be created" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts"
+    run invoke_claude "test prompt" "Issue" "42" "# per-item instructions"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to create transcript directory: ${SESSION_BASE_DIR}/transcripts/Issue_42"* ]]
+    [ "$(grep -cx 'run' "${args_log}")" -eq 0 ]
+}
+
+@test "invoke_claude purges an idle item's transcripts before launching" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_transcript_dir "Issue_5"
+    age_transcript_files "Issue_5" 15
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_5" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_42" ]
+}
+
+@test "prune_transcripts is a no-op that succeeds when the transcripts tree does not exist" {
+    rm -rf "${SESSION_BASE_DIR}"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}" ]
+}
+
+@test "prune_transcripts keeps an item directory with a recently modified file" {
+    make_transcript_dir "Issue_10"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts keeps an item directory whose files are older than the shared window but within the item window" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 8
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes an item directory whose files are all older than the item window, whatever the directory's own mtime" {
+    make_transcript_dir "Issue_10"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/other.jsonl"
+    age_transcript_files "Issue_10" 15
+    # The directories stay fresh: appending to a transcript does not change them, so they are
+    # not evidence of recent work.
+    touch "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "prune_transcripts keeps an item directory with one recent file among old ones" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/new.jsonl"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/new.jsonl" ]
+}
+
+@test "prune_transcripts ages an item directory with no files by its own mtime" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_11/-workspace-repo" \
+        "${SESSION_BASE_DIR}/transcripts/Issue_12"
+    touch -d '15 days ago' "${SESSION_BASE_DIR}/transcripts/Issue_10" "${SESSION_BASE_DIR}/transcripts/Issue_11"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_11" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_12" ]
+}
+
+@test "prune_transcripts does not follow a link inside an item directory when ageing it, and never deletes through it" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    local outside="${TEST_TMP}/outside"
+    mkdir -p "${outside}"
+    printf 'keep\n' > "${outside}/fresh.jsonl"
+    ln -s "${outside}" "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/elsewhere"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ -f "${outside}/fresh.jsonl" ]
+}
+
+@test "prune_transcripts never fails the run when a purge cannot delete" {
+    make_transcript_dir "Issue_15"
+    age_transcript_files "Issue_15" 15
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_with_failing_deletes() {
+        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 - will retry on the next launch"* ]]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_15" ]
+}
+
+@test "prune_transcripts warns and keeps an item directory when its age cannot be read" {
+    make_transcript_dir "Issue_15"
+    age_transcript_files "Issue_15" 15
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
+    # A failing find prints nothing, which must not be read as "nothing recent".
+    prune_with_failing_find() {
+        find() { return 1; }
+        prune_transcripts
+    }
+    run prune_with_failing_find
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to read transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 to check their age - keeping them until the next launch"* ]]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_15/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes an old shared session whole and keeps a fresh session in the same project directory" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/old/tool-results" "${project}/old/subagents" "${project}/new/tool-results"
+    printf '{}\n' > "${project}/old.jsonl"
+    printf '{}\n' > "${project}/old/tool-results/result.txt"
+    printf '{}\n' > "${project}/old/subagents/agent.jsonl"
+    touch -d '8 days ago' "${project}/old.jsonl" "${project}/old/tool-results/result.txt" \
+        "${project}/old/subagents/agent.jsonl"
+    printf '{}\n' > "${project}/new.jsonl"
+    printf '{}\n' > "${project}/new/tool-results/result.txt"
+    # The project directory is old too, but it still holds a fresh session.
+    touch -d '8 days ago' "${project}"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${project}/old.jsonl" ]
+    [ ! -e "${project}/old" ]
+    [ -f "${project}/new.jsonl" ]
+    [ -f "${project}/new/tool-results/result.txt" ]
+}
+
+@test "prune_transcripts keeps a shared session with a fresh transcript whole, including its older side files" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/session/tool-results" "${project}/session/subagents"
+    printf '{}\n' > "${project}/session/tool-results/result.txt"
+    printf '{}\n' > "${project}/session/subagents/agent.jsonl"
+    touch -d '8 days ago' "${project}/session/tool-results/result.txt" "${project}/session/subagents/agent.jsonl" \
+        "${project}/session/tool-results" "${project}/session/subagents" "${project}/session"
+    printf '{}\n' > "${project}/session.jsonl"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${project}/session.jsonl" ]
+    [ -f "${project}/session/tool-results/result.txt" ]
+    [ -f "${project}/session/subagents/agent.jsonl" ]
+}
+
+@test "prune_transcripts ages a shared side directory with no transcript, and any other project entry, on its own" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/orphan/tool-results" "${project}/fresh-orphan" "${project}/memory"
+    printf '{}\n' > "${project}/orphan/tool-results/result.txt"
+    printf '{}\n' > "${project}/memory/old.md"
+    printf '{}\n' > "${project}/old.txt"
+    printf '{}\n' > "${project}/fresh.txt"
+    printf '{}\n' > "${project}/fresh-orphan/result.txt"
+    touch -d '8 days ago' "${project}/orphan/tool-results/result.txt" "${project}/memory/old.md" "${project}/old.txt"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${project}/orphan" ]
+    [ ! -e "${project}/memory" ]
+    [ ! -e "${project}/old.txt" ]
+    [ -f "${project}/fresh.txt" ]
+    [ -f "${project}/fresh-orphan/result.txt" ]
+}
+
+@test "prune_transcripts removes an empty old shared project directory, and never a non-empty one as a whole" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-fresh-empty-cwd" "${shared}/-busy-cwd"
+    printf '{}\n' > "${shared}/-emptied-cwd/session.jsonl"
+    touch -d '8 days ago' "${shared}/-emptied-cwd/session.jsonl"
+    printf '{}\n' > "${shared}/-busy-cwd/old.jsonl"
+    printf '{}\n' > "${shared}/-busy-cwd/new.jsonl"
+    touch -d '8 days ago' "${shared}/-busy-cwd/old.jsonl"
+    # Removing the old session updates -emptied-cwd's mtime, so its age is read before the pass.
+    touch -d '8 days ago' "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-busy-cwd"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${shared}/-emptied-cwd" ]
+    [ ! -e "${shared}/-stale-empty-cwd" ]
+    [ -d "${shared}/-fresh-empty-cwd" ]
+    [ ! -e "${shared}/-busy-cwd/old.jsonl" ]
+    [ -f "${shared}/-busy-cwd/new.jsonl" ]
+    [ -d "${shared}" ]
+}
+
+@test "prune_transcripts removes a top-level file in the shared directory older than the shared window" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}"
+    printf '{}\n' > "${shared}/old.json"
+    printf '{}\n' > "${shared}/.old-dot-file"
+    touch -d '8 days ago' "${shared}/old.json" "${shared}/.old-dot-file"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${shared}/old.json" ]
+    [ ! -e "${shared}/.old-dot-file" ]
+}
+
+@test "prune_transcripts keeps a fresh top-level file in the shared directory" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}"
+    printf '{}\n' > "${shared}/fresh.json"
+    touch -d '6 days ago' "${shared}/fresh.json"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${shared}/fresh.json" ]
+}
+
+@test "prune_transcripts warns and keeps a shared session and its project directory when their age cannot be read" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/session"
+    printf '{}\n' > "${project}/session.jsonl"
+    printf '{}\n' > "${project}/session/result.txt"
+    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session" "${project}"
+    # A failing find prints nothing, which must not be read as "nothing recent".
+    prune_shared_with_failing_find() {
+        find() { return 1; }
+        prune_transcripts
+    }
+    run prune_shared_with_failing_find
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to read transcripts at ${project} to check their age - keeping them until the next launch"* ]]
+    [[ "${output}" == *"Failed to read transcripts at ${project}/session.jsonl to check their age - keeping them until the next launch"* ]]
+    [ -f "${project}/session.jsonl" ]
+    [ -f "${project}/session/result.txt" ]
+}
+
+@test "prune_transcripts warns naming the session and keeps an idle shared session whole when it cannot be deleted" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/session"
+    printf '{}\n' > "${project}/session.jsonl"
+    printf '{}\n' > "${project}/session/result.txt"
+    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_shared_with_failing_deletes() {
+        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_shared_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${project}/session.jsonl - will retry on the next launch"* ]]
+    [ -f "${project}/session.jsonl" ]
+    [ -f "${project}/session/result.txt" ]
+}
+
+@test "prune_transcripts warns and keeps an empty old shared project directory when it cannot be removed" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-stale-empty-cwd"
+    mkdir -p "${project}"
+    touch -d '8 days ago' "${project}"
+    make_stub rmdir "exit 1"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${project} - will retry on the next launch"* ]]
+    [ -d "${project}" ]
+}
+
+@test "prune_transcripts never follows or deletes through a link in the shared directory, and removes it only when dangling" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    local outside="${TEST_TMP}/outside"
+    mkdir -p "${shared}/-workspace-repo" "${outside}/-linked-cwd" "${outside}/side"
+    printf '{}\n' > "${outside}/-linked-cwd/old.jsonl"
+    printf '{}\n' > "${outside}/old.json"
+    printf '{}\n' > "${outside}/side/old.txt"
+    printf '{}\n' > "${outside}/fresh.jsonl"
+    touch -d '30 days ago' "${outside}/-linked-cwd/old.jsonl" "${outside}/-linked-cwd" "${outside}/old.json" \
+        "${outside}/side/old.txt"
+    ln -s "${outside}/-linked-cwd" "${shared}/-linked-cwd"
+    ln -s "${outside}/old.json" "${shared}/linked.json"
+    ln -s "${outside}/missing" "${shared}/-dangling-cwd"
+    # Inside a project directory: an old session whose side directory is a link is removed
+    # without following the link, and a link is never aged, followed or removed.
+    printf '{}\n' > "${shared}/-workspace-repo/session.jsonl"
+    touch -d '8 days ago' "${shared}/-workspace-repo/session.jsonl"
+    ln -s "${outside}/side" "${shared}/-workspace-repo/session"
+    ln -s "${outside}/fresh.jsonl" "${shared}/-workspace-repo/linked.jsonl"
+    ln -s "${outside}/-linked-cwd" "${shared}/-workspace-repo/elsewhere"
+    touch -d '8 days ago' "${shared}/-workspace-repo"
+    touch -h -d '30 days ago' "${shared}/-linked-cwd" "${shared}/linked.json" "${shared}/-dangling-cwd"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -L "${shared}/-linked-cwd" ]
+    [ -L "${shared}/linked.json" ]
+    [ ! -L "${shared}/-dangling-cwd" ]
+    [ ! -e "${shared}/-workspace-repo/session.jsonl" ]
+    [ -L "${shared}/-workspace-repo/session" ]
+    [ -L "${shared}/-workspace-repo/linked.jsonl" ]
+    [ -L "${shared}/-workspace-repo/elsewhere" ]
+    [ -f "${outside}/-linked-cwd/old.jsonl" ]
+    [ -f "${outside}/old.json" ]
+    [ -f "${outside}/side/old.txt" ]
+    [ -f "${outside}/fresh.jsonl" ]
+}
+
+# --- session transcripts: pivoted PR linked to its Issue's directory --------------------------
+
+@test "link_pivot_pr_transcripts links the PR's transcript directory to the Issue's with a relative symlink" {
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/Issue_10")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+}
+
+@test "link_pivot_pr_transcripts keeps the Issue's existing transcripts and is idempotent" {
+    make_transcript_dir "Issue_10"
+    link_pivot_pr_transcripts "10" "99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "link_pivot_pr_transcripts keeps a non-empty real PR transcript directory and says so" {
+    make_transcript_dir "PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 already has transcripts of its own at ${SESSION_BASE_DIR}/transcripts/PullRequest_99, so they are kept and not linked to Issue #10"* ]]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "link_pivot_pr_transcripts keeps a real PR transcript directory holding only a dot-file" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/PullRequest_99/.hidden"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/.hidden" ]
+}
+
+@test "link_pivot_pr_transcripts replaces an empty real PR transcript directory with the link" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still succeeds when an empty real PR transcript directory cannot be removed" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    make_stub rmdir "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to remove empty transcript directory ${SESSION_BASE_DIR}/transcripts/PullRequest_99, so PR #99 transcripts will not be linked to Issue #10"* ]]
+    [ -d "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_transcripts leaves an existing non-directory PR transcript entry untouched" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_transcripts leaves an existing link to another Issue untouched" {
+    make_transcript_dir "Issue_7"
+    ln -s "Issue_7" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_7" ]
+}
+
+@test "link_pivot_pr_transcripts leaves a dangling link untouched" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_7" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_7" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_7" ]
+}
+
+@test "link_pivot_pr_transcripts recreates the Issue directory a dangling link to it points at" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still succeeds when the Issue directory cannot be created" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to create transcript directory ${SESSION_BASE_DIR}/transcripts/Issue_10, so PR #99 transcripts will not be linked to Issue #10"* ]]
+}
+
+@test "link_pivot_pr_transcripts warns and still succeeds when the link cannot be created" {
+    make_stub ln "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to link PR #99 transcripts to Issue #10, so they will be kept in a directory of their own"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_transcripts records pivot activity in the Issue directory and refreshes it on each call" {
+    local activity_file="${SESSION_BASE_DIR}/transcripts/Issue_10/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}"
+    link_pivot_pr_transcripts "10" "99"
+    [ -f "${activity_file}" ]
+    touch -d '15 days ago' "${activity_file}"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -n "$(find "${activity_file}" -mmin -1 -print)" ]
+}
+
+@test "link_pivot_pr_transcripts keeps an idle Issue directory alive through the prune that follows the pivot" {
+    make_transcript_dir "Issue_10"
+    # Aged before the pivot: ageing after it would age the activity file too.
+    age_transcript_files "Issue_10" 15
+    link_pivot_pr_transcripts "10" "99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still links when pivot activity cannot be recorded" {
+    make_stub touch "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to record pivot activity in ${SESSION_BASE_DIR}/transcripts/Issue_10, so Issue #10 transcripts may be purged as idle"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "main links the transcripts of the PR an Issue pivots to into the Issue's directory" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main links a pivoted PR's transcripts to the Issue it closes, not the Issue being processed" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    # The feed lists Issue #10, but the repository's open bot PR #99 closes #20.
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":20}]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_20" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_20" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main does not link a pivoted PR's transcripts when the PR closes no Issue" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo does not close any Issue in the repository, so its transcripts are not linked to an Issue's"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+}
+
+@test "main links a pivoted PR's transcripts to the lowest-numbered Issue when the PR closes more than one" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":30},{"number":20},{"number":25}]}\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"does not close any Issue in the repository"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_20" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts/Issue_20" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_25" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_30" ]
+}
+
+@test "pr_json_lowest_closing_issue prints the Issue the PR closes when it closes only one" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue counts a reference in the same repository, matched case-insensitively" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164,"repository":{"owner":{"login":"Org"},"name":"Repo"}}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue ignores a reference to another repository" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":7,"repository":{"owner":{"login":"org"},"name":"other"}},{"number":164,"repository":{"owner":{"login":"org"},"name":"repo"}}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":7,"repository":{"owner":{"login":"org"},"name":"other"}}]}' "org/repo"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "pr_json_lowest_closing_issue counts the same Issue referenced twice as one" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":164},{"number":164}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "164" ]
+}
+
+@test "pr_json_lowest_closing_issue prints the lowest-numbered Issue when the PR closes several" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":200},{"number":9},{"number":164},{"number":9}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "9" ]
+}
+
+@test "pr_json_lowest_closing_issue picks the lowest-numbered Issue in this repository, ignoring a lower one elsewhere" {
+    run pr_json_lowest_closing_issue '{"closingIssuesReferences":[{"number":3,"repository":{"owner":{"login":"org"},"name":"other"}},{"number":164,"repository":{"owner":{"login":"ORG"},"name":"REPO"}},{"number":50}]}' "org/repo"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "50" ]
+}
+
+@test "pr_json_lowest_closing_issue fails when the PR closes no Issue, or the field is absent or malformed" {
+    local pr_json
+    for pr_json in '{"closingIssuesReferences":[]}' '{"closingIssuesReferences":null}' '{}' \
+        '{"closingIssuesReferences":[{"number":"x"}]}' '{"closingIssuesReferences":[{}]}' \
+        '{"closingIssuesReferences":[{"number":"x"},{"number":5}]}' 'not json'; do
+        run pr_json_lowest_closing_issue "${pr_json}" "org/repo"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+    done
+}
+
+@test "fetch_pr_json asks gh for closingIssuesReferences in the same call" {
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"; printf "{}"'
+    fetch_pr_json 42 > /dev/null
+    [ "$(wc -l < "${TEST_TMP}/gh_args")" -eq 1 ]
+    grep -q "closingIssuesReferences" "${TEST_TMP}/gh_args"
+}
+
+@test "main still processes a pivoted PR when its transcripts cannot be linked" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    make_stub ln "exit 1"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to link PR #99 transcripts to Issue #10"* ]]
+    [[ "${output}" == *"PR #99 in org/repo is blocked"* ]]
+}
+
+@test "invoke_claude mounts a pivoted PR's linked transcript directory and tightens the Issue directory it points at" {
+    local args_log="${TEST_TMP}/podman_args"
+    stub_podman_run_logging_args "${args_log}"
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    chmod 0755 "${SESSION_BASE_DIR}/transcripts" "${SESSION_BASE_DIR}/transcripts/Issue_10"
+    invoke_claude "test prompt" "PullRequest" "99" "# per-item instructions" 2>/dev/null
+    grep -qx "${SESSION_BASE_DIR}/transcripts/PullRequest_99:/home/developer/.claude/projects:rw" "${args_log}"
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/Issue_10")" = "700" ]
+    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts removes a dangling link" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "prune_transcripts removes a link left dangling by the same pass's purge of its Issue" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "prune_transcripts keeps a live link and its target's files, however old the link is" {
+    make_transcript_dir "Issue_10"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    touch -h -d '30 days ago' "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+}
+
+@test "prune_transcripts never deletes through a live link to a directory outside the transcripts tree" {
+    local outside="${TEST_TMP}/outside"
+    mkdir -p "${outside}" "${SESSION_BASE_DIR}/transcripts"
+    printf '{}\n' > "${outside}/old.jsonl"
+    touch -d '30 days ago' "${outside}/old.jsonl" "${outside}"
+    ln -s "${outside}" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${outside}/old.jsonl" ]
+}
+
+@test "prune_transcripts warns when a dangling link cannot be removed" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_with_failing_link_delete() {
+        rm() { [ "$2" = "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_with_failing_link_delete
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to remove transcript link at ${SESSION_BASE_DIR}/transcripts/PullRequest_99 - will retry on the next launch"* ]]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "prune_transcripts never calls gh, including when it removes directories and links" {
+    local gh_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf '%s\n' \"\$*\" >> \"${gh_log}\"; exit 1"
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    ln -s "Issue_10" "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    make_transcript_dir "Issue_11"
+    ln -s "Issue_11" "${SESSION_BASE_DIR}/transcripts/PullRequest_100"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${gh_log}" ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_100" ]
 }

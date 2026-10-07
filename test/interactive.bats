@@ -824,6 +824,26 @@ setup_interactive_run() {
     grep -q ':/home/developer/.claude/CLAUDE.md:ro$' "${TEST_TMP}/podman_args"
 }
 
+@test "invoke_claude_interactive mounts the shared transcript directory at ~/.claude/projects with mode 0700" {
+    setup_interactive_run
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    local transcript_dir="${SESSION_BASE_DIR}/transcripts/_shared"
+    grep -qx "${transcript_dir}:/home/developer/.claude/projects:rw" "${TEST_TMP}/podman_args"
+    [ "$(stat -c %a "${transcript_dir}")" = "700" ]
+}
+
+@test "invoke_claude_interactive age-purges the shared transcript directory before launching" {
+    setup_interactive_run
+    local transcript_dir="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${transcript_dir}/-workspace-repo" "${transcript_dir}/-old-cwd"
+    printf '{}\n' > "${transcript_dir}/-old-cwd/old.jsonl"
+    printf '{}\n' > "${transcript_dir}/-workspace-repo/new.jsonl"
+    touch -d '8 days ago' "${transcript_dir}/-old-cwd/old.jsonl" "${transcript_dir}/-old-cwd"
+    invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
+    [ ! -e "${transcript_dir}/-old-cwd" ]
+    [ -f "${transcript_dir}/-workspace-repo/new.jsonl" ]
+}
+
 @test "invoke_claude_interactive passes the owner token as a Podman secret named after its own container, never --env" {
     setup_interactive_run
     invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
