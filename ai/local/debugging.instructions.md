@@ -144,6 +144,21 @@ find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'rate-limit' -exec ech
 
 A rate-limit file contains a unix timestamp. Compare against `date +%s` — if the stored value is in the future, the orchestrator will skip all items for that owner until it expires.
 
+### 4a - Session-denials record and daily digest marker
+
+```bash
+find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'session-denials.*' | sort
+cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/session-denials.<YYYY-MM-DD>
+cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/last-digest-sent
+```
+
+- `<owner>/session-denials.YYYY-MM-DD` holds one tab-separated line per agent session that day: timestamp, repo, item type, item id, denial count, stalled flag, quit flag (the final message said a tool was denied or disabled), and the denied command names (`-` for none). Start here for an item that keeps stopping early: a run of quit or stalled lines for the same item means its sessions are giving up on a denial rather than rewriting the command.
+- A session whose run died (`is_error`, or no result object) is still recorded, judged on the quit flag only. A session cut off by the agent timeout is recorded with no denials and not stalled, since there is no result to read. A session that never started (a container pre-flight failure) has no line.
+- `<owner>/last-digest-sent` holds the date the owner's last daily digest went out, or was due and had nothing to send (no file for yesterday or the day before). A missing digest with this file still on an older date means every post failed (each tick retries; look for the `Daily digest for <owner>:` warnings, which name the failing step); a digest sent twice in a day means the marker could not be written (look for the "Failed to write the daily digest marker" warning).
+- `<owner>/.digest.lock` is the per-owner digest lock, held only while a run decides on and sends the digest; an `--owner` run and a no-owner run can otherwise overlap on the same owner.
+- Files older than `SESSION_DENIALS_RETENTION_DAYS` (lib/globals) are pruned on every rollover attempt, whether or not the digest was sent.
+- A date with no file (before the per-day record existed, or already pruned) can still be checked for quit sessions from the service journal: check 7 in `tasks/healthcheck.md` describes the per-repo count.
+
 ### 5 — PR invocation-guard files
 
 The orchestrator no longer persists Claude session IDs — every run is a fresh single-phase

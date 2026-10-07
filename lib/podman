@@ -38,6 +38,11 @@ run_claude_fresh() {
             podman rm -f "${PODMAN_CONTAINER_NAME}" > /dev/null 2>&1 || true
             notify_discord_claude_error "${item_type}" "${item_id}" \
                 "Container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes — killed"
+            # Claude did run, so this is a real session and gets its line in the per-day record
+            # before the die; there is no result to read, so it is recorded with no denials, no
+            # quit and not stalled. The SESSION_* globals still hold the reset invoke_claude did
+            # before calling this function, so nothing needs clearing here.
+            record_session_outcome "${item_type}" "${item_id}" 0
             die "Agent container ${PODMAN_CONTAINER_NAME} timed out after ${AGENT_TIMEOUT_MINUTES} minutes"
         fi
         if grep -qi "name.*already in use" "${stderrfile}" 2>/dev/null; then
@@ -269,6 +274,122 @@ claude_result_indicates_diagnostic_refusal() {
     refusal_re+='|need you to [^.]*(confirm|allowlist)'
 
     match_nocase "${result_text}" "${refusal_re}"
+}
+
+# Returns 0 (true) if the session's final message says it stopped because it believed a tool was
+# denied or disabled for the rest of the session: it mentions a denial, says the session gave up,
+# and does not say how it carried on (see TOOL_DENIAL_MENTION_PATTERNS and the arrays after it in
+# lib/globals). Negated workaround phrases ("Nothing was pushed") are removed, leftmost first and
+# each replaced by a space, before the workaround test, so they do not hide a quit. Kept separate
+# from claude_result_indicates_diagnostic_refusal so the .last-diagnostic marker it feeds keeps
+# its own, narrower rules.
+claude_result_indicates_tool_denied_quit() {
+    local result_text="$1" mention_re give_up_re workaround_re negated_re without_negated
+    mention_re=$(IFS='|'; printf '%s' "${TOOL_DENIAL_MENTION_PATTERNS[*]}")
+    give_up_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_GIVE_UP_PATTERNS[*]}")
+    workaround_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_WORKAROUND_PATTERNS[*]}")
+    negated_re=$(IFS='|'; printf '%s' "${TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS[*]}")
+    if ! match_nocase "${result_text}" "${mention_re}" || ! match_nocase "${result_text}" "${give_up_re}"; then
+        return 1
+    fi
+    # Lower-cased first so the removal below does not depend on nocasematch; the healthcheck awk
+    # lower-cases the same way.
+    without_negated="${result_text,,}"
+    while match_nocase "${without_negated}" "${negated_re}"; do
+        without_negated="${without_negated/"${BASH_REMATCH[0]}"/ }"
+    done
+    ! match_nocase "${without_negated}" "${workaround_re}"
+}
+
+# Prints the names of the tool calls denied in a Claude JSON result, comma-separated and
+# deduplicated, or nothing when there were none: the program a denied Bash command runs, or the
+# tool name for any other tool. For Bash, leading NAME=value assignments are skipped because an
+# assignment can carry a token. Bare "(" or "{" words and wrapper words (env, sudo, command, exec,
+# nohup, time, xargs) are skipped too, along with each wrapper's options (any word starting with
+# "-") and the separate value of the options known to take one, such as sudo -u, so the program
+# the wrapper runs is reported rather than an option or its value. A quoted option value that
+# spans several words gives "(other)", since a word from inside the quotes is not the program. A
+# leading "(", "{" or quote is then dropped from the word that is left, and only the basename of a
+# path is kept. Anything that is still not a plain short name becomes "(other)" rather than being
+# trimmed into shape, so no secret, path or argument can reach the tab-separated state line or a
+# Discord field.
+claude_result_denied_command_names() {
+    local tmpfile="$1"
+    jq -r '
+        def options_with_value:
+            {
+                "sudo": ["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U",
+                         "--user", "--group", "--close-from", "--chdir", "--host", "--prompt", "--role", "--type", "--other-user"],
+                "env": ["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+                "xargs": ["-I", "-n", "-d", "-L", "-P", "-s", "-E", "-a",
+                          "--max-args", "--delimiter", "--max-procs", "--max-chars", "--arg-file"],
+                "time": ["-o", "-f", "--output", "--format"]
+            };
+        def skip_wrapper_options($wrapper):
+            if length == 0 then .
+            elif .[0] == "--" then .[1:]
+            elif .[0] | startswith("-")
+            then (if (.[0] | IN(options_with_value[$wrapper] // [] | .[])) | not then .[1:]
+                  elif (.[1] // "") | test("^[\"'\''][^\"'\'']*$") then []
+                  else .[2:]
+                  end)
+                 | skip_wrapper_options($wrapper)
+            else .
+            end;
+        def program_word:
+            if length == 0 then ""
+            elif .[0] | test("^([A-Za-z_][A-Za-z0-9_]*=|[({]+$)")
+            then .[1:] | program_word
+            elif .[0] | IN("env", "sudo", "command", "exec", "nohup", "time", "xargs")
+            then .[0] as $wrapper | .[1:] | skip_wrapper_options($wrapper) | program_word
+            else .[0]
+            end;
+        def plain_name($re): if test($re) then . else "(other)" end;
+        (.permission_denials // []) | if type == "array" then . else [] end
+        | map(select(type == "object")
+            | if .tool_name == "Bash"
+              then ((.tool_input // {}) | if type == "object" then (.command // "") else "" end
+                    | tostring | [splits("\\s+") | select(length > 0)] | program_word
+                    | sub("^[({\"'\'']+"; "") | sub("[\"'\'')}]+$"; "") | split("/") | last // ""
+                    | plain_name("^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$"))
+              else (.tool_name // "") | tostring | plain_name("^[A-Za-z0-9][A-Za-z0-9_.+-]{0,59}$")
+              end)
+        | unique | join(",")
+        ' "${tmpfile}" 2>/dev/null
+}
+
+# Clears the SESSION_* outcome globals (lib/globals), so a session that dies before reaching the
+# capture below can never leave the previous session's outcome behind for the caller to read.
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state after sourcing
+reset_session_outcome() {
+    SESSION_DENIAL_COUNT=0
+    SESSION_DENIED_COMMANDS=""
+    SESSION_TOOL_DENIED_QUIT=0
+    SESSION_RESULT_TEXT=""
+}
+
+# Sets every SESSION_* outcome global from this session's result. Arguments: tmpfile (the Claude
+# JSON result), denials_summary (handle_claude_permission_denials' rendered "- tool: detail"
+# lines), result_text. The count is taken from the rendered lines, as
+# handle_claude_permission_denials does, so it always agrees with what was logged. Each global is
+# assigned on every path, so nothing depends on the reset at the top of invoke_claude.
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state after sourcing
+capture_session_outcome() {
+    local tmpfile="$1" denials_summary="$2" result_text="$3"
+    SESSION_RESULT_TEXT="${result_text}"
+    if [ -n "${denials_summary}" ]; then
+        SESSION_DENIAL_COUNT=$(printf '%s\n' "${denials_summary}" | grep -c '^- ')
+        SESSION_DENIED_COMMANDS=$(claude_result_denied_command_names "${tmpfile}")
+    else
+        SESSION_DENIAL_COUNT=0
+        SESSION_DENIED_COMMANDS=""
+    fi
+    if claude_result_indicates_tool_denied_quit "${result_text}"; then
+        SESSION_TOOL_DENIED_QUIT=1
+    else
+        SESSION_TOOL_DENIED_QUIT=0
+    fi
+    return 0
 }
 
 # Persists this session's diagnostic signal (#1448) so a later idle-exhaustion/runaway Blocked
@@ -680,6 +801,8 @@ invoke_claude() {
     local prompt="$1" item_type="${2:-}" item_id="${3:-}" claude_md_content="${4:-}"
     local tmpfile owner_token container_name
 
+    reset_session_outcome
+
     local prompt_len=${#prompt}
     if [ "${prompt_len}" -gt "${MAX_PROMPT_CHARS}" ]; then
         notify_discord_claude_error "${item_type}" "${item_id}" \
@@ -747,9 +870,15 @@ invoke_claude() {
     # otherwise skip this entirely on exactly the runs where the diagnostic matters most.
     record_last_session_diagnostic "${item_type}" "${item_id}" "${result_text}" "${denials_summary}"
 
+    # Captured before the is_error check for the same reason: oneshot's post-session block never
+    # runs once handle_claude_is_error dies, so an errored session is recorded here instead, with
+    # only the quit flag to judge it by.
+    capture_session_outcome "${tmpfile}" "${denials_summary}" "${result_text}"
+
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
+        record_session_outcome "${item_type}" "${item_id}" 0
         handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
@@ -769,7 +898,7 @@ invoke_claude() {
     # or a stream fragment — a fresh run that dies before the final result would otherwise be
     # treated as a silent success.
     jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
+        || { record_session_outcome "${item_type}" "${item_id}" 0; rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 
     cleanup_claude_invocation_tmpfiles

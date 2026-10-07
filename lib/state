@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 # File-backed bookkeeping used across ticks: per-item invocation/guard-file counters, the
 # runaway backstop and its forgiveness-on-unblock logic, environment-block auto-unblocking,
-# rate limiting, and blocked/closed-issue notification markers.
+# rate limiting, blocked/closed-issue notification markers, and the per-day session-denials
+# record with its daily digest rollover.
 
 # Shared invocation-guard file path for the runaway backstop, keyed by item type + id. The PR
 # and Issue guards below store different shapes (PRs also track an idle counter — see
@@ -366,6 +367,7 @@ reset_issue_invocation_counts_if_capped() {
 
 # Returns the path to the rate-limit file for the current owner.
 owner_rate_limit_file() {
+    # shellcheck disable=SC2153  # OWNER is the global set by set_repo_context (lib/git), not a misspelling of the owner locals below
     printf '%s/%s/rate-limit' "${ORCHESTRATOR_STATE_DIR}" "${OWNER}"
 }
 
@@ -785,4 +787,243 @@ tag_pr_closed_issue() {
         --body "Issue #${issue_id} was found closed while this PR is still open. Automated work has been paused pending manual investigation." \
         2>/dev/null && tagged=0
     return "${tagged}"
+}
+
+# Today's date (YYYY-MM-DD, host local time). Names the per-day session-denials file and drives
+# the daily digest rollover; a function so a test can pin the day.
+orchestrator_today() {
+    date +%Y-%m-%d
+}
+
+# Prints the date the given number of days before day (both YYYY-MM-DD).
+date_days_before() {
+    local day="$1" days="$2"
+    date -d "${day} -${days} day" +%Y-%m-%d
+}
+
+# Prints the date the given number of days after day (both YYYY-MM-DD).
+date_days_after() {
+    local day="$1" days="$2"
+    date -d "${day} +${days} day" +%Y-%m-%d
+}
+
+# Per-owner, per-day record of every agent session's denial outcome, read by the daily digest
+# (send_daily_digest_if_due) and by the tasks/healthcheck.md prompt.
+session_denials_file_path() {
+    local owner="$1" day="$2"
+    printf '%s/%s/session-denials.%s' "${ORCHESTRATOR_STATE_DIR}" "${owner}" "${day}"
+}
+
+# Appends one tab-separated line for the most recent session (the SESSION_* globals, lib/globals)
+# to today's file for OWNER: timestamp, repo, item type, item id, denial count, stalled flag,
+# quit flag, and the denied command names ("-" when none). A single short printf with >> is one
+# O_APPEND write, so a line can never interleave with another writer's, and oneshot's own lock
+# means there normally is no other writer. Best-effort: a failed write only loses the line for the
+# digest, so it warns rather than failing a session whose work is already done.
+append_session_denials_line() {
+    local item_type="$1" item_id="$2" stalled="$3" state_file
+    state_file=$(session_denials_file_path "${OWNER}" "$(orchestrator_today)")
+    mkdir -p "${state_file%/*}" 2>/dev/null
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Iseconds)" "${REPO_FULL}" "${item_type}" "${item_id}" \
+        "${SESSION_DENIAL_COUNT}" "${stalled}" "${SESSION_TOOL_DENIED_QUIT}" "${SESSION_DENIED_COMMANDS:--}" \
+        >> "${state_file}" 2>/dev/null \
+        || warn "Failed to append the session outcome for ${item_type} #${item_id} to ${state_file}: the daily digest will not count it"
+}
+
+# Policy: a session stalled when it quit believing a tool was denied (any item type, whatever
+# progress it made), or when it hit at least one denial and made no progress. pr_no_progress is 1
+# only when oneshot's PR no-progress branch ran; Issues have no per-session progress judgement,
+# so for them only the quit flag counts. Arguments: quit_flag, denial_count, pr_no_progress.
+session_outcome_is_stalled() {
+    local quit_flag="$1" denial_count="$2" pr_no_progress="$3"
+    [ "${quit_flag}" = "1" ] && return 0
+    [ "${pr_no_progress}" = "1" ] && [[ "${denial_count}" =~ ^[0-9]+$ ]] && [ "${denial_count}" -gt 0 ]
+}
+
+# Records the most recent session's outcome (the SESSION_* globals): judges it with
+# session_outcome_is_stalled, the one place that policy is applied, then writes one line in the
+# owner's per-day session-denials file and sends a Discord alert when it stalled. pr_no_progress
+# is 1 only when oneshot's PR no-progress branch ran. Called exactly once per session: from
+# run_claude_fresh on a timeout and from invoke_claude on the two paths that die straight
+# afterwards (is_error, and no result object at all), all three passing 0 because no progress
+# judgement exists there, and otherwise from oneshot's post-session block, which knows whether a
+# PR made progress.
+record_session_outcome() {
+    local item_type="$1" item_id="$2" pr_no_progress="$3" stalled=0
+    if session_outcome_is_stalled "${SESSION_TOOL_DENIED_QUIT}" "${SESSION_DENIAL_COUNT}" "${pr_no_progress}"; then
+        stalled=1
+    fi
+    append_session_denials_line "${item_type}" "${item_id}" "${stalled}"
+    if [ "${stalled}" = "1" ]; then
+        warn "${item_type} #${item_id} in ${REPO_FULL}: session stalled (${SESSION_DENIAL_COUNT} denial(s), quit after a tool denial: ${SESSION_TOOL_DENIED_QUIT})"
+        notify_discord_session_stalled "${item_type}" "${item_id}" "${SESSION_DENIAL_COUNT}" \
+            "${SESSION_DENIED_COMMANDS}" "${SESSION_RESULT_TEXT}"
+    fi
+    return 0
+}
+
+# Removes the owner's session-denials files older than SESSION_DENIALS_RETENTION_DAYS before
+# today, judged by the date in the file name rather than the file's mtime so the rule follows
+# orchestrator_today.
+prune_session_denials_files() {
+    local owner="$1" today="$2" cutoff file day
+    cutoff=$(date_days_before "${today}" "${SESSION_DENIALS_RETENTION_DAYS}") || return 0
+    for file in "${ORCHESTRATOR_STATE_DIR}/${owner}"/session-denials.*; do
+        [ -f "${file}" ] || continue
+        day="${file##*/session-denials.}"
+        [[ "${day}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || continue
+        if [[ "${day}" < "${cutoff}" ]]; then
+            rm -f "${file}"
+        fi
+    done
+    return 0
+}
+
+# Prints a compact JSON summary of one per-day session-denials file: session, denial, stalled and
+# quit totals, per-repository totals, and the five most often denied command names (counted once
+# per session). Prints null when the file does not exist, so the digest can tell "no record" apart
+# from a recorded day with nothing in it. Malformed lines are skipped.
+summarise_session_denials_day() {
+    local file="$1"
+    if [ ! -f "${file}" ]; then
+        printf 'null'
+        return 0
+    fi
+    jq -R -s -c '
+        [split("\n")[] | select(length > 0) | split("\t") | select(length >= 8)
+            | {repo: .[1], denials: ((.[4] | tonumber?) // 0), stalled: (.[5] == "1"), quit: (.[6] == "1"),
+               commands: (if .[7] == "-" then [] else (.[7] | split(",")) end)}] as $s
+        | {sessions: ($s | length),
+           denials: ([$s[].denials] | add // 0),
+           stalled: ([$s[] | select(.stalled)] | length),
+           quits: ([$s[] | select(.quit)] | length),
+           repos: ($s | group_by(.repo)
+                | map({repo: .[0].repo, sessions: length, denials: ([.[].denials] | add), stalled: ([.[] | select(.stalled)] | length)})
+                | sort_by(-.denials, -.stalled, .repo)),
+           top_commands: ([$s[].commands[]] | group_by(.) | map({name: .[0], count: length})
+                | sort_by(-.count, .name) | .[0:5])}
+        ' "${file}"
+}
+
+# Holds the date (YYYY-MM-DD) the owner's last daily digest was sent.
+daily_digest_marker_path() {
+    local owner="$1"
+    printf '%s/%s/last-digest-sent' "${ORCHESTRATOR_STATE_DIR}" "${owner}"
+}
+
+# Lazy daily rollover: when the owner's digest marker is older than today (or missing), sends one
+# digest for each day not yet reported, oldest first, each compared with the day before it, and
+# advances the marker after each day. Runs on whichever tick first sees the new day, so no timer of
+# its own is needed. A per-owner lock (.digest.lock in the owner's state directory) is held while
+# it runs, because oneshot's own lock is keyed by --owner (or "_global" with none), so an --owner
+# run and a no-owner run overlap; a tick that finds the lock held skips the digest and leaves it to
+# the holder.
+send_daily_digest_if_due() {
+    local owner="$1" lock_file lock_fd
+    lock_file="${ORCHESTRATOR_STATE_DIR}/${owner}/.digest.lock"
+    if ! mkdir -p "${lock_file%/*}" 2>/dev/null || ! { exec {lock_fd}>"${lock_file}"; } 2>/dev/null; then
+        warn "Daily digest for ${owner}: could not open the digest lock ${lock_file}, skipping the digest this tick"
+        return 0
+    fi
+    if flock --exclusive --nonblock "${lock_fd}"; then
+        send_daily_digest_under_lock "${owner}"
+    else
+        info "Daily digest for ${owner}: another run holds the digest lock, leaving the digest to it"
+    fi
+    exec {lock_fd}>&-
+    return 0
+}
+
+# Summarises one day and the day before it and sends the daily digest for that day. Arguments:
+# owner, day, day_file, day_before_file. Returns 1, after warning with the owner and the failing
+# step, when either summary or the send fails, so the caller leaves the marker alone and the
+# digest is retried on the next tick.
+summarise_and_send_daily_digest() {
+    local owner="$1" day="$2" day_file="$3" day_before_file="$4" summary previous
+    if ! summary=$(summarise_session_denials_day "${day_file}"); then
+        warn "Daily digest for ${owner}: failed to summarise ${day_file}, will retry on the next tick"
+        return 1
+    fi
+    if ! previous=$(summarise_session_denials_day "${day_before_file}"); then
+        warn "Daily digest for ${owner}: failed to summarise ${day_before_file}, will retry on the next tick"
+        return 1
+    fi
+    if ! notify_discord_daily_digest "${owner}" "${day}" "${summary}" "${previous}"; then
+        warn "Daily digest for ${owner}: sending the digest for ${day} failed, will retry on the next tick"
+        return 1
+    fi
+    return 0
+}
+
+# Sends the digest for one day, then moves the marker to the day after it (the date that day's
+# digest is normally sent). No digest is sent when neither the day nor the day before has a
+# session-denials file, since there is nothing to report, but the marker still moves. Otherwise
+# the marker only moves once notify_discord_daily_digest succeeds (including when no webhook is
+# configured). Returns 1, leaving the marker on this day, when the day cannot be worked out or
+# sent, so the caller stops and the next tick resumes from this day. Arguments: owner, marker, day.
+send_daily_digest_for_day() {
+    local owner="$1" marker="$2" day="$3" day_before next_day day_file day_before_file
+    day_before=$(date_days_before "${day}" 1) || { warn "Daily digest for ${owner}: could not work out the day before ${day}, will retry on the next tick"; return 1; }
+    next_day=$(date_days_after "${day}" 1) || { warn "Daily digest for ${owner}: could not work out the day after ${day}, will retry on the next tick"; return 1; }
+    day_file=$(session_denials_file_path "${owner}" "${day}")
+    day_before_file=$(session_denials_file_path "${owner}" "${day_before}")
+    if [ -f "${day_file}" ] || [ -f "${day_before_file}" ]; then
+        summarise_and_send_daily_digest "${owner}" "${day}" "${day_file}" "${day_before_file}" || return 1
+    else
+        info "Daily digest for ${owner}: no session record for ${day} or ${day_before}, nothing to send"
+    fi
+    mkdir -p "${marker%/*}" 2>/dev/null
+    { printf '%s\n' "${next_day}" > "${marker}.tmp" && mv "${marker}.tmp" "${marker}"; } 2>/dev/null \
+        || warn "Failed to write the daily digest marker ${marker}: the digest may be sent again"
+    return 0
+}
+
+# The body of send_daily_digest_if_due, run with the owner's digest lock held. The marker holds
+# the date the last digest was sent, which is the day after the last day reported, so the first
+# day still due is the marker's own date. The marker is read here, after the lock is taken, so a
+# run that waited behind one that has just sent the digest sees the new date and does nothing.
+# Each day from the marker's date up to and including yesterday gets its own digest, oldest
+# first, and the marker moves after each one, so a crash or a failed send part-way through
+# resumes from the first day not yet reported and a day is never sent twice. With no marker (or
+# an unreadable one) only yesterday is due. The catch-up reaches back at most
+# SESSION_DENIALS_RETENTION_DAYS days, since older per-day files have been pruned. Old per-day
+# files are pruned on every rollover attempt, whatever the send result.
+send_daily_digest_under_lock() {
+    local owner="$1" today marker last_sent="" earliest day
+    today=$(orchestrator_today) || { warn "Daily digest for ${owner}: could not work out today's date, skipping the digest"; return 0; }
+    marker=$(daily_digest_marker_path "${owner}")
+    [ -f "${marker}" ] && read -r last_sent < "${marker}"
+    if [[ "${last_sent}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        if ! [[ "${last_sent}" < "${today}" ]]; then
+            return 0
+        fi
+        day="${last_sent}"
+    else
+        day=$(date_days_before "${today}" 1) || { warn "Daily digest for ${owner}: could not work out the day before ${today}, skipping the digest"; prune_session_denials_files "${owner}" "${today}"; return 0; }
+    fi
+    if earliest=$(date_days_before "${today}" "${SESSION_DENIALS_RETENTION_DAYS}") && [[ "${day}" < "${earliest}" ]]; then
+        info "Daily digest for ${owner}: the last digest went out on ${last_sent}, catching up from ${earliest} only (SESSION_DENIALS_RETENTION_DAYS)"
+        day="${earliest}"
+    fi
+    while [[ "${day}" < "${today}" ]]; do
+        send_daily_digest_for_day "${owner}" "${marker}" "${day}" || break
+        day=$(date_days_after "${day}" 1) || break
+    done
+    prune_session_denials_files "${owner}" "${today}"
+}
+
+# Runs send_daily_digest_if_due for the --owner this run serves or, with no --owner, for every
+# owner that has recorded at least one session.
+run_daily_digest_rollover() {
+    local owner_filter="$1" owner_dir
+    if [ -n "${owner_filter}" ]; then
+        send_daily_digest_if_due "${owner_filter}"
+        return 0
+    fi
+    for owner_dir in "${ORCHESTRATOR_STATE_DIR}"/*/; do
+        compgen -G "${owner_dir}session-denials.*" > /dev/null || continue
+        owner_dir="${owner_dir%/}"
+        send_daily_digest_if_due "${owner_dir##*/}"
+    done
+    return 0
 }
