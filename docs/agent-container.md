@@ -157,7 +157,7 @@ a session, and the next session starts a fresh directory. The purge also only co
 repository being launched for, so idle transcripts in a repository with no further launches wait
 until that repository's next one.
 
-`oneshot` still never resumes a session: every phase starts a fresh one, and the transcripts
+`oneshot` never resumes a session: every phase starts a fresh one, and the transcripts
 exist so a human can read afterwards what an agent did and why.
 
 ## Assumptions

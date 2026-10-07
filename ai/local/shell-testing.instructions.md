@@ -30,7 +30,7 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 | `lib/prompts` | CLAUDE.md/prompt building (`build_issue_claude_md`/`build_pr_claude_md`): heredoc bodies the agent reads directly; treat any edit to their wording as a behaviour change, not a refactor. |
 | `lib/workflow-board` | GitHub Projects v2 "Workflow" board GraphQL management + its disk cache. |
 | `lib/discord` | Discord webhook notifications. |
-| `lib/podman` | Container/Podman invocation: the largest, most side-effectful file. `invoke_claude` (oneshot's `--print` phase runs) uses `ensure_agent_container_ready` and `prepare_claude_container_args`; the latter dies before creating any temporary file or Podman secret unless both an item type and an item id are given. |
+| `lib/podman` | Container/Podman invocation: the largest, most side-effectful file. `invoke_claude` (oneshot's `--print` phase runs) refuses a launch without both an item type and an item id, before creating any temporary file or Podman secret, then uses `ensure_agent_container_ready` and `prepare_claude_container_args`. |
 
 Add new functions to the right `lib/*` file by what they do, not to `oneshot` itself — `oneshot`
 should only ever contain `main()`, its arg parsing, and the source block. When a function
