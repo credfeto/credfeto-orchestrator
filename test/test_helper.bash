@@ -79,8 +79,8 @@ setup_isolated_env() {
     # worktree fixture, whose .git is a file, dies with ".git/index: Not a directory").
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
     # HOME above isolates the global gitconfig, but /etc/gitconfig still applies: on this host
-    # it sets core.hooksPath, which git_hooks_dir (lib/git) honours, so every fixture would
-    # otherwise digest the host's shared hooks checkout instead of its own .git/hooks.
+    # it sets core.hooksPath, so every git commit in a fixture would otherwise run the host's
+    # shared hooks instead of the fixture's own .git/hooks.
     export GIT_CONFIG_NOSYSTEM=1
     unset GH_HOST GH_ENTERPRISE_TOKEN GH_TOKEN
     unset CLAUDECODE CLAUDE_CODE_OAUTH_TOKEN ORCHESTRATOR_IMAGE
@@ -107,12 +107,6 @@ setup_isolated_env() {
 source_oneshot() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/oneshot"
-    seed_test_repo_context
-}
-
-# Seeds the canonical test repo context after a script that sources lib/git has been loaded,
-# then points every derived state directory into the isolated test directory.
-seed_test_repo_context() {
     set_repo_context "credfeto/credfeto-orchestrator"
     SESSION_BASE_DIR="${TEST_TMP}/sessions"
     export CLAUDE_STATE_DIR="${SESSION_BASE_DIR}/claude"
@@ -155,15 +149,6 @@ source_install_claude_hooks() {
 source_setup_owner() {
     # shellcheck source=/dev/null
     source "${REPO_ROOT}/setup-owner"
-}
-
-# Sources the interactive script so its functions are defined without running main, then
-# seeds the same canonical repo context and isolated state dirs source_oneshot does, since
-# interactive's container helpers (lib/podman) read the same globals.
-source_interactive() {
-    # shellcheck source=/dev/null
-    source "${REPO_ROOT}/interactive"
-    seed_test_repo_context
 }
 
 # Sources the create-project script so its functions are defined without running main.

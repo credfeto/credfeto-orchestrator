@@ -47,7 +47,7 @@ broken_links() {
     names=$(script_names)
     [[ "${names}" == *"oneshot"* ]]
     [[ "${names}" == *"cfwf"* ]]
-    [ "$(printf '%s\n' "${names}" | wc -l)" -ge 12 ]
+    [ "$(printf '%s\n' "${names}" | wc -l)" -ge 11 ]
 }
 
 @test "every script has a guide under docs/development/scripts" {
