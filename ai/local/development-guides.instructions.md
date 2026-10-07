@@ -7,7 +7,7 @@
 ## The guides
 
 - The development guide for this repository is [docs/development/README.md](../../docs/development/README.md): what is where, how the shell scripts are written and tested, the change workflow, and the GitHub API behaviour that has caught us out (reads lagging writes, no single-item read in `gh project`, paging caps).
-- Each script has its own guide under [docs/development/scripts/](../../docs/development/scripts/), named after the script (`oneshot`, `loop`, `interactive`, `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure`, `cfwf`, `pre-commit-check`, `querydb`).
+- Each script has its own guide under [docs/development/scripts/](../../docs/development/scripts/), named after the script (`oneshot`, `loop`, `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure`, `cfwf`, `pre-commit-check`, `querydb`).
 - The `lib/*` function libraries are covered by [docs/development/lib.md](../../docs/development/lib.md) and the Claude Code hooks and permission files by [docs/development/claude-hooks.md](../../docs/development/claude-hooks.md).
 
 ## Rules
