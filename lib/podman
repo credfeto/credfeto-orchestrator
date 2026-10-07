@@ -878,7 +878,7 @@ invoke_claude() {
     local is_error
     is_error=$(jq -r '.is_error // false' "${tmpfile}" 2>/dev/null || printf 'false')
     if [ "${is_error}" = "true" ]; then
-        record_session_outcome "${item_type}" "${item_id}" "${SESSION_TOOL_DENIED_QUIT}"
+        record_session_outcome "${item_type}" "${item_id}" 0
         handle_claude_is_error "${tmpfile}" "${item_type}" "${item_id}"
     fi
 
@@ -898,7 +898,7 @@ invoke_claude() {
     # or a stream fragment — a fresh run that dies before the final result would otherwise be
     # treated as a silent success.
     jq -e 'type == "object" and (has("result") or has("is_error"))' "${tmpfile}" >/dev/null 2>&1 \
-        || { record_session_outcome "${item_type}" "${item_id}" "${SESSION_TOOL_DENIED_QUIT}"; rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
+        || { record_session_outcome "${item_type}" "${item_id}" 0; rm -f "${tmpfile}"; cleanup_claude_invocation_tmpfiles; die "Claude did not return a result object"; }
     rm -f "${tmpfile}"
 
     cleanup_claude_invocation_tmpfiles

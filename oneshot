@@ -89,8 +89,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # load_env_unblock_attempts, save_env_unblock_attempts, reset_env_unblock_attempts,
 # try_auto_unblock_env_diagnosed_pr, issue_invocation_guard_file_path,
 # load_issue_invocation_counts, save_issue_invocation_counts,
-# reset_issue_invocation_counts_if_capped, session_outcome_is_stalled, record_session_outcome,
-# and run_daily_digest_rollover are declared in lib/state.
+# reset_issue_invocation_counts_if_capped, record_session_outcome, and run_daily_digest_rollover
+# are declared in lib/state.
 
 # pr_json_is_terminal, pr_json_has_placeholder_file, pr_json_has_failed_required_check, gh_noun_for_item_type,
 # apply_blocked_label, apply_blocked_label_with_reason, item_confirmed_not_blocked_live,
@@ -1529,11 +1529,7 @@ main() {
 
         # Recorded before the counters are saved: either save can die, and a real session that
         # ran must still reach the per-day record and, when stalled, the alert.
-        local session_stalled=0
-        if session_outcome_is_stalled "${SESSION_TOOL_DENIED_QUIT}" "${SESSION_DENIAL_COUNT}" "${pr_session_no_progress}"; then
-            session_stalled=1
-        fi
-        record_session_outcome "${item_type}" "${item_id}" "${session_stalled}"
+        record_session_outcome "${item_type}" "${item_id}" "${pr_session_no_progress}"
 
         if [ "${item_type}" = "PullRequest" ]; then
             save_pr_invocation_counts "${item_id}" "$(( PR_INVOCATION_TOTAL + 1 ))" "${pr_new_idle}"

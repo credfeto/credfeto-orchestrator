@@ -840,13 +840,19 @@ session_outcome_is_stalled() {
     [ "${pr_no_progress}" = "1" ] && [[ "${denial_count}" =~ ^[0-9]+$ ]] && [ "${denial_count}" -gt 0 ]
 }
 
-# Records the most recent session's outcome (the SESSION_* globals): one line in the owner's
-# per-day session-denials file, and a Discord alert when stalled is 1. Called exactly once per
-# session: from run_claude_fresh on a timeout and from invoke_claude on the two paths that die
-# straight afterwards (is_error, and no result object at all), and otherwise from oneshot's
-# post-session block, which knows whether a PR made progress.
+# Records the most recent session's outcome (the SESSION_* globals): judges it with
+# session_outcome_is_stalled, the one place that policy is applied, then writes one line in the
+# owner's per-day session-denials file and sends a Discord alert when it stalled. pr_no_progress
+# is 1 only when oneshot's PR no-progress branch ran. Called exactly once per session: from
+# run_claude_fresh on a timeout and from invoke_claude on the two paths that die straight
+# afterwards (is_error, and no result object at all), all three passing 0 because no progress
+# judgement exists there, and otherwise from oneshot's post-session block, which knows whether a
+# PR made progress.
 record_session_outcome() {
-    local item_type="$1" item_id="$2" stalled="$3"
+    local item_type="$1" item_id="$2" pr_no_progress="$3" stalled=0
+    if session_outcome_is_stalled "${SESSION_TOOL_DENIED_QUIT}" "${SESSION_DENIAL_COUNT}" "${pr_no_progress}"; then
+        stalled=1
+    fi
     append_session_denials_line "${item_type}" "${item_id}" "${stalled}"
     if [ "${stalled}" = "1" ]; then
         warn "${item_type} #${item_id} in ${REPO_FULL}: session stalled (${SESSION_DENIAL_COUNT} denial(s), quit after a tool denial: ${SESSION_TOOL_DENIED_QUIT})"

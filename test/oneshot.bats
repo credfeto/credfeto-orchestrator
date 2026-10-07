@@ -4193,7 +4193,7 @@ STUBEOF
     [ ! -f "${ORCHESTRATOR_STATE_DIR}/${OWNER}/session-denials.2026-10-05" ]
 }
 
-@test "record_session_outcome appends a line every time and alerts only when stalled" {
+@test "record_session_outcome appends a line every time and alerts only when session_outcome_is_stalled says so" {
     orchestrator_today() { printf '2026-10-05'; }
     local stalled_log="${TEST_TMP}/stalled.log"
     notify_discord_session_stalled() { printf '%s\n' "$*" >> "${stalled_log}"; }
@@ -4205,13 +4205,22 @@ STUBEOF
     [ ! -f "${stalled_log}" ]
     SESSION_DENIAL_COUNT=2
     SESSION_DENIED_COMMANDS="gh,git"
+    record_session_outcome "PullRequest" "7" 0
+    [ ! -f "${stalled_log}" ]
     record_session_outcome "PullRequest" "7" 1
     [ "$(wc -l < "${stalled_log}")" -eq 1 ]
+    SESSION_DENIAL_COUNT=0
+    SESSION_DENIED_COMMANDS=""
+    SESSION_TOOL_DENIED_QUIT=1
+    record_session_outcome "Issue" "8" 0
+    [ "$(wc -l < "${stalled_log}")" -eq 2 ]
 
     local state_file="${ORCHESTRATOR_STATE_DIR}/${OWNER}/session-denials.2026-10-05"
-    [ "$(wc -l < "${state_file}")" -eq 2 ]
+    [ "$(wc -l < "${state_file}")" -eq 4 ]
     [ "$(sed -n 1p "${state_file}" | cut -f3-)" = "$(printf 'PullRequest\t7\t0\t0\t0\t-')" ]
-    [ "$(sed -n 2p "${state_file}" | cut -f3-)" = "$(printf 'PullRequest\t7\t2\t1\t0\tgh,git')" ]
+    [ "$(sed -n 2p "${state_file}" | cut -f3-)" = "$(printf 'PullRequest\t7\t2\t0\t0\tgh,git')" ]
+    [ "$(sed -n 3p "${state_file}" | cut -f3-)" = "$(printf 'PullRequest\t7\t2\t1\t0\tgh,git')" ]
+    [ "$(sed -n 4p "${state_file}" | cut -f3-)" = "$(printf 'Issue\t8\t0\t1\t1\t-')" ]
 }
 
 @test "prune_session_denials_files removes files older than the retention period and keeps the rest" {
