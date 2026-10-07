@@ -345,6 +345,12 @@ TRANSCRIPT_RETENTION_DAYS=7
 # items closing: a merged PR and the Issue it closes drop out of the priorities feed first.
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TRANSCRIPT_ITEM_RETENTION_DAYS=14
+# File touched in an Issue's transcript directory on every Issue-to-PR pivot
+# (link_pivot_pr_transcripts in lib/state), so the pivot counts as activity and the prune before
+# the launch cannot purge an Issue that has been idle. A dot-file at the root of the mounted
+# ~/.claude/projects, beside Claude Code's per-project subdirectories rather than inside one.
+# shellcheck disable=SC2034  # read by lib/state after sourcing
+TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME=".orchestrator-last-pivot"
 # Transcript directory name for launches with no work item (interactive, ad-hoc invoke_claude
 # calls). Starts with an underscore so it can never collide with an <ItemType>_<id> directory.
 # shellcheck disable=SC2034  # read by lib/state and lib/podman after sourcing
