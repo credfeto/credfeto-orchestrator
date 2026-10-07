@@ -3113,7 +3113,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--model' "${args_log}"
     grep -qx 'opusplan' "${args_log}"
 }
@@ -3131,7 +3131,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "unique-prompt-marker-xyz" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     # The prompt text must appear as its own argv element (the CLAUDE_PROMPT
     # trailing entry in PODMAN_CLAUDE_ARGS), not be piped in via stdin.
     grep -qx -- 'unique-prompt-marker-xyz' "${args_log}"
@@ -3150,7 +3150,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "unique-prompt-marker-xyz" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     # --add-dir takes <directories...> (variadic) — without a "--" separator right
     # before the prompt, the CLI parser swallows the prompt as an extra --add-dir
     # value instead of the positional [prompt] argument. Assert "--" is the line
@@ -3174,7 +3174,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "unique-prompt-marker-xyz" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     local add_dir_line
     add_dir_line=$(grep -nx -- '--add-dir' "${args_log}" | cut -d: -f1)
     [ -n "${add_dir_line}" ]
@@ -3195,7 +3195,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "unique-prompt-marker-xyz" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qE -- ":${CONTAINER_SCRATCH_PATH}:rw\$" "${args_log}"
 }
 
@@ -3212,7 +3212,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "unique-prompt-marker-xyz" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "unique-prompt-marker-xyz" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     # The --volume argv element is HOST:CONTAINER:rw as a single token; strip the
     # container-side suffix to recover the host-side scratch dir invoke_claude created.
     local scratch_dir
@@ -3250,7 +3250,7 @@ esac
 JQSTUB
     chmod +x "${STUB_BIN}/jq"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${args_log}" ]
     grep -qFx -- '--cpus=4' "${args_log}"
     grep -qFx -- '--memory=12g' "${args_log}"
@@ -3542,7 +3542,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'orchestrator-credfeto' "${args_log}"
 }
 
@@ -3559,7 +3559,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw" "${args_log}"
     grep -qx "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro" "${args_log}"
 }
@@ -3586,7 +3586,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     grep -q ':/home/developer/.claude/CLAUDE.md:ro' "${args_log}"
 }
 
@@ -3612,7 +3612,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     for d in sessions session-env plans cache backups; do
         grep -qx "${CLAUDE_STATE_DIR}/${d}:/home/developer/.claude/${d}:rw" "${args_log}"
         [ -d "${CLAUDE_STATE_DIR}/${d}" ]
@@ -3641,7 +3641,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     grep -qx "${ORCHESTRATOR_CACHE_DIR}/global:/home/developer/.cache/orchestrator/global:rw" "${args_log}"
     [ -d "${ORCHESTRATOR_CACHE_DIR}/global" ]
     # Only "global" is mounted - "local" is created by entrypoint.sh itself and stays
@@ -3659,7 +3659,7 @@ STUBEOF
 [ "$1" = "pull" ] && exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    run invoke_claude "test prompt" "" "" ""
+    run invoke_claude "test prompt" "Issue" "42" ""
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"claude_md_content is required"* ]]
 }
@@ -4752,7 +4752,7 @@ STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
     CLAUDE_MD_TMPFILE="sentinel"
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     [ -z "${CLAUDE_MD_TMPFILE}" ]
 }
 
@@ -4825,7 +4825,7 @@ printf '%s\n' "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     grep -q "${XDG_RUNTIME_DIR}" "${args_log}"
 }
 
@@ -4849,9 +4849,8 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    # Secret was created with the container-scoped name (orchestrator-<owner>), so a
-    # co-located interactive session (interactive-<owner>-<repo>) can never remove it
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
+    # Secret was created with the container-scoped name (orchestrator-<owner>)
     grep -q "create" "${secret_log}"
     grep -qx "claude-oauth-orchestrator-credfeto" "${secret_log}"
     # Token is NOT passed via --env
@@ -4908,7 +4907,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     # Secret was created with the container-scoped enterprise token secret name
     grep -q "create" "${secret_log}"
     grep -qx "gh-enterprise-token-orchestrator-credfeto" "${secret_log}"
@@ -4936,7 +4935,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'gh-enterprise-token-orchestrator-credfeto,type=env,target=GH_TOKEN' "${args_log}"
     grep -qx 'GH_HOST=github.com' "${args_log}"
     [ "$(grep -c 'target=GH_ENTERPRISE_TOKEN' "${args_log}")" -eq 0 ]
@@ -5099,7 +5098,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--replace' "${args_log}"
 }
 
@@ -5165,7 +5164,7 @@ exit 0
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -eq 2 ]
     # The stub logs one argument per line. The container-scoped secret name must appear three
     # times: the pre-create cleanup of any stale secret from a prior run, the create, and THIS
@@ -5251,7 +5250,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run grep -q ".claude:/home/developer/.claude" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -11321,7 +11320,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_NAME=Alice' "${args_log}"
 }
 
@@ -11338,7 +11337,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000' "${args_log}"
 }
 
@@ -11356,7 +11355,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000' "${args_log}"
 }
 
@@ -11374,7 +11373,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_USER_EMAIL=alice@example.com' "${args_log}"
 }
 
@@ -11393,7 +11392,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx 'GIT_SIGNING_KEY=ABCD1234' "${args_log}"
 }
 
@@ -11411,7 +11410,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run grep -qx 'GIT_USER_NAME=' "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -11448,21 +11447,28 @@ STUBEOF
     grep -qx "WORK_ITEM_URL=https://github.com/${REPO_FULL}/pull/17" "${args_log}"
 }
 
-@test "invoke_claude does not pass WORK_ITEM_URL when item_type and item_id are empty" {
-    local args_log="${TEST_TMP}/podman_args"
-    mkdir -p "${REPO_WORK_DIR}" "${RULES_DIR}"
-    cat > "${STUB_BIN}/podman" << STUBEOF
-#!/usr/bin/env bash
-[ "\$1" = "pull" ] && exit 0
-[ "\$1" = "inspect" ] && exit 1
-printf "%s\n" "\$@" >> "${args_log}"
-printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
-STUBEOF
-    chmod +x "${STUB_BIN}/podman"
-
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
-    run grep -q 'WORK_ITEM_URL=' "${args_log}"
-    [ "${status}" -ne 0 ]
+@test "invoke_claude without an item dies before podman run, creating no secret and no tmpfile" {
+    local args_log="${TEST_TMP}/podman_args" mktemp_log="${TEST_TMP}/mktemp_calls" notify_log="${TEST_TMP}/notify"
+    stub_podman_run_logging_args "${args_log}"
+    mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    printf 'my-claude-token\n' > "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/credfeto"
+    export GH_ENTERPRISE_TOKEN="gh-token"
+    mktemp() { printf '%s\n' "$*" >> "${mktemp_log}"; command mktemp "$@"; }
+    notify_discord_claude_error() { printf '%s\n' "$*" >> "${notify_log}"; }
+    local item
+    # Each entry is "<item_type>|<item_id>".
+    for item in "|" "Issue|" "|42"; do
+        rm -f "${args_log}" "${mktemp_log}"
+        run invoke_claude "test prompt" "${item%%|*}" "${item#*|}" "# mock CLAUDE.md"
+        [ "${status}" -ne 0 ]
+        [[ "${output}" == *"An agent container launch needs both an item type and an item id"* ]]
+        [ "$(grep -cx 'run' "${args_log}")" -eq 0 ]
+        [ "$(grep -cx 'secret' "${args_log}")" -eq 0 ]
+        [ ! -e "${mktemp_log}" ]
+    done
+    [ "$(grep -c 'An agent container launch needs both an item type and an item id' "${notify_log}")" -eq 3 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts" ]
 }
 
 @test "invoke_claude does not mount the host HOME gitconfig" {
@@ -11478,7 +11484,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
 
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run grep -qF ".gitconfig" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -11637,7 +11643,7 @@ STUBEOF
 
     GIT_SIGNING_KEY="ABCD1234"
     GPG_PUBKEY_TMPDIR=""
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# per-item instructions" 2>/dev/null
     [ -z "${GPG_PUBKEY_TMPDIR}" ]
 }
 
@@ -11816,23 +11822,6 @@ STUBEOF
     make_stub podman 'exit 1'
     run cleanup_dangling_images
     [ "${status}" -eq 0 ]
-}
-
-@test "PRUNE_DANGLING_IMAGES and PODMAN_REPLACE_CONTAINER are not seeded from the environment" {
-    export PRUNE_DANGLING_IMAGES=0 PODMAN_REPLACE_CONTAINER=0
-    source_oneshot
-    [ "${PRUNE_DANGLING_IMAGES}" = "1" ]
-    [ "${PODMAN_REPLACE_CONTAINER}" = "1" ]
-}
-
-@test "cleanup_dangling_images is a no-op when PRUNE_DANGLING_IMAGES is 0" {
-    local args_log="${TEST_TMP}/podman_args"
-    make_stub podman "printf '%s\n' \"\$@\" >> '${args_log}'; exit 0"
-    [ "${PRUNE_DANGLING_IMAGES}" = "1" ]
-    PRUNE_DANGLING_IMAGES=0
-    run cleanup_dangling_images
-    [ "${status}" -eq 0 ]
-    [ ! -e "${args_log}" ]
 }
 
 @test "invoke_claude falls back to the cached image when podman pull fails but the image exists locally (#1090)" {
@@ -12015,7 +12004,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${call_log}" ]
     local prune_line pull_line
     prune_line=$(grep -n 'image_prune' "${call_log}" | head -1 | cut -d: -f1)
@@ -12036,7 +12025,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     [ -f "${call_log}" ]
     local count
     count=$(grep -c 'image_prune' "${call_log}")
@@ -12064,7 +12053,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${ssh_sock}:/tmp/ssh-agent.sock:ro" "${args_log}"
     grep -qx "SSH_AUTH_SOCK=/tmp/ssh-agent.sock" "${args_log}"
 }
@@ -12081,7 +12070,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"SSH_AUTH_SOCK is not set"* ]]
 }
@@ -12102,7 +12091,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"SSH_AUTH_SOCK is not set or socket is absent"* ]]
 }
@@ -12121,7 +12110,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     run grep -q "\.ssh:/home/developer/.ssh" "${args_log}"
     [ "${status}" -ne 0 ]
 }
@@ -12143,7 +12132,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -q "${HOME}/.database:/home/developer/.database:ro" "${args_log}"
 }
 
@@ -12160,7 +12149,7 @@ printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
     GIT_SIGNING_KEY=""
-    run invoke_claude "test prompt" "" "" "# mock CLAUDE.md"
+    run invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *".database not found"* ]]
 }
@@ -12178,7 +12167,7 @@ printf '%s\n' "\$1" >> "${podman_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    run invoke_claude "" "" "" "# mock CLAUDE.md"
+    run invoke_claude "" "Issue" "42" "# mock CLAUDE.md"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Prompt is empty"* ]]
     run grep -qx "run" "${podman_log}"
@@ -12196,7 +12185,7 @@ STUBEOF
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "hello from prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "hello from prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     [ "${CLAUDE_PROMPT}" = "hello from prompt" ]
 }
 
@@ -17273,7 +17262,7 @@ printf "%s\n" "\$@" >> "${args_log}"
 printf '{"session_id":"12345678-1234-1234-1234-123456789abc","result":"done"}\n'
 STUBEOF
     chmod +x "${STUB_BIN}/podman"
-    invoke_claude "test prompt" "" "" "# mock CLAUDE.md" 2>/dev/null
+    invoke_claude "test prompt" "Issue" "42" "# mock CLAUDE.md" 2>/dev/null
     grep -qx -- '--print' "${args_log}"
     grep -qx -- '--output-format' "${args_log}"
     grep -qx -- '--permission-mode' "${args_log}"
@@ -18415,10 +18404,19 @@ stub_pr_merged() {
     [ "$(transcript_dir_path PullRequest 7)" = "${SESSION_BASE_DIR}/transcripts/PullRequest_7" ]
 }
 
-@test "transcript_dir_path falls back to the shared directory when item context is missing" {
-    [ "$(transcript_dir_path "" "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
-    [ "$(transcript_dir_path)" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
-    [ "$(transcript_dir_path Issue "")" = "${SESSION_BASE_DIR}/transcripts/_shared" ]
+@test "transcript_dir_path fails and prints nothing unless both the item type and id are set" {
+    run transcript_dir_path
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    run transcript_dir_path "Issue"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    run transcript_dir_path "Issue" ""
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    run transcript_dir_path "" "42"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
 }
 
 @test "invoke_claude mounts the item's own transcript directory at ~/.claude/projects with mode 0700" {
@@ -18440,14 +18438,6 @@ stub_pr_merged() {
     invoke_claude "test prompt" "PullRequest" "7" "# per-item instructions" 2>/dev/null
     [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/PullRequest_7")" = "700" ]
     [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts")" = "700" ]
-}
-
-@test "invoke_claude mounts the shared transcript directory when it has no item context" {
-    local args_log="${TEST_TMP}/podman_args"
-    stub_podman_run_logging_args "${args_log}"
-    invoke_claude "test prompt" "" "" "# per-item instructions" 2>/dev/null
-    grep -qx "${SESSION_BASE_DIR}/transcripts/_shared:/home/developer/.claude/projects:rw" "${args_log}"
-    [ "$(stat -c %a "${SESSION_BASE_DIR}/transcripts/_shared")" = "700" ]
 }
 
 @test "invoke_claude dies without launching the container when the transcript directory cannot be created" {
@@ -18485,7 +18475,7 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts keeps an item directory whose files are older than the shared window but within the item window" {
+@test "prune_transcripts keeps an item directory whose files are older than a week but within the item window" {
     make_transcript_dir "Issue_10"
     age_transcript_files "Issue_10" 8
     run prune_transcripts
@@ -18542,7 +18532,6 @@ stub_pr_merged() {
 @test "prune_transcripts never fails the run when a purge cannot delete" {
     make_transcript_dir "Issue_15"
     age_transcript_files "Issue_15" 15
-    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
     # Defined inside the function so the failing rm only exists in run's subshell and never
     # reaches teardown, which needs the real rm.
     prune_with_failing_deletes() {
@@ -18558,7 +18547,6 @@ stub_pr_merged() {
 @test "prune_transcripts warns and keeps an item directory when its age cannot be read" {
     make_transcript_dir "Issue_15"
     age_transcript_files "Issue_15" 15
-    mkdir -p "${SESSION_BASE_DIR}/transcripts/_shared"
     # A failing find prints nothing, which must not be read as "nothing recent".
     prune_with_failing_find() {
         find() { return 1; }
@@ -18570,185 +18558,58 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_15/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts removes an old shared session whole and keeps a fresh session in the same project directory" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}/old/tool-results" "${project}/old/subagents" "${project}/new/tool-results"
-    printf '{}\n' > "${project}/old.jsonl"
-    printf '{}\n' > "${project}/old/tool-results/result.txt"
-    printf '{}\n' > "${project}/old/subagents/agent.jsonl"
-    touch -d '8 days ago' "${project}/old.jsonl" "${project}/old/tool-results/result.txt" \
-        "${project}/old/subagents/agent.jsonl"
-    printf '{}\n' > "${project}/new.jsonl"
-    printf '{}\n' > "${project}/new/tool-results/result.txt"
-    # The project directory is old too, but it still holds a fresh session.
-    touch -d '8 days ago' "${project}"
-    run prune_transcripts
+@test "purge_idle_transcript_entry keeps a fresh entry and succeeds quietly" {
+    make_transcript_dir "Issue_10"
+    run purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
     [ "${status}" -eq 0 ]
-    [ ! -e "${project}/old.jsonl" ]
-    [ ! -e "${project}/old" ]
-    [ -f "${project}/new.jsonl" ]
-    [ -f "${project}/new/tool-results/result.txt" ]
+    [ -z "${output}" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts keeps a shared session with a fresh transcript whole, including its older side files" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}/session/tool-results" "${project}/session/subagents"
-    printf '{}\n' > "${project}/session/tool-results/result.txt"
-    printf '{}\n' > "${project}/session/subagents/agent.jsonl"
-    touch -d '8 days ago' "${project}/session/tool-results/result.txt" "${project}/session/subagents/agent.jsonl" \
-        "${project}/session/tool-results" "${project}/session/subagents" "${project}/session"
-    printf '{}\n' > "${project}/session.jsonl"
-    run prune_transcripts
+@test "purge_idle_transcript_entry removes an idle directory and an idle regular file" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    local old_file="${SESSION_BASE_DIR}/transcripts/old.json"
+    printf '{}\n' > "${old_file}"
+    touch -d '15 days ago' "${old_file}"
+    local retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
+    run purge_idle_transcript_entry "${retention_mins}" "${SESSION_BASE_DIR}/transcripts/Issue_10"
     [ "${status}" -eq 0 ]
-    [ -f "${project}/session.jsonl" ]
-    [ -f "${project}/session/tool-results/result.txt" ]
-    [ -f "${project}/session/subagents/agent.jsonl" ]
+    [ -z "${output}" ]
+    run purge_idle_transcript_entry "${retention_mins}" "${old_file}"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
+    [ ! -e "${old_file}" ]
+    [ -d "${SESSION_BASE_DIR}/transcripts" ]
 }
 
-@test "prune_transcripts ages a shared side directory with no transcript, and any other project entry, on its own" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}/orphan/tool-results" "${project}/fresh-orphan" "${project}/memory"
-    printf '{}\n' > "${project}/orphan/tool-results/result.txt"
-    printf '{}\n' > "${project}/memory/old.md"
-    printf '{}\n' > "${project}/old.txt"
-    printf '{}\n' > "${project}/fresh.txt"
-    printf '{}\n' > "${project}/fresh-orphan/result.txt"
-    touch -d '8 days ago' "${project}/orphan/tool-results/result.txt" "${project}/memory/old.md" "${project}/old.txt"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ ! -e "${project}/orphan" ]
-    [ ! -e "${project}/memory" ]
-    [ ! -e "${project}/old.txt" ]
-    [ -f "${project}/fresh.txt" ]
-    [ -f "${project}/fresh-orphan/result.txt" ]
-}
-
-@test "prune_transcripts removes an empty old shared project directory, and never a non-empty one as a whole" {
-    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
-    mkdir -p "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-fresh-empty-cwd" "${shared}/-busy-cwd"
-    printf '{}\n' > "${shared}/-emptied-cwd/session.jsonl"
-    touch -d '8 days ago' "${shared}/-emptied-cwd/session.jsonl"
-    printf '{}\n' > "${shared}/-busy-cwd/old.jsonl"
-    printf '{}\n' > "${shared}/-busy-cwd/new.jsonl"
-    touch -d '8 days ago' "${shared}/-busy-cwd/old.jsonl"
-    # Removing the old session updates -emptied-cwd's mtime, so its age is read before the pass.
-    touch -d '8 days ago' "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-busy-cwd"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ ! -e "${shared}/-emptied-cwd" ]
-    [ ! -e "${shared}/-stale-empty-cwd" ]
-    [ -d "${shared}/-fresh-empty-cwd" ]
-    [ ! -e "${shared}/-busy-cwd/old.jsonl" ]
-    [ -f "${shared}/-busy-cwd/new.jsonl" ]
-    [ -d "${shared}" ]
-}
-
-@test "prune_transcripts removes a top-level file in the shared directory older than the shared window" {
-    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
-    mkdir -p "${shared}"
-    printf '{}\n' > "${shared}/old.json"
-    printf '{}\n' > "${shared}/.old-dot-file"
-    touch -d '8 days ago' "${shared}/old.json" "${shared}/.old-dot-file"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ ! -e "${shared}/old.json" ]
-    [ ! -e "${shared}/.old-dot-file" ]
-}
-
-@test "prune_transcripts keeps a fresh top-level file in the shared directory" {
-    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
-    mkdir -p "${shared}"
-    printf '{}\n' > "${shared}/fresh.json"
-    touch -d '6 days ago' "${shared}/fresh.json"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ -f "${shared}/fresh.json" ]
-}
-
-@test "prune_transcripts warns and keeps a shared session and its project directory when their age cannot be read" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}/session"
-    printf '{}\n' > "${project}/session.jsonl"
-    printf '{}\n' > "${project}/session/result.txt"
-    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session" "${project}"
-    # A failing find prints nothing, which must not be read as "nothing recent".
-    prune_shared_with_failing_find() {
+@test "purge_idle_transcript_entry warns and keeps an entry whose age cannot be read" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
+    # Defined inside the function so the failing find only exists in run's subshell.
+    purge_with_failing_find() {
         find() { return 1; }
-        prune_transcripts
+        purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
     }
-    run prune_shared_with_failing_find
+    run purge_with_failing_find
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to read transcripts at ${project} to check their age - keeping them until the next launch"* ]]
-    [[ "${output}" == *"Failed to read transcripts at ${project}/session.jsonl to check their age - keeping them until the next launch"* ]]
-    [ -f "${project}/session.jsonl" ]
-    [ -f "${project}/session/result.txt" ]
+    [[ "${output}" == *"Failed to read transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_10 to check their age - keeping them until the next launch"* ]]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts warns naming the session and keeps an idle shared session whole when it cannot be deleted" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}/session"
-    printf '{}\n' > "${project}/session.jsonl"
-    printf '{}\n' > "${project}/session/result.txt"
-    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session"
+@test "purge_idle_transcript_entry warns and keeps an idle entry it cannot remove" {
+    make_transcript_dir "Issue_10"
+    age_transcript_files "Issue_10" 15
     # Defined inside the function so the failing rm only exists in run's subshell and never
     # reaches teardown, which needs the real rm.
-    prune_shared_with_failing_deletes() {
-        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
-        prune_transcripts
+    purge_with_failing_rm() {
+        rm() { return 1; }
+        purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
     }
-    run prune_shared_with_failing_deletes
+    run purge_with_failing_rm
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to purge transcripts at ${project}/session.jsonl - will retry on the next launch"* ]]
-    [ -f "${project}/session.jsonl" ]
-    [ -f "${project}/session/result.txt" ]
-}
-
-@test "prune_transcripts warns and keeps an empty old shared project directory when it cannot be removed" {
-    local project="${SESSION_BASE_DIR}/transcripts/_shared/-stale-empty-cwd"
-    mkdir -p "${project}"
-    touch -d '8 days ago' "${project}"
-    make_stub rmdir "exit 1"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to purge transcripts at ${project} - will retry on the next launch"* ]]
-    [ -d "${project}" ]
-}
-
-@test "prune_transcripts never follows or deletes through a link in the shared directory, and removes it only when dangling" {
-    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
-    local outside="${TEST_TMP}/outside"
-    mkdir -p "${shared}/-workspace-repo" "${outside}/-linked-cwd" "${outside}/side"
-    printf '{}\n' > "${outside}/-linked-cwd/old.jsonl"
-    printf '{}\n' > "${outside}/old.json"
-    printf '{}\n' > "${outside}/side/old.txt"
-    printf '{}\n' > "${outside}/fresh.jsonl"
-    touch -d '30 days ago' "${outside}/-linked-cwd/old.jsonl" "${outside}/-linked-cwd" "${outside}/old.json" \
-        "${outside}/side/old.txt"
-    ln -s "${outside}/-linked-cwd" "${shared}/-linked-cwd"
-    ln -s "${outside}/old.json" "${shared}/linked.json"
-    ln -s "${outside}/missing" "${shared}/-dangling-cwd"
-    # Inside a project directory: an old session whose side directory is a link is removed
-    # without following the link, and a link is never aged, followed or removed.
-    printf '{}\n' > "${shared}/-workspace-repo/session.jsonl"
-    touch -d '8 days ago' "${shared}/-workspace-repo/session.jsonl"
-    ln -s "${outside}/side" "${shared}/-workspace-repo/session"
-    ln -s "${outside}/fresh.jsonl" "${shared}/-workspace-repo/linked.jsonl"
-    ln -s "${outside}/-linked-cwd" "${shared}/-workspace-repo/elsewhere"
-    touch -d '8 days ago' "${shared}/-workspace-repo"
-    touch -h -d '30 days ago' "${shared}/-linked-cwd" "${shared}/linked.json" "${shared}/-dangling-cwd"
-    run prune_transcripts
-    [ "${status}" -eq 0 ]
-    [ -L "${shared}/-linked-cwd" ]
-    [ -L "${shared}/linked.json" ]
-    [ ! -L "${shared}/-dangling-cwd" ]
-    [ ! -e "${shared}/-workspace-repo/session.jsonl" ]
-    [ -L "${shared}/-workspace-repo/session" ]
-    [ -L "${shared}/-workspace-repo/linked.jsonl" ]
-    [ -L "${shared}/-workspace-repo/elsewhere" ]
-    [ -f "${outside}/-linked-cwd/old.jsonl" ]
-    [ -f "${outside}/old.json" ]
-    [ -f "${outside}/side/old.txt" ]
-    [ -f "${outside}/fresh.jsonl" ]
+    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_10 - will retry on the next launch"* ]]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
 # --- session transcripts: pivoted PR linked to its Issue's directory --------------------------

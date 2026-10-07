@@ -2,7 +2,7 @@
 # The Workflow board's status field: the project's built-in "Status" single-select field,
 # carrying the ten workflow states (#1519). Holds the one definition of those states and the
 # in-place conversion of a board that still uses the old custom "Workflow Status" field.
-# Sourced by create-project and by oneshot and interactive (through lib/workflow-board). Needs
+# Sourced by create-project and by oneshot (through lib/workflow-board). Needs
 # only lib/core (warn/info), `gh` and `jq`. cfwf is copied into the container image on its own
 # and keeps its own copy of the state names; test/status-mapping-parity.bats keeps the two in
 # step.

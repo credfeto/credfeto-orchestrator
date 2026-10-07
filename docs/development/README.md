@@ -16,7 +16,6 @@ this guide, not `CONTRIBUTING.md`; a change made there will be overwritten.
   [create-project](scripts/create-project.md),
   [install-claude-hooks](scripts/install-claude-hooks.md),
   [install-timer](scripts/install-timer.md),
-  [interactive](scripts/interactive.md),
   [loop](scripts/loop.md),
   [notify-unit-failure](scripts/notify-unit-failure.md),
   [oneshot](scripts/oneshot.md),
@@ -42,7 +41,7 @@ link in these pages is broken.
 
 | Path | What it is |
 | --- | --- |
-| `oneshot`, `loop`, `interactive` | The orchestrator itself: one work item per run, the loop that drives it, and the attached interactive session. |
+| `oneshot`, `loop` | The orchestrator itself: one work item per run, and the loop that drives it. |
 | `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure` | Setup, install and support scripts. |
 | `lib/` | The function libraries `oneshot` sources (see [lib.md](lib.md)). |
 | `containers/base/` | The agent container image chain and, in `development-full`, the scripts and Claude Code hooks baked into it. |

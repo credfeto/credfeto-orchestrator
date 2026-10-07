@@ -708,13 +708,14 @@ transcripts_root_path() {
 # Host directory bind-mounted at the container's ~/.claude/projects, where Claude Code writes
 # its session transcripts. One per work item so every session the item ever runs accumulates in
 # one place and the whole directory can be purged once the item has been idle for
-# TRANSCRIPT_ITEM_RETENTION_DAYS. Callers with no item context share TRANSCRIPT_SHARED_DIR_NAME,
-# which is purged per session instead, each aged by the newest file of the session
-# (prune_transcripts in lib/podman).
+# TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts in lib/podman). Returns 1, printing nothing,
+# unless both item_type and item_id are set.
 transcript_dir_path() {
-    local item_type="${1:-}" item_id="${2:-}" name="${TRANSCRIPT_SHARED_DIR_NAME}"
-    [ -n "${item_type}" ] && [ -n "${item_id}" ] && name="${item_type}_${item_id}"
-    printf '%s/%s' "$(transcripts_root_path)" "${name}"
+    local item_type="${1:-}" item_id="${2:-}"
+    if [ -z "${item_type}" ] || [ -z "${item_id}" ]; then
+        return 1
+    fi
+    printf '%s/%s_%s' "$(transcripts_root_path)" "${item_type}" "${item_id}"
 }
 
 # Creates a transcript directory and restricts both it and the transcripts root to the owner,
