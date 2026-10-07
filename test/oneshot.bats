@@ -10521,7 +10521,7 @@ STUBEOF
     grep -qx "WORK_ITEM_URL=https://github.com/${REPO_FULL}/pull/17" "${args_log}"
 }
 
-@test "invoke_claude without an item dies before podman run, creating no secret and no tmpfile" {
+@test "invoke_claude without an item dies before any podman call, creating no secret and no tmpfile" {
     local args_log="${TEST_TMP}/podman_args" mktemp_log="${TEST_TMP}/mktemp_calls" notify_log="${TEST_TMP}/notify"
     stub_podman_run_logging_args "${args_log}"
     mkdir -p "${XDG_CONFIG_HOME}/orchestrator/tokens"
@@ -10537,8 +10537,9 @@ STUBEOF
         run invoke_claude "test prompt" "${item%%|*}" "${item#*|}" "# mock CLAUDE.md"
         [ "${status}" -ne 0 ]
         [[ "${output}" == *"An agent container launch needs both an item type and an item id"* ]]
-        [ "$(grep -cx 'run' "${args_log}")" -eq 0 ]
-        [ "$(grep -cx 'secret' "${args_log}")" -eq 0 ]
+        # The stub logs every podman call but pull and inspect, so no log means the pre-flight
+        # (image prune) never ran either.
+        [ ! -e "${args_log}" ]
         [ ! -e "${mktemp_log}" ]
     done
     [ "$(grep -c 'An agent container launch needs both an item type and an item id' "${notify_log}")" -eq 3 ]
@@ -17380,21 +17381,6 @@ stub_pr_merged() {
     [ "$(transcript_dir_path PullRequest 7)" = "${SESSION_BASE_DIR}/transcripts/PullRequest_7" ]
 }
 
-@test "transcript_dir_path fails and prints nothing unless both the item type and id are set" {
-    run transcript_dir_path
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-    run transcript_dir_path "Issue"
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-    run transcript_dir_path "Issue" ""
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-    run transcript_dir_path "" "42"
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-}
-
 @test "invoke_claude mounts the item's own transcript directory at ~/.claude/projects with mode 0700" {
     local args_log="${TEST_TMP}/podman_args"
     stub_podman_run_logging_args "${args_log}"
@@ -17451,7 +17437,7 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts keeps an item directory whose files are older than a week but within the item window" {
+@test "prune_transcripts keeps an item directory whose files are days old but still within the retention window" {
     make_transcript_dir "Issue_10"
     age_transcript_files "Issue_10" 8
     run prune_transcripts
@@ -17532,60 +17518,6 @@ stub_pr_merged() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Failed to read transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_15 to check their age - keeping them until the next launch"* ]]
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_15/-workspace-repo/session.jsonl" ]
-}
-
-@test "purge_idle_transcript_entry keeps a fresh entry and succeeds quietly" {
-    make_transcript_dir "Issue_10"
-    run purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
-    [ "${status}" -eq 0 ]
-    [ -z "${output}" ]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
-}
-
-@test "purge_idle_transcript_entry removes an idle directory and an idle regular file" {
-    make_transcript_dir "Issue_10"
-    age_transcript_files "Issue_10" 15
-    local old_file="${SESSION_BASE_DIR}/transcripts/old.json"
-    printf '{}\n' > "${old_file}"
-    touch -d '15 days ago' "${old_file}"
-    local retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
-    run purge_idle_transcript_entry "${retention_mins}" "${SESSION_BASE_DIR}/transcripts/Issue_10"
-    [ "${status}" -eq 0 ]
-    [ -z "${output}" ]
-    run purge_idle_transcript_entry "${retention_mins}" "${old_file}"
-    [ "${status}" -eq 0 ]
-    [ ! -e "${SESSION_BASE_DIR}/transcripts/Issue_10" ]
-    [ ! -e "${old_file}" ]
-    [ -d "${SESSION_BASE_DIR}/transcripts" ]
-}
-
-@test "purge_idle_transcript_entry warns and keeps an entry whose age cannot be read" {
-    make_transcript_dir "Issue_10"
-    age_transcript_files "Issue_10" 15
-    # Defined inside the function so the failing find only exists in run's subshell.
-    purge_with_failing_find() {
-        find() { return 1; }
-        purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
-    }
-    run purge_with_failing_find
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to read transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_10 to check their age - keeping them until the next launch"* ]]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
-}
-
-@test "purge_idle_transcript_entry warns and keeps an idle entry it cannot remove" {
-    make_transcript_dir "Issue_10"
-    age_transcript_files "Issue_10" 15
-    # Defined inside the function so the failing rm only exists in run's subshell and never
-    # reaches teardown, which needs the real rm.
-    purge_with_failing_rm() {
-        rm() { return 1; }
-        purge_idle_transcript_entry "$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))" "${SESSION_BASE_DIR}/transcripts/Issue_10"
-    }
-    run purge_with_failing_rm
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Failed to purge transcripts at ${SESSION_BASE_DIR}/transcripts/Issue_10 - will retry on the next launch"* ]]
-    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
 }
 
 # --- session transcripts: pivoted PR linked to its Issue's directory --------------------------

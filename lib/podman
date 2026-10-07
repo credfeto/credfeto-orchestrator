@@ -361,13 +361,12 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
-# Succeeds when a transcript entry has been idle for more than retention_mins: no file under it
-# was modified within that time, or, when it contains no file at all (only empty subdirectories
-# at most), the directory itself was not. The directory's own mtime is otherwise ignored, because
-# appending to a transcript does not change it. A regular file is its own only file, so it is
-# aged by its own mtime. find runs without following links (its default), so a link inside the
-# directory never counts. Returns 2 when find cannot read the entry, so the caller keeps it
-# rather than reading empty output as idle.
+# Succeeds when a work item's transcript directory has been idle for more than retention_mins: no
+# file under it was modified within that time, or, when it contains no file at all (only empty
+# subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
+# ignored, because appending to a transcript does not change it. find runs without following
+# links (its default), so a link inside the directory never counts. Returns 2 when find cannot
+# read the directory, so the caller keeps it rather than reading empty output as idle.
 transcript_item_idle() {
     local dir="$1" retention_mins="$2" any_file recent
     any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
@@ -377,38 +376,6 @@ transcript_item_idle() {
         recent=$(find "${dir}" -type f ! -mmin "+${retention_mins}" -print -quit 2>/dev/null) || return 2
     fi
     [ -z "${recent}" ]
-}
-
-# Removes one transcript entry (a real directory or regular file, never a link) once it has been
-# idle for more than retention_mins (transcript_item_idle). Keeps it and warns when its age cannot
-# be read, or warns when it cannot be removed; never fails.
-purge_idle_transcript_entry() {
-    local retention_mins="$1" entry="$2" idle_status=0
-    transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
-    if [ "${idle_status}" -eq 2 ]; then
-        warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
-        return 0
-    fi
-    [ "${idle_status}" -eq 0 ] || return 0
-    rm -rf "${entry}" 2>/dev/null \
-        || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
-    return 0
-}
-
-# Removes every top-level link in dir whose target no longer exists. A live link is never
-# followed, aged or removed.
-remove_dangling_transcript_links() {
-    local dir="$1" entry
-    for entry in "${dir}"/*; do
-        [ -L "${entry}" ] || continue
-        # -e follows the link, so it is false only when the target is missing.
-        [ -e "${entry}" ] && continue
-        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
-        # never anything it points at.
-        rm -f "${entry}" 2>/dev/null \
-            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
-    done
-    return 0
 }
 
 # Removes every transcript directory idle for more than TRANSCRIPT_ITEM_RETENTION_DAYS
@@ -426,16 +393,33 @@ prune_transcripts() {
     [ -d "${transcripts_dir}" ] || return 0
 
     local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
-    local entry
+    local entry idle_status
     # Real directories first, so a link this pass leaves dangling by purging its target is
     # removed by the link pass below in the same run.
     for entry in "${transcripts_dir}"/*; do
         # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
-        purge_idle_transcript_entry "${item_retention_mins}" "${entry}"
+        idle_status=0
+        transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
+        if [ "${idle_status}" -eq 2 ]; then
+            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+            continue
+        fi
+        [ "${idle_status}" -eq 0 ] || continue
+        rm -rf "${entry}" 2>/dev/null \
+            || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
     done
-    remove_dangling_transcript_links "${transcripts_dir}"
+
+    for entry in "${transcripts_dir}"/*; do
+        [ -L "${entry}" ] || continue
+        # -e follows the link, so it is false only when the target is missing.
+        [ -e "${entry}" ] && continue
+        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
+        # never anything it points at.
+        rm -f "${entry}" 2>/dev/null \
+            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
+    done
     return 0
 }
 
@@ -617,6 +601,13 @@ invoke_claude() {
         die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"
     fi
 
+    # Checked before the pre-flight (prune, pull) and before anything is created, so a launch
+    # without an item does no work and leaves nothing behind.
+    if [ -z "${item_type}" ] || [ -z "${item_id}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" "An agent container launch needs both an item type and an item id"
+        die "An agent container launch needs both an item type and an item id"
+    fi
+
     owner_token=$(load_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
@@ -770,8 +761,8 @@ ensure_agent_container_ready() {
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
 # persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
 # directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
-# GH_ENTERPRISE_TOKEN. item_type and item_id are both required: they select the transcript
-# directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
+# GH_ENTERPRISE_TOKEN. item_type and item_id (both set, checked by invoke_claude) select the
+# transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
 # Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
 # tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
 # the ssh-agent the service unit's ExecStartPre started for this run (stop_ssh_agent). The
@@ -786,12 +777,6 @@ prepare_claude_container_args() {
     if [ -z "${claude_md_content}" ]; then
         notify_discord_claude_error "${item_type}" "${item_id}" "claude_md_content is required but was not provided"
         die "claude_md_content is required but was not provided"
-    fi
-
-    # Checked before anything is created, so a launch without an item leaves nothing behind.
-    if ! transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}"); then
-        notify_discord_claude_error "${item_type}" "${item_id}" "An agent container launch needs both an item type and an item id"
-        die "An agent container launch needs both an item type and an item id"
     fi
 
     # Bake settings.json/policy-limits.json/hooks/skills into the image (see
@@ -820,6 +805,7 @@ prepare_claude_container_args() {
     for d in sessions session-env plans cache backups; do
         mkdir -p "${CLAUDE_STATE_DIR}/${d}" || die "Failed to create persistent Claude state directory: ${CLAUDE_STATE_DIR}/${d}"
     done
+    transcript_dir=$(transcript_dir_path "${item_type}" "${item_id}")
     ensure_transcript_dir "${transcript_dir}" || die "Failed to create transcript directory: ${transcript_dir}"
     # Backs the container's ~/.cache/orchestrator/global (#1380): only "global" gets a
     # persistent host directory; "local" is created by entrypoint.sh itself and stays
