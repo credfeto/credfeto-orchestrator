@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Claude Hooks
 
 [Back to Local Instructions Index](index.md)
