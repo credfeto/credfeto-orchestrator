@@ -360,7 +360,7 @@ claude_result_denied_command_names() {
 
 # Clears the SESSION_* outcome globals (lib/globals), so a session that dies before reaching the
 # capture below can never leave the previous session's outcome behind for the caller to read.
-# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state and oneshot after sourcing
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state after sourcing
 reset_session_outcome() {
     SESSION_DENIAL_COUNT=0
     SESSION_DENIED_COMMANDS=""
@@ -373,7 +373,7 @@ reset_session_outcome() {
 # lines), result_text. The count is taken from the rendered lines, as
 # handle_claude_permission_denials does, so it always agrees with what was logged. Each global is
 # assigned on every path, so nothing depends on the reset at the top of invoke_claude.
-# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state and oneshot after sourcing
+# shellcheck disable=SC2034  # the SESSION_* globals are read by lib/state after sourcing
 capture_session_outcome() {
     local tmpfile="$1" denials_summary="$2" result_text="$3"
     SESSION_RESULT_TEXT="${result_text}"

@@ -146,9 +146,6 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_session_stalled, notify_discord_daily_digest, notify_discord_rate_limited, and
 # notify_discord_host_health are declared in lib/discord.
 
-# The SESSION_* outcome globals of the most recent invoke_claude session (SESSION_DENIAL_COUNT,
-# SESSION_TOOL_DENIED_QUIT and the rest) are declared in lib/globals.
-
 # rearm_closed_issue_markers, tag_pr_closed_issue and link_pivot_pr_transcripts are declared in
 # lib/state.
 

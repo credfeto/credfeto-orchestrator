@@ -544,20 +544,20 @@ ISSUE_INVOCATION_TOTAL=0
 ISSUE_INVOCATION_IDLE=0
 
 # The outcome of the most recent invoke_claude session (lib/podman), reset at the start of every
-# call and set before its is_error check, so oneshot's post-session block can judge whether the
-# session stalled without re-reading the result JSON, which invoke_claude deletes.
+# call and set before its is_error check, so record_session_outcome (lib/state) can judge whether
+# the session stalled without re-reading the result JSON, which invoke_claude deletes.
 # SESSION_DENIED_COMMANDS holds names only, comma-separated and deduplicated: the program each
 # denied Bash command runs (leading assignments and wrapper words skipped, basename only), or the
 # tool name for any other tool, and "(other)" for anything that is not a plain short name. Never
 # arguments, values or paths, which can hold tokens or other detail that must not reach Discord
 # or the per-day state file.
-# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_DENIAL_COUNT=0
-# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_DENIED_COMMANDS=""
-# shellcheck disable=SC2034  # read by lib/podman, lib/state and oneshot after sourcing
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_TOOL_DENIED_QUIT=0
-# shellcheck disable=SC2034  # read by lib/podman after sourcing
+# shellcheck disable=SC2034  # read by lib/state after sourcing
 SESSION_RESULT_TEXT=""
 
 # Output pair for parse_two_token_counters (lib/state) — shared by load_pr_invocation_counts and
