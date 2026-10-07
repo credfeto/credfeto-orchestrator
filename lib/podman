@@ -1020,10 +1020,8 @@ prepare_claude_container_args() {
     # Lets the agent container announce what it's working on at startup.
     PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
 
-    # Secrets are named after the container, not the owner: each launch removes and recreates
-    # its secrets on entry and removes them on every exit path, so a name shared with another
-    # container would let one launch delete the secret the other is between creating and
-    # consuming.
+    # Secrets are named after the container (orchestrator-<owner>); each launch removes and
+    # recreates them on entry and removes them on every exit path.
     # Secrets created under the pre-rename names (claude-oauth-<owner>, gh-enterprise-token)
     # by a run that crashed between create and its EXIT trap would otherwise never be swept
     # again after the self-update, leaving a live token in the store. Best-effort, every launch.

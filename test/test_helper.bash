@@ -75,8 +75,7 @@ setup_isolated_env() {
     unset GIT_USER_NAME GIT_USER_EMAIL GIT_SIGNING_KEY PR_CREATOR_LOGIN
     # When the suite runs from a git pre-commit hook, git exports GIT_INDEX_FILE (as the
     # RELATIVE path .git/index) and GIT_DIR/GIT_WORK_TREE for the real repository; any real git
-    # command inside a fixture then resolves them against the fixture and fails (a linked
-    # worktree fixture, whose .git is a file, dies with ".git/index: Not a directory").
+    # command inside a fixture then resolves them against the fixture and fails.
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
     # HOME above isolates the global gitconfig, but /etc/gitconfig still applies: on this host
     # it sets core.hooksPath, so every git commit in a fixture would otherwise run the host's
