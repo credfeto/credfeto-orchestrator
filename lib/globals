@@ -161,9 +161,9 @@ SESSION_DENIALS_RETENTION_DAYS=30
 #         could not continue with cleanup, but the rest of the work is complete" does not count.
 #         A workaround word with a negation right before it says the opposite, so every
 #         TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS match is removed from the message before (iii)
-#         is tested: "not", "never", "no" or a word ending in "n't" directly before the word
-#         (allowing "yet" and "been" between, as in "has not yet been pushed"), or "nothing" or
-#         "no" followed by up to three words and was/were/is/are/has been/have been ("Nothing was
+#         is tested: "not", "never", "no", "cannot" or a word ending in "n't" directly before
+#         the word (allowing "yet" and "be" or "been" between, as in "has not yet been pushed"
+#         or "could not be completed"), or "nothing" or "no" followed by up to three words and was/were/is/are/has been/have been ("Nothing was
 #         pushed", "no commits were pushed"). Only the negated phrase is removed, so "the docs
 #         were not completed, but I pushed the code" still reports a workaround.
 # Limits: this is a keyword heuristic over free text. A session that gives up but also reports
@@ -197,7 +197,7 @@ TOOL_DENIED_WORKAROUND_PATTERNS=(
 )
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS=(
-    '([a-z]n[^a-z ]{1,3}t|(^|[^a-z])(not|never|no))( yet)?( been)? (finished|completed|pushed|succeeded)'
+    '([a-z]n[^a-z ]{1,3}t|(^|[^a-z])(not|never|no|cannot))( yet)?( be| been)? (finished|completed|pushed|succeeded)'
     '(^|[^a-z])(nothing|no)( [a-z]+){0,3} (was|were|has been|have been|is|are) (finished|completed|pushed|succeeded)'
 )
 
