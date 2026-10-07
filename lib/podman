@@ -478,20 +478,16 @@ setup_cgroup_leaf() {
 # Only untagged images are pruned — the current ORCHESTRATOR_IMAGE is always
 # tagged and is never removed.  Suppresses errors so that a failure to prune
 # (e.g. no images to prune, podman storage not initialised) is never fatal.
-# A no-op unless PRUNE_DANGLING_IMAGES=1 (lib/globals): `interactive` runs against the
-# developer's own image store, where an unannounced prune is a destructive side effect.
 cleanup_dangling_images() {
-    [ "${PRUNE_DANGLING_IMAGES}" = "1" ] || return 0
     podman image prune --force > /dev/null 2>&1 || true
 }
 
-# Succeeds when a transcript entry has been idle for more than retention_mins: no file under it
-# was modified within that time, or, when it contains no file at all (only empty subdirectories
-# at most), the directory itself was not. The directory's own mtime is otherwise ignored, because
-# appending to a transcript does not change it. A regular file is its own only file, so it is
-# aged by its own mtime. find runs without following links (its default), so a link inside the
-# directory never counts. Returns 2 when find cannot read the entry, so the caller keeps it
-# rather than reading empty output as idle.
+# Succeeds when a work item's transcript directory has been idle for more than retention_mins: no
+# file under it was modified within that time, or, when it contains no file at all (only empty
+# subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
+# ignored, because appending to a transcript does not change it. find runs without following
+# links (its default), so a link inside the directory never counts. Returns 2 when find cannot
+# read the directory, so the caller keeps it rather than reading empty output as idle.
 transcript_item_idle() {
     local dir="$1" retention_mins="$2" any_file recent
     any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
@@ -503,69 +499,40 @@ transcript_item_idle() {
     [ -z "${recent}" ]
 }
 
-# Removes one or more transcript entries (real directories or regular files, never links)
-# together once every one of them has been idle for more than retention_mins
-# (transcript_item_idle), so a session's .jsonl and its side directory go together or not at all.
-# Keeps them all and warns when the age of any cannot be read, or warns when they cannot be
-# removed; never fails.
-purge_idle_transcript_entry() {
-    local retention_mins="$1" entry idle_status
-    shift
-    for entry in "$@"; do
+# Removes every transcript directory idle for more than TRANSCRIPT_ITEM_RETENTION_DAYS
+# (transcript_item_idle), and every link to a directory that no longer exists.
+# Age-based rather than tied to an item closing, because oneshot never observes most closures (a
+# merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
+# queries GitHub, because this runs before every container launch and must never fail or stall
+# the run.
+# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
+# lib/state) is never followed and never removed while its target exists: the PR's sessions write
+# through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
+prune_transcripts() {
+    local transcripts_dir
+    transcripts_dir=$(transcripts_root_path)
+    [ -d "${transcripts_dir}" ] || return 0
+
+    local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
+    local entry idle_status
+    # Real directories first, so a link this pass leaves dangling by purging its target is
+    # removed by the link pass below in the same run.
+    for entry in "${transcripts_dir}"/*; do
+        # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
+        [ -L "${entry}" ] && continue
+        [ -d "${entry}" ] || continue
         idle_status=0
-        transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
+        transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
         if [ "${idle_status}" -eq 2 ]; then
             warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
-            return 0
-        fi
-        [ "${idle_status}" -eq 0 ] || return 0
-    done
-    rm -rf "$@" 2>/dev/null \
-        || warn "Failed to purge transcripts at ${1} - will retry on the next launch"
-    return 0
-}
-
-# Ages one project directory of the shared transcript directory per session, never as a whole:
-# interactive always runs in the same container cwd, so one project directory holds every session
-# and any recent session would otherwise keep years of older ones. A session is <id>.jsonl, which
-# every turn appends to, plus its side directory <id>/ (tool results, subagents), whose files keep
-# their original mtimes; both are aged by the newest file across the two and removed together, so
-# a resumed session never loses its side files. Every other entry (an <id>/ with no .jsonl, any
-# other file or directory) is aged on its own. A link is never followed, aged or removed, so a
-# project directory holding one is never emptied. The project directory itself is removed only
-# once it is empty and its own mtime was already outside the window before this pass, which is
-# read first because removing sessions below updates it.
-prune_shared_project_dir() {
-    local project="$1" retention_mins="$2" stale entry
-    stale=$(find "${project}" -maxdepth 0 -mmin "+${retention_mins}" -print 2>/dev/null) || {
-        warn "Failed to read transcripts at ${project} to check their age - keeping them until the next launch"
-        stale=""
-    }
-    for entry in "${project}"/* "${project}"/.[!.]* "${project}"/..?*; do
-        # -L first: -d and -f are also true for a live link.
-        [ -L "${entry}" ] && continue
-        if [ -f "${entry}" ] && [ "${entry%.jsonl}" != "${entry}" ] \
-            && [ -d "${entry%.jsonl}" ] && [ ! -L "${entry%.jsonl}" ]; then
-            purge_idle_transcript_entry "${retention_mins}" "${entry}" "${entry%.jsonl}"
-        elif [ -d "${entry}" ] && [ -f "${entry}.jsonl" ] && [ ! -L "${entry}.jsonl" ]; then
-            # Aged and removed with its .jsonl above.
             continue
-        elif [ -d "${entry}" ] || [ -f "${entry}" ]; then
-            purge_idle_transcript_entry "${retention_mins}" "${entry}"
         fi
+        [ "${idle_status}" -eq 0 ] || continue
+        rm -rf "${entry}" 2>/dev/null \
+            || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
     done
-    [ -n "${stale}" ] || return 0
-    [ -z "$(find "${project}" -mindepth 1 -print -quit 2>/dev/null || printf 'unreadable')" ] || return 0
-    rmdir "${project}" 2>/dev/null \
-        || warn "Failed to purge transcripts at ${project} - will retry on the next launch"
-    return 0
-}
 
-# Removes every top-level link in dir whose target no longer exists. A live link is never
-# followed, aged or removed.
-remove_dangling_transcript_links() {
-    local dir="$1" entry
-    for entry in "${dir}"/*; do
+    for entry in "${transcripts_dir}"/*; do
         [ -L "${entry}" ] || continue
         # -e follows the link, so it is false only when the target is missing.
         [ -e "${entry}" ] && continue
@@ -577,64 +544,11 @@ remove_dangling_transcript_links() {
     return 0
 }
 
-# Removes the transcript directory of every work item idle for more than
-# TRANSCRIPT_ITEM_RETENTION_DAYS (transcript_item_idle), every link to a directory that no longer
-# exists, and every session of the shared no-item directory idle for more than
-# TRANSCRIPT_RETENTION_DAYS.
-# The shared directory is aged per session inside each project directory Claude Code creates
-# under ~/.claude/projects (prune_shared_project_dir), by the newest file of the session, never
-# file by file, so a session resumed within the window keeps its older side files and /resume
-# still works. A top-level regular file is aged by its own mtime, and a top-level link follows the
-# same rule as an item link.
-# Age-based rather than tied to an item closing, because oneshot never observes most closures (a
-# merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
-# queries GitHub, because this runs before every container launch and must never fail or stall
-# the run. Not gated on PRUNE_DANGLING_IMAGES: that protects a developer's own image store,
-# whereas this tree is orchestrator state, and the shared directory interactive uses would
-# otherwise grow without bound.
-# A symlink (a pivoted PR's entry pointing at its Issue's directory, link_pivot_pr_transcripts in
-# lib/state) is never followed and never removed while its target exists: the PR's sessions write
-# through it into the Issue's directory, which keeps that directory fresh while the PR is worked.
-prune_transcripts() {
-    local transcripts_dir
-    transcripts_dir=$(transcripts_root_path)
-    [ -d "${transcripts_dir}" ] || return 0
-
-    local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
-    local entry
-    # Real directories first, so a link this pass leaves dangling by purging its target is
-    # removed by the link pass below in the same run.
-    for entry in "${transcripts_dir}"/*; do
-        # -L first: -d is also true for a live link, and rm -rf through one would purge its target.
-        [ -L "${entry}" ] && continue
-        [ -d "${entry}" ] || continue
-        [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
-        purge_idle_transcript_entry "${item_retention_mins}" "${entry}"
-    done
-    remove_dangling_transcript_links "${transcripts_dir}"
-
-    local shared_dir
-    shared_dir=$(transcript_dir_path)
-    # -L first: never prune through a shared directory that is itself a link.
-    if [ -d "${shared_dir}" ] && [ ! -L "${shared_dir}" ]; then
-        local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
-        for entry in "${shared_dir}"/* "${shared_dir}"/.[!.]* "${shared_dir}"/..?*; do
-            [ -L "${entry}" ] && continue
-            if [ -d "${entry}" ]; then
-                prune_shared_project_dir "${entry}" "${retention_mins}"
-            elif [ -f "${entry}" ]; then
-                purge_idle_transcript_entry "${retention_mins}" "${entry}"
-            fi
-        done
-        remove_dangling_transcript_links "${shared_dir}"
-    fi
-    return 0
-}
-
 # Kills the ssh-agent started by the service unit's ExecStartPre so the service
 # cgroup is clean when the next timer fires and systemd does not warn about
-# left-over processes.  Registered as an EXIT trap by main so it runs on any
-# exit — success, die, or signal — regardless of whether invoke_claude was called.
+# left-over processes. Registered as an EXIT trap by main, and again by
+# prepare_claude_container_args (whose trap replaces main's), so it runs on any exit: success,
+# die, or signal, whether or not invoke_claude was called.
 # Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring install-timer's
 # ExecStartPre pkill) — an unscoped 'pkill ssh-agent' matches any process with that
 # name system-wide, including an unrelated interactive login agent (#1122).
@@ -810,6 +724,13 @@ invoke_claude() {
         die "Prompt is too long: ${prompt_len} characters exceeds limit of ${MAX_PROMPT_CHARS}"
     fi
 
+    # Checked before the pre-flight (prune, pull) and before anything is created, so a launch
+    # without an item does no work and leaves nothing behind.
+    if [ -z "${item_type}" ] || [ -z "${item_id}" ]; then
+        notify_discord_claude_error "${item_type}" "${item_id}" "An agent container launch needs both an item type and an item id"
+        die "An agent container launch needs both an item type and an item id"
+    fi
+
     owner_token=$(load_token_for_owner "${OWNER}")
     container_name="orchestrator-${OWNER}"
 
@@ -821,10 +742,7 @@ invoke_claude() {
     # were all variations of that race). MAX_PROMPT_CHARS (100000) keeps it well
     # under any argv-length limit.
     CLAUDE_PROMPT="${prompt}"
-    # stop_ssh_agent rides on the EXIT trap prepare_claude_container_args installs: it tears
-    # down the agent the service unit's ExecStartPre started for this run (install-timer),
-    # which is why the interactive path, running under the user's own agent, does not pass it.
-    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}" stop_ssh_agent
+    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}" "${item_type}" "${item_id}"
 
     PODMAN_CLAUDE_ARGS=(
         --model opusplan
@@ -905,52 +823,12 @@ invoke_claude() {
     cleanup_dangling_images
 }
 
-# Runs claude inside the agent container as a live, attached terminal session (the
-# `interactive` script) instead of a single --print phase: the same image, mounts, resource
-# limits, secrets and GPG/SSH wiring as invoke_claude, but with a TTY attached, no launch
-# prompt, no JSON result parsing, and no --permission-mode override: the image's own baked
-# claude-settings.json (containers/base/development-full) governs permissions exactly as it
-# would for oneshot. Uses a distinct container name from oneshot's orchestrator-<OWNER> so an
-# interactive session can never trip (or be clobbered by) a co-located oneshot run's
-# "already running"/--replace handling. Returns podman's own exit status.
-invoke_claude_interactive() {
-    local claude_md_content="$1"
-    local owner_token container_name
-
-    terminal_available || die "interactive sessions need a terminal on stdin and stdout (podman run --tty refuses a non-TTY)"
-
-    owner_token=$(load_token_for_owner "${OWNER}")
-    [ -n "${owner_token}" ] || die "No Claude OAuth token file for owner ${OWNER}, run interactive again to bootstrap it, or see README.md (Per-owner OAuth token)"
-    container_name="interactive-${OWNER}-${REPO}"
-
-    ensure_agent_container_ready "${container_name}"
-
-    # No extra EXIT-trap command: oneshot passes stop_ssh_agent here, which pkills any
-    # "ssh-agent -a ${SSH_AUTH_SOCK}" process, and on a desktop that is the user's own
-    # long-lived agent, not one this script started.
-    prepare_claude_container_args "${claude_md_content}" "${owner_token}" "${container_name}"
-    PODMAN_RUN_ARGS+=( --tty )
-
-    PODMAN_CLAUDE_ARGS=(
-        --model opusplan
-        --add-dir "${CONTAINER_REPO_PATH}" "${CONTAINER_RULES_PATH}" "${CONTAINER_SCRATCH_PATH}"
-    )
-
-    validate_bind_mounts
-    info "Starting interactive Claude session in container ${container_name} (image ${ORCHESTRATOR_IMAGE})..." >&2
-    local podman_exit=0
-    podman "${PODMAN_RUN_ARGS[@]}" "${ORCHESTRATOR_IMAGE}" "${PODMAN_CLAUDE_ARGS[@]}" || podman_exit=$?
-
-    cleanup_claude_invocation_tmpfiles
-    return "${podman_exit}"
-}
-
-# Pre-flight for any agent container launch (invoke_claude / invoke_claude_interactive):
-# removes a leftover non-running container holding container_name, dies if a running one
-# holds it, prunes dangling images, and pulls ORCHESTRATOR_IMAGE (once per process). item_type
-# and item_id are optional and only feed the Discord error notifications.
+# Pre-flight for an agent container launch (invoke_claude): removes a leftover non-running
+# container holding container_name, dies if a running one holds it, prunes dangling images and
+# idle transcripts, and pulls ORCHESTRATOR_IMAGE (once per process). item_type and item_id only
+# feed the Discord error notifications.
 ensure_agent_container_ready() {
-    local container_name="$1" item_type="${2:-}" item_id="${3:-}"
+    local container_name="$1" item_type="$2" item_id="$3"
 
     if podman inspect "${container_name}" >/dev/null 2>&1; then
         # A container left behind by a hard host crash (despite --rm) previously made every
@@ -1010,23 +888,19 @@ ensure_agent_container_ready() {
 # Builds PODMAN_RUN_ARGS (everything up to, but not including, the image name) for an agent
 # container launch, and creates the per-invocation host-side state it mounts: CLAUDE_MD_TMPFILE
 # (the generated CLAUDE.md), CLAUDE_SCRATCH_TMPDIR (the /workspace/tmp scratch mount), the
-# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the per-item transcript
-# directory (transcript_dir_path), and the Podman secrets for
-# the Claude OAuth token and GH_ENTERPRISE_TOKEN. Shared by invoke_claude (oneshot's --print
-# phase runs) and invoke_claude_interactive so the two can never drift apart in what they mount
-# or expose. Installs the EXIT trap that removes everything it creates
-# (cleanup_claude_invocation_tmpfiles) before the first mktemp, so a die() from inside here
-# cannot leak a tmpfile or a secret (#1103); bash traps replace rather than append, so a
-# caller that needs more on EXIT passes it as extra_exit_cmd (oneshot: stop_ssh_agent). The
-# trap is a backstop only: every normal exit path in the callers runs the cleanup itself.
-# item_type and item_id are optional: when both are set they select the transcript directory
-# and feed the WORK_ITEM_URL banner and the Discord error notifications.
+# persistent CLAUDE_STATE_DIR/ORCHESTRATOR_CACHE_DIR subdirectories, the work item's transcript
+# directory (transcript_dir_path), and the Podman secrets for the Claude OAuth token and
+# GH_ENTERPRISE_TOKEN. item_type and item_id (both set, checked by invoke_claude) select the
+# transcript directory and feed the WORK_ITEM_URL banner and the Discord error notifications.
+# Installs the EXIT trap before the first mktemp, so a die() from inside here cannot leak a
+# tmpfile or a secret (#1103). Bash traps replace rather than append, so the one trap also stops
+# the ssh-agent the service unit's ExecStartPre started for this run (stop_ssh_agent). The
+# cleanup half is a backstop only: every normal exit path in invoke_claude runs it itself.
 prepare_claude_container_args() {
-    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="${4:-}" item_id="${5:-}" extra_exit_cmd="${6:-}"
+    local claude_md_content="$1" owner_token="$2" container_name="$3" item_type="$4" item_id="$5"
     local d transcript_dir
 
-    # shellcheck disable=SC2064  # expanded now on purpose: the command is fixed at install time
-    trap "cleanup_claude_invocation_tmpfiles${extra_exit_cmd:+; ${extra_exit_cmd}}" EXIT
+    trap 'cleanup_claude_invocation_tmpfiles; stop_ssh_agent' EXIT
 
     # CLAUDE.md content is mandatory — every invocation must supply it.
     if [ -z "${claude_md_content}" ]; then
@@ -1086,21 +960,20 @@ prepare_claude_container_args() {
         --volume "${REPO_WORK_DIR}:${CONTAINER_REPO_PATH}:rw"
         --volume "${RULES_DIR}:${CONTAINER_RULES_PATH}:ro"
         --volume "${CLAUDE_SCRATCH_TMPDIR}:${CONTAINER_SCRATCH_PATH}:rw"
+        # --replace takes over the name if something still holds it, instead of refusing to start
+        # (#1361). ensure_agent_container_ready already handles a leftover container podman inspect
+        # can SEE (removing it when stopped, dying when genuinely running), and that guard is what
+        # keeps --replace from silently destroying another invocation's in-flight work. This covers
+        # the case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
+        # container mid-teardown) can leave the name reserved in the lower containers/storage layer
+        # while libpod's own metadata record is gone, so podman ps -a and podman inspect both report
+        # nothing while podman run still fails with "already in use by an external entity". That
+        # wedged the credfeto service for 19.5 hours across ~3,000 cycles until a human intervened.
+        # Verified on the live orphan: --replace both starts successfully AND purges the stale
+        # storage reservation, so it is the cure as well as the prevention. Only safe under oneshot's
+        # per-owner flock, which guarantees no other launch holds the name legitimately.
+        --replace
     )
-    # --replace takes over the name if something still holds it, instead of refusing to start
-    # (#1361). ensure_agent_container_ready already handles a leftover container podman inspect
-    # can SEE (removing it when stopped, dying when genuinely running), and that guard is what
-    # keeps --replace from silently destroying another invocation's in-flight work. This covers
-    # the case that guard cannot see: an unclean shutdown (e.g. a host reboot SIGKILLing a --rm
-    # container mid-teardown) can leave the name reserved in the lower containers/storage layer
-    # while libpod's own metadata record is gone, so podman ps -a and podman inspect both report
-    # nothing while podman run still fails with "already in use by an external entity". That
-    # wedged the credfeto service for 19.5 hours across ~3,000 cycles until a human intervened.
-    # Verified on the live orphan: --replace both starts successfully AND purges the stale
-    # storage reservation, so it is the cure as well as the prevention. Only safe under oneshot's
-    # per-owner flock; interactive sets PODMAN_REPLACE_CONTAINER=0 (lib/globals) because a
-    # second unlocked launch racing the first through the pull window would otherwise kill it.
-    [ "${PODMAN_REPLACE_CONTAINER}" = "1" ] && PODMAN_RUN_ARGS+=( --replace )
     [ -n "${PODMAN_CGROUP_PARENT}" ] && PODMAN_RUN_ARGS+=( --cgroup-parent "${PODMAN_CGROUP_PARENT}" )
     if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK}" ]; then
         PODMAN_RUN_ARGS+=( --volume "${SSH_AUTH_SOCK}:/tmp/ssh-agent.sock:ro" )
@@ -1144,18 +1017,11 @@ prepare_claude_container_args() {
     # already hardcodes /workspace/repo as WORKSPACE_REPO_DIR's default - no need to inject
     # them via --env from a fixed value the container already knows.
 
-    # Lets the agent container announce what it's working on at startup. Only
-    # set when both are known — most callers (tests, ad-hoc invocations) pass
-    # empty item_type/item_id and simply won't get this env var.
-    if [ -n "${item_type}" ] && [ -n "${item_id}" ]; then
-        PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
-    fi
+    # Lets the agent container announce what it's working on at startup.
+    PODMAN_RUN_ARGS+=( --env "WORK_ITEM_URL=$(build_item_url "${item_type}" "${item_id}")" )
 
-    # Secrets are named after the container, not the owner: oneshot (orchestrator-<owner>) and
-    # interactive (interactive-<owner>-<repo>) can run side by side on one host, and each
-    # removes and recreates its secrets on entry and removes them on every exit path, so a
-    # shared name would let one launch delete the secret the other is between creating and
-    # consuming.
+    # Secrets are named after the container (orchestrator-<owner>); each launch removes and
+    # recreates them on entry and removes them on every exit path.
     # Secrets created under the pre-rename names (claude-oauth-<owner>, gh-enterprise-token)
     # by a run that crashed between create and its EXIT trap would otherwise never be swept
     # again after the self-update, leaving a live token in the store. Best-effort, every launch.
@@ -1169,8 +1035,8 @@ prepare_claude_container_args() {
     fi
     if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
         # gh only honours GH_ENTERPRISE_TOKEN for a non-github.com GH_HOST; for a direct
-        # github.com login (an unproxied developer's .env, see bootstrap_orchestrator_env_file)
-        # the same token has to arrive as GH_TOKEN or every gh call in the container fails.
+        # github.com login (an unproxied .env) the same token has to arrive as GH_TOKEN or every
+        # gh call in the container fails.
         local gh_token_target="GH_ENTERPRISE_TOKEN"
         [ "$(normalize_gh_host "${GH_HOST:-}")" = "github.com" ] && gh_token_target="GH_TOKEN"
         GH_ENTERPRISE_SECRET_NAME="gh-enterprise-token-${container_name}"
