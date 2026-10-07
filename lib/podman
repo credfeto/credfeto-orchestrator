@@ -364,13 +364,13 @@ cleanup_dangling_images() {
     podman image prune --force > /dev/null 2>&1 || true
 }
 
-# Succeeds when a work item's transcript directory has been idle for more than retention_mins:
-# no file under it was modified within that time, or, when it contains no file at all (only empty
-# subdirectories at most), the directory itself was not. The directory's own mtime is otherwise
-# ignored, because appending to a transcript does not change it. find runs without following
-# links (its default), so a link inside the directory never counts. The age test is the exact
-# complement of the shared directory's -mmin "+N" rule. Returns 2 when find cannot read the
-# directory, so the caller keeps it rather than reading empty output as idle.
+# Succeeds when a transcript entry has been idle for more than retention_mins: no file under it
+# was modified within that time, or, when it contains no file at all (only empty subdirectories
+# at most), the directory itself was not. The directory's own mtime is otherwise ignored, because
+# appending to a transcript does not change it. A regular file is its own only file, so it is
+# aged by its own mtime. find runs without following links (its default), so a link inside the
+# directory never counts. Returns 2 when find cannot read the entry, so the caller keeps it
+# rather than reading empty output as idle.
 transcript_item_idle() {
     local dir="$1" retention_mins="$2" any_file recent
     any_file=$(find "${dir}" -type f -print -quit 2>/dev/null) || return 2
@@ -382,9 +382,48 @@ transcript_item_idle() {
     [ -z "${recent}" ]
 }
 
+# Removes one transcript entry (a real directory or regular file, never a link) when it has been
+# idle for more than retention_mins (transcript_item_idle). Keeps it and warns when its age
+# cannot be read or it cannot be removed; never fails.
+purge_idle_transcript_entry() {
+    local entry="$1" retention_mins="$2" idle_status=0
+    transcript_item_idle "${entry}" "${retention_mins}" || idle_status=$?
+    if [ "${idle_status}" -eq 2 ]; then
+        warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
+        return 0
+    fi
+    [ "${idle_status}" -eq 0 ] || return 0
+    rm -rf "${entry}" 2>/dev/null \
+        || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+    return 0
+}
+
+# Removes every top-level link in dir whose target no longer exists. A live link is never
+# followed, aged or removed.
+remove_dangling_transcript_links() {
+    local dir="$1" entry
+    for entry in "${dir}"/*; do
+        [ -L "${entry}" ] || continue
+        # -e follows the link, so it is false only when the target is missing.
+        [ -e "${entry}" ] && continue
+        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
+        # never anything it points at.
+        rm -f "${entry}" 2>/dev/null \
+            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
+    done
+    return 0
+}
+
 # Removes the transcript directory of every work item idle for more than
 # TRANSCRIPT_ITEM_RETENTION_DAYS (transcript_item_idle), every link to a directory that no longer
-# exists, and every file in the shared no-item directory not modified for TRANSCRIPT_RETENTION_DAYS.
+# exists, and every top-level entry of the shared no-item directory idle for more than
+# TRANSCRIPT_RETENTION_DAYS.
+# The shared directory is aged per top-level entry (each project directory Claude Code creates
+# under ~/.claude/projects) by the newest file under it, never file by file: a session spans
+# <session>.jsonl, which every turn appends to, plus side files under <session>/ (tool results,
+# subagents) that keep their original mtimes, so a per-file purge would strip the side files of a
+# session resumed within the window and break /resume. A top-level regular file is aged by its own
+# mtime, and a top-level link follows the same rule as an item link.
 # Age-based rather than tied to an item closing, because oneshot never observes most closures (a
 # merged PR and the Issue it closes drop out of the priorities feed first), and nothing here
 # queries GitHub, because this runs before every container launch and must never fail or stall
@@ -400,7 +439,7 @@ prune_transcripts() {
     [ -d "${transcripts_dir}" ] || return 0
 
     local item_retention_mins=$(( TRANSCRIPT_ITEM_RETENTION_DAYS * 1440 ))
-    local entry idle_status
+    local entry
     # Real directories first, so a link this pass leaves dangling by purging its target is
     # removed by the link pass below in the same run.
     for entry in "${transcripts_dir}"/*; do
@@ -408,34 +447,21 @@ prune_transcripts() {
         [ -L "${entry}" ] && continue
         [ -d "${entry}" ] || continue
         [ "${entry##*/}" = "${TRANSCRIPT_SHARED_DIR_NAME}" ] && continue
-        idle_status=0
-        transcript_item_idle "${entry}" "${item_retention_mins}" || idle_status=$?
-        if [ "${idle_status}" -eq 2 ]; then
-            warn "Failed to read transcripts at ${entry} to check their age - keeping them until the next launch"
-            continue
-        fi
-        [ "${idle_status}" -eq 0 ] || continue
-        rm -rf "${entry}" 2>/dev/null \
-            || warn "Failed to purge transcripts at ${entry} - will retry on the next launch"
+        purge_idle_transcript_entry "${entry}" "${item_retention_mins}"
     done
-
-    for entry in "${transcripts_dir}"/*; do
-        [ -L "${entry}" ] || continue
-        # -e follows the link, so it is false only when the target is missing.
-        [ -e "${entry}" ] && continue
-        # rm -f on the bare link path (no trailing slash, no -r) removes the link itself and
-        # never anything it points at.
-        rm -f "${entry}" 2>/dev/null \
-            || warn "Failed to remove transcript link at ${entry} - will retry on the next launch"
-    done
+    remove_dangling_transcript_links "${transcripts_dir}"
 
     local shared_dir
     shared_dir=$(transcript_dir_path)
-    if [ -d "${shared_dir}" ]; then
+    # -L first: never prune through a shared directory that is itself a link.
+    if [ -d "${shared_dir}" ] && [ ! -L "${shared_dir}" ]; then
         local retention_mins=$(( TRANSCRIPT_RETENTION_DAYS * 1440 ))
-        # -delete implies -depth, so a directory is tested for -empty only after its old files
-        # have gone.
-        find "${shared_dir}" -mindepth 1 \( -type f -o -type d -empty \) -mmin "+${retention_mins}" -delete 2>/dev/null || true
+        for entry in "${shared_dir}"/* "${shared_dir}"/.[!.]* "${shared_dir}"/..?*; do
+            [ -L "${entry}" ] && continue
+            [ -d "${entry}" ] || [ -f "${entry}" ] || continue
+            purge_idle_transcript_entry "${entry}" "${retention_mins}"
+        done
+        remove_dangling_transcript_links "${shared_dir}"
     fi
     return 0
 }
