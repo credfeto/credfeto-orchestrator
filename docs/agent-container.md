@@ -114,11 +114,26 @@ repository that the PR closes (its `closingIssuesReferences`, read from the PR s
 has already fetched), not the Issue it was processing when it pivoted: the pivot takes the
 repository's open bot PR, which need not belong to that Issue. A PR that closes more than one
 Issue there is linked to the lowest-numbered of them; one that closes no Issue there is not
-linked (an info message says so), and its sessions get a directory of their own. It creates
-`Issue_<n>/` first if needed, and only creates the link when there is no `PullRequest_<m>` entry
-already: an existing directory or link, whether live or dangling, is left alone. A failure to
-link is a warning, and the PR's sessions then get a directory of their
-own.
+linked (an info message says so), and its sessions get a directory of their own.
+
+The pivot counts as activity. It creates `Issue_<n>/` if needed and touches
+`Issue_<n>/.orchestrator-last-pivot` (`TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME` in `lib/globals`), so
+the prune that runs before the launch cannot purge an Issue that has been idle for 14 days and
+leave the PR's sessions to start a directory of their own. The file is touched on every tick the
+Issue pivots, whether or not a container launches, so an Issue whose PR is still open in the
+priorities feed is kept for as long as that PR stays there. The file sits at the root of the
+mounted `~/.claude/projects`, beside Claude Code's per-project subdirectories rather than inside
+one. Then, for an existing `PullRequest_<m>` entry:
+
+- a link, whether live or dangling, is left alone; a dangling link to the same Issue becomes live
+  again because the Issue's directory has just been created;
+- an empty real directory, left when the PR was processed directly from the feed before any
+  pivot, or after an earlier purge of its Issue, is removed with `rmdir` and replaced by the
+  link;
+- a non-empty real directory is kept, so no transcript is lost, and an info message says so.
+
+Every failure is a warning and never fails the run; the PR's sessions then get a directory of
+their own.
 
 Retention is by age, enforced before every container launch by `prune_transcripts`
 (`lib/podman`). It does not depend on an item closing: a merged PR and the Issue it closes drop

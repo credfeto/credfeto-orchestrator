@@ -14,7 +14,8 @@ counters and block markers) and each item's session transcripts in
 `transcripts/<ItemType>_<id>/`, kept so a human can read what the agent did.  When an issue
 pivots to its PR, the PR's transcript directory is linked to the issue's, so both share one
 history.  An item's transcripts are deleted once none of them has been modified for 14 days,
-whether the item is open or closed; see
+whether the item is open or closed.  An issue that pivots to its PR keeps its transcripts for as
+long as it keeps pivoting, because each pivot counts as activity; see
 [docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### Usage

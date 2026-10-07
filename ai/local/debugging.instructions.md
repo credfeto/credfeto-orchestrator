@@ -243,7 +243,7 @@ find ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/I
 - Before each launch `prune_transcripts` (`lib/podman`) deletes an item's whole transcript directory once no file in it has been modified for 14 days (`TRANSCRIPT_ITEM_RETENTION_DAYS`), whether the item is open or closed; the third command above shows the newest file, which is what that age is measured from. A directory with no files is aged by its own modification time.
 - `transcripts/PullRequest_<m>` as a symlink - a PR an Issue pivoted to, linked to `Issue_<n>` so its sessions are in the Issue's directory; read them there. `ls -la` shows the target. A live link is never deleted on its own; a link whose target is missing is deleted by the next purge, and the purge never follows a link, so it only ever deletes the link itself.
 - Transcripts missing for an item that is still open mean it had no session for 14 days; that is expected, since `oneshot` never resumes a session. Transcripts older than 14 days that are still present belong to a repository that has not launched a container since, because the purge only runs before a launch for that repository; delete the directory by hand if it matters.
-- An empty item directory after a session ran means Claude Code wrote no transcript; check the mount is present in the `podman run` arguments (`/home/developer/.claude/projects:rw`) before suspecting anything else.
+- An item directory that `ls -A` shows as empty, or holding only `.orchestrator-last-pivot` (the activity file each Issue-to-PR pivot touches), after a session ran means Claude Code wrote no transcript; check the mount is present in the `podman run` arguments (`/home/developer/.claude/projects:rw`) before suspecting anything else.
 
 ### 7 — Podman containers
 

@@ -726,9 +726,14 @@ ensure_transcript_dir() {
 # Issue's, so the pivoted sessions' transcripts accumulate with the Issue's, keep that directory
 # fresh while the PR is worked, and are purged with it once it has been idle for
 # TRANSCRIPT_ITEM_RETENTION_DAYS (prune_transcripts in lib/podman, which then removes the dangling
-# link). The Issue directory is ensured first so a link left dangling by an earlier purge of that
-# Issue becomes live again. Any existing PullRequest_<m> entry, whether a real directory or a live
-# or dangling link, is left as it is.
+# link). The pivot itself counts as activity: the Issue directory is ensured and its
+# TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME touched, so the prune that runs before this launch cannot
+# purge an Issue that has been idle and leave the PR's sessions to start a directory of their own.
+# For the same reason a link left dangling by an earlier purge of that Issue becomes live again.
+# An existing PullRequest_<m> link, live or dangling, is left as it is. An empty real
+# PullRequest_<m> directory (created when the PR was processed before any pivot, or after an
+# earlier purge of its Issue) is replaced by the link; a non-empty one is kept, so no transcript
+# is lost.
 # Best-effort: a failure only means the pivoted sessions get a directory of their own.
 link_pivot_pr_transcripts() {
     local issue_id="$1" pr_number="$2" issue_dir pr_path
@@ -738,7 +743,23 @@ link_pivot_pr_transcripts() {
         warn "Failed to create transcript directory ${issue_dir}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
         return 0
     fi
-    { [ -e "${pr_path}" ] || [ -L "${pr_path}" ]; } && return 0
+    touch "${issue_dir}/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}" 2>/dev/null \
+        || warn "Failed to record pivot activity in ${issue_dir}, so Issue #${issue_id} transcripts may be purged as idle"
+    # -L first: -d is also true for a live link, and rmdir must only ever see a real directory.
+    [ -L "${pr_path}" ] && return 0
+    if [ -d "${pr_path}" ]; then
+        # find without following links sees dot-files too; a failed read counts as non-empty.
+        if [ -n "$(find "${pr_path}" -mindepth 1 -print -quit 2>/dev/null || printf 'unreadable')" ]; then
+            info "PR #${pr_number} already has transcripts of its own at ${pr_path}, so they are kept and not linked to Issue #${issue_id}"
+            return 0
+        fi
+        if ! rmdir "${pr_path}" 2>/dev/null; then
+            warn "Failed to remove empty transcript directory ${pr_path}, so PR #${pr_number} transcripts will not be linked to Issue #${issue_id}"
+            return 0
+        fi
+    elif [ -e "${pr_path}" ]; then
+        return 0
+    fi
     ln -s "${issue_dir##*/}" "${pr_path}" 2>/dev/null \
         || warn "Failed to link PR #${pr_number} transcripts to Issue #${issue_id}, so they will be kept in a directory of their own"
     return 0

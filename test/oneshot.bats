@@ -17595,12 +17595,51 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
 }
 
-@test "link_pivot_pr_transcripts leaves an existing real PR transcript directory untouched" {
+@test "link_pivot_pr_transcripts keeps a non-empty real PR transcript directory and says so" {
     make_transcript_dir "PullRequest_99"
     run link_pivot_pr_transcripts "10" "99"
     [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 already has transcripts of its own at ${SESSION_BASE_DIR}/transcripts/PullRequest_99, so they are kept and not linked to Issue #10"* ]]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
     [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "link_pivot_pr_transcripts keeps a real PR transcript directory holding only a dot-file" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    printf '{}\n' > "${SESSION_BASE_DIR}/transcripts/PullRequest_99/.hidden"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/.hidden" ]
+}
+
+@test "link_pivot_pr_transcripts replaces an empty real PR transcript directory with the link" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still succeeds when an empty real PR transcript directory cannot be removed" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    make_stub rmdir "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to remove empty transcript directory ${SESSION_BASE_DIR}/transcripts/PullRequest_99, so PR #99 transcripts will not be linked to Issue #10"* ]]
+    [ -d "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_transcripts leaves an existing non-directory PR transcript entry untouched" {
+    mkdir -p "${SESSION_BASE_DIR}/transcripts"
+    printf 'not a directory\n' > "${SESSION_BASE_DIR}/transcripts/PullRequest_99"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+    [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
 }
 
 @test "link_pivot_pr_transcripts leaves an existing link to another Issue untouched" {
@@ -17645,6 +17684,37 @@ stub_pr_merged() {
     [[ "${output}" == *"Failed to link PR #99 transcripts to Issue #10, so they will be kept in a directory of their own"* ]]
     [ ! -e "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
+}
+
+@test "link_pivot_pr_transcripts records pivot activity in the Issue directory and refreshes it on each call" {
+    local activity_file="${SESSION_BASE_DIR}/transcripts/Issue_10/${TRANSCRIPT_PIVOT_ACTIVITY_FILE_NAME}"
+    link_pivot_pr_transcripts "10" "99"
+    [ -f "${activity_file}" ]
+    touch -d '15 days ago' "${activity_file}"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -n "$(find "${activity_file}" -mmin -1 -print)" ]
+}
+
+@test "link_pivot_pr_transcripts keeps an idle Issue directory alive through the prune that follows the pivot" {
+    make_transcript_dir "Issue_10"
+    # Aged before the pivot: ageing after it would age the activity file too.
+    age_transcript_files "Issue_10" 15
+    link_pivot_pr_transcripts "10" "99"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/Issue_10/-workspace-repo/session.jsonl" ]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
+    [ -f "${SESSION_BASE_DIR}/transcripts/PullRequest_99/-workspace-repo/session.jsonl" ]
+}
+
+@test "link_pivot_pr_transcripts warns and still links when pivot activity cannot be recorded" {
+    make_stub touch "exit 1"
+    run link_pivot_pr_transcripts "10" "99"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to record pivot activity in ${SESSION_BASE_DIR}/transcripts/Issue_10, so Issue #10 transcripts may be purged as idle"* ]]
+    [ "$(readlink "${SESSION_BASE_DIR}/transcripts/PullRequest_99")" = "Issue_10" ]
 }
 
 @test "main links the transcripts of the PR an Issue pivots to into the Issue's directory" {
