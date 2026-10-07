@@ -183,8 +183,9 @@ mounts (`sessions`, `session-env`, `plans`, `cache`, `backups` under
 `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/claude`) are shared, and the
 conversation transcripts Claude Code resumes from (`~/.claude/projects` in the container) are
 kept in `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>/transcripts/_shared`,
-mode `0700`, so `/resume` and `claude --continue` find them next time. A project directory there
-in which no file has been modified for 7 days is deleted as a whole before each launch; see
+mode `0700`, so `/resume` and `claude --continue` find them next time. A session there, aged by
+the newest file of the session, is deleted as a whole before each launch once none of its files
+has been modified for 7 days; see
 [docs/agent-container.md](docs/agent-container.md#session-transcripts).
 
 ### What the container can reach

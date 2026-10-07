@@ -17546,12 +17546,33 @@ stub_pr_merged() {
     [ -f "${SESSION_BASE_DIR}/transcripts/Issue_15/-workspace-repo/session.jsonl" ]
 }
 
-@test "prune_transcripts keeps a shared project directory with a fresh session transcript, including its older side files" {
+@test "prune_transcripts removes an old shared session whole and keeps a fresh session in the same project directory" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/old/tool-results" "${project}/old/subagents" "${project}/new/tool-results"
+    printf '{}\n' > "${project}/old.jsonl"
+    printf '{}\n' > "${project}/old/tool-results/result.txt"
+    printf '{}\n' > "${project}/old/subagents/agent.jsonl"
+    touch -d '8 days ago' "${project}/old.jsonl" "${project}/old/tool-results/result.txt" \
+        "${project}/old/subagents/agent.jsonl"
+    printf '{}\n' > "${project}/new.jsonl"
+    printf '{}\n' > "${project}/new/tool-results/result.txt"
+    # The project directory is old too, but it still holds a fresh session.
+    touch -d '8 days ago' "${project}"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${project}/old.jsonl" ]
+    [ ! -e "${project}/old" ]
+    [ -f "${project}/new.jsonl" ]
+    [ -f "${project}/new/tool-results/result.txt" ]
+}
+
+@test "prune_transcripts keeps a shared session with a fresh transcript whole, including its older side files" {
     local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
     mkdir -p "${project}/session/tool-results" "${project}/session/subagents"
     printf '{}\n' > "${project}/session/tool-results/result.txt"
     printf '{}\n' > "${project}/session/subagents/agent.jsonl"
-    touch -d '8 days ago' "${project}/session/tool-results/result.txt" "${project}/session/subagents/agent.jsonl"
+    touch -d '8 days ago' "${project}/session/tool-results/result.txt" "${project}/session/subagents/agent.jsonl" \
+        "${project}/session/tool-results" "${project}/session/subagents" "${project}/session"
     printf '{}\n' > "${project}/session.jsonl"
     run prune_transcripts
     [ "${status}" -eq 0 ]
@@ -17560,18 +17581,41 @@ stub_pr_merged() {
     [ -f "${project}/session/subagents/agent.jsonl" ]
 }
 
-@test "prune_transcripts removes a shared project directory whose files are all older than the shared window, whatever the directory's own mtime" {
-    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
-    mkdir -p "${shared}/-old-cwd/session/tool-results" "${shared}/-stale-empty-cwd" "${shared}/-fresh-empty-cwd"
-    printf '{}\n' > "${shared}/-old-cwd/session.jsonl"
-    printf '{}\n' > "${shared}/-old-cwd/session/tool-results/result.txt"
-    touch -d '8 days ago' "${shared}/-old-cwd/session.jsonl" "${shared}/-old-cwd/session/tool-results/result.txt" \
-        "${shared}/-stale-empty-cwd"
+@test "prune_transcripts ages a shared side directory with no transcript, and any other project entry, on its own" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/orphan/tool-results" "${project}/fresh-orphan" "${project}/memory"
+    printf '{}\n' > "${project}/orphan/tool-results/result.txt"
+    printf '{}\n' > "${project}/memory/old.md"
+    printf '{}\n' > "${project}/old.txt"
+    printf '{}\n' > "${project}/fresh.txt"
+    printf '{}\n' > "${project}/fresh-orphan/result.txt"
+    touch -d '8 days ago' "${project}/orphan/tool-results/result.txt" "${project}/memory/old.md" "${project}/old.txt"
     run prune_transcripts
     [ "${status}" -eq 0 ]
-    [ ! -e "${shared}/-old-cwd" ]
+    [ ! -e "${project}/orphan" ]
+    [ ! -e "${project}/memory" ]
+    [ ! -e "${project}/old.txt" ]
+    [ -f "${project}/fresh.txt" ]
+    [ -f "${project}/fresh-orphan/result.txt" ]
+}
+
+@test "prune_transcripts removes an empty old shared project directory, and never a non-empty one as a whole" {
+    local shared="${SESSION_BASE_DIR}/transcripts/_shared"
+    mkdir -p "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-fresh-empty-cwd" "${shared}/-busy-cwd"
+    printf '{}\n' > "${shared}/-emptied-cwd/session.jsonl"
+    touch -d '8 days ago' "${shared}/-emptied-cwd/session.jsonl"
+    printf '{}\n' > "${shared}/-busy-cwd/old.jsonl"
+    printf '{}\n' > "${shared}/-busy-cwd/new.jsonl"
+    touch -d '8 days ago' "${shared}/-busy-cwd/old.jsonl"
+    # Removing the old session updates -emptied-cwd's mtime, so its age is read before the pass.
+    touch -d '8 days ago' "${shared}/-emptied-cwd" "${shared}/-stale-empty-cwd" "${shared}/-busy-cwd"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [ ! -e "${shared}/-emptied-cwd" ]
     [ ! -e "${shared}/-stale-empty-cwd" ]
     [ -d "${shared}/-fresh-empty-cwd" ]
+    [ ! -e "${shared}/-busy-cwd/old.jsonl" ]
+    [ -f "${shared}/-busy-cwd/new.jsonl" ]
     [ -d "${shared}" ]
 }
 
@@ -17597,11 +17641,12 @@ stub_pr_merged() {
     [ -f "${shared}/fresh.json" ]
 }
 
-@test "prune_transcripts warns and keeps a shared project directory when its age cannot be read" {
+@test "prune_transcripts warns and keeps a shared session and its project directory when their age cannot be read" {
     local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
-    mkdir -p "${project}"
+    mkdir -p "${project}/session"
     printf '{}\n' > "${project}/session.jsonl"
-    touch -d '8 days ago' "${project}/session.jsonl"
+    printf '{}\n' > "${project}/session/result.txt"
+    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session" "${project}"
     # A failing find prints nothing, which must not be read as "nothing recent".
     prune_shared_with_failing_find() {
         find() { return 1; }
@@ -17610,32 +17655,76 @@ stub_pr_merged() {
     run prune_shared_with_failing_find
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Failed to read transcripts at ${project} to check their age - keeping them until the next launch"* ]]
+    [[ "${output}" == *"Failed to read transcripts at ${project}/session.jsonl to check their age - keeping them until the next launch"* ]]
     [ -f "${project}/session.jsonl" ]
+    [ -f "${project}/session/result.txt" ]
+}
+
+@test "prune_transcripts warns naming the session and keeps an idle shared session whole when it cannot be deleted" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-workspace-repo"
+    mkdir -p "${project}/session"
+    printf '{}\n' > "${project}/session.jsonl"
+    printf '{}\n' > "${project}/session/result.txt"
+    touch -d '8 days ago' "${project}/session.jsonl" "${project}/session/result.txt" "${project}/session"
+    # Defined inside the function so the failing rm only exists in run's subshell and never
+    # reaches teardown, which needs the real rm.
+    prune_shared_with_failing_deletes() {
+        rm() { [ "$1" = "-rf" ] && return 1; command rm "$@"; }
+        prune_transcripts
+    }
+    run prune_shared_with_failing_deletes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${project}/session.jsonl - will retry on the next launch"* ]]
+    [ -f "${project}/session.jsonl" ]
+    [ -f "${project}/session/result.txt" ]
+}
+
+@test "prune_transcripts warns and keeps an empty old shared project directory when it cannot be removed" {
+    local project="${SESSION_BASE_DIR}/transcripts/_shared/-stale-empty-cwd"
+    mkdir -p "${project}"
+    touch -d '8 days ago' "${project}"
+    make_stub rmdir "exit 1"
+    run prune_transcripts
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to purge transcripts at ${project} - will retry on the next launch"* ]]
+    [ -d "${project}" ]
 }
 
 @test "prune_transcripts never follows or deletes through a link in the shared directory, and removes it only when dangling" {
     local shared="${SESSION_BASE_DIR}/transcripts/_shared"
     local outside="${TEST_TMP}/outside"
-    mkdir -p "${shared}/-workspace-repo" "${outside}/-linked-cwd"
+    mkdir -p "${shared}/-workspace-repo" "${outside}/-linked-cwd" "${outside}/side"
     printf '{}\n' > "${outside}/-linked-cwd/old.jsonl"
     printf '{}\n' > "${outside}/old.json"
-    touch -d '30 days ago' "${outside}/-linked-cwd/old.jsonl" "${outside}/-linked-cwd" "${outside}/old.json"
+    printf '{}\n' > "${outside}/side/old.txt"
+    printf '{}\n' > "${outside}/fresh.jsonl"
+    touch -d '30 days ago' "${outside}/-linked-cwd/old.jsonl" "${outside}/-linked-cwd" "${outside}/old.json" \
+        "${outside}/side/old.txt"
     ln -s "${outside}/-linked-cwd" "${shared}/-linked-cwd"
     ln -s "${outside}/old.json" "${shared}/linked.json"
     ln -s "${outside}/missing" "${shared}/-dangling-cwd"
-    # A link inside a project directory is not followed when ageing it either.
+    # Inside a project directory: an old session whose side directory is a link is removed
+    # without following the link, and a link is never aged, followed or removed.
     printf '{}\n' > "${shared}/-workspace-repo/session.jsonl"
     touch -d '8 days ago' "${shared}/-workspace-repo/session.jsonl"
+    ln -s "${outside}/side" "${shared}/-workspace-repo/session"
+    ln -s "${outside}/fresh.jsonl" "${shared}/-workspace-repo/linked.jsonl"
     ln -s "${outside}/-linked-cwd" "${shared}/-workspace-repo/elsewhere"
+    touch -d '8 days ago' "${shared}/-workspace-repo"
     touch -h -d '30 days ago' "${shared}/-linked-cwd" "${shared}/linked.json" "${shared}/-dangling-cwd"
     run prune_transcripts
     [ "${status}" -eq 0 ]
     [ -L "${shared}/-linked-cwd" ]
     [ -L "${shared}/linked.json" ]
     [ ! -L "${shared}/-dangling-cwd" ]
-    [ ! -e "${shared}/-workspace-repo" ]
+    [ ! -e "${shared}/-workspace-repo/session.jsonl" ]
+    [ -L "${shared}/-workspace-repo/session" ]
+    [ -L "${shared}/-workspace-repo/linked.jsonl" ]
+    [ -L "${shared}/-workspace-repo/elsewhere" ]
     [ -f "${outside}/-linked-cwd/old.jsonl" ]
     [ -f "${outside}/old.json" ]
+    [ -f "${outside}/side/old.txt" ]
+    [ -f "${outside}/fresh.jsonl" ]
 }
 
 # --- session transcripts: pivoted PR linked to its Issue's directory --------------------------
