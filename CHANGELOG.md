@@ -62,7 +62,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
-- TBD - to be finalized after review
+- Removed the interactive script with its tests, documentation and utilities, transcripts/_shared directory handling, and the PRUNE_DANGLING_IMAGES and PODMAN_REPLACE_CONTAINER settings; dangling-image pruning and podman run --replace are now unconditional, and all agent container launches require a work item
 ### Deployment Changes
 
 <!--
