@@ -72,7 +72,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
 - The fleet health check now reports stalled and quit sessions from the per-day session-denials logs, to the private Discord channel only, and no longer excludes a denial that ended a session as known-by-design (#1561)
 - cfwf body leak check also refuses npm tokens, Google API keys, an Authorization or Proxy-Authorization header with a value after its colon or equals sign, a password in the user:password@ part of a URL, x-access-token Git URLs, legacy OpenAI keys and AWS temporary access key IDs (#1614)
-- TBD - to be finalized after review
+- Issue titles in this repository now start with the tool or component they affect, using a `<scope>: <rest>` format (#1581)
 ### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
