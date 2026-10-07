@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # GitHub Projects v2 Instructions
 
 [Back to Local Instructions Index](index.md)
