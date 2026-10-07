@@ -72,7 +72,7 @@ Webhook notifications (`notify_discord_work_item`, `notify_discord_blocked_item`
 
 ### podman
 
-Launching the agent container. `invoke_claude` and `invoke_claude_interactive` share `ensure_agent_container_ready` and `prepare_claude_container_args`. Also `run_claude_fresh`, cgroup, SSH and GPG set-up, `validate_bind_mounts`, `current_agent_image_sha`, and `prune_transcripts` (the age-based transcript purge, run before every launch: an item directory with no file modified for 14 days, a link whose target is gone, never following a link, and `_shared` files older than 7 days). Depends on: `core`, `discord`, `state`.
+Launching the agent container. `invoke_claude` and `invoke_claude_interactive` share `ensure_agent_container_ready` and `prepare_claude_container_args`. Also `run_claude_fresh`, cgroup, SSH and GPG set-up, `validate_bind_mounts`, `current_agent_image_sha`, and `prune_transcripts` (the age-based transcript purge, run before every launch: an item directory with no file modified for 14 days, a link whose target is gone, never following a link, and each `_shared` project directory or top-level file with nothing modified for 7 days). Depends on: `core`, `discord`, `state`.
 
 `lib/discord` and `lib/podman` each declare a few plain top-level variables of their own (`DISCORD_RESOLVED_WEBHOOK_URL`, and `CLAUDE_MD_TMPFILE`, `CLAUDE_PROMPT`, `GPG_PUBKEY_TMPDIR`, `PODMAN_SECRET_NAME`, `GH_ENTERPRISE_SECRET_NAME`, `CLAUDE_SCRATCH_TMPDIR`). They are invocation-scoped scratch values assigned to `""`, so they are an existing exception to the "globals live in `lib/globals`" rule below rather than a pattern to copy.
 

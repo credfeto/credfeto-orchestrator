@@ -835,12 +835,12 @@ setup_interactive_run() {
 @test "invoke_claude_interactive age-purges the shared transcript directory before launching" {
     setup_interactive_run
     local transcript_dir="${SESSION_BASE_DIR}/transcripts/_shared"
-    mkdir -p "${transcript_dir}/-workspace-repo"
-    printf '{}\n' > "${transcript_dir}/-workspace-repo/old.jsonl"
+    mkdir -p "${transcript_dir}/-workspace-repo" "${transcript_dir}/-old-cwd"
+    printf '{}\n' > "${transcript_dir}/-old-cwd/old.jsonl"
     printf '{}\n' > "${transcript_dir}/-workspace-repo/new.jsonl"
-    touch -d '8 days ago' "${transcript_dir}/-workspace-repo/old.jsonl"
+    touch -d '8 days ago' "${transcript_dir}/-old-cwd/old.jsonl"
     invoke_claude_interactive "# CLAUDE.md" 2>/dev/null
-    [ ! -e "${transcript_dir}/-workspace-repo/old.jsonl" ]
+    [ ! -e "${transcript_dir}/-old-cwd" ]
     [ -f "${transcript_dir}/-workspace-repo/new.jsonl" ]
 }
 

@@ -149,8 +149,14 @@ out of the priorities feed, so `oneshot` almost never sees an item closed.
   PR is being worked, and both go together once it has been idle for 14 days. A link whose
   target no longer exists is deleted (the link only, never anything through it), including one
   left dangling by the same pass.
-- `_shared` files are deleted individually once they have not been modified for 7 days
-  (`TRANSCRIPT_RETENTION_DAYS`).
+- `_shared` is aged per top-level entry, one per project directory Claude Code creates under
+  `~/.claude/projects`, by the newest file modification time under it, the same way as an item
+  directory, and a whole entry is deleted once nothing under it has been modified for 7 days
+  (`TRANSCRIPT_RETENTION_DAYS`). It is never purged file by file: a session spans
+  `<session>.jsonl`, which every turn appends to, plus side files under `<session>/` (tool
+  results, subagents) that keep their original modification times, so a resumed session keeps
+  all of them. A top-level file is aged by its own modification time, and a top-level link
+  follows the link rule above.
 
 The purge never queries GitHub and never fails the run: a directory it cannot read or delete is
 kept, with a warning, until the next launch. As a result, an item that is still open but has had
