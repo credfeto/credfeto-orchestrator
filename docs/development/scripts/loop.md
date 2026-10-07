@@ -33,7 +33,7 @@ Exit status: it never exits normally. It exits `1` when `lib/core` cannot be sou
    2. Run `"${SCRIPT_DIR}/oneshot"`.
    3. Print `success` and `sleep 300`.
 
-External tools: `git`, `timeout` (from coreutils) and `sleep`, plus whatever `oneshot` needs. Unlike `oneshot`, `loop` does not check for them with `require_tools`, so a missing `timeout` would show up as a failed pull warning, not a clear error.
+External tools: `git`, `timeout` (from coreutils) and `sleep`, plus whatever `oneshot` needs. Unlike `oneshot`, `loop` does not check for them with `check_required_tools`, so a missing `timeout` would show up as a failed pull warning, not a clear error.
 
 ## Tests
 
