@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Issue Title Instructions
 
 [Back to Local Instructions Index](index.md)
