@@ -1471,15 +1471,13 @@ leak_tokens() {
 }
 
 @test "body check refuses a token at the very start of the body, and one after punctuation" {
-    printf '%s\n' "gh""p_abc def" > "${TEST_TMP}/leak.md"
-    run_body_check
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: body refused: token (line 1)" ]
-
-    printf '%s\n' "url?t=gh""p_abc" > "${TEST_TMP}/leak.md"
-    run_body_check
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: body refused: token (line 1)" ]
+    local body
+    for body in "gh""p_abc def" "url?t=gh""p_abc"; do
+        printf '%s\n' "${body}" > "${TEST_TMP}/leak.md"
+        run_body_check
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: body refused: token (line 1)" ]
+    done
 }
 
 @test "issue create refuses a body naming a host path, from any of the starts of a path, before calling gh" {
@@ -1643,9 +1641,7 @@ leak_tokens() {
         rm -f "${GH_LOG}"
         CFWF_PRIVATE_OWNERS="secret-org other-hidden" run_body_check
         assert_refused "${status}" "${output}" "${stderr}" "private repository" "plans"
-        [ "$(gh_call_count "repo view secret-org")" -eq 0 ]
-        [ "$(gh_call_count "repo view Secret-Org")" -eq 0 ]
-        [ "$(gh_call_count "repo view other-hidden")" -eq 0 ]
+        [ "$(gh_call_count "--json visibility")" -eq "$(visibility_lookups "${REPO}")" ]
     done
 }
 
