@@ -94,7 +94,7 @@ FIELD_ID=""
 FIELD_NAME=""
 OPTION_ID=""
 ITEM_STATUS=""
-GRAPHQL_ERR_FILE=""
+GH_ERR_FILE=""
 GRAPHQL_OUTPUT=""
 GRAPHQL_ERROR=""
 TITLE=""
@@ -103,8 +103,6 @@ PRIORITY=""
 LABELS=()
 CREATED_URL=""
 BODY_PATH_TMP=""
-VISIBILITY_ERR_FILE=""
-VISIBILITY=""
 declare -gA REPOSITORY_VISIBILITY=()
 declare -gA PRIVATE_OWNERS=()
 
@@ -120,7 +118,15 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${CREATED_URL}" ]; then
         printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
     fi
-    rm -f "${GRAPHQL_ERR_FILE}" "${BODY_PATH_TMP}" "${VISIBILITY_ERR_FILE}"
+    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}"
+}
+
+# Creates GH_ERR_FILE, the one file gh's stderr is captured in, on first use. Each caller reads
+# it straight after its own gh call, so one file serves them all.
+ensure_gh_err_file() {
+    if [ -z "${GH_ERR_FILE}" ]; then
+        GH_ERR_FILE=$(mktemp) || die "could not create a temporary file"
+    fi
 }
 
 usage_general() {
@@ -425,11 +431,9 @@ resolve_status() {
 # gh's exit status.
 graphql_query() {
     local status=0
-    if [ -z "${GRAPHQL_ERR_FILE}" ]; then
-        GRAPHQL_ERR_FILE=$(mktemp) || die "could not create a temporary file"
-    fi
-    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GRAPHQL_ERR_FILE}") || status=$?
-    GRAPHQL_ERROR=$(< "${GRAPHQL_ERR_FILE}")
+    ensure_gh_err_file
+    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GH_ERR_FILE}") || status=$?
+    GRAPHQL_ERROR=$(< "${GH_ERR_FILE}")
     return "${status}"
 }
 
@@ -662,27 +666,39 @@ assign_issue_option() {
     esac
 }
 
-parse_issue_options() {
+# Parses the options of a command that posts a body: $1 is the space-separated list of the flags
+# it accepts (each taking a value, assigned by assign_issue_option), the rest are the arguments.
+# Help is the current command's.
+parse_body_command_options() {
+    local allowed=" $1 "
+    shift
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --repo | --priority | --title | --body-file | --label)
-                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
-                assign_issue_option "$1" "$2"
-                shift 2
-                ;;
             -h | --help)
-                usage_issue
+                usage_for "${CURRENT_COMMAND}"
                 exit 0
                 ;;
             *)
-                usage_error "unknown option: $1"
+                [[ "$1" == --* && "${allowed}" == *" $1 "* ]] || usage_error "unknown option: $1"
+                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+                assign_issue_option "$1" "$2"
+                shift 2
                 ;;
         esac
     done
 }
 
-# Points BODY_FILE at the file holding the body (a copy of stdin when it was -) and
-# refuses a missing, unreadable or blank one.
+parse_issue_options() {
+    parse_body_command_options "--repo --priority --title --body-file --label" "$@"
+}
+
+parse_body_options() {
+    parse_body_command_options "--repo --body-file" "$@"
+}
+
+# Points BODY_FILE at the file holding the body (a copy of stdin when it was -), refuses a
+# missing, unreadable or blank one, and then runs the leak check on that exact file for REPO, so
+# every command that resolves a body has it checked before gh sees it.
 resolve_body() {
     if [ "${BODY_FILE}" = "-" ]; then
         BODY_PATH_TMP=$(mktemp) || die "could not create a temporary file"
@@ -694,6 +710,7 @@ resolve_body() {
         fi
     fi
     grep -q '[^[:space:]]' "${BODY_FILE}" || die "the issue body is empty"
+    check_body_for_leaks "${BODY_FILE}" "${REPO}"
 }
 
 # Names only the rule and the line, never the matched text: echoing a token into a transcript would
@@ -746,65 +763,55 @@ repository_references() {
         print_reference "${match%%:*}" "${text#*[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm][:/]}"
     done < <(LC_ALL=C grep -inoaE "(^|[^A-Za-z0-9.-])(www\.)?github\.com[:/]${REPOSITORY_PATTERN}" -- "${body}")
 
-    while IFS= read -r match; do
-        text="${match#*:}"
-        text="${text%#*}"
-        print_reference "${match%%:*}" "${text#[^A-Za-z0-9]}"
-    done < <(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}#[0-9]+" -- "${body}")
-
-    [ "${#PRIVATE_OWNERS[@]}" -gt 0 ] || return 0
+    # One pass finds both shapes: the longest match keeps a #n, which marks a cross-reference.
     while IFS= read -r match; do
         text="${match#*:}"
         text="${text#[^A-Za-z0-9]}"
         owner="${text%%/*}"
-        [ -n "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || continue
-        print_reference "${match%%:*}" "${text}"
-    done < <(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}" -- "${body}")
+        [[ "${text}" == *#* ]] || [ -n "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || continue
+        print_reference "${match%%:*}" "${text%#*}"
+    done < <(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}(#[0-9]+)?" -- "${body}")
 }
 
-# Sets VISIBILITY to public or private for the repository $1, asking GitHub once per run. A
-# repository GitHub does not show the caller counts as private; any other failure dies with $2.
-lookup_visibility() {
+# Succeeds when the repository $1 is public, asking GitHub once per run. A repository GitHub does
+# not show the caller counts as private; any other failure dies with $2.
+repository_is_public() {
     local repository="$1" failure="$2" key="${1,,}" answer
     if [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ]; then
-        if [ -z "${VISIBILITY_ERR_FILE}" ]; then
-            VISIBILITY_ERR_FILE=$(mktemp) || die "could not create a temporary file"
-        fi
-        if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${VISIBILITY_ERR_FILE}"); then
+        ensure_gh_err_file
+        if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${GH_ERR_FILE}"); then
             case "${answer,,}" in
                 public) REPOSITORY_VISIBILITY["${key}"]=public ;;
                 private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
                 *) die "${failure}: gh gave an unexpected answer" ;;
             esac
-        elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${VISIBILITY_ERR_FILE}"; then
+        elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${GH_ERR_FILE}"; then
             REPOSITORY_VISIBILITY["${key}"]=private
         else
             die "${failure}"
         fi
     fi
-    VISIBILITY="${REPOSITORY_VISIBILITY["${key}"]}"
+    [ "${REPOSITORY_VISIBILITY["${key}"]}" = public ]
 }
 
 # Refuses a body for a public repository that names a private one. The target's own visibility is
 # only looked up once the body names some other repository, so a body that names none costs no
 # gh call. The repository a refused reference names is never printed.
 check_repository_references() {
-    local body="$1" target="$2" line reference owner target_public=""
+    local body="$1" target="$2" line reference owner
     load_private_owners
     while IFS=$'\t' read -r line reference; do
         owner="${reference%%/*}"
         [ "${reference,,}" != "${target,,}" ] || continue
         [[ "${GITHUB_RESERVED_PATHS}" != *" ${owner,,} "* ]] || continue
 
-        if [ -z "${target_public}" ]; then
-            lookup_visibility "${target}" "could not read the visibility of ${target}"
-            target_public="${VISIBILITY}"
-        fi
-        [ "${target_public}" = public ] || return 0
+        # Looked up here, not before the loop, so a body that names no other repository costs no
+        # gh call; the cache makes every later pass free.
+        repository_is_public "${target}" "could not read the visibility of ${target}" || return 0
 
         [ -z "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || refuse_body "private repository" "${line}"
-        lookup_visibility "${reference}" "could not read the visibility of the repository named on line ${line} of the body"
-        [ "${VISIBILITY}" = public ] || refuse_body "private repository" "${line}"
+        repository_is_public "${reference}" "could not read the visibility of the repository named on line ${line} of the body" \
+            || refuse_body "private repository" "${line}"
     done < <(repository_references "${body}" | sort -t$'\t' -k1,1n -s)
 }
 
@@ -882,7 +889,6 @@ issue_create() {
     collect_issue_labels
     require_gh
     resolve_body
-    check_body_for_leaks "${BODY_FILE}" "${REPO}"
 
     # The board is resolved before anything is written, so a repository with no Workflow
     # board fails here and leaves no issue behind.
@@ -928,32 +934,12 @@ cmd_issue() {
     esac
 }
 
-parse_body_options() {
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --repo | --body-file)
-                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
-                assign_issue_option "$1" "$2"
-                shift 2
-                ;;
-            -h | --help)
-                usage_body
-                exit 0
-                ;;
-            *)
-                usage_error "unknown option: $1"
-                ;;
-        esac
-    done
-}
-
 body_check() {
     parse_body_options "$@"
     require REPO --repo
     require BODY_FILE --body-file
     require_gh
     resolve_body
-    check_body_for_leaks "${BODY_FILE}" "${REPO}"
 }
 
 cmd_body() {
