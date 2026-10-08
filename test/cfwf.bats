@@ -1428,7 +1428,7 @@ visibility_lookups() {
 
 # Writes the body file: two clean lines, then the given text as line 3, then a clean last line.
 write_leak_body() {
-    printf 'A clean first line.\n\nLine three: %s\nA clean last line.\n' "$1" > "${TEST_TMP}/leak.md"
+    printf 'A clean first line.\n\n%s\nA clean last line.\n' "$1" > "${TEST_TMP}/leak.md"
 }
 
 run_body_check() {
@@ -1463,7 +1463,6 @@ leak_tokens() {
     local token
     while IFS= read -r token; do
         write_leak_body "the value is ${token} here"
-        rm -f "${GH_LOG}"
         run_issue_create_leak
         assert_refused "${status}" "${output}" "${stderr}" token "${token}"
         [ ! -f "${GH_LOG}" ]
@@ -1485,12 +1484,7 @@ leak_tokens() {
     local path start
     for path in /home/someone/work /root/.ssh /run/user/1000/scratch /tmp/claude-out; do
         for start in "" " " '"' "'" '`' "(" "[" "="; do
-            if [ -z "${start}" ]; then
-                printf 'first\n\n%s/file\nlast\n' "${path}" > "${TEST_TMP}/leak.md"
-            else
-                write_leak_body "see ${start}${path}/file"
-            fi
-            rm -f "${GH_LOG}"
+            write_leak_body "${start:+see }${start}${path}/file"
             run_issue_create_leak
             assert_refused "${status}" "${output}" "${stderr}" "host path" "${path}"
             [ ! -f "${GH_LOG}" ]
@@ -1502,8 +1496,7 @@ leak_tokens() {
     prepare_issue_create
     local control
     for control in '\000' '\001' '\010' '\013' '\014' '\015' '\033' '\037' '\177'; do
-        printf "A clean first line.\n\nLine three: secret%bvalue\nA clean last line.\n" "${control}" > "${TEST_TMP}/leak.md"
-        rm -f "${GH_LOG}"
+        printf "A clean first line.\n\nsecret%bvalue\nA clean last line.\n" "${control}" > "${TEST_TMP}/leak.md"
         run_issue_create_leak
         assert_refused "${status}" "${output}" "${stderr}" "control character" "secret"
         [ ! -f "${GH_LOG}" ]
