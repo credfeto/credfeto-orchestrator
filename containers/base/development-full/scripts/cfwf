@@ -17,11 +17,22 @@ readonly BODY_REFUSED_EXIT=8
 # does not start with $: a value that does is a variable or secret reference such as ${...},
 # ${{ ... }} or $NAME, not the secret itself.
 readonly SECRET_ASSIGNMENT_PATTERN="(^|[^A-Za-z0-9_])([A-Z0-9_]*_)?(TOKEN|SECRET|KEY|PASSWORD)=[\"']?[^[:space:]\$\"']"
-readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])(gh[porsu]_|xox[bap]-|glpat-)[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${SECRET_ASSIGNMENT_PATTERN}"
-# A host path starts a line or follows any byte that cannot continue a word or a relative path (a
-# letter, digit, dot, tilde or dash), so /var/tmp/, ./tmp/ and ~/tmp/ pass while a slash, a colon,
-# a comma, markdown emphasis and the like, and file:/// (its third slash), all start one.
-readonly HOST_PATH_PATTERN='(^|[^A-Za-z0-9.~-])/(home|root|run/user|tmp|Users)/'
+# An Authorization header whose Bearer value starts with a token character (so a placeholder such
+# as <token>, $TOKEN or ${{ ... }} passes), in a header, a curl -H or JSON; or Bearer and a value of
+# 20 or more token characters anywhere, which ordinary prose ("a Bearer token") never has.
+readonly BEARER_PATTERN="([Aa]uthorization|AUTHORIZATION)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?([Bb]earer|BEARER)[[:space:]]+[A-Za-z0-9._~+/-]|(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+[A-Za-z0-9._~+/=-]{20,}"
+# A Discord webhook URL with its id and the start of its token: the URL is the credential.
+readonly DISCORD_WEBHOOK_PATTERN='[Dd]iscord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]'
+readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])(gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${BEARER_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
+# A host path is one of three shapes. First, /home/ and the like at the start of a path: the start
+# of a line or after any byte that cannot continue a word or a relative path (a letter, digit, dot,
+# tilde or dash), so ./tmp/ and ~/tmp/ pass while a slash, a colon, a comma, markdown emphasis and
+# the like, and file:/// (its third slash), all start one. Second, a home, a user runtime directory
+# or tmp deeper inside an absolute path (/mnt/c/Users/, /var/home/, /private/tmp/, /var/tmp/):
+# here the path must not follow a slash either, unless as file://, so the path of a URL
+# (https://example.com/home/x, whose host follows //) passes. Third, a Windows drive path under
+# Users, with either slash, in any case.
+readonly HOST_PATH_PATTERN='(^|[^A-Za-z0-9.~-])/(home|root|run/user|tmp|Users)/|(^|[^A-Za-z0-9.~/-]|file://)(/[A-Za-z0-9._-]+)+/(home|run/user|tmp|Users)/|(^|[^A-Za-z0-9])[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]'
 # Every UTF-8 byte of a multi-byte character is 0x80 or above, so a byte scan finds exactly the C0
 # controls (except tab and newline; carriage return is one) and DEL, and the C1 controls U+0080 to
 # U+009F, which UTF-8 writes as 0xC2 and then 0x80 to 0x9F. NUL is mapped to 0x01 before the scan
@@ -32,13 +43,17 @@ readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo; a slash or a dot means it is part of a
 # longer path or a host name.
 readonly REFERENCE_BOUNDARY='(^|[^A-Za-z0-9_./-])'
+# Characters that, just before an owner/repo#n or owner/repo@sha, put it inside a URL, a query or
+# another path, so it is not a cross-reference. A bare owner/repo of a listed private owner after
+# one of them (REPO=owner/repo) is still a reference.
+readonly URL_PATH_BYTES='~@#%?&=:+'
 # The start of a link to a repository: github.com (or www.github.com) followed by / or : (an SSH
-# remote), api.github.com/repos/ or raw.githubusercontent.com/. It must not follow a letter, digit,
-# dot or dash, so another host that ends in the same letters (notgithub.com, docs.github.com,
-# gist.github.com, whose paths are not repositories) is not read as one. Dots are allowed after
-# such a boundary, and two dots anywhere, because a host name never holds those: they are sentence
-# punctuation, such as an ellipsis.
-readonly REPOSITORY_LINK_PREFIX='(^|[^A-Za-z0-9.-]|\.\.)\.*((www\.)?github\.com[:/]|api\.github\.com/repos/|raw\.githubusercontent\.com/)'
+# remote), api.github.com/repos/, raw.githubusercontent.com/ or codeload.github.com/. It must
+# not follow a letter, digit, dot or dash, so another host that ends in the same letters
+# (notgithub.com, docs.github.com, gist.github.com, whose paths are not repositories) is not read
+# as one. Dots are allowed after such a boundary, and two dots anywhere, because a host name never
+# holds those: they are sentence punctuation, such as an ellipsis.
+readonly REPOSITORY_LINK_PREFIX='(^|[^A-Za-z0-9.-]|\.\.)\.*((www\.)?github\.com[:/]|api\.github\.com/repos/|raw\.githubusercontent\.com/|codeload\.github\.com/)'
 # First path segments of github.com URLs that are GitHub's own pages, never an owner.
 readonly GITHUB_RESERVED_PATHS=" about account advisories apps codespaces collections contact copilot customer-stories dashboard enterprise enterprises events explore features issues join login logout marketplace new notifications organizations orgs pricing pulls readme resources search security sessions settings signup site solutions sponsors stars team topics trending users watching "
 readonly PRIORITIES=(Security Urgent High Medium Low)
@@ -124,6 +139,7 @@ SCAN_TMP=""
 VALUE_TMP=""
 declare -gA REPOSITORY_VISIBILITY=()
 declare -gA PRIVATE_OWNERS=()
+PRIVATE_OWNERS_LOADED=""
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -140,12 +156,16 @@ cleanup() {
     rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}"
 }
 
-# Creates GH_ERR_FILE, the one file gh's stderr is captured in, on first use. Each caller reads
-# it straight after its own gh call, so one file serves them all.
-ensure_gh_err_file() {
-    if [ -z "${GH_ERR_FILE}" ]; then
-        GH_ERR_FILE=$(mktemp) || die "could not create a temporary file"
-    fi
+# Creates a temporary file on first use and stores its path in the global variable named by $1
+# (GH_ERR_FILE, BODY_PATH_TMP, SCAN_TMP or VALUE_TMP), leaving one that is already set alone, so
+# each is made at most once per run and the EXIT trap (cleanup) removes it. GH_ERR_FILE is the one
+# file gh's stderr is captured in: each caller reads it straight after its own gh call, so one file
+# serves them all.
+ensure_temp_file() {
+    local path
+    [ -z "${!1}" ] || return 0
+    path=$(mktemp) || die "could not create a temporary file"
+    printf -v "$1" '%s' "${path}"
 }
 
 usage_general() {
@@ -247,9 +267,13 @@ body runs first, so a body can be tested before it is used.
 --body-file  The body: a regular file, or - to read it from stdin. An empty body is an error.
 
 A body is refused when it contains, in this order (the first rule that matches wins):
-  token               ghp_, gho_, ghs_, ghu_, ghr_, github_pat_, glpat-, xoxb-, xoxa- or xoxp-
-                      followed by a token character, an AWS access key id, a PRIVATE KEY block
-                      line, or NAME=value where NAME is upper case and is TOKEN, SECRET, KEY or
+  token               ghp_, gho_, ghs_, ghu_, ghr_, github_pat_, glpat-, sk-ant-, sk-proj-,
+                      xoxa-, xoxb-, xoxp-, xoxr- or xoxs- followed by a token character, an
+                      AWS access key id, a PRIVATE KEY block line, a Discord webhook URL
+                      (discord.com or discordapp.com /api/webhooks/<digits>/ and a token
+                      character), an Authorization header whose Bearer value starts with a
+                      token character, Bearer and 20 or more token characters, or
+                      NAME=value where NAME is upper case and is TOKEN, SECRET, KEY or
                       PASSWORD or ends in _TOKEN, _SECRET, _KEY or _PASSWORD, and the value
                       (after an optional quote) does not start with \$, so a reference such
                       as \${...}, \${{ ... }} or \$NAME passes. Lower-case names and the
@@ -257,21 +281,31 @@ A body is refused when it contains, in this order (the first rule that matches w
   host path           /home/, /Users/, /root/, /run/user/ or /tmp/ at the start of a path: the
                       start of a line, or after any character but a letter, digit, ., ~ or -
                       (so file:///home/... and PATH=...:/home/... are refused, while
-                      /var/tmp/x, ./tmp/x and ~/tmp/x pass)
+                      ./tmp/x and ~/tmp/x pass); /home/, /Users/, /run/user/ or /tmp/ deeper
+                      inside an absolute path (/mnt/c/Users/..., /var/home/...,
+                      /private/tmp/..., /var/tmp/...), but not in the path of a URL such as
+                      https://example.com/home/x; or a Windows drive path under Users
+                      (C:\Users\... or C:/Users/..., in any case)
   control character   a C0 control other than tab and newline (carriage return included, so
                       CRLF line endings are refused), DEL, or a C1 control (U+0080 to
                       U+009F); other invisible characters, such as bidi formatting ones,
                       are not refused
   too long            more than ${BODY_LIMIT} characters
   private repository  only when --repo is public: a github.com/<owner>/<repo>,
-                      api.github.com/repos/<owner>/<repo> or
-                      raw.githubusercontent.com/<owner>/<repo> link (gists are not
-                      repositories), a git@github.com:<owner>/<repo> remote or an
-                      <owner>/<repo>#<n> reference to a repository that is private or that
-                      the caller cannot see, or any <owner>/<repo> whose owner is listed in
+                      api.github.com/repos/<owner>/<repo>,
+                      raw.githubusercontent.com/<owner>/<repo> or
+                      codeload.github.com/<owner>/<repo> link (gists are not
+                      repositories), a git@github.com:<owner>/<repo> remote, or a standalone
+                      <owner>/<repo>#<n> or <owner>/<repo>@<sha> reference (not inside a
+                      path or a URL, <sha> 7 to 40 hex digits, and with no letter, digit, _
+                      or - straight after <n> or <sha>, so docs/setup.md#1-intro is not one)
+                      to a repository that is private or that the caller cannot see, or
+                      any <owner>/<repo> whose owner is listed in
                       CFWF_PRIVATE_OWNERS (space-separated owners, refused with no lookup).
                       The target itself always passes. Each other repository is looked up
-                      once per run with gh repo view.
+                      once per run with gh repo view. A --repo that GitHub does not show the
+                      caller (a typo, a renamed repository, no access) is a runtime failure,
+                      never a pass.
 
 A refusal prints "cfwf: body refused: <rule>", with "(line <n>)" where there is one, on stderr
 and exits ${BODY_REFUSED_EXIT}. The matched text is never printed. There is no option to skip
@@ -463,7 +497,7 @@ resolve_status() {
 # gh's exit status.
 graphql_query() {
     local status=0
-    ensure_gh_err_file
+    ensure_temp_file GH_ERR_FILE
     GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GH_ERR_FILE}") || status=$?
     GRAPHQL_ERROR=$(< "${GH_ERR_FILE}")
     return "${status}"
@@ -648,8 +682,8 @@ utf8_locale_available() {
     [ "${#accented}" -eq 1 ]
 }
 
-# Called just before a length is counted in C.UTF-8 (validate_visible_text and resolve_body), so a
-# host without it is refused rather than left to count bytes and turn away a valid multi-byte
+# Called just before a length is counted in C.UTF-8 (validate_visible_text and check_body_for_leaks),
+# so a host without it is refused rather than left to count bytes and turn away a valid multi-byte
 # title, label or body. Nothing else needs the locale, so --help and usage errors still work.
 require_utf8_locale() {
     utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
@@ -746,7 +780,7 @@ parse_body_options() {
 # every command that resolves a body has it checked before gh sees it.
 resolve_body() {
     if [ "${BODY_FILE}" = "-" ]; then
-        BODY_PATH_TMP=$(mktemp) || die "could not create a temporary file"
+        ensure_temp_file BODY_PATH_TMP
         cat > "${BODY_PATH_TMP}" || die "could not read the body from stdin"
         BODY_FILE="${BODY_PATH_TMP}"
     else
@@ -784,9 +818,7 @@ refuse_first_match() {
 # because no pattern can hold a NUL and 0x01 is refused as a control character too. The copy is a
 # file and not a pipe so that a failure here stops the check rather than leaving it nothing to scan.
 write_nul_free_copy() {
-    if [ -z "${SCAN_TMP}" ]; then
-        SCAN_TMP=$(mktemp) || die "could not create a temporary file"
-    fi
+    ensure_temp_file SCAN_TMP
     LC_ALL=C tr '\000' '\001' < "$1" > "${SCAN_TMP}" || die "could not scan the $2"
 }
 
@@ -800,15 +832,18 @@ check_text_patterns() {
     refuse_first_match "${subject}" "control character" "${CONTROL_PATTERN}" "${SCAN_TMP}"
 }
 
-# Fills PRIVATE_OWNERS (lower-cased) from the space-separated CFWF_PRIVATE_OWNERS.
+# Fills PRIVATE_OWNERS (lower-cased) from the space-separated CFWF_PRIVATE_OWNERS, once per run:
+# the body, the title and each label are all checked against the same list.
 load_private_owners() {
     local owner
     local -a owners
+    [ -z "${PRIVATE_OWNERS_LOADED}" ] || return 0
     read -ra owners <<< "${CFWF_PRIVATE_OWNERS:-}"
     for owner in "${owners[@]}"; do
         [[ "${owner}" =~ ^${OWNER_PATTERN}$ ]] || die "CFWF_PRIVATE_OWNERS holds a value that is not an owner: ${owner}"
         PRIVATE_OWNERS["${owner,,}"]=1
     done
+    PRIVATE_OWNERS_LOADED=1
 }
 
 # Prints "<line $1>\t<owner/repo>" for the owner/repo $2 as matched, without the trailing full
@@ -824,17 +859,25 @@ print_reference() {
     printf '%s\t%s\n' "$1" "${reference}"
 }
 
+# Succeeds when the owner/repo word $1, which followed the byte $2 (empty at the start of a line),
+# is a cross-reference: it ends in # and digits alone, or in @ and a commit SHA alone, and $2 is
+# not one of URL_PATH_BYTES.
+is_cross_reference() {
+    [[ "$1" =~ (\#[0-9]+|@[0-9A-Fa-f]{7,40})$ ]] || return 1
+    [ -z "$2" ] || [[ "${URL_PATH_BYTES}" != *"$2"* ]]
+}
+
 # Prints "<line>\t<owner/repo>" for each repository the text in the file $1 names: links
-# (REPOSITORY_LINK_PREFIX) and git@github.com:owner/repo remotes, owner/repo#n references, and bare
-# owner/repo words whose owner is in PRIVATE_OWNERS (a bare owner/repo is otherwise left alone, because a relative
-# file path has the same shape).
+# (REPOSITORY_LINK_PREFIX) and git@github.com:owner/repo remotes, standalone owner/repo#n and
+# owner/repo@sha references, and bare owner/repo words whose owner is in PRIVATE_OWNERS (a bare
+# owner/repo is otherwise left alone, because a relative file path has the same shape).
 repository_references() {
-    local body="$1" links words match text owner
+    local body="$1" links words match text owner boundary
     # grep's output is taken whole and its status checked, because a grep that fails inside a
     # process substitution would look like a body naming no repository.
     links=$(LC_ALL=C grep -inoaE "${REPOSITORY_LINK_PREFIX}${REPOSITORY_PATTERN}" -- "${body}")
     [ "$?" -le 1 ] || return 2
-    words=$(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}(#[0-9]+)?" -- "${body}")
+    words=$(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}([#@][A-Za-z0-9_-]+)?" -- "${body}")
     [ "$?" -le 1 ] || return 2
 
     # A link ends with owner/repo, and the owner follows the last / or : before it, whichever host
@@ -847,23 +890,31 @@ repository_references() {
         print_reference "${match%%:*}" "${owner}/${text##*/}"
     done <<< "${links}"
 
-    # One pass finds both shapes: the longest match keeps a #n, which marks a cross-reference.
+    # One pass finds both shapes. The longest match takes in every word character and dash after a
+    # # or an @, so a cross-reference is one whose # is followed by digits alone, or whose @ is
+    # followed by a commit SHA alone (7 to 40 hex digits, GitHub's owner/repo@sha autolink):
+    # docs/setup.md#1-intro (a heading anchor), fix/foo#12abc and owner/action@v4 are not. grep
+    # cannot look ahead, so taking those characters in is how it sees them; none of them can start
+    # the next reference.
     while IFS= read -r match; do
         [ -n "${match}" ] || continue
         text="${match#*:}"
-        text="${text#[^A-Za-z0-9]}"
+        # The byte matched by REFERENCE_BOUNDARY, or nothing at the start of a line.
+        boundary="${text%%[A-Za-z0-9]*}"
+        text="${text#"${boundary}"}"
         owner="${text%%/*}"
-        [[ "${text}" == *#* ]] || [ -n "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || continue
-        print_reference "${match%%:*}" "${text%#*}"
+        is_cross_reference "${text}" "${boundary}" || [ -n "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || continue
+        print_reference "${match%%:*}" "${text%%[#@]*}"
     done <<< "${words}"
 }
 
-# Succeeds when the repository $1 is public, asking GitHub once per run. A repository GitHub does
-# not show the caller counts as private; any other failure dies with $2.
-repository_is_public() {
+# Records in REPOSITORY_VISIBILITY whether the repository $1 is public, private (or internal) or
+# missing (GitHub does not show it to the caller), asking GitHub once per run; any other failure
+# dies with $2.
+look_up_visibility() {
     local repository="$1" failure="$2" key="${1,,}" answer
     if [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ]; then
-        ensure_gh_err_file
+        ensure_temp_file GH_ERR_FILE
         if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${GH_ERR_FILE}"); then
             case "${answer,,}" in
                 public) REPOSITORY_VISIBILITY["${key}"]=public ;;
@@ -871,12 +922,28 @@ repository_is_public() {
                 *) die "${failure}: gh gave an unexpected answer" ;;
             esac
         elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${GH_ERR_FILE}"; then
-            REPOSITORY_VISIBILITY["${key}"]=private
+            REPOSITORY_VISIBILITY["${key}"]=missing
         else
             die "${failure}"
         fi
     fi
-    [ "${REPOSITORY_VISIBILITY["${key}"]}" = public ]
+}
+
+# Succeeds when the repository $1, named in the text, is public. One GitHub does not show the
+# caller counts as private, since the caller cannot tell it apart from one; any other failure dies
+# with $2.
+repository_is_public() {
+    look_up_visibility "$1" "$2"
+    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" = public ]
+}
+
+# Succeeds when the target repository $1 is public. A target GitHub does not show the caller dies:
+# counting it as private would skip every private repository check and pass the text unchecked.
+# Any other failure dies with $2.
+target_is_public() {
+    look_up_visibility "$1" "$2"
+    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" != missing ] || die "the repository ${1} was not found, or the caller cannot see it"
+    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" = public ]
 }
 
 # Refuses the text in the file $1, for the repository $2, when the repository is public and the
@@ -894,7 +961,7 @@ check_repository_references() {
         [ "${reference,,}" != "${target,,}" ] || continue
         [[ "${GITHUB_RESERVED_PATHS}" != *" ${owner,,} "* ]] || continue
 
-        repository_is_public "${target}" "could not read the visibility of ${target}" || return 0
+        target_is_public "${target}" "could not read the visibility of ${target}" || return 0
 
         [ -z "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || refuse_text "${subject}" "private repository" "${line}"
         place="in the ${subject}"
@@ -908,9 +975,14 @@ check_repository_references() {
 # stopping at the first that matches. $1 must be the exact file gh will be given.
 check_body_for_leaks() {
     local body="$1" target="$2"
+    local length
     check_text_patterns "${body}" body
     require_utf8_locale
-    [ "$(LC_ALL=C.UTF-8 wc -m < "${body}")" -le "${BODY_LIMIT}" ] || refuse_text body "too long"
+    # A count that fails or is not a number is a scan failure (exit 1), never "too long" or a pass.
+    length=$(LC_ALL=C.UTF-8 wc -m < "${body}") || die "could not count the characters of the body"
+    length="${length//[[:space:]]/}"
+    [[ "${length}" =~ ^[0-9]+$ ]] || die "could not count the characters of the body"
+    [ "${length}" -le "${BODY_LIMIT}" ] || refuse_text body "too long"
     check_repository_references "${body}" "${target}" body
 }
 
@@ -920,9 +992,7 @@ check_body_for_leaks() {
 # than once.
 check_value_for_leaks() {
     local value="$1" target="$2" subject="$3"
-    if [ -z "${VALUE_TMP}" ]; then
-        VALUE_TMP=$(mktemp) || die "could not create a temporary file"
-    fi
+    ensure_temp_file VALUE_TMP
     printf '%s\n' "${value}" > "${VALUE_TMP}" || die "could not scan the ${subject}"
     check_text_patterns "${VALUE_TMP}" "${subject}"
     check_repository_references "${VALUE_TMP}" "${target}" "${subject}"

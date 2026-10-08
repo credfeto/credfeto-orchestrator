@@ -995,6 +995,23 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a character count that fails or is not a number is a runtime failure (exit 1), never too long or a pass" {
+    printf 'A short body.\n' > "${TEST_TMP}/leak.md"
+    local real_wc failure
+    real_wc=$(command -v wc)
+    # Each pass makes the character count (wc -m) fail one way: an error status, then garbage on
+    # stdout with status 0. Every other wc is the real one.
+    for failure in "echo 'wc: read error' >&2; exit 1" "echo 'not a count'; exit 0"; do
+        make_stub_multiline wc \
+            "case \" \$* \" in *\" -m \"*) ${failure} ;; esac" \
+            "exec ${real_wc} \"\$@\""
+        run_body_check
+        [ "${status}" -eq 1 ]
+        [ "${stderr##*$'\n'}" = "cfwf: could not count the characters of the body" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
 @test "issue create refuses --repo given twice, so a second one can never redirect the issue" {
     prepare_issue_create
     create_args
@@ -1463,7 +1480,11 @@ leak_tokens() {
     local tail="LEAKMARKER0123456789"
     printf '%s\n' "gh""p_${tail}" "gh""o_${tail}" "gh""s_${tail}" "gh""u_${tail}" "gh""r_${tail}" "github""_pat_${tail}" "gl""pat-${tail}" \
         "AKI""A$(printf 'Q%.0s' {1..16})" "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
-        "xo""xb-${tail}" "xo""xa-${tail}" "xo""xp-${tail}" \
+        "xo""xb-${tail}" "xo""xa-${tail}" "xo""xp-${tail}" "xo""xr-${tail}" "xo""xs-${tail}" \
+        "sk-""ant-api03-${tail}" "sk-""proj-${tail}" "https://disc""ord.com/api/webhooks/123456/${tail}" \
+        "disc""ordapp.com/api/webhooks/1/${tail}" "Discord.com/api/web""hooks/42/x" \
+        "Authorization: Bear""er abc" "-H 'authorization: bear""er ${tail}'" "{\"Authorization\": \"Bear""er ${tail}\"}" \
+        "AUTHORIZATION: BEAR""ER x" "Bear""er ${tail}${tail}" "(bear""er ${tail}${tail})" \
         "GH_TO""KEN=${tail}" "export DB_PASS""WORD=${tail}" "MY_SEC""RET=${tail}" "(API_K""EY=${tail})" \
         "TO""KEN=${tail}" "K""EY=${tail}" "GH_TO""KEN=\"${tail}\"" "GH_TO""KEN='${tail}'" "AWS_2_SEC""RET=${tail}"
 }
@@ -1502,6 +1523,22 @@ leak_tokens() {
     done
 }
 
+@test "body check refuses a home, a user runtime directory or tmp deeper inside an absolute path, and a Windows drive path under Users" {
+    local path start
+    for path in /mnt/c/Users/someone/work /var/home/someone/work /private/tmp/claude-out /var/tmp/x /var/run/user/1000/x /a.b/tmp/x; do
+        for start in "" " " '"' "(" "=" ":" "," "*" "file://"; do
+            write_leak_body "${start:+see }${start}${path}/file"
+            run_body_check
+            assert_refused "${status}" "${output}" "${stderr}" "host path" "${path}"
+        done
+    done
+    for path in 'C:\Users\someone\x' 'c:/users/someone/x' 'D:\\USERS\\someone' '(C:\Users\someone)'; do
+        write_leak_body "see ${path}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "host path" "someone"
+    done
+}
+
 @test "issue create refuses a body with a control character other than tab and newline, before calling gh" {
     prepare_issue_create
     local control
@@ -1534,7 +1571,9 @@ leak_tokens() {
     printf '%s\n' \
         "Tabs$(printf '\t')are fine, as are multi-byte characters: $(printf '\303\251 \303\274 \346\227\245 \302\240 \302\251 \342\200\256 \304\200')." \
         "Relative paths such as test/cfwf.bats, lib/state and containers/base/x are fine." \
-        "So are /usr/local/bin/cfwf, /var/tmp/x, ~/work, ~/tmp/x, ./tmp/x, ../home/x, tmp/notes, /users/x and example.com/home/x." \
+        "So are /usr/local/bin/cfwf, ~/work, ~/tmp/x, ~/work/home/x, ./tmp/x, ./a/tmp/x, ../home/x, tmp/notes, src/tmp/x, a/b/home/x, /users/x and example.com/home/x." \
+        "URL paths pass too: https://example.com/home/x, http://h/tmp/x, //cdn.example.com/tmp/x and https://example.com/var/home/x." \
+        "So do Windows paths not under Users, a drive letter inside a word, and a relative one: C:\\Program Files\\x, abc:\\Users\\x, docs\\Users\\x." \
         "Words such as keyboard, laughs_at, monkey and the word TOKEN alone are fine, as is KEY = value." \
         "A token prefix on its own, gh""p_, is fine." \
         "credfeto/other-repo with no link and no number is not looked up." > "${TEST_TMP}/leak.md"
@@ -1543,6 +1582,28 @@ leak_tokens() {
     [ -z "${output}" ]
     [ -z "${stderr}" ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "body check passes a token prefix, a Bearer placeholder or a webhook placeholder with no secret after it" {
+    local body
+    while IFS= read -r body; do
+        printf '%s\n' "${body}" > "${TEST_TMP}/leak.md"
+        run_body_check
+        [ "${status}" -eq 0 ] || { echo "refused: ${body}" >&2; return 1; }
+        [ -z "${stderr}" ]
+    done << 'BODIES'
+An Anthropic key starts sk-ant- and a project key sk-proj- on their own.
+desk-proj-x and task-ant-y are words.
+A Slack prefix such as xoxz-abc is not one of the token forms.
+Authorization: Bearer <token>
+Authorization: Bearer $GH_TOKEN
+-H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"
+A Bearer token is sent in the Authorization header.
+Bearer <token>
+Bearer authentication is used.
+https://discord.com/api/webhooks/<id>/<token>
+discord.com/api/webhooks/123456/<token>
+BODIES
 }
 
 @test "body check passes a NAME=value whose name only ends in the letters, or whose value is a reference" {
@@ -1677,6 +1738,25 @@ BODIES
     [ "${stderr}" = "cfwf: could not read the visibility of ${REPO}" ]
 }
 
+@test "a target repository GitHub does not show the caller is a runtime failure (exit 1), never a pass" {
+    write_visibility credfeto/hidden-thing PRIVATE
+    local reference
+    for reference in "credfeto/hidden-thing#3" "https://github.com/credfeto/hidden-thing" "secret-org/plans"; do
+        write_leak_body "see ${reference}"
+        CFWF_PRIVATE_OWNERS="secret-org" run --separate-stderr "${SCRIPT}" body check --repo credfeto/no-such-repo --body-file "${TEST_TMP}/leak.md"
+        [ "${status}" -eq 1 ]
+        [ "${stderr}" = "cfwf: the repository credfeto/no-such-repo was not found, or the caller cannot see it" ]
+        [ -z "${output}" ]
+    done
+
+    prepare_issue_create
+    rm -f "${GH_LOG}"
+    run --separate-stderr "${SCRIPT}" issue create --repo credfeto/no-such-repo --priority High --title "see credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository credfeto/no-such-repo was not found, or the caller cannot see it" ]
+    assert_nothing_created
+}
+
 @test "a grep that fails while scanning the body is a runtime failure (exit 1), never a pass" {
     write_visibility "${REPO}" PUBLIC
     write_visibility credfeto/open-thing PUBLIC
@@ -1701,7 +1781,8 @@ BODIES
     write_visibility "${REPO}" PUBLIC
     local reference
     for reference in "secret-org/plans" "https://github.com/Secret-Org/plans/issues/1" "secret-org/plans#4" "\`other-hidden/plans\`" \
-        "https://raw.githubusercontent.com/secret-org/plans/main/x" "https://api.github.com/repos/secret-org/plans"; do
+        "https://raw.githubusercontent.com/secret-org/plans/main/x" "https://api.github.com/repos/secret-org/plans" \
+        "REPO=secret-org/plans" "repo:secret-org/plans" "?r=secret-org/plans#1" "x@secret-org/plans@abc1234"; do
         write_leak_body "see ${reference}"
         rm -f "${GH_LOG}"
         CFWF_PRIVATE_OWNERS="secret-org other-hidden" run_body_check
@@ -1716,6 +1797,65 @@ BODIES
     CFWF_PRIVATE_OWNERS="secret-org" run_body_check
     [ "${status}" -eq 0 ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "a #n inside a longer word, or an owner/repo#n inside a path or a URL, is not a cross-reference, and passes with no lookup" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local body
+    for body in "docs/setup.md#1-prerequisites" "fix/foo#12abc" "src/app.ts#12_x" "fix/foo#12-bar" "credfeto/hidden-thing#1x" \
+        "https://example.com/?p=credfeto/hidden-thing#1" "user@credfeto/hidden-thing#1" "~credfeto/hidden-thing#1" \
+        "x:credfeto/hidden-thing#1" "a&b=credfeto/hidden-thing#1" "%2Fcredfeto/hidden-thing#1" "+credfeto/hidden-thing#1"; do
+        write_leak_body "see ${body} here"
+        rm -f "${GH_LOG}"
+        run_body_check
+        [ "${status}" -eq 0 ] || { echo "refused: ${body}" >&2; return 1; }
+        [ -z "${stderr}" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "standalone cross-references side by side are each checked, so a private one after a public one is refused" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/open-thing PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local body
+    for body in "credfeto/open-thing#1 credfeto/hidden-thing#2" "credfeto/open-thing#1,credfeto/hidden-thing#2." \
+        "(credfeto/open-thing#1)(credfeto/hidden-thing#2)" "credfeto/hidden-thing#2"; do
+        write_leak_body "${body}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+    done
+}
+
+@test "a public target refuses a codeload link or an owner/repo@sha autolink to a private repository" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local sha40 reference
+    sha40=$(printf 'a%.0s' {1..40})
+    for reference in "https://codeload.github.com/credfeto/hidden-thing/zip/refs/heads/main" "codeload.github.com/credfeto/hidden-thing/tar.gz/v1" \
+        "credfeto/hidden-thing@abc1234" "credfeto/hidden-thing@ABC1234." "(credfeto/hidden-thing@${sha40})" "credfeto/open-thing#1 credfeto/hidden-thing@abc1234"; do
+        write_visibility credfeto/open-thing PUBLIC
+        write_leak_body "see ${reference}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+    done
+}
+
+@test "an @ that is not followed by a commit SHA alone, or a host that only ends in codeload.github.com, passes with no lookup" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local body
+    for body in "credfeto/hidden-thing@abc123" "credfeto/hidden-thing@$(printf 'a%.0s' {1..41})" "credfeto/hidden-thing@abc1234x" \
+        "credfeto/hidden-thing@abc1234-x" "credfeto/hidden-thing@v1.2.3" "actions/checkout@v4" "notcodeload.github.com/credfeto/hidden-thing" \
+        "x@credfeto/hidden-thing@abc1234"; do
+        write_leak_body "see ${body} here"
+        rm -f "${GH_LOG}"
+        run_body_check
+        [ "${status}" -eq 0 ] || { echo "refused: ${body}" >&2; return 1; }
+        [ -z "${stderr}" ]
+        [ ! -f "${GH_LOG}" ]
+    done
 }
 
 @test "a value in CFWF_PRIVATE_OWNERS that is not an owner is a runtime failure" {
