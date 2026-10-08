@@ -679,7 +679,7 @@ parse_body_command_options() {
                 exit 0
                 ;;
             *)
-                [[ "$1" == --* && "${allowed}" == *" $1 "* ]] || usage_error "unknown option: $1"
+                [[ "${allowed}" == *" $1 "* ]] || usage_error "unknown option: $1"
                 [ "$#" -ge 2 ] || usage_error "$1 needs a value"
                 assign_issue_option "$1" "$2"
                 shift 2
@@ -805,8 +805,6 @@ check_repository_references() {
         [ "${reference,,}" != "${target,,}" ] || continue
         [[ "${GITHUB_RESERVED_PATHS}" != *" ${owner,,} "* ]] || continue
 
-        # Looked up here, not before the loop, so a body that names no other repository costs no
-        # gh call; the cache makes every later pass free.
         repository_is_public "${target}" "could not read the visibility of ${target}" || return 0
 
         [ -z "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || refuse_body "private repository" "${line}"
@@ -915,23 +913,31 @@ issue_create() {
     printf '%s\n' "${url}"
 }
 
-cmd_issue() {
-    CURRENT_COMMAND="issue"
+# Runs a command that has a single subcommand: $1 is the command, $2 its subcommand, $3 the
+# function that runs it, and the rest are the arguments as given after the command.
+dispatch_subcommand() {
+    local command="$1" subcommand="$2" handler="$3"
+    shift 3
+    CURRENT_COMMAND="${command}"
     case "${1:-}" in
-        create)
+        "${subcommand}")
             shift
-            issue_create "$@"
+            "${handler}" "$@"
             ;;
         -h | --help)
-            usage_issue
+            usage_for "${command}"
             ;;
         "")
-            usage_error "issue needs a subcommand (create)"
+            usage_error "${command} needs a subcommand (${subcommand})"
             ;;
         *)
-            usage_error "unknown issue subcommand: $1"
+            usage_error "unknown ${command} subcommand: $1"
             ;;
     esac
+}
+
+cmd_issue() {
+    dispatch_subcommand issue create issue_create "$@"
 }
 
 body_check() {
@@ -943,22 +949,7 @@ body_check() {
 }
 
 cmd_body() {
-    CURRENT_COMMAND="body"
-    case "${1:-}" in
-        check)
-            shift
-            body_check "$@"
-            ;;
-        -h | --help)
-            usage_body
-            ;;
-        "")
-            usage_error "body needs a subcommand (check)"
-            ;;
-        *)
-            usage_error "unknown body subcommand: $1"
-            ;;
-    esac
+    dispatch_subcommand body check body_check "$@"
 }
 
 main() {
