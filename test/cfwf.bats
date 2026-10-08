@@ -1407,14 +1407,19 @@ assert_nothing_created() {
 # Writes the answer to a visibility lookup of the repository $1 (PUBLIC, PRIVATE or INTERNAL). A
 # repository with no answer written is one GitHub does not show the caller.
 write_visibility() {
-    local name="${1,,}"
-    jq -n --arg v "$2" '{visibility: $v}' > "${GH_FIXTURES}/visibility-${name//\//_}.json"
+    jq -n --arg v "$2" '{visibility: $v}' > "$(visibility_fixture "$1").json"
 }
 
 # Makes the visibility lookup of the repository $1 fail the way a proxy or network fault would.
 fail_visibility() {
+    touch "$(visibility_fixture "$1").fail"
+}
+
+# Prints the fixture path, without extension, that the gh stub reads for a visibility lookup of
+# the repository $1: lower-cased, with the slash turned into an underscore.
+visibility_fixture() {
     local name="${1,,}"
-    touch "${GH_FIXTURES}/visibility-${name//\//_}.fail"
+    printf '%s' "${GH_FIXTURES}/visibility-${name//\//_}"
 }
 
 visibility_lookups() {
@@ -1428,6 +1433,10 @@ write_leak_body() {
 
 run_body_check() {
     run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md"
+}
+
+run_issue_create_leak() {
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
 }
 
 # Given a run's status, stdout and stderr: it exited 8 naming the rule $4 and line 3, printed
@@ -1455,7 +1464,7 @@ leak_tokens() {
     while IFS= read -r token; do
         write_leak_body "the value is ${token} here"
         rm -f "${GH_LOG}"
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+        run_issue_create_leak
         assert_refused "${status}" "${output}" "${stderr}" token "${token}"
         [ ! -f "${GH_LOG}" ]
     done < <(leak_tokens)
@@ -1484,7 +1493,7 @@ leak_tokens() {
                 write_leak_body "see ${start}${path}/file"
             fi
             rm -f "${GH_LOG}"
-            run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+            run_issue_create_leak
             assert_refused "${status}" "${output}" "${stderr}" "host path" "${path}"
             [ ! -f "${GH_LOG}" ]
         done
@@ -1497,7 +1506,7 @@ leak_tokens() {
     for control in '\000' '\001' '\010' '\013' '\014' '\015' '\033' '\037' '\177'; do
         printf "A clean first line.\n\nLine three: secret%bvalue\nA clean last line.\n" "${control}" > "${TEST_TMP}/leak.md"
         rm -f "${GH_LOG}"
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+        run_issue_create_leak
         assert_refused "${status}" "${output}" "${stderr}" "control character" "secret"
         [ ! -f "${GH_LOG}" ]
     done
@@ -1660,7 +1669,7 @@ leak_tokens() {
     prepare_issue_create
     write_visibility "${REPO}" PUBLIC
     write_leak_body "see https://github.com/credfeto/hidden-thing/issues/4"
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+    run_issue_create_leak
     assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
     assert_nothing_created
     [ "$(gh_call_count "label list")" -eq 0 ]
