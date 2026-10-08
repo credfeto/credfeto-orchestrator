@@ -26,7 +26,7 @@ setup() {
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'case "$1 $2" in' \
-        '  "repo view") [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
+        '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
@@ -160,6 +160,7 @@ gh_line_of() {
         [[ "${output}" == *"workflow-status --check"* ]]
         [[ "${output}" == *"closing-issue-labels"* ]]
         [[ "${output}" == *"issue create"* ]]
+        [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
     done
 }
 
@@ -177,6 +178,15 @@ gh_line_of() {
     [[ "${output}" == *"cfwf issue create --repo <owner/repo> --priority <priority> --title <title> --body-file <file> [--label <label> ...]"* ]]
     [[ "${output}" == *"there is no --status"* ]]
     [[ "${output}" == *"a bad call leaves no issue behind"* ]]
+    [[ "${output}" == *"The body is checked for leaks"* ]]
+    [[ "${output}" == *"A refused body exits 8"* ]]
+
+    run "${SCRIPT}" help body
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf body check --repo <owner/repo> --body-file <file|->"* ]]
+    [[ "${output}" == *"and exits 8"* ]]
+    [[ "${output}" == *"CFWF_PRIVATE_OWNERS"* ]]
+    [[ "${output}" == *"There is no option to skip"*"the check."* ]]
 }
 
 @test "the workflow-status help states that --set does not read back, the fallback listing limit and the GraphQL exception" {
@@ -950,7 +960,7 @@ assert_nothing_created() {
     [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
 
     printf 'body\n' > "${TEST_TMP}/body.md"
-    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; BODY_FILE="$2"; resolve_body' _ "${SCRIPT}" "${TEST_TMP}/body.md"
+    run bash -c 'source "$1"; utf8_locale_available() { return 1; }; check_body_for_leaks "$2" credfeto/repo' _ "${SCRIPT}" "${TEST_TMP}/body.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the C.UTF-8 locale is not installed"* ]]
 }
@@ -971,12 +981,12 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
 }
 
-@test "issue create refuses a body over GitHub's 65536 characters before creating anything, and accepts exactly that many" {
+@test "issue create refuses a body over GitHub's 65536 characters with exit 8 before calling gh, and accepts exactly that many" {
     prepare_issue_create
     head -c 65537 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/long.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/long.md"
-    [ "${status}" -eq 1 ]
-    [[ "${output}" == *"the issue body is longer than 65536 characters"* ]]
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/long.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: too long" ]
     [ ! -f "${GH_LOG}" ]
 
     head -c 65536 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/limit.md"
@@ -1390,4 +1400,351 @@ assert_nothing_created() {
     TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - < /dev/null
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
+}
+
+# --- body leak check -----------------------------------------------------------
+
+# Writes the answer to a visibility lookup of the repository $1 (PUBLIC, PRIVATE or INTERNAL). A
+# repository with no answer written is one GitHub does not show the caller.
+write_visibility() {
+    local name="${1,,}"
+    jq -n --arg v "$2" '{visibility: $v}' > "${GH_FIXTURES}/visibility-${name//\//_}.json"
+}
+
+# Makes the visibility lookup of the repository $1 fail the way a proxy or network fault would.
+fail_visibility() {
+    local name="${1,,}"
+    touch "${GH_FIXTURES}/visibility-${name//\//_}.fail"
+}
+
+visibility_lookups() {
+    gh_call_count "repo view $1 --json visibility"
+}
+
+# Writes the body file: two clean lines, then the given text as line 3, then a clean last line.
+write_leak_body() {
+    printf 'A clean first line.\n\nLine three: %s\nA clean last line.\n' "$1" > "${TEST_TMP}/leak.md"
+}
+
+run_body_check() {
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md"
+}
+
+# Given a run's status, stdout and stderr: it exited 8 naming the rule $4 and line 3, printed
+# nothing on stdout, and did not echo the text $5 that matched.
+assert_refused() {
+    local run_status="$1" run_output="$2" run_stderr="$3" rule="$4" secret="$5"
+    [ "${run_status}" -eq 8 ]
+    [ "${run_stderr}" = "cfwf: body refused: ${rule} (line 3)" ]
+    [ -z "${run_output}" ]
+    [[ "${run_stderr}" != *"${secret}"* ]]
+}
+
+# The token forms, built from pieces so that no secret scanner flags this file.
+leak_tokens() {
+    local tail="LEAKMARKER0123456789"
+    printf '%s\n' "gh""p_${tail}" "gh""o_${tail}" "gh""s_${tail}" "github""_pat_${tail}" "gl""pat-${tail}" \
+        "AKI""A$(printf 'Q%.0s' {1..16})" "-----BEGIN RSA PRIV""ATE KEY-----" "-----BEGIN PRIV""ATE KEY-----" \
+        "xo""xb-${tail}" "xo""xa-${tail}" "xo""xp-${tail}" \
+        "GH_TO""KEN=${tail}" "export DB_PASS""WORD=${tail}" "MY_SEC""RET=${tail}" "(API_K""EY=${tail})"
+}
+
+@test "issue create refuses a body with any token form with exit 8, naming the rule and line only, before calling gh" {
+    prepare_issue_create
+    local token
+    while IFS= read -r token; do
+        write_leak_body "the value is ${token} here"
+        rm -f "${GH_LOG}"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+        assert_refused "${status}" "${output}" "${stderr}" token "${token}"
+        [ ! -f "${GH_LOG}" ]
+    done < <(leak_tokens)
+}
+
+@test "body check refuses a token at the very start of the body, and one after punctuation" {
+    printf '%s\n' "gh""p_abc def" > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: token (line 1)" ]
+
+    printf '%s\n' "url?t=gh""p_abc" > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: token (line 1)" ]
+}
+
+@test "issue create refuses a body naming a host path, from any of the starts of a path, before calling gh" {
+    prepare_issue_create
+    local path start
+    for path in /home/someone/work /root/.ssh /run/user/1000/scratch /tmp/claude-out; do
+        for start in "" " " '"' "'" '`' "(" "[" "="; do
+            if [ -z "${start}" ]; then
+                printf 'first\n\n%s/file\nlast\n' "${path}" > "${TEST_TMP}/leak.md"
+            else
+                write_leak_body "see ${start}${path}/file"
+            fi
+            rm -f "${GH_LOG}"
+            run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+            assert_refused "${status}" "${output}" "${stderr}" "host path" "${path}"
+            [ ! -f "${GH_LOG}" ]
+        done
+    done
+}
+
+@test "issue create refuses a body with a control character other than tab and newline, before calling gh" {
+    prepare_issue_create
+    local control
+    for control in '\000' '\001' '\010' '\013' '\014' '\015' '\033' '\037' '\177'; do
+        printf "A clean first line.\n\nLine three: secret%bvalue\nA clean last line.\n" "${control}" > "${TEST_TMP}/leak.md"
+        rm -f "${GH_LOG}"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+        assert_refused "${status}" "${output}" "${stderr}" "control character" "secret"
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "the first rule that matches wins, in the order token, host path, control character, too long" {
+    printf 'a /tmp/x path\n%s\n' "gh""p_abc" > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${stderr}" = "cfwf: body refused: token (line 2)" ]
+
+    printf 'a\033b\nsee /tmp/x\n' > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${stderr}" = "cfwf: body refused: host path (line 2)" ]
+
+    {
+        printf 'a\033b\n'
+        head -c 65537 /dev/zero | tr '\0' 'x'
+    } > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${stderr}" = "cfwf: body refused: control character (line 1)" ]
+}
+
+@test "body check passes a body with no leaks, printing nothing and calling gh for nothing" {
+    printf '%s\n' \
+        "Tabs$(printf '\t')are fine, as are multi-byte characters: $(printf '\303\251 \303\274 \346\227\245')." \
+        "Relative paths such as test/cfwf.bats, lib/state and containers/base/x are fine." \
+        "So are /usr/local/bin/cfwf, /var/tmp/x, ~/work and tmp/notes." \
+        "Words such as keyboard, laughs_at, monkey and the word TOKEN alone are fine, as is KEY = value." \
+        "A token prefix on its own, gh""p_, is fine." \
+        "credfeto/other-repo with no link and no number is not looked up." > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a public target refuses a link to, or a reference to, a private repository, without naming it" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local reference
+    for reference in "https://github.com/credfeto/hidden-thing/issues/4" "github.com/credfeto/hidden-thing" \
+        "credfeto/hidden-thing#12" "(credfeto/hidden-thing#12)" "https://www.github.com/credfeto/hidden-thing.git" \
+        "https://GitHub.COM/credfeto/hidden-thing" "git@github.com:credfeto/hidden-thing.git"; do
+        write_leak_body "see ${reference} for details"
+        rm -f "${GH_LOG}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+        [ "$(visibility_lookups credfeto/hidden-thing)" -eq 1 ]
+    done
+}
+
+@test "a repository GitHub does not show the caller counts as private, and so does an internal one" {
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "see https://github.com/credfeto/not-visible/pull/2"
+    run_body_check
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "not-visible"
+
+    write_visibility credfeto/inside INTERNAL
+    write_leak_body "see credfeto/inside#2"
+    run_body_check
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "inside"
+}
+
+@test "a private target accepts the same reference to a private repository, and looks nothing else up" {
+    write_visibility "${REPO}" PRIVATE
+    write_visibility credfeto/hidden-thing PRIVATE
+    write_leak_body "see https://github.com/credfeto/hidden-thing/issues/4 and credfeto/hidden-thing#5"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "$(visibility_lookups "${REPO}")" -eq 1 ]
+    [ "$(visibility_lookups credfeto/hidden-thing)" -eq 0 ]
+}
+
+@test "a reference to the target itself or to a GitHub page that is not a repository passes with no lookup" {
+    write_leak_body "see https://github.com/Credfeto/Credfeto-Orchestrator/pull/1 and ${REPO}#2 and https://github.com/orgs/credfeto/projects/74 and https://github.com/advisories/GHSA-abcd-efgh-ijkl"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a link with an ellipsis or a bare .git for the repository names none, and passes with no lookup" {
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "the repositories under https://github.com/credfeto/... and github.com/credfeto/.git"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a reference to a public repository passes, and each repository is looked up once per run" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/open-thing PUBLIC
+    printf '%s\n' "https://github.com/credfeto/open-thing/issues/1" "credfeto/open-thing#2" \
+        "https://github.com/credfeto/open-thing.git" "git@github.com:credfeto/open-thing.git" "CREDFETO/OPEN-THING#3" "https://github.com/credfeto/open-thing." > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--json visibility")" -eq 2 ]
+    [ "$(visibility_lookups "${REPO}")" -eq 1 ]
+    [ "$(visibility_lookups credfeto/open-thing)" -eq 1 ]
+}
+
+@test "the first private reference in the body is the one refused, after the public ones before it pass" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/open-thing PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    printf '%s\n' "credfeto/open-thing#1" "fine" "https://github.com/credfeto/hidden-thing" "credfeto/hidden-thing#9" > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: private repository (line 3)" ]
+}
+
+@test "a visibility lookup that fails is a runtime failure (exit 1), never a pass or a refusal" {
+    write_visibility "${REPO}" PUBLIC
+    fail_visibility credfeto/flaky-thing
+    write_leak_body "see credfeto/flaky-thing#3"
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read the visibility of the repository named on line 3 of the body" ]
+
+    rm -f "${GH_FIXTURES}"/visibility-*
+    fail_visibility "${REPO}"
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read the visibility of ${REPO}" ]
+}
+
+@test "an owner in CFWF_PRIVATE_OWNERS is refused with no lookup, even as a bare owner/repo" {
+    write_visibility "${REPO}" PUBLIC
+    local reference
+    for reference in "secret-org/plans" "https://github.com/Secret-Org/plans/issues/1" "secret-org/plans#4" "\`other-hidden/plans\`"; do
+        write_leak_body "see ${reference}"
+        rm -f "${GH_LOG}"
+        CFWF_PRIVATE_OWNERS="secret-org other-hidden" run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "plans"
+        [ "$(gh_call_count "repo view secret-org")" -eq 0 ]
+        [ "$(gh_call_count "repo view Secret-Org")" -eq 0 ]
+        [ "$(gh_call_count "repo view other-hidden")" -eq 0 ]
+    done
+}
+
+@test "a bare owner/repo inside a longer path is not read as a reference to a listed owner" {
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "see src/secret-org/plans and docs.secret-org/plans"
+    CFWF_PRIVATE_OWNERS="secret-org" run_body_check
+    [ "${status}" -eq 0 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a value in CFWF_PRIVATE_OWNERS that is not an owner is a runtime failure" {
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "see credfeto/x#1"
+    CFWF_PRIVATE_OWNERS="good bad/owner" run_body_check
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"CFWF_PRIVATE_OWNERS holds a value that is not an owner"* ]]
+}
+
+@test "issue create refuses a body naming a private repository before any board read or write" {
+    prepare_issue_create
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "see https://github.com/credfeto/hidden-thing/issues/4"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+    assert_nothing_created
+    [ "$(gh_call_count "label list")" -eq 0 ]
+    [ "$(gh_call_count "project field-list")" -eq 0 ]
+    [ "$(gh_call_count "--json projectsV2")" -eq 0 ]
+}
+
+@test "issue create checks the stdin copy it hands to gh, and refuses a leak there before any write" {
+    prepare_issue_create
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "a path /tmp/out"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: host path (line 1)" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "body check reads the body from stdin, and leaves no temporary file behind" {
+    local scratch="${TEST_TMP}/tmp"
+    mkdir -p "${scratch}"
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/open-thing PUBLIC
+    TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file - <<< "see credfeto/open-thing#1"
+    [ "${status}" -eq 0 ]
+    [ "$(visibility_lookups credfeto/open-thing)" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file - <<< "see /home/x/y"
+    [ "${status}" -eq 8 ]
+    [ -z "$(ls -A "${scratch}")" ]
+}
+
+@test "body check help and usage errors, none of which call gh" {
+    run "${SCRIPT}" body check --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf body check"* ]]
+
+    run "${SCRIPT}" body -h
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf body check"* ]]
+
+    run --separate-stderr "${SCRIPT}" body
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"body needs a subcommand (check)"* ]]
+
+    run --separate-stderr "${SCRIPT}" body frobnicate
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"unknown body subcommand: frobnicate"* ]]
+
+    printf 'clean\n' > "${TEST_TMP}/leak.md"
+    run --separate-stderr "${SCRIPT}" body check --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --repo"* ]]
+    [[ "${stderr}" == *"Usage: cfwf body check"* ]]
+
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --body-file"* ]]
+
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md" --title T
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"unknown option: --title"* ]]
+
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --repo credfeto/other --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"--repo can only be given once"* ]]
+
+    run --separate-stderr "${SCRIPT}" body check --repo "no-slash" --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 2 ]
+
+    local flag
+    for flag in --skip-leak-check --force; do
+        run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md" "${flag}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == *"unknown option: ${flag}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "body check refuses a missing or blank body as a runtime failure, without calling gh" {
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/nope.md"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"cannot read the body file"* ]]
+
+    printf ' \n' > "${TEST_TMP}/blank.md"
+    run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/blank.md"
+    [ "${status}" -eq 1 ]
+    [ ! -f "${GH_LOG}" ]
 }
