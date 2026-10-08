@@ -10,6 +10,20 @@ readonly LABEL_LIMIT=1000
 readonly TITLE_LIMIT=256
 readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
+readonly BODY_REFUSED_EXIT=8
+# The body leak rules, as extended regular expressions matched byte by byte in the C locale.
+readonly TOKEN_PATTERN='(^|[^A-Za-z0-9])(gh[pos]_|xox[bap]-|glpat-)[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|(TOKEN|SECRET|KEY|PASSWORD)=[^[:space:]]'
+readonly HOST_PATH_PATTERN="(^|[[:space:]\"'\`(=[])/(home|root|run/user|tmp)/"
+# Every UTF-8 byte of a multi-byte character is 0x80 or above, so a byte scan finds exactly the C0
+# controls and DEL. NUL is mapped to 0x01 before the scan, because no pattern can hold a NUL.
+readonly CONTROL_PATTERN=$'[\x01-\x08\x0b-\x1f\x7f]'
+readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
+readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
+# A character that may come just before a bare owner/repo; a slash or a dot means it is part of a
+# longer path or a host name.
+readonly REFERENCE_BOUNDARY='(^|[^A-Za-z0-9_./-])'
+# First path segments of github.com URLs that are GitHub's own pages, never an owner.
+readonly GITHUB_RESERVED_PATHS=" about account advisories apps codespaces collections contact customer-stories enterprise enterprises explore features issues login marketplace new notifications orgs organizations pricing pulls readme search security settings site sponsors topics trending users "
 readonly PRIORITIES=(Security Urgent High Medium Low)
 readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
 readonly NEW_ISSUE_STATUS="Not Started"
@@ -89,6 +103,10 @@ PRIORITY=""
 LABELS=()
 CREATED_URL=""
 BODY_PATH_TMP=""
+VISIBILITY_ERR_FILE=""
+VISIBILITY=""
+declare -gA REPOSITORY_VISIBILITY=()
+declare -gA PRIVATE_OWNERS=()
 
 die() {
     printf 'cfwf: %s\n' "$*" >&2
@@ -102,7 +120,7 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${CREATED_URL}" ]; then
         printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
     fi
-    rm -f "${GRAPHQL_ERR_FILE}" "${BODY_PATH_TMP}"
+    rm -f "${GRAPHQL_ERR_FILE}" "${BODY_PATH_TMP}" "${VISIBILITY_ERR_FILE}"
 }
 
 usage_general() {
@@ -114,6 +132,7 @@ Commands:
   workflow-status --check  Print the current Workflow board status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   issue create             Create an issue and put it on the Workflow board as Not Started
+  body check               Check a body for leaks without posting it (exit 8 when refused)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -183,6 +202,45 @@ the repository, so a bad call leaves no issue behind. A label that does not exis
 repository is created first: a standard label gets its standard colour and description, any
 other label gets the colour gh picks. If the issue is created but the board write fails, cfwf
 exits 1 and the error carries the issue URL. The board write is never read back.
+
+The body is checked for leaks before anything is read from the board or created (see
+'cfwf help body'). A refused body exits 8 with "cfwf: body refused: <rule>" on stderr, and
+nothing is created.
+USAGE
+}
+
+usage_body() {
+    cat << USAGE
+Usage: cfwf body check --repo <owner/repo> --body-file <file|->
+
+Checks a body for leaks without posting it, the same check every cfwf command that posts a
+body runs first, so a body can be tested before it is used.
+
+--repo       The repository the body is for. Always required.
+--body-file  The body: a regular file, or - to read it from stdin. An empty body is an error.
+
+A body is refused when it contains, in this order (the first rule that matches wins):
+  token               ghp_, gho_, ghs_, github_pat_, glpat-, xoxb-, xoxa- or xoxp- followed by
+                      a token character, an AWS access key id, a PRIVATE KEY block line, or
+                      NAME=value where NAME ends in TOKEN, SECRET, KEY or PASSWORD
+  host path           /home/, /root/, /run/user/ or /tmp/ at the start of a path (the start of
+                      a line, or after whitespace, a quote, a backtick, (, [ or =)
+  control character   any control character other than tab and newline
+  too long            more than ${BODY_LIMIT} characters
+  private repository  only when --repo is public: a github.com/<owner>/<repo> link, a
+                      git@github.com:<owner>/<repo> remote or an <owner>/<repo>#<n>
+                      reference to a repository that is private or that the
+                      caller cannot see, or any <owner>/<repo> whose owner is listed in
+                      CFWF_PRIVATE_OWNERS (space-separated owners, refused with no lookup).
+                      The target itself always passes. Each other repository is looked up
+                      once per run with gh repo view.
+
+A refusal prints "cfwf: body refused: <rule>", with "(line <n>)" where there is one, on stderr
+and exits ${BODY_REFUSED_EXIT}. The matched text is never printed. There is no option to skip
+the check.
+
+Exit codes: 0 the body passes (nothing is printed); ${BODY_REFUSED_EXIT} refused; 1 a runtime
+failure, including a visibility lookup that fails; 2 a usage error.
 USAGE
 }
 
@@ -191,6 +249,7 @@ usage_for() {
         workflow-status) usage_workflow_status ;;
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
+        body) usage_body ;;
         *) usage_general ;;
     esac
 }
@@ -635,9 +694,131 @@ resolve_body() {
         fi
     fi
     grep -q '[^[:space:]]' "${BODY_FILE}" || die "the issue body is empty"
+}
+
+# Names only the rule and the line, never the matched text: echoing a token into a transcript would
+# itself be the leak.
+refuse_body() {
+    printf 'cfwf: body refused: %s%s\n' "$1" "${2:+ (line $2)}" >&2
+    exit "${BODY_REFUSED_EXIT}"
+}
+
+# Prints the number of the first line on stdin that matches the extended regular expression $1,
+# or returns non-zero when none does.
+first_matching_line() {
+    local match
+    match=$(LC_ALL=C grep -naE -m1 -e "$1") || return 1
+    printf '%s' "${match%%:*}"
+}
+
+# Fills PRIVATE_OWNERS (lower-cased) from the space-separated CFWF_PRIVATE_OWNERS.
+load_private_owners() {
+    local owner
+    local -a owners
+    read -ra owners <<< "${CFWF_PRIVATE_OWNERS:-}"
+    for owner in "${owners[@]}"; do
+        [[ "${owner}" =~ ^${OWNER_PATTERN}$ ]] || die "CFWF_PRIVATE_OWNERS holds a value that is not an owner: ${owner}"
+        PRIVATE_OWNERS["${owner,,}"]=1
+    done
+}
+
+# Prints "<line $1>\t<owner/repo>" for the owner/repo $2 as matched, without the trailing full
+# stops of a sentence and the .git of a clone URL. Prints nothing when no repository name is left,
+# as for the ellipsis in "github.com/owner/...", which names no repository.
+print_reference() {
+    local reference="$2"
+    while [[ "${reference}" == *. ]]; do
+        reference="${reference%.}"
+    done
+    reference="${reference%.git}"
+    [ -n "${reference#*/}" ] || return 0
+    printf '%s\t%s\n' "$1" "${reference}"
+}
+
+# Prints "<line>\t<owner/repo>" for each repository the body at $1 names: github.com links and
+# git@github.com:owner/repo remotes, owner/repo#n references, and bare owner/repo words whose
+# owner is in PRIVATE_OWNERS (a bare owner/repo is otherwise left alone, because a relative file
+# path has the same shape).
+repository_references() {
+    local body="$1" match text owner
+    while IFS= read -r match; do
+        text="${match#*:}"
+        print_reference "${match%%:*}" "${text#*[Gg][Ii][Tt][Hh][Uu][Bb].[Cc][Oo][Mm][:/]}"
+    done < <(LC_ALL=C grep -inoaE "(^|[^A-Za-z0-9.-])(www\.)?github\.com[:/]${REPOSITORY_PATTERN}" -- "${body}")
+
+    while IFS= read -r match; do
+        text="${match#*:}"
+        text="${text%#*}"
+        print_reference "${match%%:*}" "${text#[^A-Za-z0-9]}"
+    done < <(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}#[0-9]+" -- "${body}")
+
+    [ "${#PRIVATE_OWNERS[@]}" -gt 0 ] || return 0
+    while IFS= read -r match; do
+        text="${match#*:}"
+        text="${text#[^A-Za-z0-9]}"
+        owner="${text%%/*}"
+        [ -n "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || continue
+        print_reference "${match%%:*}" "${text}"
+    done < <(LC_ALL=C grep -noaE "${REFERENCE_BOUNDARY}${REPOSITORY_PATTERN}" -- "${body}")
+}
+
+# Sets VISIBILITY to public or private for the repository $1, asking GitHub once per run. A
+# repository GitHub does not show the caller counts as private; any other failure dies with $2.
+lookup_visibility() {
+    local repository="$1" failure="$2" key="${1,,}" answer
+    if [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ]; then
+        if [ -z "${VISIBILITY_ERR_FILE}" ]; then
+            VISIBILITY_ERR_FILE=$(mktemp) || die "could not create a temporary file"
+        fi
+        if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${VISIBILITY_ERR_FILE}"); then
+            case "${answer,,}" in
+                public) REPOSITORY_VISIBILITY["${key}"]=public ;;
+                private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
+                *) die "${failure}: gh gave an unexpected answer" ;;
+            esac
+        elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${VISIBILITY_ERR_FILE}"; then
+            REPOSITORY_VISIBILITY["${key}"]=private
+        else
+            die "${failure}"
+        fi
+    fi
+    VISIBILITY="${REPOSITORY_VISIBILITY["${key}"]}"
+}
+
+# Refuses a body for a public repository that names a private one. The target's own visibility is
+# only looked up once the body names some other repository, so a body that names none costs no
+# gh call. The repository a refused reference names is never printed.
+check_repository_references() {
+    local body="$1" target="$2" line reference owner target_public=""
+    load_private_owners
+    while IFS=$'\t' read -r line reference; do
+        owner="${reference%%/*}"
+        [ "${reference,,}" != "${target,,}" ] || continue
+        [[ "${GITHUB_RESERVED_PATHS}" != *" ${owner,,} "* ]] || continue
+
+        if [ -z "${target_public}" ]; then
+            lookup_visibility "${target}" "could not read the visibility of ${target}"
+            target_public="${VISIBILITY}"
+        fi
+        [ "${target_public}" = public ] || return 0
+
+        [ -z "${PRIVATE_OWNERS["${owner,,}"]:-}" ] || refuse_body "private repository" "${line}"
+        lookup_visibility "${reference}" "could not read the visibility of the repository named on line ${line} of the body"
+        [ "${VISIBILITY}" = public ] || refuse_body "private repository" "${line}"
+    done < <(repository_references "${body}" | sort -t$'\t' -k1,1n -s)
+}
+
+# Refuses (exit 8) a body that would leak something if posted, applying the rules in order and
+# stopping at the first that matches. $1 must be the exact file gh will be given.
+check_body_for_leaks() {
+    local body="$1" target="$2" line
+    line=$(first_matching_line "${TOKEN_PATTERN}" < "${body}") && refuse_body token "${line}"
+    line=$(first_matching_line "${HOST_PATH_PATTERN}" < "${body}") && refuse_body "host path" "${line}"
+    line=$(LC_ALL=C tr '\000' '\001' < "${body}" | first_matching_line "${CONTROL_PATTERN}") \
+        && refuse_body "control character" "${line}"
     require_utf8_locale
-    [ "$(LC_ALL=C.UTF-8 wc -m < "${BODY_FILE}")" -le "${BODY_LIMIT}" ] \
-        || die "the issue body is longer than ${BODY_LIMIT} characters"
+    [ "$(LC_ALL=C.UTF-8 wc -m < "${body}")" -le "${BODY_LIMIT}" ] || refuse_body "too long"
+    check_repository_references "${body}" "${target}"
 }
 
 # Sets ISSUE_LABELS to the labels to put on the issue: the priority first, then each --label
@@ -701,6 +882,7 @@ issue_create() {
     collect_issue_labels
     require_gh
     resolve_body
+    check_body_for_leaks "${BODY_FILE}" "${REPO}"
 
     # The board is resolved before anything is written, so a repository with no Workflow
     # board fails here and leaves no issue behind.
@@ -746,6 +928,53 @@ cmd_issue() {
     esac
 }
 
+parse_body_options() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --repo | --body-file)
+                [ "$#" -ge 2 ] || usage_error "$1 needs a value"
+                assign_issue_option "$1" "$2"
+                shift 2
+                ;;
+            -h | --help)
+                usage_body
+                exit 0
+                ;;
+            *)
+                usage_error "unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+body_check() {
+    parse_body_options "$@"
+    require REPO --repo
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    check_body_for_leaks "${BODY_FILE}" "${REPO}"
+}
+
+cmd_body() {
+    CURRENT_COMMAND="body"
+    case "${1:-}" in
+        check)
+            shift
+            body_check "$@"
+            ;;
+        -h | --help)
+            usage_body
+            ;;
+        "")
+            usage_error "body needs a subcommand (check)"
+            ;;
+        *)
+            usage_error "unknown body subcommand: $1"
+            ;;
+    esac
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -761,6 +990,7 @@ main() {
         workflow-status) cmd_workflow_status "$@" ;;
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         issue) cmd_issue "$@" ;;
+        body) cmd_body "$@" ;;
         *) usage_error "unknown command: ${command}" ;;
     esac
 }
