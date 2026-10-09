@@ -1072,11 +1072,11 @@ assert_nothing_created() {
 
 @test "a priority given as --label is refused in any case, pointing at --priority, and nothing is created" {
     prepare_issue_create
+    create_args Low
     local row given canonical
     for row in "Urgent|Urgent" "urgent|Urgent" "HIGH|High" "security|Security" "Medium|Medium" "low|Low"; do
         given="${row%|*}"
         canonical="${row#*|}"
-        create_args Low
         run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "${given}"
         [ "${status}" -eq 2 ] || { echo "--label ${given} was accepted" >&2; return 1; }
         [[ "${output}" == *"'${given}' is a priority; use --priority ${canonical}, not --label"* ]]
@@ -1114,9 +1114,9 @@ assert_nothing_created() {
 
 @test "a usage error names the option and the rule but never echoes the value, which could hold a token" {
     prepare_issue_create
+    create_args
     local secret="LEAKMARKER0123456789" flag
     for flag in --title --label --body-file --repo; do
-        create_args
         # The bad value comes first, so it is parsed before the same option given by create_args.
         run --separate-stderr "${SCRIPT}" issue create "${flag}" "${secret}"$'\tx' "${CREATE_ARGS[@]:2}"
         [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
