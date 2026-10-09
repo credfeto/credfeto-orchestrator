@@ -47,7 +47,8 @@ readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])(gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|s
 # here the path must not follow a slash either, unless as file://, so the path of a URL
 # (https://example.com/home/x, whose host follows //) passes. Third, a Windows drive path under
 # Users, with either slash, in any case.
-readonly HOST_PATH_PATTERN='(^|^[^A-Za-z0-9.~/-]|[^/][^A-Za-z0-9.~/-]|/)/(home|root|run/user|tmp|Users)/|(^|[^A-Za-z0-9.~/-]|file://)(/[A-Za-z0-9._-]+)+/(home|root|run/user|tmp|Users)/|(^|[^A-Za-z0-9])[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]'
+readonly HOST_PATH_DIRECTORIES='/(home|root|run/user|tmp|Users)/'
+readonly HOST_PATH_PATTERN='(^|^[^A-Za-z0-9.~/-]|[^/][^A-Za-z0-9.~/-]|/)'"${HOST_PATH_DIRECTORIES}"'|(^|[^A-Za-z0-9.~/-]|file://)(/[A-Za-z0-9._-]+)+'"${HOST_PATH_DIRECTORIES}"'|(^|[^A-Za-z0-9])[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]'
 # Every UTF-8 byte of a multi-byte character is 0x80 or above, so a byte scan finds exactly the C0
 # controls (except tab and newline; carriage return is one) and DEL, and the C1 controls U+0080 to
 # U+009F, which UTF-8 writes as 0xC2 and then 0x80 to 0x9F. NUL is mapped to 0x01 before the scan
