@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Blocks the skills that edit Claude Code's own settings, permissions, hooks,
+# keybindings or skill definitions. Registered (in claude-managed-settings.json)
+# against the `Skill` matcher. Exit 2 = blocked, 0 = allowed.
+#
+# The hooks and allowlists guard Bash commands and file paths, but a skill can
+# run as a forked agent with its own file-editing tools, so a role that was
+# never given Edit or Write can still change settings through one. The
+# Skill(...) entries in permissions.deny cover the same names; this hook is a
+# second layer that does not depend on how Claude Code matches those rules.
+# The denial applies to every caller, a human typing the slash command
+# included: configuration changes are made by editing the tracked source files
+# and reinstalling or rebuilding.
+#
+# A skill name may carry a plugin or directory prefix (`plugin:skill`), so both
+# the full name and the part after the last `:` are matched, which stops a
+# re-prefixed invocation of a listed skill from slipping past.
+#
+# Fails closed: jq missing, the payload not parsing as JSON, or a missing/empty
+# skill name all block.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+CONFIG_SKILLS=(update-config fewer-permission-prompts keybindings-help init plugin-authoring skill-creator)
+
+is_config_skill() {
+  local skill
+  for skill in "${CONFIG_SKILLS[@]}"; do
+    [ "$1" = "$skill" ] && return 0
+  done
+  return 1
+}
+
+command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+
+skill_name=$(jq -r '.tool_input.skill // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+[ -z "$skill_name" ] && block 'tool payload has no skill name - failing closed'
+
+if is_config_skill "$skill_name" || is_config_skill "${skill_name##*:}"; then
+  block "the ${skill_name} skill changes Claude Code configuration, which is not permitted here - stop and report what you needed instead; configuration is changed by a human editing the tracked source files and reinstalling"
+fi
+
+exit 0
