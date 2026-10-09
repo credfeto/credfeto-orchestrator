@@ -1,10 +1,4 @@
 {
-  "agent": "credfeto-orchestrator",
-  "attribution": {
-    "commit": "",
-    "pr": "",
-     "sessionUrl": false
-  },
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [
@@ -334,11 +328,23 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:api.nuget.org)"
-    ]
+      "WebFetch(domain:api.nuget.org)",
+      "Edit(.claude/settings*.json*)",
+      "Edit(.mcp.json)",
+      "Edit(~/.claude.json)",
+      "Skill(update-config)",
+      "Skill(fewer-permission-prompts)",
+      "Skill(keybindings-help)",
+      "Skill(init)",
+      "Skill(plugin-authoring)",
+      "Skill(anthropic-skills:skill-creator)",
+      "Agent(statusline-setup)"
+    ],
+    "disableBypassPermissionsMode": "disable"
   },
-  "advisorModel": "fable",
-  "model": "opusplan",
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "allowManagedMcpServersOnly": true,
   "hooks": {
     "PreToolUse": [
       {
@@ -346,11 +352,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/reject-obfuscated-commands"
+            "command": "/etc/claude-code/hooks/reject-obfuscated-commands"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-allowed-dirs"
+            "command": "/etc/claude-code/hooks/enforce-allowed-dirs"
+          },
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/block-claude-config-writes"
           },
           {
             "type": "command",
@@ -358,35 +368,35 @@
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-git-identity"
+            "command": "/etc/claude-code/hooks/enforce-git-identity"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-git-dash-c"
+            "command": "/etc/claude-code/hooks/enforce-git-dash-c"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/block-git-worktree"
+            "command": "/etc/claude-code/hooks/block-git-worktree"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/block-dotnet-tool-install"
+            "command": "/etc/claude-code/hooks/block-dotnet-tool-install"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-ssh-host-and-key"
+            "command": "/etc/claude-code/hooks/enforce-ssh-host-and-key"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-curl-host"
+            "command": "/etc/claude-code/hooks/enforce-curl-host"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/enforce-background-for-long-running-commands"
+            "command": "/etc/claude-code/hooks/enforce-background-for-long-running-commands"
           },
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/cache-gh-lookups"
+            "command": "/etc/claude-code/hooks/cache-gh-lookups"
           }
         ]
       },
@@ -395,7 +405,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/block-github-mcp-write-tools"
+            "command": "/etc/claude-code/hooks/block-github-mcp-write-tools"
           }
         ]
       },
@@ -404,7 +414,25 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/block-git-worktree"
+            "command": "/etc/claude-code/hooks/block-git-worktree"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/block-claude-config-writes"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/etc/claude-code/hooks/block-config-skills"
           }
         ]
       }
@@ -413,30 +441,15 @@
   "sandbox": {
     "enabled": false,
     "filesystem": {
-       "read": {
-         "denyOnly": ["/"],
-         "allowWithinDeny": [
-           "/workspace/",
-           "~/work"
-         ]
-       }
+      "read": {
+        "denyOnly": [
+          "/"
+        ],
+        "allowWithinDeny": [
+          "/workspace/",
+          "~/work"
+        ]
+      }
     }
-  },
-  "tui": "default",
-  "autoMemoryEnabled": false,
-  "theme": "dark",
-  "agentPushNotifEnabled": false,
-  "autoCompactEnabled": true,
-  "outputStyle": "Concise",
-  "remoteControlAtStartup": true,
-  "includeGitInstructions": false,
-  "env": {
-    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
-    "CLAUDE_AUTO_BACKGROUND_TASKS": "1",
-    "DISABLE_EXTRA_USAGE_COMMAND": "1",
-    "DISABLE_FEEDBACK_COMMAND": "1",
-    "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1",
-    "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
-    "GH_HOST": "github-api.markridgwell.com"
   }
 }

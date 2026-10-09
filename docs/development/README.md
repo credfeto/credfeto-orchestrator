@@ -80,7 +80,7 @@ link in these pages is broken.
   documented where they are made, for example the read-only single-item query in `cfwf`
   (see [cfwf](scripts/cfwf.md)). A GraphQL mutation typed as a command is blocked by the agent
   sandbox (the shared rules in `ai/global/agent-roles.instructions.md` say so; it is the outer
-  sandbox, not `claude-settings.json`), and long hand-built `gh` pipelines are the kind of thing
+  sandbox, not `claude-managed-settings.json`), and long hand-built `gh` pipelines are the kind of thing
   its command checks reject:
   put a recurring multi-step `gh` pattern behind a script (that is what `cfwf` is) rather than
   asking agents to compose it each time.
@@ -188,4 +188,4 @@ These have all been seen in practice. Where a script has to cope with one, its g
 4. Update the README and any `docs/` page that describes what the scripts do, and add the
    changelog entry.
 5. If it ships in the agent image, add it to the `Dockerfile`, its sanity checks, the command
-   allowlist and `claude-settings.json` (see [claude-hooks.md](claude-hooks.md)).
+   allowlist and `claude-managed-settings.json` (see [claude-hooks.md](claude-hooks.md)).
