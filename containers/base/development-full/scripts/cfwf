@@ -614,14 +614,18 @@ graphql_query() {
     return "${status}"
 }
 
-# The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
-# so that is the fallback when stderr is empty. First line only, printable characters only (no
-# terminal escape sequences), at most 200 characters.
-graphql_failure_text() {
-    local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
-    text="${text%%$'\n'*}"
+# Prints the first line of $1, printable characters only (no terminal escape sequences), at most
+# 200 characters: the form in which any gh error is quoted.
+printable_first_line() {
+    local text="${1%%$'\n'*}"
     text="${text//[![:print:]]/}"
     printf '%s' "${text:0:200}"
+}
+
+# The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
+# so that is the fallback when stderr is empty.
+graphql_failure_text() {
+    printable_first_line "${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
 }
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
@@ -1316,15 +1320,12 @@ require_one_checks_target() {
     [ "${#targets}" -eq 1 ] || usage_error "give exactly one of --pr, --sha and --branch"
 }
 
-# The first line of gh's error (stderr, or stdout, where gh can put an error body when --jq is
-# used), printable characters only, so no terminal escape sequence reaches the caller.
+# gh's error (stderr, or stdout, where gh can put an error body when --jq is used), quoted as
+# printable_first_line does, so no terminal escape sequence reaches the caller.
 gh_error_text() {
     local text
     text=$(< "${GH_ERR_FILE}")
-    text="${text:-${API_OUTPUT}}"
-    text="${text%%$'\n'*}"
-    text="${text//[![:print:]]/}"
-    printf '%s' "${text:0:200}"
+    printable_first_line "${text:-${API_OUTPUT}}"
 }
 
 # Runs gh api on the endpoint $2 with the jq filter $3 (any further arguments are extra gh options)
