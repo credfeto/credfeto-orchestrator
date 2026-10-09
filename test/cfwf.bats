@@ -2266,7 +2266,7 @@ commit_status() {
 write_statuses() {
     local sha="$1"
     shift
-    printf '%s\n' "$@" | jq -s '{state: "pending", sha: "'"${sha}"'", statuses: map(select(. != null))}' \
+    printf '%s\n' "$@" | jq -s '{state: "pending", sha: "'"${sha}"'", statuses: .}' \
         | write_api "repos/${REPO}/commits/${sha}/status"
 }
 
