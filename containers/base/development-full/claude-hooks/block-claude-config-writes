@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# Blocks writes to Claude Code's own configuration: settings files, hooks,
+# agents, skills and MCP server config. Registered (in
+# claude-managed-settings.json) twice: in the Bash chain, and under its own
+# `Edit|Write|NotebookEdit` matcher. Exit 2 = blocked, 0 = allowed.
+#
+# Protected targets, wherever they sit (a repo's own `.claude/`, the user's
+# `~/.claude/`, any nested directory):
+#   .claude                          the directory itself, so a copy, move or
+#                                    link with it as the destination directory
+#                                    (`cp x/settings.json .claude/`) is caught
+#   .claude/settings*.json*          settings, settings.local, backups
+#   .claude/hooks, .claude/agents,   the directories and everything under them
+#   .claude/skills
+#   .claude.json                     the user's global Claude Code state
+#   .mcp.json                        project MCP server config
+#   /etc/claude-code                 managed settings and the installed hooks
+# The tracked sources under containers/base/development-full/ are not matched
+# (no `.claude/` path segment): they take effect only once a human reinstalls
+# or rebuilds, so they stay editable for normal hook development.
+#
+# The installed copies are root-owned and the managed settings outrank
+# anything a repo or user settings file says, so a write that slipped past this
+# hook could not widen permissions. This hook exists so the attempt is refused
+# visibly at the tool call, instead of landing as a stray working-tree change
+# that nobody asked for.
+#
+# Dispatch is on `.tool_name`:
+#   Edit, Write        `.tool_input.file_path`
+#   NotebookEdit       `.tool_input.notebook_path`
+#   Bash, or empty     `.tool_input.command` (the other Bash hooks' payloads
+#                      omit tool_name, so empty is treated as Bash)
+#   anything else      blocked, fail closed
+#
+# Bash write targets are the words of `>`, `>>`, `>|`, `&>`, `&>>` and `<>`
+# redirections and of a `>&` redirection to anything but a file descriptor
+# number or `-` (`>& file` writes the file, like `&>`), every argument of the
+# allowlisted commands that write files (WRITERS below: the file utilities,
+# awk, sed, curl, openssl, sqlite3, hugo, trivy, xmllint, shfmt, bats, the
+# pre-commit-hooks fixers and the linters with a report-file option; find's
+# writing actions are denied by enforce-allowed-dirs instead), every argument
+# of git when it runs a
+# subcommand that writes named paths (checkout, restore, mv, rm, clone) or is
+# given an --output option, and every argument of gh when it downloads, clones
+# or is given an output option. Checking every argument, not just the
+# destination, avoids re-implementing each tool's option parser; a protected
+# path is never a sensible source for those commands either, since Read of
+# the settings is already denied.
+#
+# Accepted gap: commands that run arbitrary code (python3, node, dotnet run,
+# npm scripts, and awk and sed programs too: awk can build a file name by
+# concatenation at run time and call system(), GNU sed has `e`) cannot be
+# judged from their arguments, so for awk and sed only a protected name
+# spelled out in the program text is caught. Those are out of reach here; the
+# root-owned install and the managed-settings locks are what hold against
+# them.
+#
+# Accepted false positive: a sed or awk program that merely mentions a
+# protected name (`sed -i 's|~/.claude/hooks/|...|' README.md`) is blocked,
+# since its program text is where `w FILE` and `print > "f"` name what they
+# write. Make such a text edit with the Edit tool instead, which checks only
+# the file being edited.
+#
+# Each target is checked two ways:
+#   - its text (unquoted backslashes removed) against the protected names as a
+#     substring, which catches a relative path that names `.claude/` whatever
+#     directory the command cd's into first, and the literal parts of a word
+#     that also contains a variable or substitution
+#     (`"$HOME/.claude/settings.json"`);
+#   - when the word is fully literal, its path (a leading `~` expanded,
+#     relative to this hook's working directory) resolved with `realpath -ms`
+#     and `realpath -m`, so neither `..` components nor a symlink pointing at
+#     a protected file gets past. An unquoted glob is also expanded now and
+#     each match checked the same way.
+# A command that writes anything also has the arguments of every cd and pushd
+# in it checked as targets, so `cd .claude && cp x settings.json` is refused at
+# the cd, and each relative literal write target (an unquoted glob expanded
+# there too) is checked a second time relative to every literal cd/pushd
+# directory, which catches a protected file
+# reached by a name that only means it after the cd
+# (`cd /etc && cp x claude-code/managed-settings.json`).
+# Accepted gap: a recursive copy of a directory whose contents include a
+# `.claude` entry (`cp -r /tmp/d/. .`) names nothing protected and is allowed.
+# A word with a variable whose literal parts name nothing protected is
+# allowed: `> "$TMPDIR/out"` is everyday use, and what the variable holds is
+# not knowable from the command text. An unquoted brace expansion or a
+# `$'...'` ANSI-C quoted part in a write target is blocked, because each can
+# assemble a protected name from pieces that do not contain it
+# (`$'\x2eclaude/settings.json'`), and reject-obfuscated-commands does not
+# decode ANSI-C escapes (#1552).
+#
+# Parses with shfmt (mvdan/sh) and walks the AST with jq, the same approach
+# as enforce-allowed-dirs; each target travels NUL-terminated, so no byte in a
+# word can be mistaken for a delimiter, and every path is resolved in one
+# batch at the end. Obfuscated command names are not this hook's job:
+# reject-obfuscated-commands rejects those before this hook runs.
+#
+# Fails closed: jq, shfmt or realpath missing, the payload not parsing as
+# JSON, an empty path or command, the command not parsing as shell, or a path
+# that cannot be resolved all block.
+
+# Byte-exact pattern semantics regardless of the host locale.
+export LC_ALL=C
+
+# The message says the command never ran (not "blocked mid-run") because a denial is easy to
+# misread as "started, now wait for it" - which then waits forever, since a denied call never
+# started in the first place (#1281).
+block() {
+  printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
+  exit 2
+}
+
+block_config_write() {
+  block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills and MCP config are changed by a human editing the tracked source files and reinstalling"
+}
+
+# Known wrapper names - mirrors the "Wrapper commands" section of
+# command-blocklist, which is what actually bans these upstream.
+WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
+# Every allowlisted command that can create, replace, remove or re-mode a file
+# named by one of its arguments. awk is here because its program text can
+# redirect output to a file (`print > "f"`) or edit in place (`-i inplace`),
+# sort and uniq because they take an output file, curl for -o/-O.
+# sed is here whether or not it is given -i: its `w FILE` command and the
+# `s///w FILE` flag write a named file too.
+# openssl (-out), sqlite3 (.once/.output, or the database file itself), hugo
+# (-d), trivy, xmllint and eslint (--output) all take an output path too, as
+# do the linters with a report-file option (flake8, pylint, ruff, stylelint,
+# markdownlint, markdownlint-cli2, cfn-lint, sqlfluff, ansible-lint), shfmt
+# (-w rewrites the named files), mktemp (creates the file its template
+# names), the pre-commit-hooks fixers that rewrite the files they are given,
+# and bats (-o writes reports into a directory). find is not here: its
+# writing actions (-delete, -fprint*, -fls) are denied outright by
+# enforce-allowed-dirs, earlier in the chain.
+WRITERS=(
+  cp mv ln install tee touch rm mkdir chmod sort uniq awk curl sed mktemp
+  openssl sqlite3 hugo trivy xmllint eslint shfmt bats
+  flake8 pylint ruff stylelint markdownlint markdownlint-cli2 cfn-lint sqlfluff ansible-lint
+  end-of-file-fixer trailing-whitespace-fixer mixed-line-ending
+)
+# gh is checked only when it downloads or clones, or is given an output
+# option: its other arguments are routinely issue and PR text that may well
+# name these paths without writing them.
+GH_WRITE_ARGS=(download clone)
+GH_WRITE_OPTION_RE='^(-D|--dir|-O|--output)'
+# git subcommands that write paths named on the command line (clone writes a
+# whole tree at its destination). Any git call with an --output option (diff,
+# log, show) is checked as well.
+GIT_PATH_WRITERS=(checkout restore mv rm clone)
+WRITE_REDIRECTS=('>' '>>' '>|' '&>' '&>>' '<>')
+CD_COMMANDS=(cd pushd)
+
+# Stands in for a variable, substitution or other expansion inside a word's
+# text; a `*` in a case pattern matches it like any other byte.
+EXPANSION=$'\x01'
+
+names_protected_config() {
+  case "$1" in
+    *.claude | *.claude/ | *.claude/settings*.json* | *.claude/hooks* | *.claude/agents* | *.claude/skills* | *.claude.json* | *.mcp.json* | *etc/claude-code*) return 0 ;;
+  esac
+  return 1
+}
+
+is_protected_path() {
+  case "$1" in
+    */.claude | */.claude/settings*.json* | */.claude/hooks | */.claude/hooks/* | */.claude/agents | */.claude/agents/* | */.claude/skills | */.claude/skills/*) return 0 ;;
+    */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
+  esac
+  return 1
+}
+
+# Sets EXPANDED to $1 with a leading `~` replaced by $HOME. Assigns a global
+# rather than printing, so callers need no $(...) subshell.
+expand_tilde() {
+  case "$1" in
+    \~) EXPANDED="$HOME" ;;
+    \~/*) EXPANDED="${HOME}${1#\~}" ;;
+    *) EXPANDED="$1" ;;
+  esac
+}
+
+# Sets ABSOLUTE to $1 tilde-expanded and, when still relative, prefixed with
+# this hook's working directory.
+to_absolute_path() {
+  expand_tilde "$1"
+  ABSOLUTE="$EXPANDED"
+  [[ "$ABSOLUTE" == /* ]] || ABSOLUTE="${PWD}/${ABSOLUTE}"
+}
+
+# Paths waiting to be resolved, and the target text each is reported under.
+# Every path is resolved at once by resolve_queued_paths: one realpath per
+# mode for the whole command rather than two per target, since a single
+# `rm -f a b c ...` or a glob over `src/*.cs` can name hundreds of them.
+QUEUED_PATHS=()
+QUEUED_LABELS=()
+
+# $1 is the target text to report, $2 the path to resolve.
+queue_path() {
+  to_absolute_path "$2"
+  QUEUED_PATHS+=("$ABSOLUTE")
+  QUEUED_LABELS+=("$1")
+}
+
+# $1 is the target text to report, $2 the unquoted glob to expand now.
+queue_glob_matches() {
+  local match
+  expand_tilde "$2"
+  while IFS= read -r match; do
+    [ -n "$match" ] && queue_path "$1" "$match"
+  done < <(compgen -G "$EXPANDED")
+}
+
+# Resolves every queued path with `realpath -ms` (so `..` cannot hide a
+# protected name) and `realpath -m` (so a symlink to a protected file cannot
+# either), and blocks if any result is protected. Each realpath prints one
+# NUL-terminated line per operand, so any count other than two per path means
+# one of them failed, which fails closed.
+resolve_queued_paths() {
+  local count="${#QUEUED_PATHS[@]}" i
+  local results=()
+  [ "$count" -eq 0 ] && return 0
+  mapfile -t -d '' results < <(
+    realpath -ms -z -- "${QUEUED_PATHS[@]}" 2> /dev/null
+    realpath -m -z -- "${QUEUED_PATHS[@]}" 2> /dev/null
+  )
+  [ "${#results[@]}" -eq $((2 * count)) ] || block 'a write target could not be resolved - failing closed'
+  for ((i = 0; i < count; i++)); do
+    if is_protected_path "${results[i]}" || is_protected_path "${results[count + i]}"; then
+      block_config_write "${QUEUED_LABELS[i]}"
+    fi
+  done
+  return 0
+}
+
+# Absolute forms of the literal cd/pushd directories seen so far; relative
+# write targets are checked against each of them as well as the hook's own
+# working directory.
+CD_DIRS=()
+
+# $1 is the target kind from the transport (W plain, G unquoted glob, B
+# unquoted brace expansion or ANSI-C quoting, D a cd/pushd directory, C a
+# cd/pushd directory that is an unquoted glob), $2 its text.
+check_target() {
+  local kind="$1" text="$2" dir
+  [ "$kind" = "B" ] && block "write target '${text}' uses brace expansion or \$'...' quoting, which cannot be checked before it runs - spell the path out"
+  names_protected_config "$text" && block_config_write "$text"
+  [[ "$text" == *"$EXPANSION"* ]] && return 0
+  queue_path "$text" "$text"
+  case "$kind" in
+    G | C) queue_glob_matches "$text" "$text" ;;
+    D)
+      to_absolute_path "$text"
+      CD_DIRS+=("$ABSOLUTE")
+      ;;
+  esac
+  [[ "$kind" == [WG] ]] || return 0
+  [[ "$text" == /* || "$text" == \~* ]] && return 0
+  for dir in "${CD_DIRS[@]}"; do
+    queue_path "$text" "${dir}/${text}"
+    [ "$kind" = "G" ] && queue_glob_matches "$text" "${dir}/${text}"
+  done
+  return 0
+}
+
+to_json_array() {
+  local out="" item
+  for item in "$@"; do out="${out:+${out},}\"${item}\""; done
+  printf '[%s]' "$out"
+}
+
+check_file_tool() {
+  local path
+  path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""') || block 'tool payload could not be parsed by jq - failing closed'
+  [ -z "$path" ] && block "${tool_name} payload has no file path - failing closed"
+  queue_path "$path" "$path"
+  resolve_queued_paths
+  exit 0
+}
+
+command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
+command -v realpath > /dev/null 2>&1 || block 'realpath is not available to resolve paths - failing closed'
+
+input=$(cat)
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+case "$tool_name" in
+  Edit | Write | NotebookEdit) check_file_tool ;;
+  Bash | "") : ;;
+  *) block "unrecognised tool_name '${tool_name}' - failing closed" ;;
+esac
+
+raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
+[ -z "$raw_cmd" ] && block 'no command to inspect - failing closed'
+
+command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the command - failing closed'
+
+ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
+
+# One NUL-terminated entry per target, "<kind>:<word's text>", kind as described
+# at check_target; a shell word cannot hold a NUL, so none can be mistaken for
+# a delimiter. Nothing is printed when the command writes nothing; otherwise
+# the cd/pushd directories come first, so CD_DIRS is filled before any write
+# target is checked. A word's text is its literal parts joined, with every
+# expansion replaced by EXPANSION. The last entry records jq's exit status, so
+# a failed analysis is not mistaken for a command that writes nothing.
+mapfile -t -d '' targets < <(
+  printf '%s' "$ast" | jq -j \
+    --arg expansion "$EXPANSION" \
+    --argjson wrappers "$(to_json_array "${WRAPPERS[@]}")" \
+    --argjson writers "$(to_json_array "${WRITERS[@]}")" \
+    --argjson git_writers "$(to_json_array "${GIT_PATH_WRITERS[@]}")" \
+    --argjson gh_writers "$(to_json_array "${GH_WRITE_ARGS[@]}")" \
+    --arg gh_option_re "$GH_WRITE_OPTION_RE" \
+    --argjson redirects "$(to_json_array "${WRITE_REDIRECTS[@]}")" \
+    --argjson cd_commands "$(to_json_array "${CD_COMMANDS[@]}")" '
+  def part:
+    if .Type == "Lit" then
+      {t: (.Value | gsub("\\\\(?<c>.)"; .c)), g: (.Value | test("[*?\\[]")), b: (.Value | test("[{]"))}
+    elif .Type == "SglQuoted" and ((.Dollar // false) | not) then {t: .Value, g: false, b: false}
+    elif .Type == "SglQuoted" then {t: .Value, g: false, b: true}
+    elif .Type == "DblQuoted" then {t: ((.Parts // []) | map(part | .t) | join("")), g: false, b: false}
+    else {t: $expansion, g: false, b: false}
+    end;
+  def word: (.Parts // []) | map(part) | {t: (map(.t) | join("")), g: any(.[]; .g), b: any(.[]; .b)};
+  def basename: split("/") | last // "";
+  def call_targets:
+    (.[0].t | basename) as $first
+    | (if ($wrappers | index($first)) != null then 1 else 0 end) as $i
+    | (.[$i].t // "" | basename) as $name
+    | .[($i + 1):] as $rest
+    | if ($writers | index($name)) != null then $rest[]
+      elif $name == "git" and any($rest[]; .t as $arg | ($git_writers | index($arg) != null) or ($arg | startswith("--output"))) then $rest[]
+      elif $name == "gh" and any($rest[]; .t as $arg | ($gh_writers | index($arg) != null) or ($arg | test($gh_option_re))) then $rest[]
+      else empty
+      end;
+  def calls: .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) | [.Args[] | word];
+  def cd_dirs:
+    select((.[0].t | basename) as $name | $cd_commands | index($name) != null)
+    | .[1:][];
+  [
+    (calls | call_targets),
+    (.. | objects | select(.Redirs? != null) | .Redirs[] | select(.Op as $op | $redirects | index($op) != null) | .Word | word),
+    (.. | objects | select(.Redirs? != null) | .Redirs[] | select(.Op == ">&") | .Word | word | select(.t | test("^([0-9]+|-)$") | not))
+  ] as $writes
+  | if ($writes | length) == 0 then empty
+    else
+      ([calls | cd_dirs] | .[] | (if .b then "B" elif .g then "C" else "D" end) + ":" + .t + "\u0000"),
+      ($writes[] | (if .b then "B" elif .g then "G" else "W" end) + ":" + .t + "\u0000")
+    end
+'
+  printf 'END:%s\0' "$?"
+)
+
+[ "${#targets[@]}" -gt 0 ] && [ "${targets[-1]}" = "END:0" ] || block 'command structure could not be analysed - failing closed'
+unset 'targets[-1]'
+[ "${#targets[@]}" -eq 0 ] && exit 0
+
+# reject-obfuscated-commands may allow a rewritten command (curly quotes turned
+# into ASCII ones via updatedInput) while this hook judged the original, so
+# once a write target is present any non-ASCII byte fails closed.
+NON_PRINTABLE_RE=$'[^ -~\t\n\r]'
+if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+  block 'command contains non-ASCII or non-printable bytes and writes to a file - rewrite it in plain ASCII'
+fi
+
+for entry in "${targets[@]}"; do
+  check_target "${entry%%:*}" "${entry#?:}"
+done
+resolve_queued_paths
+
+exit 0
