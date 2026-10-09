@@ -180,7 +180,7 @@ Standalone scripts maintained in this repo (`containers/base/development-full/sc
 
 - `pre-commit-check`: runs the active `pre-commit` hook chain with `--all-files` against the current checkout. See [pre-commit-check](../../../docs/development/scripts/pre-commit-check.md).
 - `querydb`: runs `sqlcmd` with the connection settings from `.database` files. See [querydb](../../../docs/development/scripts/querydb.md).
-- `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board or creating an issue. See [cfwf](../../../docs/development/scripts/cfwf.md).
+- `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board or creating an issue, and checks every body, title and label it posts for leaks (tokens, host paths, private repository names) first. See [cfwf](../../../docs/development/scripts/cfwf.md).
 
 Every name is registered on `claude-hooks/command-allowlist` and `claude-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
 
@@ -296,7 +296,7 @@ After the sanity check passes, the upstream acceptance test suite (`/opt/pre-com
 1. `/opt/pre-commit` is copied to `/tmp/pre-commit-test` and its ownership is set to developer:developer.
 2. `/tmp/pre-commit-test/.env` is removed so the orchestrator's network-dependent freshness check is skipped (non-freshness tests still run).
 3. `su developer -c /tmp/pre-commit-test/acceptance-test` is executed.
-4. The temporary copy is removed.
+4. The temporary copy is removed, and the upstream `install`, `install-deps-arch` and `install-deps-debian` scripts and their `lib/` helpers are pruned from `/opt/pre-commit`. The suite's own tests need them, but the image does not use them (PATH is wired directly via `ENV`).
 
 The build fails if the acceptance suite exits non-zero.
 
