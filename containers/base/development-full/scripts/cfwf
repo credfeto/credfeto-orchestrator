@@ -1007,7 +1007,6 @@ check_repository_references() {
     [ -n "${references}" ] || return 0
     references=$(sort -t$'\t' -k1,1n -s <<< "${references}") || die "could not scan the ${subject}"
     while IFS=$'\t' read -r line reference; do
-        [ -n "${reference}" ] || continue
         owner="${reference%%/*}"
         [ "${reference,,}" != "${target,,}" ] || continue
         [[ "${GITHUB_RESERVED_PATHS}" != *" ${owner,,} "* ]] || continue
