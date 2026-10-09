@@ -386,12 +386,14 @@ Exactly one of --pr, --sha and --branch. --json, --jq, --template, --watch and -
 options: the output has one fixed format.
 
 The head is resolved first, so a check on an older head (before a force-push) is never counted.
-The check runs and commit statuses of that commit are read: the newest run of a name in each check
-suite from each app is judged, and a name fails when any of those, or a commit status of that name,
-failed. The required checks of the branch are read from its branch protection and its rulesets
-(one pinned to an app is satisfied only by a run from that app, though a failed commit status of
-its name still fails it); read access to the repository is enough. Without
---all only the required checks are judged, or every check when the branch requires none.
+The check runs and commit statuses of that commit are read: the newest run of a name from each app
+is judged, whichever check suite it is in, so a run cancelled or failed in an older suite (before a
+PR was marked ready, say) no longer counts once a newer run of that name exists, and a name fails
+when any of those, or a commit status of that name, failed. The required checks of the branch are
+read from its branch protection and its rulesets (one pinned to an app is satisfied only by a run
+from that app, though a failed commit status of its name still fails it); read access to the
+repository is enough. Without --all only the required checks are judged, or every check when the
+branch requires none.
 
 Each check is judged as:
   pass     success, skipped or neutral (a status: success)
@@ -455,7 +457,11 @@ assign_option() {
     local flag="$1" value="$2"
     case "${flag}" in
         --repo)
+            # The value goes in REST paths (repos/<owner>/<repo>/...), where an owner or repository
+            # of . or .. would be read as a path segment and reach another endpoint.
             validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}" "it must be <owner>/<repo>"
+            [[ "/${value}/" != *"/./"* && "/${value}/" != *"/../"* ]] \
+                || usage_error "invalid value for ${flag}: neither the owner nor the repository can be . or .."
             REPO="${value}"
             ;;
         --pr)
@@ -820,7 +826,8 @@ validate_visible_text() {
         || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
 }
 
-# Refuses (exit 2) the flag $2 when the variable $1 it sets is already set: $3, when given, says why.
+# Refuses (exit 2) the flag $2 when the variable $1 it sets is already set: $3, when given, says
+# why.
 assign_once() {
     [ -z "${!1}" ] || usage_error "$2 can only be given once${3:+: $3}"
 }
@@ -1279,8 +1286,8 @@ readonly BRANCH_FORBIDDEN_PATTERN='[[:cntrl:][:space:]~^:?*\[]'
 
 # Succeeds when $1 is a branch name git allows (git check-ref-format --branch): none of the bytes
 # above, no leading -, no leading, trailing or doubled /, no .., no @{, not @ alone, no trailing .,
-# and no component that starts with . or ends with .lock. Any other byte (+, @, %, a non-ASCII letter) is allowed
-# and is percent-encoded by branch_path when the name goes in an API path.
+# and no component that starts with . or ends with .lock. Any other byte (+, @, %, a non-ASCII
+# letter) is allowed and is percent-encoded by branch_path when the name goes in an API path.
 valid_branch_name() {
     local name="$1"
     local LC_ALL=C
@@ -1350,10 +1357,10 @@ require_one_checks_target() {
 }
 
 # Runs gh api on the endpoint $2 with the jq filter $3 (any further arguments are extra gh options)
-# through gh_capture, so its output is in GH_OUTPUT. Returns 1 when GitHub answers 404, or 422 "No commit found for
-# SHA", leaving the caller to say
-# what that means, and dies with $1 and gh's error on any other failure, so a transport error (a
-# proxy 502, a rate limit, no access) is never read as a result.
+# through gh_capture, so its output is in GH_OUTPUT. Returns 1 when GitHub answers 404, or 422 "No
+# commit found for SHA", leaving the caller to say what that means, and dies with $1 and gh's error
+# on any other failure, so a transport error (a proxy 502, a rate limit, no access) is never read as
+# a result.
 api_read() {
     local failure="$1" endpoint="$2" filter="$3"
     shift 3
@@ -1371,25 +1378,30 @@ readonly CHECK_NAME_FILTER='gsub("[[:cntrl:]]"; " ")'
 # A tab would not do: read collapses consecutive tabs, so an empty field would shift the rest.
 readonly ROW_SEPARATOR=$'\x1f'
 # The app a required check must come from, in branch protection and in a ruleset: empty for any
-# source, which GitHub shows as a null (or -1) app_id in branch protection and leaves out of a ruleset.
+# source, which GitHub shows as a null (or -1) app_id in branch protection and leaves out of a
+# ruleset.
 readonly PROTECTION_APP_FILTER='(if (.app_id // -1) == -1 then "" else (.app_id | tostring) end)'
 readonly RULESET_APP_FILTER='(if (.integration_id // -1) == -1 then "" else (.integration_id | tostring) end)'
 HEAD_SHA=""
 RULES_BRANCH=""
 BRANCH_READ=""
 BRANCH_TIP=""
+BRANCH_PATH=""
 PROTECTION_ROWS=""
 
 # Reads the branch $2 of the repository $1 once per run, so --branch, whose tip and protection both
-# come from it, makes one call and sees one state: sets BRANCH_TIP to its tip and PROTECTION_ROWS to
-# the checks its classic branch protection requires, one row (name, app id) each. checks lists each
-# with its app; contexts, which GitHub keeps for older clients, repeats those names, so a name in
-# contexts is taken as needing no particular app only when checks does not have it. A failed read dies with $3 and gh's error, and
-# a branch that is not there dies with $4.
+# come from it, makes one call and sees one state: sets BRANCH_PATH to the branch as it goes in an
+# API path (branch_path, worked out once and reused by read_required_checks), BRANCH_TIP to its tip
+# and PROTECTION_ROWS to the checks its classic branch protection requires, one row (name, app id)
+# each. checks lists each with its app; contexts, which GitHub keeps for older clients, repeats
+# those names, so a name in contexts is taken as needing no particular app only when checks does
+# not have it. A failed read dies with $3 and gh's error, and a branch that is not there dies with
+# $4.
 read_branch() {
     local repo="$1" branch="$2" failure="$3" missing="$4"
     [ "${BRANCH_READ}" != "${repo}${ROW_SEPARATOR}${branch}" ] || return 0
-    api_read "${failure}" "repos/${repo}/branches/$(branch_path "${branch}")" \
+    BRANCH_PATH="$(branch_path "${branch}")"
+    api_read "${failure}" "repos/${repo}/branches/${BRANCH_PATH}" \
         ".commit.sha, (.protection.required_status_checks | select(.enforcement_level != \"off\") | (.checks // []) as \$checks
             | ((\$checks[] | [(.context | ${CHECK_NAME_FILTER}), ${PROTECTION_APP_FILTER}]),
                (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [(. | ${CHECK_NAME_FILTER}), \"\"]))
@@ -1423,25 +1435,27 @@ resolve_checks_head() {
     valid_branch_name "${RULES_BRANCH}" || die "gh returned an unexpected branch whose required checks apply for ${REPO}"
 }
 
-# Fills REQUIRED_CHECKS, keyed by check name and the app id it must come from (empty for any source),
-# joined by ROW_SEPARATOR, with the checks the branch $2 of the repository $1
-# requires: those of its classic branch protection and those of every ruleset that applies to it,
-# without duplicates. The protection is read from the branch itself (read_branch, so a branch
-# resolve_checks_head has already read is not read again), which needs only read access (its
-# protection endpoint needs admin rights), and an enforcement level of off requires nothing whatever
-# it lists; a branch that is not there is a runtime failure, while a 404 from the rulesets means
-# none apply.
+# Fills REQUIRED_CHECKS, keyed by check name and the app id it must come from (empty for any
+# source), joined by ROW_SEPARATOR, with the checks the branch $2 of the repository $1 requires:
+# those of its classic branch protection and those of every ruleset that applies to it, without
+# duplicates. The protection is read from the branch itself (read_branch, so a branch
+# resolve_checks_head has already read is not read again, and the rulesets are read at the
+# BRANCH_PATH it worked out), which needs only read access (its protection endpoint needs admin
+# rights), and an enforcement level of off requires nothing whatever it lists. A branch that is not
+# there is a runtime failure, and so is any failed read of the rulesets, a 404 included: GitHub
+# answers a branch no ruleset applies to (whether or not it exists) with an empty list, so a 404
+# means the rules could not be read, and taking it as none would judge too few checks.
 declare -gA REQUIRED_CHECKS=()
 read_required_checks() {
     local repo="$1" branch="$2" names name app
     read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
         "the branch whose required checks apply was not found in ${repo}"
     names="${PROTECTION_ROWS}"
-    if api_read "could not read the rulesets of ${repo}" "repos/${repo}/rules/branches/$(branch_path "${branch}")?per_page=${API_PAGE_SIZE}" \
+    api_read "could not read the rulesets of ${repo}" "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" \
         ".[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
-            | [(.context | ${CHECK_NAME_FILTER}), ${RULESET_APP_FILTER}] | join(\"\\u001f\")" --paginate; then
-        names+=$'\n'"${GH_OUTPUT}"
-    fi
+            | [(.context | ${CHECK_NAME_FILTER}), ${RULESET_APP_FILTER}] | join(\"\\u001f\")" --paginate \
+        || die "could not read the rulesets of ${repo}: $(gh_failure_text)"
+    names+=$'\n'"${GH_OUTPUT}"
     while IFS="${ROW_SEPARATOR}" read -r name app; do
         [ -n "${name}" ] || continue
         [[ "${app}" =~ ^[0-9]*$ ]] || die "gh returned an unexpected app for a required check of ${repo}"
@@ -1469,23 +1483,28 @@ commit_status_verdict() {
     esac
 }
 
-# Records the rows $2 (name, conclusion or state, id, completed_at, app id, check suite id) with the
-# verdict function $1, keeping the newest result (highest id) of each group: the runs of one name
-# from one app in one check suite. A re-run of a workflow adds its runs to the same check suite, so
-# it replaces the run before it whatever order GitHub lists them in, while a run of the same name in
-# another workflow or from another app stays a result of its own and is still judged. A commit status
-# has no app id or check suite; its group is the "status" suite, so it never replaces a check run
-# (GitHub requires both to pass when a check run and a status share a name), and the combined status
-# already has one per name. NAME_GROUPS indexes the groups of each name, one per line (a name holds
-# no newline once CHECK_NAME_FILTER has run), so judging a name reads only its own groups.
+# Records the rows $2 (name, conclusion or state, id, completed_at, app id, kind) with the verdict
+# function $1, keeping the newest result (highest id) of each group: the runs of one name from one
+# app, across every check suite on the commit, as GitHub's merge gate is seen to take only the
+# latest run of a required name. So a re-run, or a new run of the workflow in a new check suite (a
+# PR marked ready, reopened or relabelled, which with cancel-in-progress leaves the older run
+# cancelled), replaces the run before it whatever order GitHub lists them in, while a run of the
+# same name from another app stays a result of its own and is still judged. Newest is creation order
+# (the id): GitHub does not document how it orders runs, and creation order agrees with it when a
+# newer run supersedes an older one, while a newer run that has not finished keeps the name pending.
+# The kind is "run" for a check run and "status" for a commit status, which has no app id, so a
+# status never replaces a check run (GitHub requires both to pass when a check run and a status
+# share a name), and the combined status already has one per name. NAME_GROUPS indexes the groups of
+# each name, one per line (a name holds no newline once CHECK_NAME_FILTER has run), so judging a
+# name reads only its own groups.
 declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() NAME_GROUPS=()
 VERDICT=""
 record_check_rows() {
-    local verdict_of="$1" rows="$2" name result id completed_at app suite group
-    while IFS="${ROW_SEPARATOR}" read -r name result id completed_at app suite; do
+    local verdict_of="$1" rows="$2" name result id completed_at app kind group
+    while IFS="${ROW_SEPARATOR}" read -r name result id completed_at app kind; do
         [ -n "${name}" ] || continue
         [[ "${id}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected id for a check on ${HEAD_SHA}"
-        group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${suite}"
+        group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${kind}"
         if [ -z "${GROUP_RUN_ID["${group}"]:-}" ]; then
             NAME_GROUPS["${name}"]+="${group}"$'\n'
         elif [ "${id}" -le "${GROUP_RUN_ID["${group}"]}" ]; then
@@ -1504,7 +1523,7 @@ record_check_rows() {
 read_check_results() {
     local runs
     api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}" \
-        ".check_runs[]? | [(.name | ${CHECK_NAME_FILTER}), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), (.check_suite.id // \"\" | tostring)] | join(\"\\u001f\")" --paginate \
+        ".check_runs[]? | [(.name | ${CHECK_NAME_FILTER}), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), \"run\"] | join(\"\\u001f\")" --paginate \
         || die "the commit ${HEAD_SHA} was not found in ${REPO}"
     runs="${GH_OUTPUT}"
     api_read "could not read the commit statuses of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=${API_PAGE_SIZE}" \

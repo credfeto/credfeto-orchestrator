@@ -1032,7 +1032,7 @@ assert_nothing_created() {
 @test "issue create rejects a --repo that is not owner/repo, without calling gh" {
     prepare_issue_create
     local bad
-    for bad in "no-slash" "a/b/c" "a b/c" 'a/b;rm' ""; do
+    for bad in "no-slash" "a/b/c" "a b/c" 'a/b;rm' "" "../.." "./x" "x/." "x/.." "../repo"; do
         run "${SCRIPT}" issue create --repo "${bad}" --priority High --title T --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 2 ] || { echo "--repo '${bad}' was accepted" >&2; return 1; }
         [[ "${output}" == *"invalid value for --repo"* ]]
@@ -2305,11 +2305,18 @@ write_rulesets() {
         | write_api "repos/${REPO}/rules/branches/${branch}"
 }
 
+# Writes the rules that apply to the branch $1 as GitHub answers a branch no ruleset applies to:
+# an empty list, never a 404.
+write_no_rulesets() {
+    printf '[]\n' | write_api "repos/${REPO}/rules/branches/$1"
+}
+
 # PR 42, whose head is HEAD_SHA and whose base, main, requires build; build passed and nothing else
 # ran. Each test changes what it needs.
 prepare_pr_checks() {
     jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "main"}}' | write_api "repos/${REPO}/pulls/42"
     write_protection main build
+    write_no_rulesets main
     write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
     write_statuses "${HEAD_SHA}"
 }
@@ -2330,6 +2337,23 @@ run_pr_checks() {
         [[ "${output}" == *"never waits or polls"* ]]
     done
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr checks refuses an owner or repository of . or .., which would change the API path, before any gh call" {
+    local bad
+    for bad in "../.." "./x" "x/." "x/.." "../repo" "owner/.."; do
+        run --separate-stderr "${SCRIPT}" pr checks --repo "${bad}" --pr 42
+        [ "${status}" -eq 2 ] || { echo "--repo '${bad}' was accepted (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"invalid value for --repo: neither the owner nor the repository can be . or .."* ]]
+        [[ "${stderr}" != *"${bad}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    # A name that only starts with a dot, such as .github, is a real repository and is still taken.
+    run --separate-stderr "${SCRIPT}" pr checks --repo owner/.github --pr 42
+    [ "${status}" -eq 1 ]
+    [ "$(gh_call_count "api repos/owner/.github/pulls/42 ")" -eq 1 ]
 }
 
 @test "pr checks usage errors exit 2 before any gh call" {
@@ -2605,7 +2629,7 @@ run_pr_checks() {
     [[ "${output}" == *"passed=3 failed=0 pending=0"* ]]
 
     write_branch main
-    rm "$(api_fixture "repos/${REPO}/rules/branches/main").json"
+    write_no_rulesets main
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
     [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b c d summary" ]
@@ -2619,8 +2643,27 @@ run_pr_checks() {
     [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b c d summary" ]
 }
 
+@test "pr checks treats a 404 from the rulesets as a failed read (exit 1), never as no rulesets" {
+    # GitHub answers a branch no ruleset applies to with an empty list, so a 404 means the rules
+    # could not be read; taking it as none would judge only the checks that happen to be present.
+    prepare_pr_checks
+    write_branch main
+    rm "$(api_fixture "repos/${REPO}/rules/branches/main").json"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Not Found (HTTP 404)" ]
+
+    fail_api "repos/${REPO}/rules/branches/main" "gh: Resource not accessible by integration (HTTP 403)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Resource not accessible by integration (HTTP 403)" ]
+}
+
 @test "pr checks --branch judges the branch tip against that branch's required checks" {
     write_protection release/v2 build
+    write_no_rulesets release/v2
     write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
     write_statuses "${HEAD_SHA}"
     run_pr_checks --branch release/v2
@@ -2660,6 +2703,7 @@ run_pr_checks() {
     # A non-ASCII letter is encoded byte by byte, and % itself is encoded, so it can never be read
     # as an escape.
     write_protection "feat/caf%C3%A9%40x%25y" build
+    write_no_rulesets "feat/caf%C3%A9%40x%25y"
     run_pr_checks --branch "$(printf 'feat/caf\xc3\xa9@x%%y')"
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
@@ -2675,6 +2719,7 @@ run_pr_checks() {
 @test "pr checks --sha judges that commit, given in any case, against the default branch's required checks" {
     jq -n '{default_branch: "trunk"}' | write_api "repos/${REPO}"
     write_protection trunk build
+    write_no_rulesets trunk
     write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
     write_statuses "${HEAD_SHA}"
     run_pr_checks --sha "${HEAD_SHA^^}"
@@ -2707,32 +2752,45 @@ run_pr_checks() {
     [ "${status}" -eq 4 ]
 }
 
-@test "pr checks fails a name when the newest run of it in any check suite or from any app failed, whichever ran last" {
+@test "pr checks judges the newest run of a name from each app across check suites, and fails a name when that of any app failed" {
     prepare_pr_checks
-    # Two workflows (two check suites) of the same app both have a build job: the one that failed
-    # still counts after the other succeeds.
-    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build success 101 "" "" 15368 8)"
+    # The PR was marked ready, which started a new check suite and, with cancel-in-progress, left the
+    # draft's run cancelled in the old one: the newer success in the later suite clears it.
+    write_check_runs "${HEAD_SHA}" "$(check_run build cancelled 100 "" "" 15368 7)" "$(check_run build success 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary"$'\t'"passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+
+    # A newer success clears an older failure the same way, whatever order GitHub lists them in.
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build failure 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'* ]]
+
+    # A newer failure in a later suite fails the name after an older success.
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 100 "" "" 15368 7)" "$(check_run build failure 101 "" "" 15368 8)"
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'"summary"$'\t'"passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary"$'\t'"passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
 
-    # The same for two apps reporting build in suites of their own.
-    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 57789 9)" "$(check_run build success 101 "" "" 15368 8)"
-    run_pr_checks --pr 42
-    [ "${status}" -eq 3 ]
-
-    # A run still going in another suite keeps the name pending, and a failure wins over it.
+    # A newer run still going in a later suite keeps the name pending.
     write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build "" 102 "" "" 15368 9)"
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
     [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'"102"$'\n'* ]]
 
-    # A re-run adds its runs to the same suite, so there the newest still replaces the failure.
-    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build success 103 "" "" 15368 7)" \
-        "$(check_run build success 101 "" "" 15368 8)"
+    # A re-run adds its runs to the same suite, and the newest replaces the failure there too.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build success 103 "" "" 15368 7)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
     [[ "${output}" == "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"103"$'\n'* ]]
+
+    # Two apps reporting build are each judged on their own newest run, so a failure from one still
+    # fails the name after the other, newer, succeeds.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 57789 9)" "$(check_run build success 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'* ]]
 }
 
 @test "pr checks judges commit statuses, and a check run and a status of the same name must both pass" {
@@ -2822,6 +2880,7 @@ run_pr_checks() {
     rm -f "${GH_FIXTURES}"/api-*
     jq -n '{default_branch: "main"}' | write_api "repos/${REPO}"
     write_protection main build
+    write_no_rulesets main
     fail_api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" "gh: No commit found for SHA: ${HEAD_SHA} (HTTP 422)"
     run_pr_checks --sha "${HEAD_SHA}"
     [ "${status}" -eq 1 ]
