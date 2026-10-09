@@ -232,6 +232,9 @@ RUN chown root:root /home/developer/.claude/hooks \
 # core.hooksPath in /etc/gitconfig). credfeto/credfeto-global-pre-commit is
 # credfeto-owned, so this always tracks live main HEAD — no pinned-commit
 # assertion, unlike the third-party clones above.
+# install, install-deps-arch, install-deps-debian and lib/ are kept here and
+# only pruned once the upstream acceptance suite below has passed, because that
+# suite's own tests source lib/common.sh and exercise the install scripts.
 # hadolint ignore=DL3059
 RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
     git clone --depth 1 "$PRECOMMIT_UPSTREAM" /opt/pre-commit \
@@ -242,10 +245,6 @@ RUN : "${CREDFETO_PRECOMMIT_CACHE_BUST}"; \
               /opt/pre-commit/.ai-instructions \
               /opt/pre-commit/ai \
               /opt/pre-commit/CLAUDE.md \
-              /opt/pre-commit/install \
-              /opt/pre-commit/install-deps-arch \
-              /opt/pre-commit/install-deps-debian \
-              /opt/pre-commit/lib \
     && printf 'SHA=%s\n' "$HEAD_SHA" > /opt/pre-commit/.env \
     && mkdir -p /opt/git-global-hooks \
     && printf '#!/bin/bash\nexec /opt/pre-commit/src/hooks/pre-commit "$@"\n' \
@@ -447,13 +446,20 @@ RUN set -e; \
 # Copy to /tmp and run as developer (tools are installed in developer's
 # per-user profile); strip .env from the copy so the orchestrator's
 # network-dependent freshness check is silently skipped for non-freshness tests.
+# Once the suite passes, prune the upstream install scripts and their lib/
+# helpers: the suite needs them, but they describe a ~/.local/bin symlink setup
+# this image does not use (PATH is wired directly via ENV).
 # hadolint ignore=DL3059
 RUN set -e; \
     cp -a /opt/pre-commit /tmp/pre-commit-test; \
     rm -f /tmp/pre-commit-test/.env; \
     chown -R developer:developer /tmp/pre-commit-test; \
     su developer -c /tmp/pre-commit-test/acceptance-test; \
-    rm -rf /tmp/pre-commit-test
+    rm -rf /tmp/pre-commit-test \
+           /opt/pre-commit/install \
+           /opt/pre-commit/install-deps-arch \
+           /opt/pre-commit/install-deps-debian \
+           /opt/pre-commit/lib
 
 # ---- /opt/pre-commit setup health-check (fail build if incomplete) ----------
 # check-setup validates the bundled pre-commit config (`pre-commit validate-config`)
