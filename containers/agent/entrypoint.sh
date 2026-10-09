@@ -359,10 +359,12 @@ seed_orchestrator_cache
 # have accepted the interactive trust prompt, and --print mode has no way to show it.
 # Without this, a repo checkout that legitimately commits its own project-level
 # .claude/settings.json would have it silently ignored instead of honoured. This is
-# unrelated to the image's own baked-in user-level /home/developer/.claude/settings.json
-# (containers/base/development-full/claude-settings.json) - that file is not project-level
-# and is not gated by workspace trust at all; its permissions.allow is enforced by
-# --permission-mode dontAsk (#1331) regardless of this pre-acceptance.
+# unrelated to the image's own baked-in /etc/claude-code/managed-settings.json
+# (containers/base/development-full/claude-managed-settings.json) - that file is not
+# project-level and is not gated by workspace trust at all; its permissions.allow is
+# enforced by --permission-mode dontAsk (#1331) regardless of this pre-acceptance, and its
+# allowManaged*Only locks mean a trusted project file cannot add allow rules, hooks or MCP
+# servers of its own.
 if [ ! -f "${HOME}/.claude.json" ]; then
     printf '{"firstStartTime":"%s","projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "${WORKSPACE_REPO_DIR:-/workspace/repo}" \
