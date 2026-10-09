@@ -389,7 +389,8 @@ The head is resolved first, so a check on an older head (before a force-push) is
 The check runs and commit statuses of that commit are read: the newest run of a name in each check
 suite from each app is judged, and a name fails when any of those, or a commit status of that name,
 failed. The required checks of the branch are read from its branch protection and its rulesets
-(one pinned to an app is satisfied only by a run from that app); read access to the repository is enough. Without
+(one pinned to an app is satisfied only by a run from that app, though a failed commit status of
+its name still fails it); read access to the repository is enough. Without
 --all only the required checks are judged, or every check when the branch requires none.
 
 Each check is judged as:
@@ -402,6 +403,8 @@ A run that has a conclusion counts as finished, whatever its status says.
 Output, tab separated, sorted by name, then a summary:
   <name>  <pass|fail|pending>  <completed_at>  <run_id>
   summary  passed=<a> failed=<b> pending=<c> head=<sha>
+A name required more than once (from two apps, or from an app and any source) is printed once for
+each, as "<name> (app <id>)" where an app is required.
 completed_at and run_id are empty for a result not finished or not found; run_id is the commit
 status id for a status. Nothing is printed unless every read succeeded.
 
@@ -605,8 +608,9 @@ resolve_status() {
 
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
-# Every read cfwf makes through gh goes through here; each caller uses GH_OUTPUT and GH_ERROR
-# before its next gh call.
+# The board read, the visibility lookup and every pr checks read go through here (resolve_project,
+# the field list, the board listing and the closing-issue labels still call gh directly); each
+# caller uses GH_OUTPUT and GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -1346,7 +1350,8 @@ require_one_checks_target() {
 }
 
 # Runs gh api on the endpoint $2 with the jq filter $3 (any further arguments are extra gh options)
-# through gh_capture, so its output is in GH_OUTPUT. Returns 1 when GitHub answers 404, leaving the caller to say
+# through gh_capture, so its output is in GH_OUTPUT. Returns 1 when GitHub answers 404, or 422 "No commit found for
+# SHA", leaving the caller to say
 # what that means, and dies with $1 and gh's error on any other failure, so a transport error (a
 # proxy 502, a rate limit, no access) is never read as a result.
 api_read() {
@@ -1354,6 +1359,8 @@ api_read() {
     shift 3
     gh_capture api "${endpoint}" "$@" --jq "${filter}" && return 0
     [[ "${GH_ERROR}" != *"HTTP 404"* ]] || return 1
+    # A commit endpoint answers a commit that is not in the repository with 422, not 404.
+    [[ "${GH_ERROR}" != *"No commit found for SHA"*"HTTP 422"* ]] || return 1
     die "${failure}: $(gh_failure_text)"
 }
 
@@ -1469,8 +1476,9 @@ commit_status_verdict() {
 # another workflow or from another app stays a result of its own and is still judged. A commit status
 # has no app id or check suite; its group is the "status" suite, so it never replaces a check run
 # (GitHub requires both to pass when a check run and a status share a name), and the combined status
-# already has one per name.
-declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() CHECK_NAMES=()
+# already has one per name. NAME_GROUPS indexes the groups of each name, one per line (a name holds
+# no newline once CHECK_NAME_FILTER has run), so judging a name reads only its own groups.
+declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() NAME_GROUPS=()
 VERDICT=""
 record_check_rows() {
     local verdict_of="$1" rows="$2" name result id completed_at app suite group
@@ -1478,12 +1486,15 @@ record_check_rows() {
         [ -n "${name}" ] || continue
         [[ "${id}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected id for a check on ${HEAD_SHA}"
         group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${suite}"
-        [ -z "${GROUP_RUN_ID["${group}"]:-}" ] || [ "${id}" -gt "${GROUP_RUN_ID["${group}"]}" ] || continue
+        if [ -z "${GROUP_RUN_ID["${group}"]:-}" ]; then
+            NAME_GROUPS["${name}"]+="${group}"$'\n'
+        elif [ "${id}" -le "${GROUP_RUN_ID["${group}"]}" ]; then
+            continue
+        fi
         "${verdict_of}" "${result}"
         GROUP_VERDICT["${group}"]="${VERDICT}"
         GROUP_RUN_ID["${group}"]="${id}"
         GROUP_COMPLETED_AT["${group}"]="${completed_at}"
-        CHECK_NAMES["${name}"]=1
     done <<< "${rows}"
 }
 
@@ -1505,19 +1516,24 @@ read_check_results() {
 
 # Sets VERDICT, RESULT_ID and RESULT_AT for the check named $1, from the app $2 (empty for any
 # source): fail when the newest result of any of its groups failed, otherwise pending when any is
-# pending, otherwise pass, and pending when it has no result at all. RESULT_ID and RESULT_AT are
-# those of the result that decided it (the newest, among results with the same verdict).
+# pending, otherwise pass, and pending when it has no result at all. A check pinned to an app takes
+# only that app's runs, and a commit status of its name only when the status failed: a status never
+# satisfies it, but a failure is never hidden. RESULT_ID and RESULT_AT are those of the result that
+# decided it (the newest, among results with the same verdict).
 RESULT_ID=""
 RESULT_AT=""
 judge_check() {
     local name="$1" app="$2" group rest rank best=-1
+    local -a groups=()
     VERDICT=pending
     RESULT_ID=""
     RESULT_AT=""
-    for group in "${!GROUP_VERDICT[@]}"; do
-        [ "${group%%"${ROW_SEPARATOR}"*}" = "${name}" ] || continue
+    [ -z "${NAME_GROUPS["${name}"]:-}" ] || mapfile -t groups <<< "${NAME_GROUPS["${name}"]%$'\n'}"
+    for group in "${groups[@]}"; do
         rest="${group#*"${ROW_SEPARATOR}"}"
-        [ -z "${app}" ] || [ "${rest%%"${ROW_SEPARATOR}"*}" = "${app}" ] || continue
+        if [ -n "${app}" ] && [ "${rest%%"${ROW_SEPARATOR}"*}" != "${app}" ]; then
+            [ "${rest#*"${ROW_SEPARATOR}"}" = status ] && [ "${GROUP_VERDICT["${group}"]}" = fail ] || continue
+        fi
         case "${GROUP_VERDICT["${group}"]}" in
             pass) rank=0 ;;
             pending) rank=1 ;;
@@ -1537,30 +1553,35 @@ judge_check() {
 # Prints a line for each judged check, sorted by name, and the summary, then exits with the
 # verdict. Every read has already succeeded, so a failed read never leaves a partial report. A
 # judged check is a name and the app it must come from (empty for any source), so a name required
-# from two apps is judged, and printed, once for each.
+# from two apps is judged, and printed, once for each; each of those lines pinned to an app shows it
+# as "<name> (app <id>)", so no two lines carry the same name.
 report_checks() {
-    local check name passed=0 failed=0 pending=0
+    local check name app label passed=0 failed=0 pending=0
     local -a lines=()
-    local -A judged=() required_names=()
+    local -A judged=() required_count=()
     for check in "${!REQUIRED_CHECKS[@]}"; do
         judged["${check}"]=1
-        required_names["${check%%"${ROW_SEPARATOR}"*}"]=1
+        name="${check%%"${ROW_SEPARATOR}"*}"
+        required_count["${name}"]=$((${required_count["${name}"]:-0} + 1))
     done
     if [ -n "${ALL_CHECKS}" ] || [ "${#REQUIRED_CHECKS[@]}" -eq 0 ]; then
-        for name in "${!CHECK_NAMES[@]}"; do
-            [ -n "${required_names["${name}"]:-}" ] || judged["${name}${ROW_SEPARATOR}"]=1
+        for name in "${!NAME_GROUPS[@]}"; do
+            [ -n "${required_count["${name}"]:-}" ] || judged["${name}${ROW_SEPARATOR}"]=1
         done
     fi
 
     for check in "${!judged[@]}"; do
         name="${check%%"${ROW_SEPARATOR}"*}"
-        judge_check "${name}" "${check#*"${ROW_SEPARATOR}"}"
+        app="${check#*"${ROW_SEPARATOR}"}"
+        judge_check "${name}" "${app}"
         case "${VERDICT}" in
             pass) passed=$((passed + 1)) ;;
             fail) failed=$((failed + 1)) ;;
             *) pending=$((pending + 1)) ;;
         esac
-        lines+=("${name}"$'\t'"${VERDICT}"$'\t'"${RESULT_AT}"$'\t'"${RESULT_ID}")
+        label="${name}"
+        [ -z "${app}" ] || [ "${required_count["${name}"]:-0}" -le 1 ] || label+=" (app ${app})"
+        lines+=("${label}"$'\t'"${VERDICT}"$'\t'"${RESULT_AT}"$'\t'"${RESULT_ID}")
     done
 
     [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}" | LC_ALL=C sort

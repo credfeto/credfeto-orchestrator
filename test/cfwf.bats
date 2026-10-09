@@ -2510,6 +2510,21 @@ run_pr_checks() {
     write_statuses "${HEAD_SHA}" "$(commit_status build success 31)"
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
+    [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'$'\n'* ]]
+
+    # But a failed commit status of its name fails it, on its own or beside a pass from that app.
+    write_statuses "${HEAD_SHA}" "$(commit_status build failure 31)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"31"$'\n'* ]]
+    write_check_runs "${HEAD_SHA}" "$(check_run first success 10 "" "" 57789 3)" "$(check_run build success 12 "" "" 15368 5)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"31"$'\n'* ]]
+    write_statuses "${HEAD_SHA}" "$(commit_status build pending 31)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    write_statuses "${HEAD_SHA}" "$(commit_status build success 31)"
 
     write_check_runs "${HEAD_SHA}" "$(check_run first success 10 "" "" 57789 3)" "$(check_run build success 11 "" "" 57789 4)" \
         "$(check_run build success 12 "" "" 15368 5)"
@@ -2537,6 +2552,25 @@ run_pr_checks() {
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
     [[ "${output}" == "lint"$'\t'"pending"$'\t'$'\t'$'\n'* ]]
+}
+
+@test "pr checks shows the app of each line of a name required more than once, keeping four columns" {
+    prepare_pr_checks
+    write_protection main first build#15368 build#57789
+    write_check_runs "${HEAD_SHA}" "$(check_run first success 10)" "$(check_run build success 11 "" "" 15368 5)" \
+        "$(check_run build failure 12 "" "" 57789 6)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 57789)"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary"$'\t'"passed=2 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    # Required from an app and from any source: only the pinned line names its app.
+    write_branch main
+    write_rulesets main build build#15368
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11 "" "" 15368 5)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary"$'\t'"passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "$(awk -F '\t' 'NF != 4' <<< "${output}" | grep -vc '^summary')" -eq 0 ]
 }
 
 @test "pr checks judges every check when the branch requires none" {
@@ -2784,10 +2818,20 @@ run_pr_checks() {
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: the branch whose required checks apply was not found in ${REPO}" ]
 
-    prepare_pr_checks
-    rm "$(api_fixture "repos/${REPO}/commits/${HEAD_SHA}/check-runs").json"
-    run_pr_checks --pr 42
+    # GitHub answers a --sha that is not in the repository with 422, not 404.
+    rm -f "${GH_FIXTURES}"/api-*
+    jq -n '{default_branch: "main"}' | write_api "repos/${REPO}"
+    write_protection main build
+    fail_api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" "gh: No commit found for SHA: ${HEAD_SHA} (HTTP 422)"
+    run_pr_checks --sha "${HEAD_SHA}"
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: the commit ${HEAD_SHA} was not found in ${REPO}" ]
+
+    # Any other 422 is a failed read, not a missing commit.
+    fail_api "repos/${REPO}/commits/${HEAD_SHA}/check-runs" "gh: Validation Failed (HTTP 422)"
+    run_pr_checks --sha "${HEAD_SHA}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the check runs of ${HEAD_SHA}: gh: Validation Failed (HTTP 422)" ]
 }
