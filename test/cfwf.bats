@@ -33,7 +33,7 @@ setup() {
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
-        '  "label list") [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
+        '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
@@ -142,6 +142,12 @@ set_args() {
 
 gh_call_count() {
     grep -cF -- "$1" "${GH_LOG}" || true
+}
+
+# Succeeds when gh was called with exactly the arguments $1, where BODY stands for the --body-file
+# path: cfwf hands gh its private copy of the body, whose name mktemp chooses.
+issue_create_called_with() {
+    sed -E 's/ --body-file [^ ]+( |$)/ --body-file BODY\1/' "${GH_LOG}" | grep -qxF -- "$1"
 }
 
 gh_line_of() {
@@ -298,7 +304,7 @@ gh_line_of() {
     # shellcheck disable=SC2016  # literal characters: proving they are never interpreted
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status 'x") | .id # $(id)'
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"unknown status"* ]]
+    [[ "${output}" == *"unknown --status"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
 }
@@ -308,7 +314,7 @@ gh_line_of() {
         {id: "st_3", name: "Approved"}, {id: "x1", name: "Banana"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status banana
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"unknown status 'banana'"* ]]
+    [[ "${output}" == *"unknown --status (valid: "* && "${output}" != *banana* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
@@ -457,7 +463,7 @@ gh_line_of() {
     write_legacy_field_list
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Todo
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"unknown status 'Todo'"* ]]
+    [[ "${output}" == *"unknown --status (valid: "* && "${output}" != *Todo* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
 }
@@ -465,7 +471,7 @@ gh_line_of() {
 @test "--set lists the valid statuses when the name is unknown, and writes nothing" {
     run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Nonsense
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"unknown status 'Nonsense' (valid: Not Started, Planning, Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review, Complete)"* ]]
+    [[ "${output}" == *"unknown --status (valid: Not Started, Planning, Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review, Complete)"* ]]
     [ "$(gh_call_count "project item-add")" -eq 0 ]
 }
 
@@ -908,7 +914,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label -wip
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- -wip" "${GH_LOG}"
-    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label -wip" "${GH_LOG}"
+    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label -wip"
 }
 
 @test "issue create refuses --title given twice, like --priority and --body-file" {
@@ -1037,7 +1043,7 @@ assert_nothing_created() {
     create_args Critical
     run "${SCRIPT}" "${CREATE_ARGS[@]}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"unknown priority 'Critical' (expected Security, Urgent, High, Medium or Low)"* ]]
+    [[ "${output}" == *"unknown --priority (expected Security, Urgent, High, Medium or Low)"* && "${output}" != *Critical* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -1060,7 +1066,7 @@ assert_nothing_created() {
         create_args "${given}"
         run "${SCRIPT}" "${CREATE_ARGS[@]}"
         [ "${status}" -eq 0 ]
-        grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label ${canonical}" "${GH_LOG}"
+        issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label ${canonical}"
     done
 }
 
@@ -1092,7 +1098,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "a,b"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"invalid value for --label: a,b"* ]]
+    [[ "${output}" == *"invalid value for --label: it must not contain a comma or a control character"* && "${output}" != *"a,b"* ]]
 
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label $'a\nb'
     [ "${status}" -eq 2 ]
@@ -1104,6 +1110,34 @@ assert_nothing_created() {
     run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title $'a\tb' --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "a usage error names the option and the rule but never echoes the value, which could hold a token" {
+    prepare_issue_create
+    local secret="LEAKMARKER0123456789" flag
+    for flag in --title --label --body-file --repo; do
+        create_args
+        # The bad value comes first, so it is parsed before the same option given by create_args.
+        run --separate-stderr "${SCRIPT}" issue create "${flag}" "${secret}"$'\tx' "${CREATE_ARGS[@]:2}"
+        [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
+        [[ "${stderr}" == "cfwf: invalid value for ${flag}: it must "* ]]
+        [[ "${stderr}" != *"${secret}"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority "${secret}" --title T --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown --priority "* && "${stderr}" != *"${secret}"* ]]
+
+    for flag in --pr --status; do
+        run --separate-stderr "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Approved "${flag}" "${secret}"$'\tx'
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: invalid value for ${flag}: it must "* && "${stderr}" != *"${secret}"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run --separate-stderr "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status "${secret}"
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: unknown --status "* && "${stderr}" != *"${secret}"* ]]
 }
 
 @test "issue create rejects the options that belong to workflow-status, and unknown ones" {
@@ -1172,6 +1206,19 @@ assert_nothing_created() {
     assert_nothing_created
 }
 
+@test "issue create hands gh the private copy it checked, so a body file rewritten after the check is never posted" {
+    prepare_issue_create
+    cp "${TEST_TMP}/body.md" "${TEST_TMP}/checked.md"
+    printf '%s\n' "${TEST_TMP}/body.md" > "${GH_FIXTURES}/label-list.rewrite"
+    create_args
+    run "${SCRIPT}" "${CREATE_ARGS[@]}"
+    [ "${status}" -eq 0 ]
+    # The rewrite happened, between the check and the issue create, and gh still got the checked text.
+    [[ "$(cat "${TEST_TMP}/body.md")" == rewritten* ]]
+    cmp "${TEST_TMP}/checked.md" "${GH_FIXTURES}/issue-body.txt"
+    [ "$(grep -c -- "--body-file ${TEST_TMP}/body.md" "${GH_LOG}")" -eq 0 ]
+}
+
 @test "issue create hands the body file to gh unchanged" {
     prepare_issue_create
     create_args
@@ -1209,7 +1256,7 @@ assert_nothing_created() {
     [ "${output}" = "${NEW_ISSUE_URL}" ]
     [ -z "${stderr}" ]
 
-    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High" "${GH_LOG}"
+    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High"
     grep -qxF "project item-add 74 --owner credfeto --url ${NEW_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_1" "${GH_LOG}"
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
@@ -1250,7 +1297,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label cfwf --label CFWF
     [ "${status}" -eq 0 ]
-    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label cfwf" "${GH_LOG}"
+    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label cfwf"
     [ "$(gh_call_count "label create")" -eq 0 ]
 }
 
@@ -1261,7 +1308,7 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} --color ffa500 --description Work for an AI Agent -- AI-Work" "${GH_LOG}"
     grep -qxF "label create --repo ${REPO} --color ff0000 --description Do not work on this -- On Hold" "${GH_LOG}"
-    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label AI-Work --label On Hold" "${GH_LOG}"
+    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label AI-Work --label On Hold"
 }
 
 @test "issue create creates any other missing label with the colour gh picks, passing no colour or description" {
@@ -1270,7 +1317,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- brand new" "${GH_LOG}"
-    grep -qxF "issue create --repo ${REPO} --title A new issue --body-file ${TEST_TMP}/body.md --label High --label brand new" "${GH_LOG}"
+    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label brand new"
 }
 
 @test "issue create creates a missing priority label with its standard colour and description" {
@@ -1418,6 +1465,10 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
     touch "${GH_FIXTURES}/issue-create.fail"
     TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
     [ "${status}" -eq 1 ]
@@ -1485,6 +1536,7 @@ leak_tokens() {
         "disc""ordapp.com/api/webhooks/1/${tail}" "Discord.com/api/web""hooks/42/x" \
         "Authorization: Bear""er abc" "-H 'authorization: bear""er ${tail}'" "{\"Authorization\": \"Bear""er ${tail}\"}" \
         "AUTHORIZATION: BEAR""ER x" "Bear""er ${tail}${tail}" "(bear""er ${tail}${tail})" \
+        "Bear""er 0abcdefghijklmnopqrst" "Bear""er abcdefghijklmnopqrs9" "BEAR""ER abcdefghijklmnopqrstuvwxyz-7" \
         "GH_TO""KEN=${tail}" "export DB_PASS""WORD=${tail}" "MY_SEC""RET=${tail}" "(API_K""EY=${tail})" \
         "TO""KEN=${tail}" "K""EY=${tail}" "GH_TO""KEN=\"${tail}\"" "GH_TO""KEN='${tail}'" "AWS_2_SEC""RET=${tail}"
 }
@@ -1523,6 +1575,16 @@ leak_tokens() {
     done
 }
 
+@test "body check still refuses a host path after punctuation that does not follow a slash, at a line start, or after a run of slashes" {
+    local body
+    for body in "_/home/someone/x_" "__/tmp/claude-out__" "**/root/.ssh**" "see a,/run/user/1000/x" "see /_/home/someone/x" \
+        "///home/someone/x" "x//tmp/claude-out" "https://example.com//home/someone"; do
+        write_leak_body "${body}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "host path" "someone"
+    done
+}
+
 @test "body check refuses a home, a user runtime directory or tmp deeper inside an absolute path, and a Windows drive path under Users" {
     local path start
     for path in /mnt/c/Users/someone/work /var/home/someone/work /private/tmp/claude-out /var/tmp/x /var/run/user/1000/x /a.b/tmp/x; do
@@ -1550,7 +1612,7 @@ leak_tokens() {
     done
 }
 
-@test "the first rule that matches wins, in the order token, host path, control character, too long" {
+@test "the first rule that matches wins, in the order token, host path, control character, invalid UTF-8, too long" {
     printf 'a /tmp/x path\n%s\n' "gh""p_abc" > "${TEST_TMP}/leak.md"
     run_body_check
     [ "${stderr}" = "cfwf: body refused: token (line 2)" ]
@@ -1565,6 +1627,40 @@ leak_tokens() {
     } > "${TEST_TMP}/leak.md"
     run_body_check
     [ "${stderr}" = "cfwf: body refused: control character (line 1)" ]
+
+    printf 'a\205b\nc\033d\n' > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${stderr}" = "cfwf: body refused: control character (line 2)" ]
+
+    {
+        printf 'a\205b\n'
+        head -c 65537 /dev/zero | tr '\0' 'x'
+    } > "${TEST_TMP}/leak.md"
+    run_body_check
+    [ "${stderr}" = "cfwf: body refused: invalid UTF-8 (line 1)" ]
+}
+
+@test "a body, a title or a label that is not valid UTF-8 is refused with exit 8, naming only the line, before calling gh" {
+    prepare_issue_create
+    local bytes
+    # A Latin-1 or CP1252 C1 byte alone, any byte that never starts UTF-8, a lead byte with no
+    # continuation, an overlong NUL, a UTF-16 surrogate, a code point above U+10FFFF, and a
+    # continuation byte straight after a whole character.
+    for bytes in '\205' '\237' '\377' '\300' '\342\202' '\300\200' '\355\240\200' '\364\220\200\200' '\303\251\251'; do
+        printf "A clean first line.\n\nsecret%bvalue\nA clean last line.\n" "${bytes}" > "${TEST_TMP}/leak.md"
+        run_issue_create_leak
+        assert_refused "${status}" "${output}" "${stderr}" "invalid UTF-8" "secret"
+        [ ! -f "${GH_LOG}" ]
+
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf "a%bb" "${bytes}")" --body-file "${TEST_TMP}/body.md"
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
+
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "$(printf "a%bb" "${bytes}")"
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: label refused: invalid UTF-8" ]
+        [ ! -f "${GH_LOG}" ]
+    done
 }
 
 @test "body check passes a body with no leaks, printing nothing and calling gh for nothing" {
@@ -1573,6 +1669,7 @@ leak_tokens() {
         "Relative paths such as test/cfwf.bats, lib/state and containers/base/x are fine." \
         "So are /usr/local/bin/cfwf, ~/work, ~/tmp/x, ~/work/home/x, ./tmp/x, ./a/tmp/x, ../home/x, tmp/notes, src/tmp/x, a/b/home/x, /users/x and example.com/home/x." \
         "URL paths pass too: https://example.com/home/x, http://h/tmp/x, //cdn.example.com/tmp/x and https://example.com/var/home/x." \
+        "So does a URL path segment of punctuation: https://example.com/_/home/x, https://example.com/a/*/tmp/x, http://h/,/Users/x and https://example.com/:/root/x." \
         "So do Windows paths not under Users, a drive letter inside a word, and a relative one: C:\\Program Files\\x, abc:\\Users\\x, docs\\Users\\x." \
         "Words such as keyboard, laughs_at, monkey and the word TOKEN alone are fine, as is KEY = value." \
         "A token prefix on its own, gh""p_, is fine." \
@@ -1601,6 +1698,11 @@ Authorization: Bearer $GH_TOKEN
 A Bearer token is sent in the Authorization header.
 Bearer <token>
 Bearer authentication is used.
+Bearer authentication-mechanism-description
+The bearer token-based-authentication-scheme is used.
+Bearer Authentication-Mechanism-Description.
+Bearer abcdefghijklmnopqrstuvwxyz
+Bearer abcdefghijklmnopqr9
 https://discord.com/api/webhooks/<id>/<token>
 discord.com/api/webhooks/123456/<token>
 BODIES
@@ -1677,6 +1779,34 @@ BODIES
 
 @test "links to GitHub's other pages, such as starred lists, Copilot and the team plan, pass with no lookup" {
     write_leak_body "see https://github.com/stars/someone/lists/tools, github.com/copilot/c/abc123, https://github.com/team/compare and https://github.com/dashboard/feed"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a link to the target's own wiki passes with no lookup, and another repository's wiki is looked up as that repository" {
+    write_leak_body "see https://github.com/${REPO}.wiki, git@github.com:${REPO}.wiki.git and https://github.com/${REPO}/wiki/Home"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ ! -f "${GH_LOG}" ]
+
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    local reference
+    for reference in "https://github.com/credfeto/hidden-thing.wiki" "github.com/credfeto/hidden-thing.WIKI.git"; do
+        write_leak_body "see ${reference} here"
+        rm -f "${GH_LOG}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+        [ "$(visibility_lookups credfeto/hidden-thing)" -eq 1 ]
+    done
+}
+
+@test "a pasted image or file, or one on GitHub's image hosts, passes on a public target with no lookup" {
+    write_visibility "${REPO}" PUBLIC
+    write_leak_body "![img](https://github.com/user-attachments/assets/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b) and [log](https://github.com/user-attachments/files/123/build.log), https://user-images.githubusercontent.com/1/2.png, https://private-user-images.githubusercontent.com/1/3.png and https://github.com/${REPO}/assets/1/4"
     run_body_check
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
@@ -1763,9 +1893,9 @@ BODIES
     write_leak_body "see credfeto/open-thing#1 and https://github.com/credfeto/open-thing"
     local real_grep flags
     real_grep=$(command -v grep)
-    # Each pass makes one of the scans fail: the rule scans (-naE), the link scan (-inoaE) and the
-    # owner/repo scan (-noaE). Every other grep is the real one.
-    for flags in -naE -inoaE -noaE; do
+    # Each pass makes one of the scans fail: the rule scans (-naE), the UTF-8 scan alone (-xv), the
+    # link scan (-inoaE) and the owner/repo scan (-noaE). Every other grep is the real one.
+    for flags in -naE -xv -inoaE -noaE; do
         make_stub_multiline grep \
             "case \" \$* \" in *\" ${flags} \"*) echo 'grep: read error' >&2; exit 2 ;; esac" \
             "exec ${real_grep} \"\$@\""
@@ -1805,7 +1935,7 @@ BODIES
     local body
     for body in "docs/setup.md#1-prerequisites" "fix/foo#12abc" "src/app.ts#12_x" "fix/foo#12-bar" "credfeto/hidden-thing#1x" \
         "https://example.com/?p=credfeto/hidden-thing#1" "user@credfeto/hidden-thing#1" "~credfeto/hidden-thing#1" \
-        "x:credfeto/hidden-thing#1" "a&b=credfeto/hidden-thing#1" "%2Fcredfeto/hidden-thing#1" "+credfeto/hidden-thing#1"; do
+        "localhost:8080/hidden-thing#1" "https://example.com:8443/credfeto/hidden-thing#1" "a&b=credfeto/hidden-thing#1" "%2Fcredfeto/hidden-thing#1" "+credfeto/hidden-thing#1"; do
         write_leak_body "see ${body} here"
         rm -f "${GH_LOG}"
         run_body_check
@@ -1821,7 +1951,8 @@ BODIES
     write_visibility credfeto/hidden-thing PRIVATE
     local body
     for body in "credfeto/open-thing#1 credfeto/hidden-thing#2" "credfeto/open-thing#1,credfeto/hidden-thing#2." \
-        "(credfeto/open-thing#1)(credfeto/hidden-thing#2)" "credfeto/hidden-thing#2"; do
+        "(credfeto/open-thing#1)(credfeto/hidden-thing#2)" "credfeto/hidden-thing#2" "Related:credfeto/hidden-thing#2" \
+        "Fixes:credfeto/hidden-thing@abc1234" "x:credfeto/hidden-thing#2"; do
         write_leak_body "${body}"
         run_body_check
         assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
