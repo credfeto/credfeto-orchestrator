@@ -26,7 +26,7 @@ setup() {
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'case "$1 $2" in' \
-        '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
+        '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
@@ -224,7 +224,7 @@ gh_line_of() {
 
 @test "an unknown command exits 2 with the usage on stderr" {
     run bash -c '"$1" frobnicate 2>&1 >/dev/null; exit "${PIPESTATUS[0]}"' _ "${SCRIPT}"
-    [[ "${output}" == *"unknown command: frobnicate"* ]]
+    [[ "${output}" == *"unknown command (argument 1; its value is not shown)"* && "${output}" != *frobnicate* ]]
     [[ "${output}" == *"Usage: cfwf <command>"* ]]
     run "${SCRIPT}" frobnicate
     [ "${status}" -eq 2 ]
@@ -245,7 +245,7 @@ gh_line_of() {
 @test "an unknown option and an option missing its value exit 2" {
     run "${SCRIPT}" workflow-status --set --bogus
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"unknown option: --bogus"* ]]
+    [[ "${output}" == *"unknown option (argument 3; its value is not shown)"* && "${output}" != *--bogus* ]]
 
     run "${SCRIPT}" workflow-status --set --repo
     [ "${status}" -eq 2 ]
@@ -257,7 +257,7 @@ gh_line_of() {
     for flag in --owner --project-number --project-id --field-id --option-id --url; do
         run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Approved "${flag}" value
         [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
-        [[ "${output}" == *"unknown option: ${flag}"* ]]
+        [[ "${output}" == *"unknown option (argument 9; its value is not shown)"* ]]
     done
     [ ! -f "${GH_LOG}" ]
 }
@@ -873,7 +873,7 @@ assert_nothing_created() {
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"unknown issue subcommand: frobnicate"* ]]
+    [[ "${output}" == *"unknown issue subcommand (argument 2; its value is not shown)"* && "${output}" != *frobnicate* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -979,7 +979,7 @@ assert_nothing_created() {
 
     run bash -c 'source "$1"; utf8_locale_available() { return 1; }; CURRENT_COMMAND=issue; parse_issue_options --bogus' _ "${SCRIPT}"
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"unknown option: --bogus"* ]]
+    [[ "${output}" == *"unknown option ("* ]]
 }
 
 @test "the C.UTF-8 locale check passes where the locale is installed" {
@@ -1147,7 +1147,7 @@ assert_nothing_created() {
     for flag in --status --pr --issue --set --check --bogus; do
         run "${SCRIPT}" "${CREATE_ARGS[@]}" "${flag}" 1
         [ "${status}" -eq 2 ] || { echo "${flag} was accepted" >&2; return 1; }
-        [[ "${output}" == *"unknown option: ${flag}"* ]]
+        [[ "${output}" == *"unknown option (argument 11; its value is not shown)"* ]]
     done
     [ ! -f "${GH_LOG}" ]
 }
@@ -1156,7 +1156,26 @@ assert_nothing_created() {
     prepare_issue_create
     run --separate-stderr "${SCRIPT}" issue create "--title --body-file" x --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == *"unknown option: --title --body-file"* ]]
+    [[ "${stderr}" == *"unknown option (argument 3; its value is not shown)"* && "${stderr}" != *"--title --body-file"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "a token-shaped stray argument is named by its position, never echoed, as a command, a subcommand or an option" {
+    prepare_issue_create
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run --separate-stderr "${SCRIPT}" "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown command (argument 1; its value is not shown)"* && "${stderr}" != *"${secret}"* ]]
+
+    run --separate-stderr "${SCRIPT}" body "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown body subcommand (argument 2; its value is not shown)"* && "${stderr}" != *"${secret}"* ]]
+
+    # An unquoted title: --title takes the first word, and the token after it is a stray argument.
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title Rotate "${secret}" now --body-file "${TEST_TMP}/body.md"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown option (argument 9; its value is not shown)"* && "${stderr}" != *"${secret}"* ]]
+    [ -z "${output}" ]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -1165,7 +1184,7 @@ assert_nothing_created() {
     for flag in --priority --title --body-file --label; do
         run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 1346 --status Approved "${flag}" value
         [ "${status}" -eq 2 ]
-        [[ "${output}" == *"unknown option: ${flag}"* ]]
+        [[ "${output}" == *"unknown option (argument 9; its value is not shown)"* ]]
     done
     [ ! -f "${GH_LOG}" ]
 }
@@ -1175,7 +1194,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/nope.md"
     [ "${status}" -eq 1 ]
-    [[ "${output}" == *"cannot read the body file: ${TEST_TMP}/nope.md"* ]]
+    [[ "${output}" == *"cfwf: cannot read the --body-file"* && "${output}" != *"${TEST_TMP}"* ]]
 
     : > "${TEST_TMP}/empty.md"
     run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/empty.md"
@@ -1487,9 +1506,10 @@ write_visibility() {
     jq -n --arg v "$2" '{visibility: $v}' > "$(visibility_fixture "$1").json"
 }
 
-# Makes the visibility lookup of the repository $1 fail the way a proxy or network fault would.
+# Makes the visibility lookup of the repository $1 fail the way a proxy or network fault would, or
+# with the error $2 when one is given.
 fail_visibility() {
-    touch "$(visibility_fixture "$1").fail"
+    printf '%s' "${2:-}" > "$(visibility_fixture "$1").fail"
 }
 
 # Prints the fixture path, without extension, that the gh stub reads for a visibility lookup of
@@ -1587,7 +1607,8 @@ leak_tokens() {
 
 @test "body check refuses a home, a user runtime directory or tmp deeper inside an absolute path, and a Windows drive path under Users" {
     local path start
-    for path in /mnt/c/Users/someone/work /var/home/someone/work /private/tmp/claude-out /var/tmp/x /var/run/user/1000/x /a.b/tmp/x; do
+    for path in /mnt/c/Users/someone/work /var/home/someone/work /private/tmp/claude-out /var/tmp/x /var/run/user/1000/x /a.b/tmp/x \
+        /var/root/.ssh /mnt/x/root/y; do
         for start in "" " " '"' "(" "=" ":" "," "*" "file://"; do
             write_leak_body "${start:+see }${start}${path}/file"
             run_body_check
@@ -1667,8 +1688,8 @@ leak_tokens() {
     printf '%s\n' \
         "Tabs$(printf '\t')are fine, as are multi-byte characters: $(printf '\303\251 \303\274 \346\227\245 \302\240 \302\251 \342\200\256 \304\200')." \
         "Relative paths such as test/cfwf.bats, lib/state and containers/base/x are fine." \
-        "So are /usr/local/bin/cfwf, ~/work, ~/tmp/x, ~/work/home/x, ./tmp/x, ./a/tmp/x, ../home/x, tmp/notes, src/tmp/x, a/b/home/x, /users/x and example.com/home/x." \
-        "URL paths pass too: https://example.com/home/x, http://h/tmp/x, //cdn.example.com/tmp/x and https://example.com/var/home/x." \
+        "So are /usr/local/bin/cfwf, ~/work, ~/tmp/x, ~/work/home/x, ./tmp/x, ./a/tmp/x, ../home/x, tmp/notes, src/tmp/x, a/b/home/x, a/b/root/x, /users/x and example.com/home/x." \
+        "URL paths pass too: https://example.com/home/x, http://h/tmp/x, //cdn.example.com/tmp/x, https://example.com/var/home/x and https://example.com/var/root/x." \
         "So does a URL path segment of punctuation: https://example.com/_/home/x, https://example.com/a/*/tmp/x, http://h/,/Users/x and https://example.com/:/root/x." \
         "So do Windows paths not under Users, a drive letter inside a word, and a relative one: C:\\Program Files\\x, abc:\\Users\\x, docs\\Users\\x." \
         "Words such as keyboard, laughs_at, monkey and the word TOKEN alone are fine, as is KEY = value." \
@@ -1861,6 +1882,14 @@ BODIES
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: could not read the visibility of the repository named on line 3 of the body" ]
 
+    # Access denied (an organisation enforcing SSO, or a proxy) is not "not found": it fails closed
+    # as a runtime failure rather than counting as private.
+    rm -f "${GH_FIXTURES}"/visibility-credfeto_flaky-thing.*
+    fail_visibility credfeto/flaky-thing $'HTTP 403: Resource protected by organization SAML enforcement\n'
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read the visibility of the repository named on line 3 of the body" ]
+
     rm -f "${GH_FIXTURES}"/visibility-*
     fail_visibility "${REPO}"
     run_body_check
@@ -1885,6 +1914,15 @@ BODIES
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the repository credfeto/no-such-repo was not found, or the caller cannot see it" ]
     assert_nothing_created
+}
+
+@test "a target repository GitHub does not show the caller is never looked up when the text names no other repository" {
+    rm -f "${GH_LOG}"
+    write_leak_body "see credfeto/no-such-repo#3, which is the target itself, and test/cfwf.bats"
+    run --separate-stderr "${SCRIPT}" body check --repo credfeto/no-such-repo --body-file "${TEST_TMP}/leak.md"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ ! -f "${GH_LOG}" ]
 }
 
 @test "a grep that fails while scanning the body is a runtime failure (exit 1), never a pass" {
@@ -1927,6 +1965,44 @@ BODIES
     CFWF_PRIVATE_OWNERS="secret-org" run_body_check
     [ "${status}" -eq 0 ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "a reference in Markdown emphasis is still checked, and an underscore inside a word is not a boundary" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/hidden-thing PRIVATE
+    write_visibility credfeto/open-thing PUBLIC
+    local body
+    for body in "see _credfeto/hidden-thing#5_" "see __credfeto/hidden-thing#5__" "_credfeto/hidden-thing#5_ first" \
+        "see *credfeto/hidden-thing#5*" "see **credfeto/hidden-thing@abc1234**" "(_credfeto/hidden-thing@abc1234_)"; do
+        write_leak_body "${body}"
+        run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
+    done
+
+    for body in "see _secret-org/plans_" "see __secret-org/plans__"; do
+        write_leak_body "${body}"
+        CFWF_PRIVATE_OWNERS="secret-org" run_body_check
+        assert_refused "${status}" "${output}" "${stderr}" "private repository" "plans"
+    done
+
+    write_leak_body "see _credfeto/open-thing#5_ and *credfeto/open-thing#6*"
+    rm -f "${GH_LOG}"
+    run_body_check
+    [ "${status}" -eq 0 ]
+    [ "$(visibility_lookups credfeto/open-thing)" -eq 1 ]
+
+    # An underscore inside a word, or a #n followed by more than closing underscores, is not a
+    # reference, so nothing is looked up.
+    for body in "see my_credfeto/hidden-thing#5" "see credfeto/hidden-thing#5_x" "see /_credfeto/hidden-thing#5_" "see =_credfeto/hidden-thing#5_"; do
+        write_leak_body "${body}"
+        rm -f "${GH_LOG}"
+        run_body_check
+        [ "${status}" -eq 0 ] || { echo "${body} was refused" >&2; return 1; }
+        [ ! -f "${GH_LOG}" ]
+    done
+    write_leak_body "see my_secret-org/plans"
+    CFWF_PRIVATE_OWNERS="secret-org" run_body_check
+    [ "${status}" -eq 0 ]
 }
 
 @test "a #n inside a longer word, or an owner/repo#n inside a path or a URL, is not a cross-reference, and passes with no lookup" {
@@ -2093,7 +2169,7 @@ BODIES
 
     run --separate-stderr "${SCRIPT}" body frobnicate
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == *"unknown body subcommand: frobnicate"* ]]
+    [[ "${stderr}" == *"unknown body subcommand (argument 2; its value is not shown)"* && "${stderr}" != *frobnicate* ]]
 
     printf 'clean\n' > "${TEST_TMP}/leak.md"
     run --separate-stderr "${SCRIPT}" body check --body-file "${TEST_TMP}/leak.md"
@@ -2107,7 +2183,7 @@ BODIES
 
     run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md" --title T
     [ "${status}" -eq 2 ]
-    [[ "${stderr}" == *"unknown option: --title"* ]]
+    [[ "${stderr}" == *"unknown option (argument 7; its value is not shown)"* ]]
 
     run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --repo credfeto/other --body-file "${TEST_TMP}/leak.md"
     [ "${status}" -eq 2 ]
@@ -2120,7 +2196,7 @@ BODIES
     for flag in --skip-leak-check --force "--repo --body-file"; do
         run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/leak.md" "${flag}"
         [ "${status}" -eq 2 ]
-        [[ "${stderr}" == *"unknown option: ${flag}"* ]]
+        [[ "${stderr}" == *"unknown option (argument 7; its value is not shown)"* && "${stderr}" != *"${flag}"* ]]
     done
     [ ! -f "${GH_LOG}" ]
 }
@@ -2128,7 +2204,7 @@ BODIES
 @test "body check refuses a missing or blank body as a runtime failure, without calling gh" {
     run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/nope.md"
     [ "${status}" -eq 1 ]
-    [[ "${stderr}" == *"cannot read the body file"* ]]
+    [ "${stderr}" = "cfwf: cannot read the --body-file" ]
 
     printf ' \n' > "${TEST_TMP}/blank.md"
     run --separate-stderr "${SCRIPT}" body check --repo "${REPO}" --body-file "${TEST_TMP}/blank.md"
