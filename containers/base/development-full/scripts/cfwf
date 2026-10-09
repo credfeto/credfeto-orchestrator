@@ -15,7 +15,7 @@ readonly BODY_REFUSED_EXIT=8
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
-readonly CHECK_RUNS_PAGE_SIZE=100
+readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
 # follows an underscore (so MONKEY=banana passes), and the value, after an optional opening quote,
@@ -1386,7 +1386,7 @@ read_required_checks() {
         ".protection.required_status_checks | select(.enforcement_level != \"off\") | (.contexts[]?, .checks[]?.context) | ${CHECK_NAME_FILTER}" \
         || die "the branch whose required checks apply was not found in ${repo}"
     names="${API_OUTPUT}"
-    if api_read "could not read the rulesets of ${repo}" "repos/${repo}/rules/branches/${branch}?per_page=${CHECK_RUNS_PAGE_SIZE}" \
+    if api_read "could not read the rulesets of ${repo}" "repos/${repo}/rules/branches/${branch}?per_page=${API_PAGE_SIZE}" \
         "(.[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?.context) | ${CHECK_NAME_FILTER}" --paginate; then
         names+=$'\n'"${API_OUTPUT}"
     fi
@@ -1441,11 +1441,11 @@ record_check_rows() {
 # head_sha is another commit is left out, so a result on an older head is never counted.
 read_check_results() {
     local runs
-    api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}" \
+    api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}" \
         ".check_runs[]? | select(.head_sha == \"${HEAD_SHA}\") | [(.name | ${CHECK_NAME_FILTER}), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\")] | join(\"\\u001f\")" --paginate \
         || die "the commit ${HEAD_SHA} was not found in ${REPO}"
     runs="${API_OUTPUT}"
-    api_read "could not read the commit statuses of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=${CHECK_RUNS_PAGE_SIZE}" \
+    api_read "could not read the commit statuses of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=${API_PAGE_SIZE}" \
         ".statuses[]? | [(.context | ${CHECK_NAME_FILTER}), .state, (.id | tostring), (if .state == \"pending\" then \"\" else (.updated_at // \"\") end)] | join(\"\\u001f\")" --paginate \
         || die "the commit ${HEAD_SHA} was not found in ${REPO}"
     record_check_rows check_run_verdict newest "${runs}"
