@@ -1216,7 +1216,7 @@ assert_nothing_created() {
     # The rewrite happened, between the check and the issue create, and gh still got the checked text.
     [[ "$(cat "${TEST_TMP}/body.md")" == rewritten* ]]
     cmp "${TEST_TMP}/checked.md" "${GH_FIXTURES}/issue-body.txt"
-    [ "$(grep -c -- "--body-file ${TEST_TMP}/body.md" "${GH_LOG}")" -eq 0 ]
+    [ "$(gh_call_count "--body-file ${TEST_TMP}/body.md")" -eq 0 ]
 }
 
 @test "issue create hands the body file to gh unchanged" {
@@ -1962,11 +1962,11 @@ BODIES
 @test "a public target refuses a codeload link or an owner/repo@sha autolink to a private repository" {
     write_visibility "${REPO}" PUBLIC
     write_visibility credfeto/hidden-thing PRIVATE
+    write_visibility credfeto/open-thing PUBLIC
     local sha40 reference
     sha40=$(printf 'a%.0s' {1..40})
     for reference in "https://codeload.github.com/credfeto/hidden-thing/zip/refs/heads/main" "codeload.github.com/credfeto/hidden-thing/tar.gz/v1" \
         "credfeto/hidden-thing@abc1234" "credfeto/hidden-thing@ABC1234." "(credfeto/hidden-thing@${sha40})" "credfeto/open-thing#1 credfeto/hidden-thing@abc1234"; do
-        write_visibility credfeto/open-thing PUBLIC
         write_leak_body "see ${reference}"
         run_body_check
         assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
