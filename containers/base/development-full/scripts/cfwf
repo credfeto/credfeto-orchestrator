@@ -265,7 +265,7 @@ Creates an issue and puts it on the repository's Workflow board in one step, as 
              not a regular file; use -). An empty body is an error. It is read once, into a
              private copy that is both checked and posted, so a later change to the file is
              not posted.
---label     Optional and repeatable; one label per option (a comma is not accepted). A priority
+--label      Optional and repeatable; one label per option (a comma is not accepted). A priority
              label is rejected here: use --priority. Each is checked for leaks as the body is.
 
 Everything is checked before anything is created, including that a Workflow board is linked to
@@ -309,10 +309,11 @@ A body is refused when it contains, in this order (the first rule that matches w
                       start of a line, or after any character but a letter, digit, ., ~ or -
                       (so file:///home/... and PATH=...:/home/... are refused, while
                       ./tmp/x and ~/tmp/x pass), except a character other than / that itself
-                      follows /, as in the URL path https://example.com/_/home/x; /home/, /Users/, /run/user/ or /tmp/ deeper
-                      inside an absolute path (/mnt/c/Users/..., /var/home/...,
-                      /private/tmp/..., /var/tmp/...), but not in the path of a URL such as
-                      https://example.com/home/x; or a Windows drive path under Users
+                      follows /, as in the URL path https://example.com/_/home/x;
+                      /home/, /Users/, /run/user/ or /tmp/ deeper inside an absolute path
+                      (/mnt/c/Users/..., /var/home/..., /private/tmp/..., /var/tmp/...), but
+                      not in the path of a URL such as https://example.com/home/x; or a
+                      Windows drive path under Users
                       (C:\Users\... or C:/Users/..., in any case)
   control character   a C0 control other than tab and newline (carriage return included, so
                       CRLF line endings are refused), DEL, or a C1 control (U+0080 to
@@ -895,8 +896,8 @@ load_private_owners() {
 # Prints "<line $1>\t<owner/repo>" for the owner/repo $2 as matched, without the trailing full
 # stops of a sentence, the .git of a clone URL and then the .wiki of a wiki (owner/repo.wiki, or
 # its clone URL owner/repo.wiki.git), since a wiki has its repository's visibility: the
-# repository is what is compared with the target and looked up. Prints nothing when no repository name is left, as for the ellipsis in
-# "github.com/owner/...", which names no repository.
+# repository is what is compared with the target and looked up. Prints nothing when no repository
+# name is left, as for the ellipsis in "github.com/owner/...", which names no repository.
 print_reference() {
     local reference="$2"
     while [[ "${reference}" == *. ]]; do
@@ -963,19 +964,18 @@ repository_references() {
 # dies with $2.
 look_up_visibility() {
     local repository="$1" failure="$2" key="${1,,}" answer
-    if [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ]; then
-        ensure_temp_file GH_ERR_FILE
-        if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${GH_ERR_FILE}"); then
-            case "${answer,,}" in
-                public) REPOSITORY_VISIBILITY["${key}"]=public ;;
-                private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
-                *) die "${failure}: gh gave an unexpected answer" ;;
-            esac
-        elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${GH_ERR_FILE}"; then
-            REPOSITORY_VISIBILITY["${key}"]=missing
-        else
-            die "${failure}"
-        fi
+    [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ] || return 0
+    ensure_temp_file GH_ERR_FILE
+    if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${GH_ERR_FILE}"); then
+        case "${answer,,}" in
+            public) REPOSITORY_VISIBILITY["${key}"]=public ;;
+            private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
+            *) die "${failure}: gh gave an unexpected answer" ;;
+        esac
+    elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${GH_ERR_FILE}"; then
+        REPOSITORY_VISIBILITY["${key}"]=missing
+    else
+        die "${failure}"
     fi
 }
 
@@ -991,9 +991,9 @@ repository_is_public() {
 # counting it as private would skip every private repository check and pass the text unchecked.
 # Any other failure dies with $2.
 target_is_public() {
-    look_up_visibility "$1" "$2"
+    repository_is_public "$1" "$2" && return 0
     [ "${REPOSITORY_VISIBILITY["${1,,}"]}" != missing ] || die "the repository ${1} was not found, or the caller cannot see it"
-    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" = public ]
+    return 1
 }
 
 # Refuses the text in the file $1, for the repository $2, when the repository is public and the
@@ -1004,6 +1004,7 @@ check_repository_references() {
     local text="$1" target="$2" subject="$3" references line reference owner place
     load_private_owners
     references=$(repository_references "${text}") || die "could not scan the ${subject}"
+    [ -n "${references}" ] || return 0
     references=$(sort -t$'\t' -k1,1n -s <<< "${references}") || die "could not scan the ${subject}"
     while IFS=$'\t' read -r line reference; do
         [ -n "${reference}" ] || continue
