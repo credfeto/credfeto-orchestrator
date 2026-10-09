@@ -2238,15 +2238,17 @@ fail_api() {
 }
 
 # One check run: name, conclusion ("" for none), id, then optionally its status (completed when it
-# has a conclusion, in_progress otherwise) and the commit it ran on (HEAD_SHA).
+# has a conclusion, in_progress otherwise; "" for that default), the commit it ran on (HEAD_SHA), the
+# id of the app that made it (GitHub Actions, 15368) and the id of its check suite (1).
 check_run() {
     local status="${4:-}"
     [ -n "${status}" ] || { [ -n "$2" ] && status=completed || status=in_progress; }
     jq -n --arg name "$1" --arg conclusion "$2" --argjson id "$3" --arg status "${status}" \
-        --arg sha "${5:-${HEAD_SHA}}" --arg at "${COMPLETED_AT}" \
+        --arg sha "${5:-${HEAD_SHA}}" --arg at "${COMPLETED_AT}" --argjson app "${6:-15368}" --argjson suite "${7:-1}" \
         '{name: $name, id: $id, head_sha: $sha, status: $status,
           conclusion: (if $conclusion == "" then null else $conclusion end),
-          completed_at: (if $conclusion == "" then null else $at end)}'
+          completed_at: (if $conclusion == "" then null else $at end),
+          app: {id: $app, slug: "app-\($app)"}, check_suite: {id: $suite}}'
 }
 
 # Writes the check runs of the commit $1: the rest of the arguments, each a check_run object.
@@ -2279,24 +2281,27 @@ write_branch() {
 }
 
 # Writes the branch $1, its tip at HEAD_SHA, with classic branch protection requiring the checks
-# named by the rest of the arguments, the first through contexts and the others through checks, as
-# GitHub lists both.
+# named by the rest of the arguments, each name or name#<app id>. As GitHub lists them, contexts
+# repeats every name, and checks has each but the first (one set up before checks existed) with its
+# app id, or null for any source.
 write_protection() {
     local branch="$1"
     shift
     jq -n --arg name "${branch}" --arg sha "${HEAD_SHA}" --args '{name: $name, commit: {sha: $sha}, protected: true,
         protection: {enabled: true, required_status_checks: {enforcement_level: "non_admins",
-            contexts: $ARGS.positional[:1], checks: ($ARGS.positional[1:] | map({context: ., app_id: null}))}}}' "$@" \
+            contexts: ($ARGS.positional | map(split("#")[0])),
+            checks: ($ARGS.positional[1:] | map(split("#") | {context: .[0], app_id: (.[1] // null | if . == null then null else tonumber end)}))}}}' "$@" \
         | write_api "repos/${REPO}/branches/${branch}"
 }
 
 # Writes the rules that apply to the branch $1: a required_status_checks rule naming the rest of
-# the arguments, beside a rule of another type.
+# the arguments, each name or name#<integration id>, beside a rule of another type.
 write_rulesets() {
     local branch="$1"
     shift
     jq -n --args '[{type: "pull_request", parameters: {required_approving_review_count: 1}},
-        {type: "required_status_checks", parameters: {required_status_checks: ($ARGS.positional | map({context: .}))}}]' "$@" \
+        {type: "required_status_checks", parameters: {required_status_checks: ($ARGS.positional
+            | map(split("#") | {context: .[0]} + (if .[1] == null then {} else {integration_id: (.[1] | tonumber)} end)))}}]' "$@" \
         | write_api "repos/${REPO}/rules/branches/${branch}"
 }
 
@@ -2348,6 +2353,7 @@ run_pr_checks() {
         "--pr 42 --interval 10"
         "--pr 42 -i 10"
         "--pr 42 --required"
+        "--pr 42 --all extra"
         "--branch -main"
         "--branch /main"
         "--branch a..b"
@@ -2355,7 +2361,9 @@ run_pr_checks() {
         "--branch a/"
         "--branch .hidden"
         "--branch main.lock"
-        "--branch a%2Fb"
+        "--branch a.lock/b"
+        "--branch @"
+        "--branch a@{1}"
         "--pr"
     )
     local args
@@ -2372,7 +2380,7 @@ run_pr_checks() {
     [[ "${stderr}" == *"missing required option --repo"* ]]
 
     local branch
-    for branch in "bad name" "bad?x" "bad*" $'bad\tx' "bad~1" "bad:x" "bad^x" "bad@{x"; do
+    for branch in "bad name" "bad?x" "bad*" $'bad\tx' "bad~1" "bad:x" "bad^x" "bad@{x" "bad[x" 'bad\x' $'bad\x7fx'; do
         run_pr_checks --branch "${branch}"
         [ "${status}" -eq 2 ]
         [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --branch: "* && "${stderr%%$'\n'*}" != *"${branch}"* ]]
@@ -2489,6 +2497,48 @@ run_pr_checks() {
     [[ "${output}" == *"summary"$'\t'"passed=1 failed=1 pending=0"* ]]
 }
 
+@test "pr checks matches a required check pinned to an app only with a run from that app, and any other by name alone" {
+    prepare_pr_checks
+    # build must come from GitHub Actions (15368); another app's build does not satisfy it.
+    write_protection main first build#15368
+    write_check_runs "${HEAD_SHA}" "$(check_run first success 10 "" "" 57789 3)" "$(check_run build success 11 "" "" 57789 4)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary"$'\t'"passed=1 failed=0 pending=1 head=${HEAD_SHA}" ]
+
+    # Nor does a commit status, which carries no app.
+    write_statuses "${HEAD_SHA}" "$(commit_status build success 31)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run first success 10 "" "" 57789 3)" "$(check_run build success 11 "" "" 57789 4)" \
+        "$(check_run build success 12 "" "" 15368 5)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'* ]]
+
+    # The pinned app's own failure fails it, whatever another app says; a failure from another
+    # app does not.
+    write_statuses "${HEAD_SHA}"
+    write_check_runs "${HEAD_SHA}" "$(check_run first success 10)" "$(check_run build failure 13 "" "" 57789 4)" \
+        "$(check_run build success 12 "" "" 15368 5)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+
+    # A name required for any source (app_id null) takes every result of that name.
+    write_protection main first build
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+
+    # A ruleset pins an app through integration_id.
+    write_branch main
+    write_rulesets main lint#15368
+    write_check_runs "${HEAD_SHA}" "$(check_run lint success 14 "" "" 57789 6)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+    [[ "${output}" == "lint"$'\t'"pending"$'\t'$'\t'$'\n'* ]]
+}
+
 @test "pr checks judges every check when the branch requires none" {
     prepare_pr_checks
     jq -n --arg sha "${HEAD_SHA}" '{name: "main", commit: {sha: $sha}}' | write_api "repos/${REPO}/branches/main"
@@ -2542,13 +2592,50 @@ run_pr_checks() {
     run_pr_checks --branch release/v2
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"head=${HEAD_SHA}" ]]
-    [ "$(gh_call_count "api repos/${REPO}/branches/release/v2 --jq")" -eq 2 ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/release/v2 --jq")" -eq 1 ]
     [ "$(gh_call_count "/protection")" -eq 0 ]
     [ "$(gh_call_count "api repos/${REPO}/rules/branches/release/v2?per_page=100 ")" -eq 1 ]
 
     run_pr_checks --branch gone
     [ "${status}" -eq 1 ]
     [[ "${stderr}" == "cfwf: the --branch was not found in ${REPO}" ]]
+
+    # The one read of the branch gives both its tip and its protection, so a failure of it names
+    # the --branch.
+    : > "${GH_LOG}"
+    fail_api "repos/${REPO}/branches/release/v2"
+    run_pr_checks --branch release/v2
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the --branch of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    [ "$(gh_call_count "branches/release/v2")" -eq 1 ]
+}
+
+@test "pr checks percent-encodes a branch name git allows but an API path cannot hold as it is, rather than refusing it" {
+    jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "release/v2+lts"}}' | write_api "repos/${REPO}/pulls/42"
+    write_protection "release/v2%2Blts" build
+    write_rulesets "release/v2%2Blts" lint
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)" "$(check_run lint success 12)"
+    write_statuses "${HEAD_SHA}"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"passed=2 failed=0 pending=0"* ]]
+    [ "$(gh_call_count "api repos/${REPO}/branches/release/v2%2Blts --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/release/v2%2Blts?per_page=100 ")" -eq 1 ]
+
+    # A non-ASCII letter is encoded byte by byte, and % itself is encoded, so it can never be read
+    # as an escape.
+    write_protection "feat/caf%C3%A9%40x%25y" build
+    run_pr_checks --branch "$(printf 'feat/caf\xc3\xa9@x%%y')"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/feat/caf%C3%A9%40x%25y --jq ")" -eq 1 ]
+
+    # A base branch GitHub returns that git itself would never allow is an unexpected answer.
+    jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "a..b"}}' | write_api "repos/${REPO}/pulls/42"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected branch whose required checks apply for ${REPO}" ]
 }
 
 @test "pr checks --sha judges that commit, given in any case, against the default branch's required checks" {
@@ -2567,7 +2654,7 @@ run_pr_checks() {
 @test "pr checks never counts a run on an older head" {
     prepare_pr_checks
     write_check_runs "${OLD_SHA}" "$(check_run build failure 9 completed "${OLD_SHA}")"
-    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)" "$(check_run build failure 15 completed "${OLD_SHA}")"
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
     [[ "${output}" == "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'* ]]
@@ -2586,13 +2673,46 @@ run_pr_checks() {
     [ "${status}" -eq 4 ]
 }
 
-@test "pr checks judges commit statuses, and a check run wins over a status of the same name" {
+@test "pr checks fails a name when the newest run of it in any check suite or from any app failed, whichever ran last" {
+    prepare_pr_checks
+    # Two workflows (two check suites) of the same app both have a build job: the one that failed
+    # still counts after the other succeeds.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build success 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'"summary"$'\t'"passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    # The same for two apps reporting build in suites of their own.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 57789 9)" "$(check_run build success 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+
+    # A run still going in another suite keeps the name pending, and a failure wins over it.
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build "" 102 "" "" 15368 9)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+    [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'"102"$'\n'* ]]
+
+    # A re-run adds its runs to the same suite, so there the newest still replaces the failure.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build success 103 "" "" 15368 7)" \
+        "$(check_run build success 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"103"$'\n'* ]]
+}
+
+@test "pr checks judges commit statuses, and a check run and a status of the same name must both pass" {
     prepare_pr_checks
     write_protection main build ci/legacy ci/error ci/waiting
-    write_statuses "${HEAD_SHA}" "$(commit_status build failure 31)" "$(commit_status ci/legacy success 32)"
+    write_statuses "${HEAD_SHA}" "$(commit_status build success 31)" "$(commit_status ci/legacy success 32)"
     run_pr_checks --pr 42
-    [[ "${output}" == *"build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"* ]]
+    [[ "${output}" == *"build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"31"* ]]
     [[ "${output}" == *"ci/legacy"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"32"* ]]
+
+    write_statuses "${HEAD_SHA}" "$(commit_status build failure 31)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == *"build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"31"* ]]
 
     write_statuses "${HEAD_SHA}" "$(commit_status ci/legacy failure 32)" "$(commit_status ci/error error 33)" "$(commit_status ci/waiting pending 34)"
     run_pr_checks --pr 42
