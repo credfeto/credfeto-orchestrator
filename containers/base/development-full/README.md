@@ -296,7 +296,7 @@ After the sanity check passes, the upstream acceptance test suite (`/opt/pre-com
 1. `/opt/pre-commit` is copied to `/tmp/pre-commit-test` and its ownership is set to developer:developer.
 2. `/tmp/pre-commit-test/.env` is removed so the orchestrator's network-dependent freshness check is skipped (non-freshness tests still run).
 3. `su developer -c /tmp/pre-commit-test/acceptance-test` is executed.
-4. The temporary copy is removed.
+4. The temporary copy is removed, and the upstream `install`, `install-deps-arch` and `install-deps-debian` scripts and their `lib/` helpers are pruned from `/opt/pre-commit`. The suite's own tests need them, but the image does not use them (PATH is wired directly via `ENV`).
 
 The build fails if the acceptance suite exits non-zero.
 
