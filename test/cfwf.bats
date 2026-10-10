@@ -1593,6 +1593,7 @@ leak_credential_forms() {
         "Authorization: tok""en ${tail}" "authorization: AWS4-HMAC-SHA256 Credential=${tail}/aws4_request" \
         "Authorization: ${tail}" "Authorization:${tail}" "authorization=x" "Authorization: <value>" \
         "{\"Authorization\": \"\"}" "\`Authorization:\` is the header" \
+        "-d \"{\\\"Authorization\\\": \\\"Bas""ic ${tail}\\\"}\"" "{\\\"Proxy-Authorization\\\":\\\"Dig""est ${tail}\\\"}" \
         "Proxy-Authorization: Bas""ic ${tail}" "-H 'proxy-authorization: bear""er x'" "PROXY-AUTHORIZATION=${tail}" \
         "{\"Proxy-Authorization\": \"Dig""est ${tail}\"}" "Proxy-Authorization: <value>" \
         "$(url_with_password https user "${tail}")" "$(url_with_password postgres app hunter)" \
@@ -1609,6 +1610,7 @@ leak_credential_forms() {
         "{\"url\":\"$(url_with_password postgres app "${tail}")\",\"email\":\"someone@example.com\"}" \
         "{\"url\":\"https:/""/user:password@localhost\",\"email\":\"someone@example.com\"}" \
         "\`https:/""/user:xxx@localhost:8080\`,\`someone@example.com\`" \
+        "https:/""/user:${tail}@localhost?at=12:30" "https:/""/user:${tail}@localhost#line:5" \
         "http://localhost:8080,someone@example.com" "'http://localhost:8080','someone@example.com'" \
         "ssh:/""/git@localhost:22,someone@example.com" "https:/""/user:@localhost,someone@example.com" \
         "$(url_with_password https user "password@${tail}")" "x-access-token"":xxx@${tail}@""example.com" \
@@ -1636,6 +1638,8 @@ harmless_credential_shapes() {
         "\`http://localhost:8080\`,\`someone@example.com\`" "http://localhost:8080/path" \
         "https://example.com:8080/path?user=someone@example.com" "ssh://git@example.com:22/path" "http://[::1]:8080/path" \
         "https://example.com:8080?user=someone@example.com and https://example.com:8080#someone@example.com" \
+        "https://example.com?at=12:30&to=someone@example.com" "https://example.com#line:5@someone" \
+        "https://user@example.com?at=12:30&to=someone@example.com" \
         "Mail someone@example.com about https://example.com:8443 and ask @someone at 12:30." \
         "https:/""/user:@example.com/path" "https:/""/user:@example.com/path?to=someone@example.com" \
         "https:/""/user:@localhost, then mail someone@example.com" \
