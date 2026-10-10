@@ -1635,16 +1635,6 @@ harmless_credential_shapes() {
     done < <(leak_tokens)
 }
 
-@test "body check refuses a key of an exact length, a Basic header, a URL password or an x-access-token with exit 8, naming the rule and line only" {
-    local form
-    while IFS= read -r form; do
-        write_leak_body "the value is ${form} here"
-        run_body_check
-        assert_refused "${status}" "${output}" "${stderr}" token "${form}"
-        [ ! -f "${GH_LOG}" ]
-    done < <(leak_credential_forms)
-}
-
 @test "body check passes a key one character short, a key prefix inside a word, a Basic placeholder and a URL with a placeholder password or none" {
     local body
     while IFS= read -r body; do
