@@ -3320,7 +3320,7 @@ run_comment_add() {
 @test "comment add refuses a plan-approval keyword outside a quote with exit 8, in any case, naming only the line" {
     prepare_comment
     local line
-    for line in "Approved" "lgtm" "LGTM, ship it" "This is APPROVED." "  approved" "the plan is (approved)" "x - Lgtm" "- > approved"; do
+    for line in "Approved" "lgtm" "LGTM, ship it" "This is APPROVED." "  approved" "the plan is (approved)" "x - Lgtm" "- > approved" "_Approved_" "__LGTM__" "so _lgtm_." "    > approved" $'\t> lgtm'; do
         write_leak_body "${line}"
         run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
         assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
@@ -3331,7 +3331,7 @@ run_comment_add() {
 @test "comment add posts a plan-approval keyword inside a Markdown quote, and a longer word holding the letters" {
     prepare_comment
     local line
-    for line in "> approved" ">LGTM" "   > The human said: Approved" "> > lgtm" "disapproved" "unapproved_change" "lgtm2" "approvedness"; do
+    for line in "> approved" ">LGTM" "   > The human said: Approved" "> > lgtm" "disapproved" "unapproved_change" "lgtm2" "approvedness" "plan_approved" "approved_change" "x_lgtm_y"; do
         write_leak_body "${line}"
         rm -f "${GH_LOG}"
         run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"

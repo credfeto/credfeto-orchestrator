@@ -66,8 +66,10 @@ readonly CONTROL_PATTERN=$'[\x01-\x08\x0b-\x1f\x7f]|\xc2[\x80-\x9f]'
 readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*'
 # The two plan-approval keywords, matched as whole words without regard to case
 # (check_comment_for_approval_keywords): an agent's comment that holds one outside a quote can be
-# read as a human approving a plan.
-readonly APPROVAL_KEYWORD_PATTERN='approved|lgtm'
+# read as a human approving a plan. A letter, digit or underscore on either side makes a longer
+# word (plan_approved), which passes; underscores with nothing but a boundary beyond them are
+# Markdown emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is refused.
+readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
@@ -445,10 +447,11 @@ There is no --body (the comment is only ever taken from --body-file), and no --e
 
 The body is checked for leaks before anything is posted (see 'cfwf help body'). It is also
 refused when either of the two plan-approval keywords is on a line that is not a Markdown quote
-(a line starting with >), as a whole word in any case, because such a comment could be read as
-a human approving a plan; quoting a human's own approval on a > line is allowed. A refused
-body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule> (line <n>)" on stderr, never naming the
-matched text, and nothing is posted. 'cfwf body check' does not apply the keyword rule.
+(a line starting with >, after at most three spaces), as a whole word in any case, because
+such a comment could be read as a human approving a plan; quoting a human's own approval on
+a > line is allowed. A refused body exits ${BODY_REFUSED_EXIT} with
+"cfwf: body refused: <rule> (line <n>)" on stderr, never naming the matched text, and nothing
+is posted. 'cfwf body check' does not apply the keyword rule.
 
 Exit codes: 0 posted; ${BODY_REFUSED_EXIT} refused; 1 a runtime failure, including an unreadable or
 blank body, a failed post or a result that is not a comment URL (the comment may then have
@@ -1713,12 +1716,13 @@ cmd_pr() {
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
-# word on a line that is not a Markdown quote. Quote lines are blanked, not deleted, in a copy so
-# the line numbers stay those of the body. SCAN_TMP is reused: the leak check is done with it.
+# word on a line that is not a Markdown quote: a > after at most three spaces, because Markdown
+# reads a deeper indent, or a tab, as code. Quote lines are blanked, not deleted, in a copy so the
+# line numbers stay those of the body. SCAN_TMP is reused: the leak check is done with it.
 check_comment_for_approval_keywords() {
     ensure_temp_file SCAN_TMP
-    LC_ALL=C sed -E 's/^[[:space:]]*>.*//' "$1" > "${SCAN_TMP}" || die "could not scan the body"
-    refuse_first_match body "approval keyword" "${APPROVAL_KEYWORD_PATTERN}" "${SCAN_TMP}" -iw
+    LC_ALL=C sed -E 's/^ {0,3}>.*//' "$1" > "${SCAN_TMP}" || die "could not scan the body"
+    refuse_first_match body "approval keyword" "${APPROVAL_KEYWORD_PATTERN}" "${SCAN_TMP}" -i
 }
 
 comment_add() {
