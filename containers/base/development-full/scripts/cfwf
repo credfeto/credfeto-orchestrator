@@ -449,8 +449,8 @@ The body is checked for leaks before anything is posted (see 'cfwf help body'). 
 refused when either of the two plan-approval keywords is on a line that is not a Markdown quote
 (a line starting with >, after at most three spaces), as a whole word in any case, because
 such a comment could be read as a human approving a plan; quoting a human's own approval on
-a > line is allowed. A refused body exits ${BODY_REFUSED_EXIT} with
-"cfwf: body refused: <rule> (line <n>)" on stderr, never naming the matched text, and nothing
+a > line is allowed. A refused body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>",
+with "(line <n>)" where there is one, on stderr, never naming the matched text, and nothing
 is posted. 'cfwf body check' does not apply the keyword rule.
 
 Exit codes: 0 posted; ${BODY_REFUSED_EXIT} refused; 1 a runtime failure, including an unreadable or

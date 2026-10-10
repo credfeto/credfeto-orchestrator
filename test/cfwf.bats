@@ -3414,6 +3414,7 @@ run_comment_add() {
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf comment add"* ]]
         [[ "${output}" == *"two plan-approval keywords"* ]]
+        [[ "${output}" == *'with "(line <n>)" where there is one'* ]]
     done
 
     run --separate-stderr "${SCRIPT}" comment
