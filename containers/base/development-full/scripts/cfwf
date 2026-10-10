@@ -36,8 +36,9 @@ bearer_value_pattern() {
 # colon or an equals sign and one character that is not whitespace. The scheme is not looked at
 # (Basic, Bearer, Digest, Negotiate, a signature), and nor is whether the value is a placeholder,
 # so nothing has to tell a secret from an example of one. Nothing has to come before the name, so
-# Proxy-Authorization is one too. The name with no value after it, as in prose, passes.
-readonly AUTHORIZATION_HEADER_PATTERN="([Aa]uthorization|AUTHORIZATION)[\"']?[[:space:]]*[:=][[:space:]]*[^[:space:]]"
+# Proxy-Authorization is one too. The name with no value after it, as in prose, passes. The quote
+# that closes the name may be escaped with a backslash, as it is in JSON held inside a string.
+readonly AUTHORIZATION_HEADER_PATTERN="([Aa]uthorization|AUTHORIZATION)(\\\\?[\"'])?[[:space:]]*[:=][[:space:]]*[^[:space:]]"
 # Bearer anywhere and a value of 20 or more token characters with a digit among them, which
 # ordinary prose ("a Bearer token", "Bearer authentication-mechanism-description") never has.
 BEARER_PATTERN="(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+$(bearer_value_pattern)"
@@ -57,9 +58,10 @@ readonly PASSWORD_PATTERN='[^[:space:]/?#@"`]+'
 # What comes before the colon that starts a password: a URL's :// and its user name, which may be
 # empty and holds no colon, or the user name x-access-token wherever it is written. A user name
 # may hold an unencoded @ (an email address as the login of a mail server URL), the first colon
-# being what ends it, so only whitespace and a slash, which end the host of a URL with no user
-# name, are left out with the colon.
-readonly URL_USER_PATTERN='://[^[:space:]/:]*'
+# being what ends it, so only whitespace, a slash, a question mark and a hash, which end the host
+# of a URL with no user name, are left out with the colon: a colon and an @ further on are then in
+# the path, the query or the fragment.
+readonly URL_USER_PATTERN='://[^[:space:]/:?#]*'
 # The password of a credential, from its colon to an @. A password may hold an unencoded @, the
 # last one before the host ends being the one that ends it, so it may start with any number of
 # them: a colon and an @ with a second @ further on (user:@secret@host) is a password, while an
