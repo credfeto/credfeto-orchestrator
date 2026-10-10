@@ -2764,6 +2764,21 @@ run_pr_checks() {
     [ "${stderr}" = "cfwf: gh returned an unexpected branch whose required checks apply for ${REPO}" ]
 }
 
+@test "pr checks --pr reads the branch and the rulesets of a base branch with a slash at the same path, the slash kept as it is" {
+    jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "release/1.0"}}' | write_api "repos/${REPO}/pulls/42"
+    write_protection release/1.0 build
+    write_rulesets release/1.0 lint
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)" "$(check_run lint failure 12)"
+    write_statuses "${HEAD_SHA}"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == *"lint"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"12"* ]]
+    [[ "${output}" == *"summary passed=1 failed=1 pending=0 head=${HEAD_SHA}" ]]
+    [ "$(gh_call_count "api repos/${REPO}/branches/release/1.0 --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/release/1.0?per_page=100 --paginate ")" -eq 1 ]
+    [ "$(gh_call_count "%2F")" -eq 0 ]
+}
+
 @test "pr checks --sha judges that commit, given in any case, against the default branch's required checks" {
     jq -n '{default_branch: "trunk"}' | write_api "repos/${REPO}"
     write_protection trunk build
@@ -2883,6 +2898,62 @@ run_pr_checks() {
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
     [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'"101"$'\n'* ]]
+
+    # A run that decided is never replaced by a newer skipped run, whatever its conclusion.
+    local conclusion
+    for conclusion in timed_out action_required; do
+        write_check_runs "${HEAD_SHA}" "$(check_run build skipped 101 "" "" 15368 8)" "$(check_run build "${conclusion}" 100 "" "" 15368 7)"
+        run_pr_checks --pr 42
+        [ "${status}" -eq 3 ] || { echo "${conclusion}: ${status}" >&2; return 1; }
+        [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'* ]]
+    done
+}
+
+@test "pr checks lets a newer skipped run replace an older cancelled one, which was superseded, not decided, whatever their order" {
+    prepare_pr_checks
+    # cancel-in-progress cancels the older run when a relabelled PR starts a suite whose job skips
+    # itself: GitHub passes the check on the skipped run, and so does pr checks.
+    local expected="build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}"
+    write_check_runs "${HEAD_SHA}" "$(check_run build cancelled 100 "" "" 15368 7)" "$(check_run build skipped 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 101 "" "" 15368 8)" "$(check_run build cancelled 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    # A failure that a newer run superseded stays superseded when that run was cancelled in turn,
+    # in any listing order.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 99 "" "" 15368 6)" "$(check_run build skipped 101 "" "" 15368 8)" \
+        "$(check_run build cancelled 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 101 "" "" 15368 8)" "$(check_run build cancelled 100 "" "" 15368 7)" \
+        "$(check_run build failure 99 "" "" 15368 6)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    # A cancelled run alone, or one newer than the skipped run, still fails.
+    write_check_runs "${HEAD_SHA}" "$(check_run build cancelled 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build cancelled 101 "" "" 15368 8)" "$(check_run build skipped 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'* ]]
+
+    # A newer run that ran replaces a cancelled one, as any newer run does.
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build cancelled 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
 }
 
 @test "pr checks judges commit statuses, and a check run and a status of the same name must both pass" {
@@ -2914,6 +2985,18 @@ run_pr_checks() {
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
     [ "${output}" = "odd name here"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+}
+
+@test "pr checks prints every C0, DEL and C1 control in a check name as a space, and keeps U+00A0, just past C1" {
+    prepare_pr_checks
+    write_protection main
+    # ESC, U+009B (CSI, a one-character escape in C1), U+0085 (NEL) and DEL are controls; U+00A0,
+    # just past C1, is not. gh's --jq (gojq) reads [[:cntrl:]] as ASCII only, so the range is
+    # written out; this stub runs jq, so the test pins the range, not the engine.
+    write_check_runs "${HEAD_SHA}" "$(check_run $'a\x1b[1mb\xc2\x9b31mc\xc2\x85d\x7fe\xc2\xa0f' success 11)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "a [1mb 31mc d e"$'\xc2\xa0'"f"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
 }
 
 @test "pr checks keeps apart two names that differ only in a control character, though both print alike" {

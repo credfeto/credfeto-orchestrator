@@ -390,12 +390,13 @@ The check runs and commit statuses of that commit are read: the newest run of a 
 is judged, whichever check suite it is in, so a run cancelled or failed in an older suite (before a
 PR was marked ready, say) no longer counts once a newer run of that name exists, and a name fails
 when any of those, or a commit status of that name, failed. A skipped run never replaces a run of
-its name that ran, so a newer suite whose job skips itself cannot hide an older failure; a skipped
-run counts (as a pass) only when no run of its name ran. The required checks of the branch are
-read from its branch protection and its rulesets (one pinned to an app is satisfied only by a run
-from that app, though a failed commit status of its name still fails it); read access to the
-repository is enough. Without --all only the required checks are judged, or every check when the
-branch requires none.
+its name that ran and decided, so a newer suite whose job skips itself cannot hide an older failure;
+a skipped run counts (as a pass) only when no run of its name ran, or when the newest that did was
+cancelled (superseded, say by that suite's cancel-in-progress) before it. The required checks of
+the branch are read from its branch protection and its rulesets (one pinned to an app is satisfied
+only by a run from that app, though a failed commit status of its name still fails it); read access
+to the repository is enough. Without --all only the required checks are judged, or every check when
+the branch requires none.
 
 Each check is judged as:
   pass     success, skipped or neutral (a status: success)
@@ -1374,10 +1375,12 @@ api_read() {
 # A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
 # name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
 # byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
-# name with each control character (a tab or a newline included) turned into a space, is only
-# printed, so it fits on one line of the output; two names that print the same are still judged
-# apart.
-readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[[:cntrl:]]"; " ");'
+# name with each control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F)
+# turned into a space, is only printed, so it fits on one line of the output and carries no
+# terminal escape; two names that print the same are still judged apart. The range is written out
+# because gh's --jq (gojq, Go regular expressions) reads [[:cntrl:]] as ASCII only, so it would let
+# a C1 control such as U+009B (CSI) through, where jq's would not.
+readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
 # The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
 # name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
 # field would shift the rest.
@@ -1505,38 +1508,47 @@ commit_status_verdict() {
 # same name from another app stays a result of its own and is still judged. Newest is creation order
 # (the id): GitHub does not document how it orders runs, and creation order agrees with it when a
 # newer run supersedes an older one, while a newer run that has not finished keeps the name pending.
-# A skipped check run did not run, so it never replaces a run of its group that did (finished or
-# not), and a run that did always replaces a skipped one: a skipped run decides only a group that
-# holds nothing else. So a newer suite whose job skips itself (a relabelled PR whose job's if: is
-# false) cannot hide an older failure, though GitHub counts skipped as a pass and may let it.
+# The rows are taken oldest first, so each one is newer than the run its group holds, and each
+# replaces it, with one exception: a skipped check run did not run, so it replaces only a skipped
+# run or a cancelled one (GROUP_YIELDS), never a run that ran and decided (finished or not). So a
+# newer suite whose job skips itself (a relabelled PR whose job's if: is false) cannot hide an older
+# failure, though GitHub counts skipped as a pass and may let it, while a run cancelled by that
+# suite's cancel-in-progress was superseded, not decided, and the skipped run passes it as GitHub
+# does. Taking the rows in id order is what makes the result the same whatever order GitHub lists
+# them in.
 # The kind is "run" for a check run and "status" for a commit status, which has no app id, so a
 # status never replaces a check run (GitHub requires both to pass when a check run and a status
 # share a name), and the combined status already has one per name. NAME_GROUPS indexes the groups of
 # each name, one per line (a name key holds no newline), so judging a name reads only its own
 # groups.
-declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() GROUP_SKIPPED=() NAME_GROUPS=()
+declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() GROUP_YIELDS=() NAME_GROUPS=()
 VERDICT=""
 record_check_rows() {
-    local verdict_of="$1" rows="$2" name printed result id completed_at app kind group skipped
+    local verdict_of="$1" rows name printed result id completed_at app kind group skipped yields
+    rows="$(LC_ALL=C sort -t "${ROW_SEPARATOR}" -k4,4n <<< "$2")" || die "could not sort the checks on ${HEAD_SHA}"
     while IFS="${ROW_SEPARATOR}" read -r name printed result id completed_at app kind; do
         [ -n "${name}" ] || continue
         [[ "${id}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected id for a check on ${HEAD_SHA}"
         PRINTED_NAME["${name}"]="${printed}"
         group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${kind}"
         skipped=""
-        [ "${kind}" != run ] || [ "${result}" != skipped ] || skipped=1
+        yields=""
+        if [ "${kind}" = run ]; then
+            case "${result}" in
+                skipped) skipped=1 yields=1 ;;
+                cancelled) yields=1 ;;
+            esac
+        fi
         if [ -z "${GROUP_RUN_ID["${group}"]:-}" ]; then
             NAME_GROUPS["${name}"]+="${group}"$'\n'
-        elif [ "${skipped}" != "${GROUP_SKIPPED["${group}"]}" ]; then
-            [ -z "${skipped}" ] || continue
-        elif [ "${id}" -le "${GROUP_RUN_ID["${group}"]}" ]; then
+        elif [ -n "${skipped}" ] && [ -z "${GROUP_YIELDS["${group}"]}" ]; then
             continue
         fi
         "${verdict_of}" "${result}"
         GROUP_VERDICT["${group}"]="${VERDICT}"
         GROUP_RUN_ID["${group}"]="${id}"
         GROUP_COMPLETED_AT["${group}"]="${completed_at}"
-        GROUP_SKIPPED["${group}"]="${skipped}"
+        GROUP_YIELDS["${group}"]="${yields}"
     done <<< "${rows}"
 }
 
