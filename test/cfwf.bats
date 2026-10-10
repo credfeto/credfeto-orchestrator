@@ -1603,7 +1603,14 @@ leak_credential_forms() {
         "$(url_with_password https user "<name>@hunter")" "$(url_with_password https user "\$NAME@hunter")" \
         "$(url_with_password https x-access-token "xxx@${tail}")" "x-access-token"":xxx@${tail}@""example.com" \
         "$(url_with_password https user xxx) and $(url_with_password https user "xxx@hunter")" \
-        "https:/""/user:xxx@localhost:8080,someone@example.com"
+        "https:/""/user:xxx@localhost:8080,someone@example.com" \
+        "$(url_with_password https user "@${tail}")" "$(url_with_password https user "@@${tail}")" \
+        "$(url_with_password https "" "@${tail}")" "$(url_with_password https x-access-token "@${tail}")" \
+        "x-access-token"":@${tail}@""example.com" "$(url_with_password https user "@xxx")" \
+        "https:/""/user:@localhost,someone@example.com" \
+        "$(url_with_password smtp "someone@example.com" "${tail}")" "$(url_with_password imap "a@b@example.com" hunter)" \
+        "$(url_with_password smtp "someone@example.com" "xxx@hunter")" "$(url_with_password smtp "someone@example.com" "@hunter")" \
+        "ssh:/""/git@localhost:22,someone@example.com"
 }
 
 # Text that looks like one of the credential forms and is not: a key one character short, a key
@@ -1631,7 +1638,13 @@ harmless_credential_shapes() {
         "$(url_with_password https user "<password>")?to=someone@example.com then mail someone@example.com" \
         "https://example.com:8080/path?user=someone@example.com" "ssh://git@example.com:22/path" "http://[::1]:8080/path" \
         "https://example.com:8080?user=someone@example.com and https://example.com:8080#someone@example.com" \
-        "Mail someone@example.com about https://example.com:8443 and ask @someone at 12:30."
+        "Mail someone@example.com about https://example.com:8443 and ask @someone at 12:30." \
+        "https:/""/user:@example.com/path" "https:/""/user:@example.com/path?to=someone@example.com" \
+        "https:/""/user:@localhost, then mail someone@example.com" "x-access-token:@example.com" \
+        "$(url_with_password smtp "someone@example.com" "<password>")" "$(url_with_password smtp "someone@example.com" xxx)" \
+        "$(url_with_password smtp "someone@example.com" "")" "smtp://someone@example.com@smtp.example.com/path" \
+        "ssh://git@example.com:22" "ssh://git@example.com:owner/repo.git" "docker://alpine@sha256:0123abcd" \
+        "https://user@example.com:8080/path?to=someone@example.com" "ssh://git@localhost:22, then mail someone@example.com"
 }
 
 @test "issue create refuses a body with any token form with exit 8, naming the rule and line only, before calling gh" {

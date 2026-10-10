@@ -57,11 +57,19 @@ readonly FIXED_LENGTH_KEY_PATTERN='npm_[A-Za-z0-9]{36}|AIza[A-Za-z0-9_-]{35}|sk-
 # with a port written in JSON or as Markdown code, where an email address may follow with no space.
 readonly PASSWORD_PATTERN='[^[:space:]/?#@"`]+'
 # What comes before the colon that starts a password: a URL's :// and its user name, which may be
-# empty and holds no colon, or the user name x-access-token wherever it is written.
-readonly URL_USER_PATTERN='://[^[:space:]/@:]*'
+# empty and holds no colon, or the user name x-access-token wherever it is written. A user name
+# may hold an unencoded @ (an email address as the login of a mail server URL), the first colon
+# being what ends it, so only whitespace and a slash, which end the host of a URL with no user
+# name, are left out with the colon.
+readonly URL_USER_PATTERN='://[^[:space:]/:]*'
 readonly ACCESS_TOKEN_USER='x-access-token'
-readonly URL_CREDENTIAL_PATTERN="${URL_USER_PATTERN}:${PASSWORD_PATTERN}@"
-readonly ACCESS_TOKEN_USER_PATTERN="${ACCESS_TOKEN_USER}:${PASSWORD_PATTERN}@"
+# The password of a credential, from its colon to an @. A password may hold an unencoded @, the
+# last one before the host ends being the one that ends it, so it may start with any number of
+# them: a colon and an @ with a second @ further on (user:@secret@host) is a password, while an
+# empty password (user:@host) has no second one.
+readonly CREDENTIAL_PASSWORD_PATTERN=":@*${PASSWORD_PATTERN}@"
+readonly URL_CREDENTIAL_PATTERN="${URL_USER_PATTERN}${CREDENTIAL_PASSWORD_PATTERN}"
+readonly ACCESS_TOKEN_USER_PATTERN="${ACCESS_TOKEN_USER}${CREDENTIAL_PASSWORD_PATTERN}"
 # A password that is an obvious placeholder: a variable or secret reference (it starts with $), a
 # name in angle brackets, a run of asterisks or of the letter x, or the word password. ERE cannot
 # say "any password but one of these", so check_text_patterns scans for tokens in a copy where
