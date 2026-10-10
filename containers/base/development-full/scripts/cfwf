@@ -1402,7 +1402,7 @@ unexpected_issue_result() {
 # three spaces, because Markdown reads a deeper indent, or a tab, as code. The body is split into
 # lines first, so ^ and $ in either pattern mean the same to jq, where they match at every line,
 # and to gh's gojq, where they match only at the ends of the text.
-readonly SIGNS_OFF_DEF='def signs_off: [split("\n")[] | select(test("^ {0,3}>") | not)] | any(test("'"${SIGN_OFF_KEYWORD_PATTERN}"'"; "i"));'
+readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | not) and test("'"${SIGN_OFF_KEYWORD_PATTERN}"'"; "i"));'
 # What ends the output of a filter whose last field must keep its trailing newlines: a command
 # substitution drops every newline at the end of what it captures, and none before this.
 readonly OUTPUT_END=$'\x1f'
@@ -1422,7 +1422,7 @@ read_issue() {
     fi
     kind="${GH_OUTPUT%%$'\n'*}"
     [ "${kind}" != pull ] || issue_not_found "${REPO}#${ISSUE} is a pull request, not an issue"
-    [ "${kind}" = issue ] && [[ "${GH_OUTPUT}" == *$'\n'* ]] || unexpected_issue_result
+    [[ "${GH_OUTPUT}" == issue$'\n'* ]] || unexpected_issue_result
     GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
 }
 
