@@ -11,6 +11,11 @@ readonly TITLE_LIMIT=256
 readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
+# The verdict codes of pr checks, which every cfwf command that judges checks shares.
+readonly CHECKS_FAILED_EXIT=3
+readonly CHECKS_PENDING_EXIT=4
+readonly NO_CHECKS_EXIT=5
+readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
 # follows an underscore (so MONKEY=banana passes), and the value, after an optional opening quote,
@@ -146,6 +151,9 @@ REPO=""
 PR=""
 ISSUE=""
 STATUS=""
+SHA=""
+BRANCH=""
+ALL_CHECKS=""
 TARGET_NUMBER=""
 TARGET_TYPE=""
 TARGET_URL_KIND=""
@@ -157,8 +165,8 @@ FIELD_NAME=""
 OPTION_ID=""
 ITEM_STATUS=""
 GH_ERR_FILE=""
-GRAPHQL_OUTPUT=""
-GRAPHQL_ERROR=""
+GH_OUTPUT=""
+GH_ERROR=""
 TITLE=""
 BODY_FILE=""
 PRIORITY=""
@@ -208,6 +216,7 @@ Commands:
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   issue create             Create an issue and put it on the Workflow board as Not Started
   body check               Check a body for leaks without posting it (exit 8 when refused)
+  pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -361,12 +370,65 @@ failure, including a scan that fails or a visibility lookup that fails other tha
 USAGE
 }
 
+usage_pr() {
+    cat << USAGE
+Usage: cfwf pr checks --repo <owner/repo> (--pr <n> | --sha <40-hex> | --branch <name>) [--all]
+
+Judges the checks on one head commit in a single read, and never waits or polls: poll by running
+it again later.
+
+--repo    Always required; never taken from the current directory.
+--pr      The pull request's head commit; required checks come from its base branch.
+--sha     That commit (40 hexadecimal digits); required checks come from the default branch.
+--branch  The branch tip, such as main after a merge; required checks come from that branch.
+--all     Judge every check, not only the required ones.
+Exactly one of --pr, --sha and --branch. --json, --jq, --template, --watch and --interval are not
+options: the output has one fixed format.
+
+The head is resolved first, so a check on an older head (before a force-push) is never counted.
+The check runs and commit statuses of that commit are read: the newest run of a name from each app
+is judged, whichever check suite it is in, so a run cancelled or failed in an older suite (before a
+PR was marked ready, say) no longer counts once a newer run of that name exists, and a name fails
+when any of those, or a commit status of that name, failed. A skipped run never replaces a run of
+its name that ran and decided, so a newer suite whose job skips itself cannot hide an older failure;
+a skipped run counts (as a pass) only when no run of its name ran, or when the newest that did was
+cancelled (superseded, say by that suite's cancel-in-progress) before it. The required checks of
+the branch are read from its branch protection and its rulesets (one pinned to an app is satisfied
+only by a run from that app, though a failed commit status of its name still fails it); read access
+to the repository is enough. Without --all only the required checks are judged, or every check when
+the branch requires none.
+
+Each check is judged as:
+  pass     success, skipped or neutral (a status: success)
+  fail     failure, cancelled, timed_out, action_required, startup_failure, stale or any other
+           conclusion (a status: failure, error or any other state)
+  pending  no conclusion yet (a status: pending), or a required check with no result at all
+A run that has a conclusion counts as finished, whatever its status says.
+
+Output, tab separated, sorted by name, then a summary:
+  <name>  <pass|fail|pending>  <completed_at>  <run_id>
+  summary passed=<a> failed=<b> pending=<c> head=<sha>
+Each check line has exactly four tab-separated fields; the summary is the last line and the only
+one with no tab, so a check named "summary" is never taken for it.
+A name required more than once (from two apps, or from an app and any source) is printed once for
+each, as "<name> (app <id>)" where an app is required.
+completed_at and run_id are empty for a result not finished or not found; run_id is the commit
+status id for a status. Nothing is printed unless every read succeeded.
+
+Exit codes: 0 every judged check passed; ${CHECKS_FAILED_EXIT} at least one failed; ${CHECKS_PENDING_EXIT} none failed and at least one is
+pending; ${NO_CHECKS_EXIT} the head has no check runs or statuses at all (expected for a PR whose checks wait
+until it is marked ready, so not a pass); 1 a runtime failure, such as a gh or network error,
+prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
+USAGE
+}
+
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
         body) usage_body ;;
+        pr) usage_pr ;;
         *) usage_general ;;
     esac
 }
@@ -400,7 +462,11 @@ assign_option() {
     local flag="$1" value="$2"
     case "${flag}" in
         --repo)
+            # The value goes in REST paths (repos/<owner>/<repo>/...), where an owner or repository
+            # of . or .. would be read as a path segment and reach another endpoint.
             validate "${value}" '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' "${flag}" "it must be <owner>/<repo>"
+            [[ "/${value}/" != *"/./"* && "/${value}/" != *"/../"* ]] \
+                || usage_error "invalid value for ${flag}: neither the owner nor the repository can be . or .."
             REPO="${value}"
             ;;
         --pr)
@@ -551,25 +617,31 @@ resolve_status() {
 # here contains no mutation. If the GraphQL call fails for any reason the board listing is used
 # instead, with a warning so the failure is visible.
 
-# Runs gh api graphql with the given arguments, keeping stdout in GRAPHQL_OUTPUT and stderr in
-# GRAPHQL_ERROR so that anything gh writes to stderr can never end up inside a value. Returns
-# gh's exit status.
-graphql_query() {
+# Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
+# so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
+# The board read, the visibility lookup and every pr checks read go through here (resolve_project,
+# the field list, the board listing and the closing-issue labels still call gh directly); each
+# caller uses GH_OUTPUT and GH_ERROR before its next gh call.
+gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
-    GRAPHQL_OUTPUT=$(gh api graphql "$@" 2> "${GH_ERR_FILE}") || status=$?
-    GRAPHQL_ERROR=$(< "${GH_ERR_FILE}")
+    GH_OUTPUT=$(gh "$@" < /dev/null 2> "${GH_ERR_FILE}") || status=$?
+    GH_ERROR=$(< "${GH_ERR_FILE}")
     return "${status}"
 }
 
-# The text to quote when a query failed: gh can put a raw error body on stdout when --jq is used,
-# so that is the fallback when stderr is empty. First line only, printable characters only (no
-# terminal escape sequences), at most 200 characters.
-graphql_failure_text() {
-    local text="${GRAPHQL_ERROR:-${GRAPHQL_OUTPUT}}"
-    text="${text%%$'\n'*}"
+# Prints the first line of $1, printable characters only (no terminal escape sequences), at most
+# 200 characters: the form in which any gh error is quoted.
+printable_first_line() {
+    local text="${1%%$'\n'*}"
     text="${text//[![:print:]]/}"
     printf '%s' "${text:0:200}"
+}
+
+# The text to quote when a gh_capture call failed: gh can put a raw error body on stdout when --jq
+# is used, so that is the fallback when stderr is empty.
+gh_failure_text() {
+    printable_first_line "${GH_ERROR:-${GH_OUTPUT}}"
 }
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
@@ -599,19 +671,19 @@ read_target_status() {
     done
     # $legacy / $status: the two field values; the old field wins while the board still has it.
     local pick="(if \$legacy != null then \$legacy elif (\$status != null and ([${states}] | index(\$status)) != null) then \$status else \"(unset)\" end)"
-    if graphql_query \
+    if gh_capture api graphql \
         -f query="query(\$o:String!,\$r:String!,\$n:Int!){repository(owner:\$o,name:\$r){${accessor}(number:\$n){projectItems(first:100){nodes{project{id} legacy:fieldValueByName(name:\"${LEGACY_FIELD}\"){... on ProjectV2ItemFieldSingleSelectValue{name}} status:fieldValueByName(name:\"Status\"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}" \
         -f o="${REPO%%/*}" -f r="${REPO#*/}" -F n="${TARGET_NUMBER}" \
         --jq ".data.repository.${accessor}.projectItems.nodes[] | select(.project.id==\"${PROJECT_ID}\") | (.legacy.name // null) as \$legacy | (.status.name // null) as \$status | ${pick}"; then
-        ITEM_STATUS="${GRAPHQL_OUTPUT}"
+        ITEM_STATUS="${GH_OUTPUT}"
         return 0
     fi
-    case "${GRAPHQL_ERROR}${GRAPHQL_OUTPUT}" in
+    case "${GH_ERROR}${GH_OUTPUT}" in
         *"Could not resolve to an Issue with the number"* | *"Could not resolve to a PullRequest with the number"*) return 0 ;;
     esac
 
     # The listing names a field by its lower-cased first word, so Workflow Status is "workflow Status".
-    fall_back_to_listing "$(graphql_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // null) as \$legacy | (.status // null) as \$status | ${pick}"
+    fall_back_to_listing "$(gh_failure_text)" ".items[] | select(((.content.repository // \"\") | ascii_downcase)==\"${REPO,,}\" and .content.number==${TARGET_NUMBER} and .content.type==\"${TARGET_TYPE}\") | (.[\"workflow Status\"] // null) as \$legacy | (.status // null) as \$status | ${pick}"
 }
 
 # Adds the item at the given URL to the board (idempotent) and sets its status on the field
@@ -759,26 +831,32 @@ validate_visible_text() {
         || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
 }
 
+# Refuses (exit 2) the flag $2 when the variable $1 it sets is already set: $3, when given, says
+# why.
+assign_once() {
+    [ -z "${!1}" ] || usage_error "$2 can only be given once${3:+: $3}"
+}
+
 assign_issue_option() {
     local flag="$1" value="$2"
     case "${flag}" in
         --repo)
-            [ -z "${REPO}" ] || usage_error "--repo can only be given once"
+            assign_once REPO "${flag}"
             assign_option "${flag}" "${value}"
             ;;
         --priority)
-            [ -z "${PRIORITY}" ] || usage_error "--priority can only be given once: an issue has exactly one priority"
+            assign_once PRIORITY "${flag}" "an issue has exactly one priority"
             PRIORITY=$(canonical_priority "${value}") \
                 || usage_error "unknown --priority (expected ${PRIORITY_LIST})"
             ;;
         --title)
-            [ -z "${TITLE}" ] || usage_error "--title can only be given once"
+            assign_once TITLE "${flag}"
             validate "${value}" '^[^[:cntrl:]]+$' "${flag}" "it must not contain a control character"
             validate_visible_text "${value}" "${TITLE_LIMIT}" "${flag}"
             TITLE="${value}"
             ;;
         --body-file)
-            [ -z "${BODY_FILE}" ] || usage_error "--body-file can only be given once"
+            assign_once BODY_FILE "${flag}"
             validate "${value}" '^[^[:cntrl:]]+$' "${flag}" "it must not contain a control character"
             BODY_FILE="${value}"
             ;;
@@ -801,13 +879,15 @@ is_one_of() {
     return 1
 }
 
-# Parses the options of a command that posts a body: $1 is the space-separated list of the flags
-# it accepts (each taking a value, assigned by assign_issue_option), the rest are the arguments.
-# Help is the current command's.
-parse_body_command_options() {
-    local -a allowed
-    read -ra allowed <<< "$1"
-    shift
+# Parses the options of a command: $1 is the function that assigns each one (called with the flag,
+# then its value for a flag that takes one), $2 the space-separated flags that take a value and $3
+# those that take none; the rest are the arguments. Help is the current command's.
+parse_command_options() {
+    local assign="$1"
+    local -a with_value switches
+    read -ra with_value <<< "$2"
+    read -ra switches <<< "$3"
+    shift 3
     while [ "$#" -gt 0 ]; do
         case "$1" in
             -h | --help)
@@ -817,9 +897,14 @@ parse_body_command_options() {
             *)
                 # A whole argument is compared with each flag, so one argument holding two flags
                 # and a space is an unknown option, not a match.
-                is_one_of "$1" "${allowed[@]}" || unknown_argument option "$#"
+                if is_one_of "$1" "${switches[@]}"; then
+                    "${assign}" "$1"
+                    shift
+                    continue
+                fi
+                is_one_of "$1" "${with_value[@]}" || unknown_argument option "$#"
                 [ "$#" -ge 2 ] || usage_error "$1 needs a value"
-                assign_issue_option "$1" "$2"
+                "${assign}" "$1" "$2"
                 shift 2
                 ;;
         esac
@@ -827,11 +912,11 @@ parse_body_command_options() {
 }
 
 parse_issue_options() {
-    parse_body_command_options "--repo --priority --title --body-file --label" "$@"
+    parse_command_options assign_issue_option "--repo --priority --title --body-file --label" "" "$@"
 }
 
 parse_body_options() {
-    parse_body_command_options "--repo --body-file" "$@"
+    parse_command_options assign_issue_option "--repo --body-file" "" "$@"
 }
 
 # Copies the body (stdin when BODY_FILE is -) to a private temporary file, BODY_PATH_TMP, and
@@ -986,16 +1071,15 @@ repository_references() {
 # missing (GitHub does not show it to the caller), asking GitHub once per run; any other failure
 # dies with $2.
 look_up_visibility() {
-    local repository="$1" failure="$2" key="${1,,}" answer
+    local repository="$1" failure="$2" key="${1,,}"
     [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ] || return 0
-    ensure_temp_file GH_ERR_FILE
-    if answer=$(gh repo view "${repository}" --json visibility --jq .visibility < /dev/null 2> "${GH_ERR_FILE}"); then
-        case "${answer,,}" in
+    if gh_capture repo view "${repository}" --json visibility --jq .visibility; then
+        case "${GH_OUTPUT,,}" in
             public) REPOSITORY_VISIBILITY["${key}"]=public ;;
             private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
             *) die "${failure}: gh gave an unexpected answer" ;;
         esac
-    elif grep -qE 'Could not resolve to a Repository|HTTP 404' "${GH_ERR_FILE}"; then
+    elif [[ "${GH_ERROR}" == *"Could not resolve to a Repository"* || "${GH_ERROR}" == *"HTTP 404"* ]]; then
         REPOSITORY_VISIBILITY["${key}"]=missing
     else
         die "${failure}"
@@ -1202,6 +1286,386 @@ cmd_body() {
     dispatch_subcommand body check body_check "$@"
 }
 
+# Succeeds when $1 is a branch name git allows, as git itself judges it, so cfwf never has to keep
+# a copy of git's rules in step. GIT_DIR=/dev/null keeps git out of any repository the caller is
+# in: inside one, git check-ref-format --branch expands the previous-checkout syntax (@{-1}) and
+# prints the branch it names, which is why the name it prints must also be the name given. Any
+# byte git allows (+, @, %, a non-ASCII letter) is percent-encoded by branch_path when the name
+# goes in an API path.
+valid_branch_name() {
+    local name="$1"
+    command -v git > /dev/null 2>&1 || die "git is not installed"
+    [ -n "${name}" ] && [ "$(GIT_DIR=/dev/null git check-ref-format --branch "${name}" 2> /dev/null)" = "${name}" ]
+}
+
+# Prints the branch name $1 as it goes in an API path: each byte other than a letter, digit, ., _,
+# ~, - or / percent-encoded, so no name can alter the path or the query. / is kept, because GitHub
+# reads a branch name with slashes from the rest of the path. valid_branch_name has already refused
+# a . or .. component, the only path segments left unencoded that could change the path.
+branch_path() {
+    local LC_ALL=C
+    local name="$1" encoded="" char code index
+    for ((index = 0; index < ${#name}; index++)); do
+        char="${name:index:1}"
+        case "${char}" in
+            [A-Za-z0-9._~/-]) encoded+="${char}" ;;
+            *)
+                # A byte above 127 can read as negative where char is signed, so it is masked.
+                printf -v code '%d' "'${char}"
+                printf -v char '%%%02X' "$((code & 255))"
+                encoded+="${char}"
+                ;;
+        esac
+    done
+    printf '%s' "${encoded}"
+}
+
+assign_checks_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --pr)
+            assign_once PR "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --sha)
+            assign_once SHA "${flag}"
+            validate "${value}" '^[0-9A-Fa-f]{40}$' "${flag}" "it must be a commit SHA of 40 hexadecimal digits"
+            SHA="${value,,}"
+            ;;
+        --branch)
+            assign_once BRANCH "${flag}"
+            valid_branch_name "${value}" \
+                || usage_error "invalid value for ${flag}: it must be a branch name git allows"
+            BRANCH="${value}"
+            ;;
+        --all)
+            ALL_CHECKS=1
+            ;;
+    esac
+}
+
+parse_pr_checks_options() {
+    parse_command_options assign_checks_option "--repo --pr --sha --branch" "--all" "$@"
+}
+
+require_one_checks_target() {
+    local targets="${PR:+x}${SHA:+x}${BRANCH:+x}"
+    [ "${#targets}" -eq 1 ] || usage_error "give exactly one of --pr, --sha and --branch"
+}
+
+# Runs gh api on the endpoint $2 with the jq filter $3 (any further arguments are extra gh options)
+# through gh_capture, so its output is in GH_OUTPUT. Returns 1 when GitHub answers 404, or 422 "No
+# commit found for SHA", leaving the caller to say what that means, and dies with $1 and gh's error
+# on any other failure, so a transport error (a proxy 502, a rate limit, no access) is never read as
+# a result.
+api_read() {
+    local failure="$1" endpoint="$2" filter="$3"
+    shift 3
+    gh_capture api "${endpoint}" "$@" --jq "${filter}" && return 0
+    [[ "${GH_ERROR}" != *"HTTP 404"* ]] || return 1
+    # A commit endpoint answers a commit that is not in the repository with 422, not 404.
+    [[ "${GH_ERROR}" != *"No commit found for SHA"*"HTTP 422"* ]] || return 1
+    die "${failure}: $(gh_failure_text)"
+}
+
+# A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
+# name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
+# byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
+# name with each control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F)
+# turned into a space, is only printed, so it fits on one line of the output and carries no
+# terminal escape; two names that print the same are still judged apart. The range is written out
+# because gh's --jq (gojq, Go regular expressions) reads [[:cntrl:]] as ASCII only, so it would let
+# a C1 control such as U+009B (CSI) through, where jq's would not.
+readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
+# name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
+# field would shift the rest.
+readonly ROW_SEPARATOR=$'\x1f'
+# A jq definition, put before a filter that uses it: app_of(f) is the app a required check must
+# come from, read from its field f (app_id in branch protection, integration_id in a ruleset):
+# empty for any source, which GitHub shows as a null (or -1) app_id and leaves out of a ruleset.
+readonly APP_OF_DEF='def app_of(f): if (f // -1) == -1 then "" else (f | tostring) end;'
+HEAD_SHA=""
+RULES_BRANCH=""
+BRANCH_READ=""
+BRANCH_TIP=""
+BRANCH_PATH=""
+PROTECTION_ROWS=""
+
+# Reads the branch $2 of the repository $1 once per run, so --branch, whose tip and protection both
+# come from it, makes one call and sees one state: sets BRANCH_PATH to the branch as it goes in an
+# API path (branch_path, worked out once and reused by read_required_checks), BRANCH_TIP to its tip
+# and PROTECTION_ROWS to the checks its classic branch protection requires, one row (name, app id)
+# each. checks lists each with its app; contexts, which GitHub keeps for older clients, repeats
+# those names, so a name in contexts is taken as needing no particular app only when checks does
+# not have it. A failed read dies with $3 and gh's error, and a branch that is not there dies with
+# $4.
+read_branch() {
+    local repo="$1" branch="$2" failure="$3" missing="$4"
+    [ "${BRANCH_READ}" != "${repo}${ROW_SEPARATOR}${branch}" ] || return 0
+    BRANCH_PATH="$(branch_path "${branch}")"
+    api_read "${failure}" "repos/${repo}/branches/${BRANCH_PATH}" \
+        "${APP_OF_DEF} ${NAME_FIELDS_DEF} .commit.sha, (.protection.required_status_checks | select(.enforcement_level != \"off\") | (.checks // []) as \$checks
+            | ((\$checks[] | [(.context | name_fields), app_of(.app_id)]),
+               (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [name_fields, \"\"]))
+            | join(\"\\u001f\"))" \
+        || die "${missing}"
+    BRANCH_TIP="${GH_OUTPUT%%$'\n'*}"
+    PROTECTION_ROWS=""
+    [[ "${GH_OUTPUT}" != *$'\n'* ]] || PROTECTION_ROWS="${GH_OUTPUT#*$'\n'}"
+    BRANCH_READ="${repo}${ROW_SEPARATOR}${branch}"
+}
+
+# Sets HEAD_SHA, the commit whose checks are judged, and RULES_BRANCH, the branch whose required
+# checks apply: the PR's head and base, the branch's tip and the branch itself, or the given commit
+# and the repository's default branch.
+resolve_checks_head() {
+    if [ -n "${PR}" ]; then
+        api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" "[.head.sha, .base.ref] | join(\"\\u001f\")" \
+            || die "${REPO}#${PR} was not found"
+        IFS="${ROW_SEPARATOR}" read -r HEAD_SHA RULES_BRANCH <<< "${GH_OUTPUT}"
+    elif [ -n "${BRANCH}" ]; then
+        read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" "the --branch was not found in ${REPO}"
+        HEAD_SHA="${BRANCH_TIP}"
+        RULES_BRANCH="${BRANCH}"
+    else
+        api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' \
+            || die "the repository ${REPO} was not found, or the caller cannot see it"
+        HEAD_SHA="${SHA}"
+        RULES_BRANCH="${GH_OUTPUT}"
+    fi
+    [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || die "gh returned an unexpected head commit for ${REPO}"
+    valid_branch_name "${RULES_BRANCH}" || die "gh returned an unexpected branch whose required checks apply for ${REPO}"
+}
+
+# Fills REQUIRED_CHECKS, keyed by check name (its key from name_fields) and the app id it must come from (empty for any
+# source), joined by ROW_SEPARATOR, with the checks the branch $2 of the repository $1 requires:
+# those of its classic branch protection and those of every ruleset that applies to it, without
+# duplicates. The protection is read from the branch itself (read_branch, so a branch
+# resolve_checks_head has already read is not read again, and the rulesets are read at the
+# BRANCH_PATH it worked out), which needs only read access (its protection endpoint needs admin
+# rights), and an enforcement level of off requires nothing whatever it lists. A branch that is not
+# there is a runtime failure, and so is any failed read of the rulesets, a 404 included: GitHub
+# answers a branch no ruleset applies to (whether or not it exists) with an empty list, so a 404
+# means the rules could not be read, and taking it as none would judge too few checks. The one
+# exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no rulesets (a private one on
+# GitHub Free) can have none, so that refusal is read as no rulesets. Each name
+# read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its key.
+declare -gA REQUIRED_CHECKS=() PRINTED_NAME=()
+# The start of the HTTP 403 GitHub answers the rulesets read with when the repository's plan has
+# no rulesets, as seen in practice (the REST reference lists only 200 for it).
+readonly RULESETS_NOT_IN_PLAN='Upgrade to GitHub Pro or make this repository public'
+read_required_checks() {
+    local repo="$1" branch="$2" names name printed app
+    read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
+        "the branch whose required checks apply was not found in ${repo}"
+    names="${PROTECTION_ROWS}"
+    if ! gh_capture api "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" --paginate \
+        --jq "${APP_OF_DEF} ${NAME_FIELDS_DEF} .[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
+            | [(.context | name_fields), app_of(.integration_id)] | join(\"\\u001f\")"; then
+        [[ "${GH_ERROR}" == *"${RULESETS_NOT_IN_PLAN}"*"(HTTP 403)"* ]] || die "could not read the rulesets of ${repo}: $(gh_failure_text)"
+        GH_OUTPUT=""
+    fi
+    names+=$'\n'"${GH_OUTPUT}"
+    while IFS="${ROW_SEPARATOR}" read -r name printed app; do
+        [ -n "${name}" ] || continue
+        [[ "${app}" =~ ^[0-9]*$ ]] || die "gh returned an unexpected app for a required check of ${repo}"
+        PRINTED_NAME["${name}"]="${printed}"
+        REQUIRED_CHECKS["${name}${ROW_SEPARATOR}${app}"]=1
+    done <<< "${names}"
+}
+
+# Sets VERDICT to pass, fail or pending for a check run whose conclusion is $1. A run with a
+# conclusion has finished whatever its status says; any conclusion not listed as a pass fails, so
+# one GitHub adds later is never mistaken for a pass.
+check_run_verdict() {
+    case "$1" in
+        "") VERDICT=pending ;;
+        success | skipped | neutral) VERDICT=pass ;;
+        *) VERDICT=fail ;;
+    esac
+}
+
+# Sets VERDICT for a commit status whose state is $1; a state not listed fails, as for a check run.
+commit_status_verdict() {
+    case "$1" in
+        success) VERDICT=pass ;;
+        pending) VERDICT=pending ;;
+        *) VERDICT=fail ;;
+    esac
+}
+
+# Records the rows $2 (name key, printed name, conclusion or state, id, completed_at, app id, kind) with the verdict
+# function $1, keeping the newest result (highest id) of each group: the runs of one name from one
+# app, across every check suite on the commit, as GitHub's merge gate is seen to take only the
+# latest run of a required name. So a re-run, or a new run of the workflow in a new check suite (a
+# PR marked ready, reopened or relabelled, which with cancel-in-progress leaves the older run
+# cancelled), replaces the run before it whatever order GitHub lists them in, while a run of the
+# same name from another app stays a result of its own and is still judged. Newest is creation order
+# (the id): GitHub does not document how it orders runs, and creation order agrees with it when a
+# newer run supersedes an older one, while a newer run that has not finished keeps the name pending.
+# The rows are taken oldest first, so each one is newer than the run its group holds, and each
+# replaces it, with one exception: a skipped check run did not run, so it replaces only a skipped
+# run or a cancelled one (GROUP_YIELDS), never a run that ran and decided (finished or not). So a
+# newer suite whose job skips itself (a relabelled PR whose job's if: is false) cannot hide an older
+# failure, though GitHub counts skipped as a pass and may let it, while a run cancelled by that
+# suite's cancel-in-progress was superseded, not decided, and the skipped run passes it as GitHub
+# does. Taking the rows in id order is what makes the result the same whatever order GitHub lists
+# them in.
+# The kind is "run" for a check run and "status" for a commit status, which has no app id, so a
+# status never replaces a check run (GitHub requires both to pass when a check run and a status
+# share a name), and the combined status already has one per name. NAME_GROUPS indexes the groups of
+# each name, one per line (a name key holds no newline), so judging a name reads only its own
+# groups.
+declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() GROUP_YIELDS=() NAME_GROUPS=()
+VERDICT=""
+record_check_rows() {
+    local verdict_of="$1" rows name printed result id completed_at app kind group skipped yields
+    rows="$(LC_ALL=C sort -t "${ROW_SEPARATOR}" -k4,4n <<< "$2")" || die "could not sort the checks on ${HEAD_SHA}"
+    while IFS="${ROW_SEPARATOR}" read -r name printed result id completed_at app kind; do
+        [ -n "${name}" ] || continue
+        [[ "${id}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected id for a check on ${HEAD_SHA}"
+        PRINTED_NAME["${name}"]="${printed}"
+        group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${kind}"
+        skipped=""
+        yields=""
+        if [ "${kind}" = run ]; then
+            case "${result}" in
+                skipped) skipped=1 yields=1 ;;
+                cancelled) yields=1 ;;
+            esac
+        fi
+        if [ -z "${GROUP_RUN_ID["${group}"]:-}" ]; then
+            NAME_GROUPS["${name}"]+="${group}"$'\n'
+        elif [ -n "${skipped}" ] && [ -z "${GROUP_YIELDS["${group}"]}" ]; then
+            continue
+        fi
+        "${verdict_of}" "${result}"
+        GROUP_VERDICT["${group}"]="${VERDICT}"
+        GROUP_RUN_ID["${group}"]="${id}"
+        GROUP_COMPLETED_AT["${group}"]="${completed_at}"
+        GROUP_YIELDS["${group}"]="${yields}"
+    done <<< "${rows}"
+}
+
+# Reads every check run (all pages, and filter=all, as GitHub's default filter=latest would leave
+# out runs before record_check_rows could compare them by id) and the combined commit status of
+# HEAD_SHA. Both endpoints answer for that one commit only; resolve_checks_head having found the current head first is what
+# keeps a result on an older, force-pushed head out.
+read_check_results() {
+    local runs missing="the commit ${HEAD_SHA} was not found in ${REPO}"
+    api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}&filter=all" \
+        "${NAME_FIELDS_DEF} .check_runs[]? | [(.name | name_fields), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), \"run\"] | join(\"\\u001f\")" --paginate \
+        || die "${missing}"
+    runs="${GH_OUTPUT}"
+    api_read "could not read the commit statuses of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=${API_PAGE_SIZE}" \
+        "${NAME_FIELDS_DEF} .statuses[]? | [(.context | name_fields), .state, (.id | tostring), (if .state == \"pending\" then \"\" else (.updated_at // \"\") end), \"\", \"status\"] | join(\"\\u001f\")" --paginate \
+        || die "${missing}"
+    record_check_rows check_run_verdict "${runs}"
+    record_check_rows commit_status_verdict "${GH_OUTPUT}"
+}
+
+# Sets VERDICT, RESULT_ID and RESULT_AT for the check named $1, from the app $2 (empty for any
+# source): fail when the newest result of any of its groups failed, otherwise pending when any is
+# pending, otherwise pass, and pending when it has no result at all. A check pinned to an app takes
+# only that app's runs, and a commit status of its name only when the status failed: a status never
+# satisfies it, but a failure is never hidden. RESULT_ID and RESULT_AT are those of the result that
+# decided it (the newest, among results with the same verdict).
+RESULT_ID=""
+RESULT_AT=""
+judge_check() {
+    local name="$1" app="$2" group rest rank best=-1
+    local -a groups=()
+    VERDICT=pending
+    RESULT_ID=""
+    RESULT_AT=""
+    [ -z "${NAME_GROUPS["${name}"]:-}" ] || mapfile -t groups <<< "${NAME_GROUPS["${name}"]%$'\n'}"
+    for group in "${groups[@]}"; do
+        rest="${group#*"${ROW_SEPARATOR}"}"
+        if [ -n "${app}" ] && [ "${rest%%"${ROW_SEPARATOR}"*}" != "${app}" ]; then
+            [ "${rest#*"${ROW_SEPARATOR}"}" = status ] && [ "${GROUP_VERDICT["${group}"]}" = fail ] || continue
+        fi
+        case "${GROUP_VERDICT["${group}"]}" in
+            pass) rank=0 ;;
+            pending) rank=1 ;;
+            *) rank=2 ;;
+        esac
+        # A tie only chooses which id and time are printed, so comparing a status id with a check
+        # run id, which GitHub numbers apart, never changes the verdict.
+        if [ "${rank}" -gt "${best}" ] || { [ "${rank}" -eq "${best}" ] && [ "${GROUP_RUN_ID["${group}"]}" -gt "${RESULT_ID}" ]; }; then
+            best="${rank}"
+            VERDICT="${GROUP_VERDICT["${group}"]}"
+            RESULT_ID="${GROUP_RUN_ID["${group}"]}"
+            RESULT_AT="${GROUP_COMPLETED_AT["${group}"]}"
+        fi
+    done
+}
+
+# Prints a line for each judged check, sorted by name, and the summary, the only line with no tab
+# (a check line always has four fields, so no check name can make one look like it), then exits
+# with the verdict. Every read has already succeeded, so a failed read never leaves a partial
+# report. A judged check is a name and the app it must come from (empty for any source), so a name
+# required from two apps is judged, and printed, once for each; each of those lines pinned to an
+# app shows it as "<name> (app <id>)". Checks are judged by name key and app; only the label is made
+# printable here, so two checks whose lines look alike (names that differ only in a control
+# character, or a check really named "<name> (app <id>)") are still judged, and counted, apart.
+report_checks() {
+    local check name app label passed=0 failed=0 pending=0
+    local -a lines=()
+    local -A judged=() required_count=()
+    for check in "${!REQUIRED_CHECKS[@]}"; do
+        judged["${check}"]=1
+        name="${check%%"${ROW_SEPARATOR}"*}"
+        required_count["${name}"]=$((${required_count["${name}"]:-0} + 1))
+    done
+    if [ -n "${ALL_CHECKS}" ] || [ "${#REQUIRED_CHECKS[@]}" -eq 0 ]; then
+        for name in "${!NAME_GROUPS[@]}"; do
+            [ -n "${required_count["${name}"]:-}" ] || judged["${name}${ROW_SEPARATOR}"]=1
+        done
+    fi
+
+    for check in "${!judged[@]}"; do
+        name="${check%%"${ROW_SEPARATOR}"*}"
+        app="${check#*"${ROW_SEPARATOR}"}"
+        judge_check "${name}" "${app}"
+        case "${VERDICT}" in
+            pass) passed=$((passed + 1)) ;;
+            fail) failed=$((failed + 1)) ;;
+            *) pending=$((pending + 1)) ;;
+        esac
+        label="${PRINTED_NAME["${name}"]}"
+        [ -z "${app}" ] || [ "${required_count["${name}"]:-0}" -le 1 ] || label+=" (app ${app})"
+        lines+=("${label}"$'\t'"${VERDICT}"$'\t'"${RESULT_AT}"$'\t'"${RESULT_ID}")
+    done
+
+    [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}" | LC_ALL=C sort
+    printf 'summary passed=%s failed=%s pending=%s head=%s\n' "${passed}" "${failed}" "${pending}" "${HEAD_SHA}"
+
+    [ "${#GROUP_VERDICT[@]}" -gt 0 ] || exit "${NO_CHECKS_EXIT}"
+    [ "${failed}" -eq 0 ] || exit "${CHECKS_FAILED_EXIT}"
+    [ "${pending}" -eq 0 ] || exit "${CHECKS_PENDING_EXIT}"
+    exit 0
+}
+
+pr_checks() {
+    parse_pr_checks_options "$@"
+    require REPO --repo
+    require_one_checks_target
+    require_gh
+    resolve_checks_head
+    read_required_checks "${REPO}" "${RULES_BRANCH}"
+    read_check_results
+    report_checks
+}
+
+cmd_pr() {
+    dispatch_subcommand pr checks pr_checks "$@"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -1219,6 +1683,7 @@ main() {
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         issue) cmd_issue "$@" ;;
         body) cmd_body "$@" ;;
+        pr) cmd_pr "$@" ;;
         *) unknown_argument command "$(($# + 1))" ;;
     esac
 }
