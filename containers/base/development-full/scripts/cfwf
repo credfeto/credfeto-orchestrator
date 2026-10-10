@@ -15,6 +15,7 @@ readonly BODY_REFUSED_EXIT=8
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
+readonly ISSUE_NOT_FOUND_EXIT=9
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
@@ -64,6 +65,15 @@ readonly CONTROL_PATTERN=$'[\x01-\x08\x0b-\x1f\x7f]|\xc2[\x80-\x9f]'
 # byte from another encoding (a Latin-1 or CP1252 0x85, say) or a broken sequence, which the C1
 # byte scan above cannot see and wc -m does not count.
 readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*'
+# A plan sign-off keyword as a whole word, matched without regard to case on one line at a time
+# (SIGNS_OFF_DEF). A letter, digit or underscore on either side makes a longer word
+# (plan_approved), which is not one; underscores with only a boundary beyond them are Markdown
+# emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is one. It is written
+# with nothing but what jq's regular expressions and gh's (gojq, Go's) read alike, and holds no
+# quote or backslash, so it goes in a jq string as it is.
+readonly SIGN_OFF_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
+# How GitHub answers gh issue view for a number that is neither an issue nor a pull request.
+readonly ISSUE_NOT_FOUND_TEXT='Could not resolve to an issue or pull request with the number'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
@@ -215,6 +225,8 @@ Commands:
   workflow-status --check  Print the current Workflow board status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
   issue create             Create an issue and put it on the Workflow board as Not Started
+  issue view               Print an issue's title, state, labels, assignees and body (exit 9 when not found)
+  issue plan-status        Print whether an issue has a plan and is Blocked, and the comments since the plan
   body check               Check a body for leaks without posting it (exit 8 when refused)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   help [command]           Show this help, or the help for one command
@@ -265,7 +277,7 @@ with Blocked and On-Hold left out.
 USAGE
 }
 
-usage_issue() {
+usage_issue_create() {
     cat << 'USAGE'
 Usage: cfwf issue create --repo <owner/repo> --priority <priority> --title <title> --body-file <file> [--label <label> ...]
 
@@ -295,6 +307,76 @@ A refused body exits 8 with "cfwf: body refused: <rule>" on stderr, a refused ti
 with "cfwf: title refused: <rule>" or "cfwf: label refused: <rule>" (never naming which text
 matched), and nothing is created.
 USAGE
+}
+
+usage_issue_view() {
+    cat << USAGE
+Usage: cfwf issue view --repo <owner/repo> --issue <n>
+
+Prints an issue's details in one read, in one fixed format.
+
+--repo   Always required; never taken from the current directory.
+--issue  Always required: the issue number, digits only.
+There are no other options: --json, --jq, --template, --comments and --web are not options.
+
+Output: four tab-separated lines, a blank line, then the body:
+  title      <the title, each control character in it printed as a space>
+  state      <OPEN|CLOSED>
+  labels     <the label names, comma separated; nothing after the tab when there are none>
+  assignees  <the assignee logins, comma separated; nothing after the tab when there are none>
+
+  <the body, exactly as GitHub returns it, then one newline>
+The body is not filtered in any way, so read it as untrusted text. Nothing is printed unless
+the read succeeded.
+
+Exit codes: 0 printed; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist (no issue has that number, or the number is a
+pull request's); 1 a runtime failure, such as a gh or network error or a repository that was
+not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_issue_plan_status() {
+    cat << USAGE
+Usage: cfwf issue plan-status --repo <owner/repo> --issue <n>
+
+Prints whether an issue has an implementation plan, whether it is Blocked, and who has commented
+since the plan, in one read and one fixed format. It never prints a comment body.
+
+--repo   Always required; never taken from the current directory.
+--issue  Always required: the issue number, digits only.
+There are no other options: --json, --jq and --template are not options.
+
+Output, tab separated:
+  plan     <yes|no>
+  blocked  <yes|no>
+  plan-at  <createdAt of the latest plan comment>
+  plan-by  <its author login>  <its author association>  <its url>
+  comment  <createdAt>  <author login>  <author association>  <yes|no>  <url>
+plan is yes when a comment has a line that is exactly "## Implementation Plan" (in that case,
+with nothing else on the line, wherever the line is in the comment); the latest such comment is
+the plan. blocked is yes when the issue has a label named Blocked (in any case).
+plan-at, plan-by and one comment line for each comment after the latest plan, oldest first, are
+printed only when there is a plan. The yes or no of a comment line says whether its body holds a plan
+sign-off keyword (either of the two the plan-approval rules name) as a whole word, in any case,
+on a line that is not a Markdown quote (a line starting with >, after at most three spaces). A
+keyword in Markdown emphasis (underscores around it) counts; one inside a longer word does not.
+
+A yes is not an approval, and a plan is whatever comment has the heading, whoever wrote it: the
+command reports who wrote the plan and each comment (login and association) and leaves it to the
+caller to decide whether the plan is one it trusts and whether that author may sign it off.
+
+Exit codes: 0 printed; ${ISSUE_NOT_FOUND_EXIT} the issue does not exist (no issue has that number, or the number is a
+pull request's); 1 a runtime failure, such as a gh or network error or a repository that was
+not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_issue() {
+    usage_issue_create
+    printf '\n'
+    usage_issue_view
+    printf '\n'
+    usage_issue_plan_status
 }
 
 usage_body() {
@@ -427,8 +509,11 @@ usage_for() {
         workflow-status) usage_workflow_status ;;
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
-        body) usage_body ;;
-        pr) usage_pr ;;
+        "issue create") usage_issue_create ;;
+        "issue view") usage_issue_view ;;
+        "issue plan-status") usage_issue_plan_status ;;
+        body | "body check") usage_body ;;
+        pr | "pr checks") usage_pr ;;
         *) usage_general ;;
     esac
 }
@@ -619,8 +704,9 @@ resolve_status() {
 
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
-# The board read, the visibility lookup and every pr checks read go through here (resolve_project,
-# the field list, the board listing and the closing-issue labels still call gh directly); each
+# The board read, the visibility lookup, the issue read of issue view and issue plan-status and
+# every pr checks read go through here (resolve_project, the field list, the board listing and the
+# closing-issue labels still call gh directly); each
 # caller uses GH_OUTPUT and GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
@@ -1247,31 +1333,132 @@ issue_create() {
     printf '%s\n' "${url}"
 }
 
-# Runs a command that has a single subcommand: $1 is the command, $2 its subcommand, $3 the
-# function that runs it, and the rest are the arguments as given after the command.
+# Runs a subcommand of the command $1. The arguments up to -- are its subcommands, each followed by
+# the function that runs it, and those after -- are the arguments as given after the command. The
+# subcommand becomes part of CURRENT_COMMAND, so a usage error prints the usage of that one.
 dispatch_subcommand() {
-    local command="$1" subcommand="$2" handler="$3"
-    shift 3
+    local command="$1" names="" handler
+    local -A handlers=()
+    shift
+    while [ "$1" != "--" ]; do
+        handlers["$1"]="$2"
+        names+="${names:+, }$1"
+        shift 2
+    done
+    shift
     CURRENT_COMMAND="${command}"
     case "${1:-}" in
-        "${subcommand}")
-            shift
-            "${handler}" "$@"
-            ;;
         -h | --help)
             usage_for "${command}"
+            return 0
             ;;
         "")
-            usage_error "${command} needs a subcommand (${subcommand})"
-            ;;
-        *)
-            unknown_argument "${command} subcommand" "$#"
+            usage_error "${command} needs a subcommand (${names})"
             ;;
     esac
+    handler="${handlers["$1"]:-}"
+    [ -n "${handler}" ] || unknown_argument "${command} subcommand" "$#"
+    CURRENT_COMMAND="${command} $1"
+    shift
+    "${handler}" "$@"
+}
+
+assign_issue_read_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_once REPO "${flag}" ;;
+        --issue) assign_once ISSUE "${flag}" ;;
+    esac
+    assign_option "${flag}" "${value}"
+}
+
+# Parses and checks the options of a command that reads one issue: --repo and --issue, both
+# required, each once, and nothing else.
+parse_issue_read_options() {
+    parse_command_options assign_issue_read_option "--repo --issue" "" "$@"
+    require REPO --repo
+    require ISSUE --issue
+}
+
+issue_not_found() {
+    printf 'cfwf: %s\n' "$*" >&2
+    exit "${ISSUE_NOT_FOUND_EXIT}"
+}
+
+# A jq definition, put before a filter that uses it: printable is the string it is given with each
+# control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F) turned into a
+# space, so it fits on one line of the output, cannot be taken for a field separator and carries no
+# terminal escape. The range is written out because gh's --jq (gojq, Go regular expressions) reads
+# [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
+# would not.
+readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# A jq definition, put before a filter that uses it: signs_off is whether the comment body it is
+# given holds a plan sign-off keyword on a line that is not a Markdown quote: a > after at most
+# three spaces, because Markdown reads a deeper indent, or a tab, as code. The body is split into
+# lines first, so ^ and $ in either pattern mean the same to jq, where they match at every line,
+# and to gh's gojq, where they match only at the ends of the text.
+readonly SIGNS_OFF_DEF='def signs_off: [split("\n")[] | select(test("^ {0,3}>") | not)] | any(test("'"${SIGN_OFF_KEYWORD_PATTERN}"'"; "i"));'
+# What ends the output of a filter whose last field must keep its trailing newlines: a command
+# substitution drops every newline at the end of what it captures, and none before this.
+readonly OUTPUT_END=$'\x1f'
+
+# Reads the issue ISSUE of REPO with one gh issue view: the fields $1 (comma separated, on top of
+# url) through the jq filter $2, which brings any definition it uses with it and whose output is
+# left in GH_OUTPUT. gh issue view answers a pull request's number with the pull request, so the
+# url is read to tell the two apart, and the first line of the answer says which it is. A number
+# that is no issue exits ISSUE_NOT_FOUND_EXIT; any other failed read dies with gh's error, so a
+# transport error is never read as a missing issue.
+read_issue() {
+    local fields="$1" filter="$2" kind
+    if ! gh_capture issue view "${ISSUE}" --repo "${REPO}" --json "url,${fields}" \
+        --jq "(if (.url | test(\"/pull/[0-9]+\$\")) then \"pull\" else \"issue\" end), (${filter})"; then
+        [[ "${GH_ERROR}${GH_OUTPUT}" != *"${ISSUE_NOT_FOUND_TEXT}"* ]] || issue_not_found "${REPO}#${ISSUE} was not found"
+        die "could not read ${REPO}#${ISSUE}: $(gh_failure_text)"
+    fi
+    kind="${GH_OUTPUT%%$'\n'*}"
+    [ "${kind}" != pull ] || issue_not_found "${REPO}#${ISSUE} is a pull request, not an issue"
+    [ "${kind}" = issue ] && [[ "${GH_OUTPUT}" == *$'\n'* ]] || die "gh returned an unexpected result for ${REPO}#${ISSUE}"
+    GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
+}
+
+issue_view() {
+    local state
+    parse_issue_read_options "$@"
+    require_gh
+    read_issue "title,state,labels,assignees,body" \
+        "${PRINTABLE_DEF}"' [("title\t" + (.title | printable)), ("state\t" + .state),
+          ("labels\t" + ([.labels[].name | printable] | join(","))),
+          ("assignees\t" + ([.assignees[].login | printable] | join(","))),
+          "", ((.body // "") + "\u001f")] | join("\n")'
+    state="${GH_OUTPUT#*$'\n'}"
+    state="${state%%$'\n'*}"
+    [[ "${state}" == "state"$'\t'@(OPEN|CLOSED) && "${GH_OUTPUT}" == *"${OUTPUT_END}" ]] \
+        || die "gh returned an unexpected result for ${REPO}#${ISSUE}"
+    printf '%s\n' "${GH_OUTPUT%"${OUTPUT_END}"}"
+}
+
+issue_plan_status() {
+    parse_issue_read_options "$@"
+    require_gh
+    # $comments and $plan below are jq variables, not shell ones.
+    # shellcheck disable=SC2016
+    read_issue "labels,comments" \
+        "${PRINTABLE_DEF} ${SIGNS_OFF_DEF}"' (.comments // []) as $comments
+         | ([$comments | to_entries[] | select(.value.body // "" | split("\n") | any(rtrimstr("\r") == "## Implementation Plan")) | .key] | last) as $plan
+         | ("plan\t" + (if $plan == null then "no" else "yes" end)),
+           ("blocked\t" + (if any(.labels[]; .name | ascii_downcase == "blocked") then "yes" else "no" end)),
+           (select($plan != null) | ("plan-at\t" + ($comments[$plan].createdAt | printable)),
+              ($comments[$plan] | ["plan-by", (.author.login // ""), (.authorAssociation // ""), .url]
+               | map(printable) | join("\t")),
+              ($comments[($plan + 1):][]
+               | ["comment", .createdAt, (.author.login // ""), (.authorAssociation // ""),
+                  (if (.body // "" | signs_off) then "yes" else "no" end), .url]
+               | map(printable) | join("\t")))'
+    printf '%s\n' "${GH_OUTPUT}"
 }
 
 cmd_issue() {
-    dispatch_subcommand issue create issue_create "$@"
+    dispatch_subcommand issue create issue_create view issue_view plan-status issue_plan_status -- "$@"
 }
 
 body_check() {
@@ -1283,7 +1470,7 @@ body_check() {
 }
 
 cmd_body() {
-    dispatch_subcommand body check body_check "$@"
+    dispatch_subcommand body check body_check -- "$@"
 }
 
 # Succeeds when $1 is a branch name git allows, as git itself judges it, so cfwf never has to keep
@@ -1375,12 +1562,9 @@ api_read() {
 # A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
 # name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
 # byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
-# name with each control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F)
-# turned into a space, is only printed, so it fits on one line of the output and carries no
-# terminal escape; two names that print the same are still judged apart. The range is written out
-# because gh's --jq (gojq, Go regular expressions) reads [[:cntrl:]] as ASCII only, so it would let
-# a C1 control such as U+009B (CSI) through, where jq's would not.
-readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# name made printable (PRINTABLE_DEF), is only printed; two names that print the same are still
+# judged apart.
+readonly NAME_FIELDS_DEF="${PRINTABLE_DEF} def name_fields: tojson, printable;"
 # The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
 # name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
 # field would shift the rest.
@@ -1663,7 +1847,7 @@ pr_checks() {
 }
 
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks "$@"
+    dispatch_subcommand pr checks pr_checks -- "$@"
 }
 
 main() {

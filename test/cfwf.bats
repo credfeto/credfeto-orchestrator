@@ -36,7 +36,7 @@ setup() {
         '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
-        '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
+        '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
@@ -167,6 +167,8 @@ gh_line_of() {
         [[ "${output}" == *"workflow-status --check"* ]]
         [[ "${output}" == *"closing-issue-labels"* ]]
         [[ "${output}" == *"issue create"* ]]
+        [[ "${output}" == *"issue view"*"(exit 9 when not found)"* ]]
+        [[ "${output}" == *"issue plan-status"* ]]
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
     done
@@ -871,7 +873,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, view, plan-status)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -3105,4 +3107,464 @@ run_pr_checks() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not read the check runs of ${HEAD_SHA}: gh: Validation Failed (HTTP 422)" ]
+}
+
+# --- issue view and issue plan-status -------------------------------------------
+
+ISSUE_READ_USAGE="--repo <owner/repo> --issue <n>"
+VIEW_FIELDS="url,title,state,labels,assignees,body"
+PLAN_STATUS_FIELDS="url,labels,comments"
+PLAN_HEADING="## Implementation Plan"
+
+# The two plan sign-off keywords, one per line, each built from pieces so that this file never
+# holds one as a word.
+sign_off_keywords() {
+    printf '%s%s\n' appr oved lg tm
+}
+
+# The fixture path (without .json or .fail) the gh stub reads for gh issue view $1.
+issue_fixture() {
+    printf '%s/issue-view-%s' "${GH_FIXTURES}" "$1"
+}
+
+# Writes issue $1 as gh issue view --json answers it: its title $2, state $3 and body $4, then its
+# label names, then -- and its assignee logins. The comments are empty; write_comments sets them.
+write_issue() {
+    local number="$1" title="$2" state="$3" body="$4"
+    shift 4
+    local -a labels=()
+    while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+        labels+=("$1")
+        shift
+    done
+    [ "$#" -eq 0 ] || shift
+    jq -n --arg url "https://github.com/${REPO}/issues/${number}" --arg title "${title}" --arg state "${state}" \
+        --arg body "${body}" --arg labels "$(printf '%s\037' "${labels[@]}")" --args \
+        '{url: $url, title: $title, state: $state, body: $body, comments: [],
+          labels: ($labels | split("\u001f") | map(select(. != "") | {id: "LA_x", name: ., color: "ffffff", description: ""})),
+          assignees: ($ARGS.positional | map({id: "U_x", login: ., name: ""}))}' "$@" > "$(issue_fixture "${number}").json"
+}
+
+# The createdAt of the comment whose number in the thread is $1: one day for each, so thread order
+# and time order agree.
+comment_time() {
+    printf '2026-10-%02dT10:00:00Z' "$1"
+}
+
+# The URL of the comment whose number in the thread is $1. Every comment fixture belongs to issue 7.
+comment_url() {
+    printf 'https://github.com/%s/issues/7#issuecomment-%s' "${REPO}" "$1"
+}
+
+# One comment as gh issue view --json comments lists it: its number in the thread $1 (which gives
+# its time and URL), author login $2 ("" for a deleted account, whose author GitHub leaves null),
+# author association $3 and body $4.
+issue_comment() {
+    jq -n --argjson n "$1" --arg login "$2" --arg association "$3" --arg body "$4" \
+        --arg time "$(comment_time "$1")" --arg url "$(comment_url "$1")" \
+        '{id: "IC_\($n)", author: (if $login == "" then null else {login: $login} end), authorAssociation: $association,
+          body: $body, createdAt: $time, isMinimized: false, url: $url}'
+}
+
+# Sets the comments of issue $1, already written, to the rest of the arguments, each an
+# issue_comment object, in thread order.
+write_comments() {
+    local file
+    file="$(issue_fixture "$1").json"
+    shift
+    printf '%s\n' "$@" | jq -s --slurpfile issue "${file}" '$issue[0] + {comments: .}' > "${file}.new"
+    mv "${file}.new" "${file}"
+}
+
+# The plan-at and plan-by lines plan-status prints when the plan is the issue_comment whose number
+# is $1, login $2 and association $3.
+plan_lines() {
+    printf 'plan-at\t%s\nplan-by\t%s\t%s\t%s' "$(comment_time "$1")" "$2" "$3" "$(comment_url "$1")"
+}
+
+# The comment line plan-status prints for the issue_comment whose number is $1, login $2,
+# association $3 and sign-off answer $4.
+comment_line() {
+    printf 'comment\t%s\t%s\t%s\t%s\t%s' "$(comment_time "$1")" "$2" "$3" "$4" "$(comment_url "$1")"
+}
+
+run_issue_read() {
+    local subcommand="$1"
+    shift
+    run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" "$@"
+}
+
+# gh was called once and only once: the gh issue view of issue $1 for exactly the fields $2.
+assert_one_issue_read() {
+    [ "$(grep -cE '^(issue|pr|repo|api|project|label) ' "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "issue view $1 --repo ${REPO} --json $2 --jq ")" -eq 1 ]
+}
+
+# Prints yes or no for each body given, one per line and in order: what plan-status says of a
+# comment with that body posted after the plan. Every body is a comment of one thread, read in one run.
+sign_off_answers() {
+    local body number=1
+    local -a comments=()
+    write_issue 7 "A title" OPEN "The request."
+    comments+=("$(issue_comment 1 credfeto OWNER "${PLAN_HEADING}")")
+    for body; do
+        number=$((number + 1))
+        comments+=("$(issue_comment "${number}" someone MEMBER "${body}")")
+    done
+    write_comments 7 "${comments[@]}"
+    "${SCRIPT}" issue plan-status --repo "${REPO}" --issue 7 < /dev/null | awk -F '\t' '$1 == "comment" { print $5 }'
+}
+
+# plan-status answers $1 (yes or no) for every one of the comment bodies that follow; the first
+# body with another answer is named.
+assert_sign_off() {
+    local expected="$1" body index=0
+    local -a answers=()
+    shift
+    mapfile -t answers < <(sign_off_answers "$@")
+    [ "${#answers[@]}" -eq "$#" ] || { echo "expected $# answers, got ${#answers[@]}" >&2; return 1; }
+    for body; do
+        [ "${answers[index]}" = "${expected}" ] || { echo "not ${expected}: ${body}" >&2; return 1; }
+        index=$((index + 1))
+    done
+}
+
+@test "issue view and issue plan-status help, from each -h and from help issue, describes the exit codes and calls no gh" {
+    local invocation
+    for invocation in "issue view -h" "issue view --help" "issue view --repo ${REPO} --help" "help issue" "issue -h"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"Usage: cfwf issue view ${ISSUE_READ_USAGE}"* ]]
+        [[ "${output}" == *"Exit codes: 0 printed; 9 the issue does not exist"*"1 a runtime failure"*"2 a usage error."* ]]
+        [[ "${output}" == *"exactly as GitHub returns it"* ]]
+    done
+    for invocation in "issue plan-status -h" "issue plan-status --help" "help issue" "issue --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"Usage: cfwf issue plan-status ${ISSUE_READ_USAGE}"* ]]
+        [[ "${output}" == *"It never prints a comment body."* ]]
+        [[ "${output}" == *"A yes is not an approval"* ]]
+    done
+
+    # The help of one subcommand is that subcommand's alone.
+    run "${SCRIPT}" issue view -h
+    [[ "${output}" != *"cfwf issue create"* && "${output}" != *"cfwf issue plan-status"* ]]
+    run "${SCRIPT}" issue plan-status -h
+    [[ "${output}" != *"cfwf issue create"* && "${output}" != *"cfwf issue view"* ]]
+    run "${SCRIPT}" issue create -h
+    [[ "${output}" != *"cfwf issue view"* && "${output}" != *"cfwf issue plan-status"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue view and issue plan-status usage errors exit 2 with their own usage, before any gh call" {
+    local -a cases=(
+        "--repo ${REPO}"
+        "--issue 7"
+        ""
+        "--repo ${REPO} --issue 7 --repo ${REPO}"
+        "--repo ${REPO} --issue 7 --issue 7"
+        "--repo ${REPO} --issue x7"
+        "--repo ${REPO} --issue 7x"
+        "--repo ${REPO} --issue -7"
+        "--repo ${REPO} --issue 7;8"
+        "--repo ${REPO} --issue #7"
+        "--repo not-a-repo --issue 7"
+        "--repo ../.. --issue 7"
+        "--repo ${REPO} --issue 7 --json title"
+        "--repo ${REPO} --issue 7 --jq ."
+        "--repo ${REPO} --issue 7 --template x"
+        "--repo ${REPO} --issue 7 --comments"
+        "--repo ${REPO} --issue 7 --web"
+        "--repo ${REPO} --issue 7 --pr 7"
+        "--repo ${REPO} --issue 7 --title T"
+        "--repo ${REPO} --issue 7 extra"
+        "--repo ${REPO} --issue"
+    )
+    local subcommand args
+    for subcommand in view plan-status; do
+        for args in "${cases[@]}"; do
+            # shellcheck disable=SC2086  # each case is split into its words on purpose
+            run --separate-stderr "${SCRIPT}" issue "${subcommand}" ${args}
+            [ "${status}" -eq 2 ] || { echo "accepted: ${subcommand} ${args} (${status})" >&2; return 1; }
+            [ -z "${output}" ]
+            [[ "${stderr}" == *"Usage: cfwf issue ${subcommand} ${ISSUE_READ_USAGE}"* ]]
+            [[ "${stderr}" != *"cfwf issue create"* ]]
+        done
+
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue ""
+        [ "${status}" -eq 2 ]
+        [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --issue: it must be a number" ]]
+
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --issue 7
+        [[ "${stderr%%$'\n'*}" == "cfwf: missing required option --repo" ]]
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}"
+        [[ "${stderr%%$'\n'*}" == "cfwf: missing required option --issue" ]]
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --repo "${REPO}"
+        [[ "${stderr%%$'\n'*}" == "cfwf: --repo can only be given once" ]]
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --issue 8
+        [[ "${stderr%%$'\n'*}" == "cfwf: --issue can only be given once" ]]
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue x7
+        [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --issue: it must be a number" ]]
+        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --json title
+        [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 7; its value is not shown)" ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue view prints an open issue's title, state, labels and assignees, then its body unchanged, in one gh call" {
+    local body=$'First line\twith a tab.\n\n\n  indented, with trailing spaces   \nand a trailing tab\t\n\nlast line\n\n'
+    write_issue 7 "A title: with 'quotes', a \\ and a | pipe" OPEN "${body}" AI-Work Medium "two words" -- credfeto someone-else
+    "${SCRIPT}" issue view --repo "${REPO}" --issue 7 > "${TEST_TMP}/out" 2> "${TEST_TMP}/err" < /dev/null
+    printf 'title\t%s\nstate\tOPEN\nlabels\tAI-Work,Medium,two words\nassignees\tcredfeto,someone-else\n\n%s\n' \
+        "A title: with 'quotes', a \\ and a | pipe" "${body}" > "${TEST_TMP}/expected"
+    cmp "${TEST_TMP}/expected" "${TEST_TMP}/out"
+    [ ! -s "${TEST_TMP}/err" ]
+    assert_one_issue_read 7 "${VIEW_FIELDS}"
+}
+
+@test "issue view prints a closed issue with no labels, no assignees and no body, each field still on its line" {
+    write_issue 7 "Done" CLOSED ""
+    "${SCRIPT}" issue view --repo "${REPO}" --issue 7 > "${TEST_TMP}/out" < /dev/null
+    printf 'title\tDone\nstate\tCLOSED\nlabels\t\nassignees\t\n\n\n' > "${TEST_TMP}/expected"
+    cmp "${TEST_TMP}/expected" "${TEST_TMP}/out"
+
+    # GitHub can answer a body that was never set with null.
+    jq '.body = null' "$(issue_fixture 7).json" > "${TEST_TMP}/null-body.json"
+    mv "${TEST_TMP}/null-body.json" "$(issue_fixture 7).json"
+    "${SCRIPT}" issue view --repo "${REPO}" --issue 7 > "${TEST_TMP}/out" < /dev/null
+    cmp "${TEST_TMP}/expected" "${TEST_TMP}/out"
+}
+
+@test "issue view keeps a body that is only whitespace, or that ends without a newline, byte for byte" {
+    local body
+    for body in $'\n\n' $' \t ' "no newline at the end" $'ends with spaces  \n\n\n\n' $'CRLF line\r\nand another\r\n'; do
+        write_issue 7 "T" OPEN "${body}"
+        "${SCRIPT}" issue view --repo "${REPO}" --issue 7 > "${TEST_TMP}/out" < /dev/null
+        printf 'title\tT\nstate\tOPEN\nlabels\t\nassignees\t\n\n%s\n' "${body}" > "${TEST_TMP}/expected"
+        cmp "${TEST_TMP}/expected" "${TEST_TMP}/out"
+    done
+}
+
+@test "issue view prints each control character in a title or a label as a space, so every field stays on its line" {
+    # A tab, a newline, ESC, U+009B (CSI, in C1) and DEL are controls; U+00A0, just past C1, is not.
+    write_issue 7 $'a\tb\nc\x1b[1md\xc2\x9be\x7ff\xc2\xa0g' OPEN "The body." $'odd\tlabel' $'two\nlines'
+    run_issue_read view --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "title"$'\t'"a b c [1md e f"$'\xc2\xa0'"g"$'\n'"state"$'\t'"OPEN"$'\n'"labels"$'\t'"odd label,two lines"$'\n'"assignees"$'\t'$'\n\n'"The body." ]
+    [ -z "${stderr}" ]
+}
+
+@test "issue view and issue plan-status exit 9 for a number that is no issue, or that is a pull request's" {
+    local subcommand
+    for subcommand in view plan-status; do
+        run_issue_read "${subcommand}" --issue 404
+        [ "${status}" -eq 9 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${REPO}#404 was not found" ]
+    done
+
+    # gh issue view answers a pull request's number with the pull request.
+    write_issue 8 "A pull request" MERGED "Its description."
+    jq --arg url "https://github.com/${REPO}/pull/8" '.url = $url' "$(issue_fixture 8).json" > "${TEST_TMP}/pull.json"
+    mv "${TEST_TMP}/pull.json" "$(issue_fixture 8).json"
+    for subcommand in view plan-status; do
+        run_issue_read "${subcommand}" --issue 8
+        [ "${status}" -eq 9 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${REPO}#8 is a pull request, not an issue" ]
+    done
+}
+
+@test "issue view and issue plan-status report a failing gh as a runtime failure (exit 1), never as a missing issue" {
+    local subcommand
+    write_issue 7 "A title" OPEN "The request."
+    for subcommand in view plan-status; do
+        printf 'gh: Bad Gateway (HTTP 502)\n' > "$(issue_fixture 7).fail"
+        run_issue_read "${subcommand}" --issue 7
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: could not read ${REPO}#7: gh: Bad Gateway (HTTP 502)" ]
+
+        # A repository GitHub does not show the caller is not a missing issue either.
+        printf "GraphQL: Could not resolve to a Repository with the name '%s'. (repository)\n" "${REPO}" > "$(issue_fixture 7).fail"
+        run_issue_read "${subcommand}" --issue 7
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: could not read ${REPO}#7: GraphQL: Could not resolve to a Repository"* ]]
+    done
+}
+
+@test "issue view refuses a state it does not know as a runtime failure, printing nothing" {
+    write_issue 7 "A title" LOCKED "The request."
+    run_issue_read view --issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#7" ]
+}
+
+@test "issue view and issue plan-status leave no temporary file behind, whether the read works or fails" {
+    local subcommand scratch="${TEST_TMP}/scratch"
+    mkdir -p "${scratch}"
+    write_issue 7 "A title" OPEN "The request."
+    for subcommand in view plan-status; do
+        TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7
+        [ "${status}" -eq 0 ]
+        [ -z "$(ls -A "${scratch}")" ]
+        TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 404
+        [ "${status}" -eq 9 ]
+        [ -z "$(ls -A "${scratch}")" ]
+    done
+}
+
+@test "issue plan-status reports no plan, and no comment lines, for an issue with no plan comment, in one gh call" {
+    local keyword
+    keyword="$(sign_off_keywords | head -1)"
+    write_issue 7 "A title" OPEN "${PLAN_HEADING} in the description is not a plan comment."
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+    [ -z "${stderr}" ]
+    assert_one_issue_read 7 "${PLAN_STATUS_FIELDS}"
+
+    # Only a line that is the heading and nothing else makes a comment a plan: not one in another
+    # case, with anything before or after the heading on its line, or of another heading level.
+    write_comments 7 "$(issue_comment 1 someone MEMBER "${PLAN_HEADING,,}")" \
+        "$(issue_comment 2 someone MEMBER "${PLAN_HEADING^^}")" \
+        "$(issue_comment 3 someone MEMBER " ${PLAN_HEADING}")" \
+        "$(issue_comment 4 someone MEMBER "${PLAN_HEADING} (revised)")" \
+        "$(issue_comment 5 someone MEMBER "${PLAN_HEADING}ning notes")" \
+        "$(issue_comment 6 someone MEMBER "${PLAN_HEADING} ")" \
+        "$(issue_comment 7 someone MEMBER "See the ${PLAN_HEADING}")" \
+        "$(issue_comment 8 someone MEMBER "### Implementation Plan")" \
+        "$(issue_comment 9 credfeto OWNER "${keyword}")"
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+}
+
+@test "issue plan-status takes a comment as a plan wherever its heading line is, with LF or CRLF line endings" {
+    local body
+    write_issue 7 "A title" OPEN "The request."
+    for body in "${PLAN_HEADING}" "${PLAN_HEADING}"$'\n\n'"Step one." "See the plan below."$'\n\n'"${PLAN_HEADING}"$'\n'"Step one." \
+        "A preamble."$'\r\n\r\n'"${PLAN_HEADING}"$'\r\n'"Step one."$'\r\n' "${PLAN_HEADING}"$'\r'; do
+        write_comments 7 "$(issue_comment 1 planner-bot NONE "${body}")"
+        run_issue_read plan-status --issue 7
+        [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)" ] || { echo "not a plan: ${body}" >&2; return 1; }
+    done
+}
+
+@test "issue plan-status reports the plan's time and each later comment in order, leaving out the comments before the plan" {
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 early-bird CONTRIBUTOR "A question before the plan.")" \
+        "$(issue_comment 2 planner-bot NONE "${PLAN_HEADING}"$'\n\n'"Step one.")" \
+        "$(issue_comment 3 credfeto OWNER "A question after the plan.")" \
+        "$(issue_comment 4 someone MEMBER "Another remark.")"
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 planner-bot NONE)"$'\n'"$(comment_line 3 credfeto OWNER no)"$'\n'"$(comment_line 4 someone MEMBER no)" ]
+    [ -z "${stderr}" ]
+    assert_one_issue_read 7 "${PLAN_STATUS_FIELDS}"
+
+    # A plan nobody has answered yet has no comment lines.
+    write_comments 7 "$(issue_comment 1 early-bird CONTRIBUTOR "A question before the plan.")" \
+        "$(issue_comment 2 planner-bot NONE "${PLAN_HEADING}")"
+    run_issue_read plan-status --issue 7
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 planner-bot NONE)" ]
+}
+
+@test "issue plan-status takes the latest of two plans, and only the comments after it" {
+    local keyword
+    keyword="$(sign_off_keywords | head -1)"
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 planner-bot NONE "${PLAN_HEADING}"$'\n'"The first plan.")" \
+        "$(issue_comment 2 credfeto OWNER "${keyword}")" \
+        "$(issue_comment 3 planner-bot NONE "The plan, revised."$'\n\n'"${PLAN_HEADING}"$'\n'"The second plan.")" \
+        "$(issue_comment 4 credfeto OWNER "Still reading.")"
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 3 planner-bot NONE)"$'\n'"$(comment_line 4 credfeto OWNER no)" ]
+
+    # A later comment whose heading is in another case is not a plan, so it does not become the latest.
+    write_comments 7 "$(issue_comment 1 planner-bot NONE "${PLAN_HEADING}")" \
+        "$(issue_comment 2 someone NONE "${PLAN_HEADING^^}")"
+    run_issue_read plan-status --issue 7
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 someone NONE no)" ]
+}
+
+@test "issue plan-status reports who wrote the latest plan, so a caller can tell a plan from an author it does not trust" {
+    local keyword
+    keyword="$(sign_off_keywords | head -1)"
+    write_issue 7 "A title" OPEN "The request."
+    write_comments 7 "$(issue_comment 1 planner-bot NONE "${PLAN_HEADING}"$'\n'"The real plan.")" \
+        "$(issue_comment 2 stranger NONE "${PLAN_HEADING}"$'\n'"Another plan altogether.")" \
+        "$(issue_comment 3 credfeto OWNER "${keyword}")"
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 stranger NONE)"$'\n'"$(comment_line 3 credfeto OWNER yes)" ]
+
+    # A plan from a deleted account has an empty login, and keeps its four fields.
+    write_comments 7 "$(issue_comment 1 "" NONE "${PLAN_HEADING}")"
+    run_issue_read plan-status --issue 7
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 "" NONE)" ]
+}
+
+@test "issue plan-status reports blocked for a label named Blocked in any case, and for no other label" {
+    local label
+    for label in Blocked blocked BLOCKED; do
+        write_issue 7 "A title" OPEN "The request." AI-Work "${label}" Medium
+        run_issue_read plan-status --issue 7
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"yes" ] || { echo "${label}: ${output}" >&2; return 1; }
+    done
+    for label in Blocked-by-upstream Unblocked "Not Blocked" On-Hold; do
+        write_issue 7 "A title" OPEN "The request." AI-Work "${label}"
+        run_issue_read plan-status --issue 7
+        [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ] || { echo "${label}: ${output}" >&2; return 1; }
+    done
+    write_issue 7 "A title" OPEN "The request."
+    run_issue_read plan-status --issue 7
+    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+}
+
+@test "issue plan-status says yes for a sign-off keyword as a whole word, in any case, with punctuation or Markdown emphasis around it" {
+    local keyword
+    while IFS= read -r keyword; do
+        assert_sign_off yes "${keyword}" "${keyword^^}" "${keyword^}" "${keyword}." "Thanks, ${keyword}!" "(${keyword})" \
+            "_${keyword}_" "__${keyword^^}__" "**${keyword}**" "\`${keyword}\`" \
+            "A first line."$'\n\n'"${keyword}" "A first line."$'\r\n'"${keyword}"$'\r\n' "${keyword}"$'\n'"A last line."
+    done < <(sign_off_keywords)
+}
+
+@test "issue plan-status says no for a sign-off keyword inside a longer word, and for a comment with none" {
+    local keyword
+    while IFS= read -r keyword; do
+        assert_sign_off no "plan_${keyword}" "${keyword}_by" "un${keyword}" "${keyword}s" "${keyword}2" "x_${keyword}_y" "_${keyword}_x" \
+            "A comment with no keyword." ""
+    done < <(sign_off_keywords)
+}
+
+@test "issue plan-status ignores a sign-off keyword on a Markdown quote line, and only there" {
+    local keyword
+    while IFS= read -r keyword; do
+        assert_sign_off no "> ${keyword}" ">${keyword}" " > ${keyword}" "   > ${keyword}" "> > ${keyword}" \
+            "> ${keyword}"$'\n\n'"Quoting the reviewer above." "As they said:"$'\r\n'"> ${keyword}"$'\r\n'
+        # Four spaces or a tab before > make code, not a quote, and a keyword after a quote counts.
+        assert_sign_off yes "    > ${keyword}" $'\t'"> ${keyword}" "> quoted"$'\n'"${keyword}" "> ${keyword}"$'\n\n'"${keyword}" "a > ${keyword}"
+    done < <(sign_off_keywords)
+}
+
+@test "issue plan-status never prints a comment body, and keeps every line in its fields whatever a comment holds" {
+    local keyword
+    keyword="$(sign_off_keywords | tail -1)"
+    write_issue 7 "A title" OPEN "The request body."
+    write_comments 7 "$(issue_comment 1 planner-bot NONE "${PLAN_HEADING}"$'\n'"plan-text-marker")" \
+        "$(issue_comment 2 credfeto OWNER "${keyword}"$'\n'"comment"$'\t'"forged"$'\t'"line-marker")" \
+        "$(issue_comment 3 "" NONE "from a deleted account")"
+    run_issue_read plan-status --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
+    [[ "${output}" != *marker* && "${output}" != *"request body"* && "${output}" != *"deleted account"* ]]
+    [ -z "${stderr}" ]
 }
