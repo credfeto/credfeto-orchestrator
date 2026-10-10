@@ -73,8 +73,15 @@ readonly ACCESS_TOKEN_USER_PATTERN="${ACCESS_TOKEN_USER}:${PASSWORD_PATTERN}@"
 # not the end of a longer password; one that holds other punctuation and then x-access-token: and
 # a placeholder is the case this still parts. A reference is at most 128 characters after its $,
 # which bounds the work sed does at each user name on a long line that never reaches an @.
+# A password may also hold an unencoded @, since the last @ before the host ends is the one that
+# ends it, so one that merely starts with a placeholder (password@123) is still a password. A line
+# where a placeholder's @ is followed by another @ with nothing between them that a password
+# cannot hold (PLACEHOLDER_STARTED_PASSWORD_PATTERN) is therefore not parted at all, which leaves
+# it to be refused.
 readonly PLACEHOLDER_PASSWORD_PATTERN='(\$[^[:space:]/@]{0,128}|<[^[:space:]/@<>]*>|\*+|[xX]+|[Pp]assword|PASSWORD)'
-readonly PLACEHOLDER_PARTING="s#((${URL_USER_PATTERN}|(^|[^A-Za-z0-9:])${ACCESS_TOKEN_USER}):${PLACEHOLDER_PASSWORD_PATTERN})@#\\1 @#g"
+readonly PLACEHOLDER_CREDENTIAL_PATTERN="(${URL_USER_PATTERN}|(^|[^A-Za-z0-9:])${ACCESS_TOKEN_USER}):${PLACEHOLDER_PASSWORD_PATTERN}"
+readonly PLACEHOLDER_STARTED_PASSWORD_PATTERN="${PLACEHOLDER_CREDENTIAL_PATTERN}@(${PASSWORD_PATTERN})?@"
+readonly PLACEHOLDER_PARTING="s#(${PLACEHOLDER_CREDENTIAL_PATTERN})@#\\1 @#g"
 # A Discord webhook URL with its id and the start of its token: the URL is the credential.
 readonly DISCORD_WEBHOOK_PATTERN='[Dd]iscord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]'
 readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])((gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|${FIXED_LENGTH_KEY_PATTERN}|${ACCESS_TOKEN_USER_PATTERN})|github_pat_[A-Za-z0-9_]|A[KS]IA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${URL_CREDENTIAL_PATTERN}|${BEARER_PATTERN}|${BASIC_AUTH_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
@@ -357,9 +364,11 @@ A body is refused when it contains, in this order (the first rule that matches w
                       unless the whole password is a placeholder: one that starts with \$
                       (a reference such as \$NAME or \${...}, of up to 128 characters after
                       the \$), a name in angle brackets, asterisks only, the letter x only,
-                      or the word password; an Authorization header
-                      whose Bearer value starts with a token character or whose Basic
-                      value starts with a base64 character, Bearer and 20 or more token
+                      or the word password (a placeholder with another @ after its @
+                      and before the host ends only starts a password, and is refused);
+                      an Authorization header whose Bearer value starts with a token
+                      character or whose Basic value starts with a base64 character,
+                      Bearer and 20 or more token
                       characters with a digit among them (so hyphenated prose after Bearer
                       passes), or
                       NAME=value where NAME is upper case and is TOKEN, SECRET, KEY or
@@ -1022,10 +1031,11 @@ write_nul_free_copy() {
 
 # Writes a copy of the file $1 (the text $2 names) to SCAN_TMP with each placeholder password
 # parted from its @, line for line, so the token rule does not take it for a real one. It is a file
-# for the same reason as the NUL-free copy.
+# for the same reason as the NUL-free copy. A line with a password that only starts with a
+# placeholder is copied as it is (the address is delimited by %, since a password pattern holds #).
 write_placeholder_parted_copy() {
     ensure_temp_file SCAN_TMP
-    LC_ALL=C sed -E "${PLACEHOLDER_PARTING}" < "$1" > "${SCAN_TMP}" || die "could not scan the $2"
+    LC_ALL=C sed -E -e "\\%${PLACEHOLDER_STARTED_PASSWORD_PATTERN}%b" -e "${PLACEHOLDER_PARTING}" < "$1" > "${SCAN_TMP}" || die "could not scan the $2"
 }
 
 # Applies the token, host path, control character and invalid UTF-8 rules, in that order, to the

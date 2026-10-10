@@ -1597,7 +1597,13 @@ leak_credential_forms() {
         "np""m_$(run_of a 37)" "AI""za$(run_of b 36)" "sk""-$(run_of c 49)" \
         "http://localhost:8080,someone@example.com" "'http://localhost:8080','someone@example.com'" \
         "$(url_with_password https user "${tail}:x-access-token:xxx")" \
-        "$(url_with_password https user "${tail}x-access-token:xxx")"
+        "$(url_with_password https user "${tail}x-access-token:xxx")" \
+        "$(url_with_password https user "password@${tail}")" "$(url_with_password https user "Password@123")" \
+        "$(url_with_password https user "xxx@hunter")" "$(url_with_password https user "***@hunter")" \
+        "$(url_with_password https user "<name>@hunter")" "$(url_with_password https user "\$NAME@hunter")" \
+        "$(url_with_password https x-access-token "xxx@${tail}")" "x-access-token"":xxx@${tail}@""example.com" \
+        "$(url_with_password https user xxx) and $(url_with_password https user "xxx@hunter")" \
+        "https:/""/user:xxx@localhost:8080,someone@example.com"
 }
 
 # Text that looks like one of the credential forms and is not: a key one character short, a key
@@ -1619,6 +1625,10 @@ harmless_credential_shapes() {
         "\`http://localhost:8080\`,\`someone@example.com\`" \
         "$(url_with_password https x-access-token "<token>")" "x-access-token:<token>@example.com" \
         "x-access-token:\$GH_TOKEN@example.com" "The user name is x-access-token: the token follows it." \
+        "x-access-token:<token>@example.com x-access-token:\$GH_TOKEN@example.com x-access-token:***@example.com" \
+        "{\"url\":\"https:/""/user:password@localhost\",\"email\":\"someone@example.com\"}" \
+        "\`https:/""/user:xxx@localhost:8080\`,\`someone@example.com\`" \
+        "$(url_with_password https user "<password>")?to=someone@example.com then mail someone@example.com" \
         "https://example.com:8080/path?user=someone@example.com" "ssh://git@example.com:22/path" "http://[::1]:8080/path" \
         "https://example.com:8080?user=someone@example.com and https://example.com:8080#someone@example.com" \
         "Mail someone@example.com about https://example.com:8443 and ask @someone at 12:30."
