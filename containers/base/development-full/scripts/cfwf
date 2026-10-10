@@ -404,7 +404,9 @@ A run that has a conclusion counts as finished, whatever its status says.
 
 Output, tab separated, sorted by name, then a summary:
   <name>  <pass|fail|pending>  <completed_at>  <run_id>
-  summary  passed=<a> failed=<b> pending=<c> head=<sha>
+  summary passed=<a> failed=<b> pending=<c> head=<sha>
+Each check line has exactly four tab-separated fields; the summary is the last line and the only
+one with no tab, so a check named "summary" is never taken for it.
 A name required more than once (from two apps, or from an app and any source) is printed once for
 each, as "<name> (app <id>)" where an app is required.
 completed_at and run_id are empty for a result not finished or not found; run_id is the commit
@@ -1281,20 +1283,16 @@ cmd_body() {
     dispatch_subcommand body check body_check "$@"
 }
 
-# Bytes git never allows in a branch name: control characters, whitespace, ~, ^, :, ?, *, [ and \.
-readonly BRANCH_FORBIDDEN_PATTERN='[[:cntrl:][:space:]~^:?*\[]'
-
-# Succeeds when $1 is a branch name git allows (git check-ref-format --branch): none of the bytes
-# above, no leading -, no leading, trailing or doubled /, no .., no @{, not @ alone, no trailing .,
-# and no component that starts with . or ends with .lock. Any other byte (+, @, %, a non-ASCII
-# letter) is allowed and is percent-encoded by branch_path when the name goes in an API path.
+# Succeeds when $1 is a branch name git allows, as git itself judges it, so cfwf never has to keep
+# a copy of git's rules in step. GIT_DIR=/dev/null keeps git out of any repository the caller is
+# in: inside one, git check-ref-format --branch expands the previous-checkout syntax (@{-1}) and
+# prints the branch it names, which is why the name it prints must also be the name given. Any
+# byte git allows (+, @, %, a non-ASCII letter) is percent-encoded by branch_path when the name
+# goes in an API path.
 valid_branch_name() {
     local name="$1"
-    local LC_ALL=C
-    [[ -n "${name}" && ! "${name}" =~ ${BRANCH_FORBIDDEN_PATTERN} ]] || return 1
-    [[ "${name}" != -* && "${name}" != /* && "${name}" != */ && "${name}" != *//* && "${name}" != *..* ]] || return 1
-    [[ "${name}" != *@\{* && "${name}" != @ ]] || return 1
-    [[ "${name}" != .* && "${name}" != */.* && "${name}" != *. && "${name}" != *.lock && "${name}" != *.lock/* ]]
+    command -v git > /dev/null 2>&1 || die "git is not installed"
+    [ -n "${name}" ] && [ "$(GIT_DIR=/dev/null git check-ref-format --branch "${name}" 2> /dev/null)" = "${name}" ]
 }
 
 # Prints the branch name $1 as it goes in an API path: each byte other than a letter, digit, ., _,
@@ -1517,12 +1515,13 @@ record_check_rows() {
     done <<< "${rows}"
 }
 
-# Reads every check run (all pages) and the combined commit status of HEAD_SHA. Both endpoints
-# answer for that one commit only; resolve_checks_head having found the current head first is what
+# Reads every check run (all pages, and filter=all, as GitHub's default filter=latest would leave
+# out runs before record_check_rows could compare them by id) and the combined commit status of
+# HEAD_SHA. Both endpoints answer for that one commit only; resolve_checks_head having found the current head first is what
 # keeps a result on an older, force-pushed head out.
 read_check_results() {
     local runs
-    api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}" \
+    api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}&filter=all" \
         ".check_runs[]? | [(.name | ${CHECK_NAME_FILTER}), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), \"run\"] | join(\"\\u001f\")" --paginate \
         || die "the commit ${HEAD_SHA} was not found in ${REPO}"
     runs="${GH_OUTPUT}"
@@ -1569,11 +1568,12 @@ judge_check() {
     done
 }
 
-# Prints a line for each judged check, sorted by name, and the summary, then exits with the
-# verdict. Every read has already succeeded, so a failed read never leaves a partial report. A
-# judged check is a name and the app it must come from (empty for any source), so a name required
-# from two apps is judged, and printed, once for each; each of those lines pinned to an app shows it
-# as "<name> (app <id>)", so no two lines carry the same name.
+# Prints a line for each judged check, sorted by name, and the summary, the only line with no tab
+# (a check line always has four fields, so no check name can make one look like it), then exits
+# with the verdict. Every read has already succeeded, so a failed read never leaves a partial
+# report. A judged check is a name and the app it must come from (empty for any source), so a name
+# required from two apps is judged, and printed, once for each; each of those lines pinned to an
+# app shows it as "<name> (app <id>)", so no two lines carry the same name.
 report_checks() {
     local check name app label passed=0 failed=0 pending=0
     local -a lines=()
@@ -1604,7 +1604,7 @@ report_checks() {
     done
 
     [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}" | LC_ALL=C sort
-    printf 'summary\tpassed=%s failed=%s pending=%s head=%s\n' "${passed}" "${failed}" "${pending}" "${HEAD_SHA}"
+    printf 'summary passed=%s failed=%s pending=%s head=%s\n' "${passed}" "${failed}" "${pending}" "${HEAD_SHA}"
 
     [ "${#GROUP_VERDICT[@]}" -gt 0 ] || exit "${NO_CHECKS_EXIT}"
     [ "${failed}" -eq 0 ] || exit "${CHECKS_FAILED_EXIT}"

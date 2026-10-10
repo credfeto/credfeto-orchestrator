@@ -2386,8 +2386,10 @@ run_pr_checks() {
         "--branch .hidden"
         "--branch main.lock"
         "--branch a.lock/b"
-        "--branch @"
         "--branch a@{1}"
+        "--branch HEAD"
+        "--branch @{-1}"
+        "--branch a."
         "--pr"
     )
     local args
@@ -2426,13 +2428,13 @@ run_pr_checks() {
     prepare_pr_checks
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary"$'\t'"passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
     [ -z "${stderr}" ]
     [ "$(gh_call_count "api repos/${REPO}/pulls/42 ")" -eq 1 ]
     [ "$(gh_call_count "api repos/${REPO}/branches/main --jq ")" -eq 1 ]
     [ "$(gh_call_count "/protection")" -eq 0 ]
     [ "$(gh_call_count "api repos/${REPO}/rules/branches/main?per_page=100 --paginate ")" -eq 1 ]
-    [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100 --paginate ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all --paginate ")" -eq 1 ]
     [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100 --paginate ")" -eq 1 ]
     [ "$(gh_call_count " api graphql")" -eq 0 ]
 }
@@ -2444,7 +2446,7 @@ run_pr_checks() {
         write_check_runs "${HEAD_SHA}" "$(check_run build "${conclusion}" 11)"
         run_pr_checks --pr 42
         [ "${status}" -eq 3 ] || { echo "${conclusion}: ${status}" >&2; return 1; }
-        [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary"$'\t'"passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+        [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
     done
 }
 
@@ -2454,7 +2456,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build skipped 11)" "$(check_run lint neutral 12)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"summary"$'\t'"passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]]
+    [[ "${output}" == *"summary passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]]
 }
 
 @test "pr checks exits 4 for a run in progress, and counts a run with a conclusion as finished whatever its status" {
@@ -2462,7 +2464,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
-    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'"11"$'\n'"summary"$'\t'"passed=0 failed=0 pending=1 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'"11"$'\n'"summary passed=0 failed=0 pending=1 head=${HEAD_SHA}" ]
 
     write_check_runs "${HEAD_SHA}" "$(check_run build "" 11 completed)"
     run_pr_checks --pr 42
@@ -2482,7 +2484,7 @@ run_pr_checks() {
     write_protection main build lint
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
-    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"lint"$'\t'"pending"$'\t'$'\t'$'\n'"summary"$'\t'"passed=1 failed=0 pending=1 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"lint"$'\t'"pending"$'\t'$'\t'$'\n'"summary passed=1 failed=0 pending=1 head=${HEAD_SHA}" ]
 
     run_pr_checks --pr 42 --all
     [ "${status}" -eq 4 ]
@@ -2499,13 +2501,13 @@ run_pr_checks() {
     write_protection main
     run_pr_checks --pr 42
     [ "${status}" -eq 5 ]
-    [ "${output}" = "summary"$'\t'"passed=0 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "summary passed=0 failed=0 pending=0 head=${HEAD_SHA}" ]
 
     # A draft-gated PR has none until it is marked ready, even where checks are required.
     write_protection main build
     run_pr_checks --pr 42
     [ "${status}" -eq 5 ]
-    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'$'\n'"summary"$'\t'"passed=0 failed=0 pending=1 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'$'\n'"summary passed=0 failed=0 pending=1 head=${HEAD_SHA}" ]
 }
 
 @test "pr checks judges only the required checks, unless --all is given" {
@@ -2518,7 +2520,7 @@ run_pr_checks() {
     run_pr_checks --pr 42 --all
     [ "${status}" -eq 3 ]
     [[ "${output}" == *"optional"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"12"* ]]
-    [[ "${output}" == *"summary"$'\t'"passed=1 failed=1 pending=0"* ]]
+    [[ "${output}" == *"summary passed=1 failed=1 pending=0"* ]]
 }
 
 @test "pr checks matches a required check pinned to an app only with a run from that app, and any other by name alone" {
@@ -2528,7 +2530,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run first success 10 "" "" 57789 3)" "$(check_run build success 11 "" "" 57789 4)"
     run_pr_checks --pr 42
     [ "${status}" -eq 4 ]
-    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary"$'\t'"passed=1 failed=0 pending=1 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary passed=1 failed=0 pending=1 head=${HEAD_SHA}" ]
 
     # Nor does a commit status, which carries no app.
     write_statuses "${HEAD_SHA}" "$(commit_status build success 31)"
@@ -2585,7 +2587,7 @@ run_pr_checks() {
         "$(check_run build failure 12 "" "" 57789 6)"
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [ "${output}" = "build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 57789)"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary"$'\t'"passed=2 failed=1 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 57789)"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"first"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"10"$'\n'"summary passed=2 failed=1 pending=0 head=${HEAD_SHA}" ]
 
     # Required from an app and from any source: only the pinned line names its app.
     write_branch main
@@ -2593,8 +2595,8 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build success 11 "" "" 15368 5)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary"$'\t'"passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]
-    [ "$(awk -F '\t' 'NF != 4' <<< "${output}" | grep -vc '^summary')" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"build (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "$(awk -F '\t' 'NF != 4' <<< "${output}")" = "summary passed=2 failed=0 pending=0 head=${HEAD_SHA}" ]
 }
 
 @test "pr checks judges every check when the branch requires none" {
@@ -2604,7 +2606,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build success 11)" "$(check_run optional failure 12)"
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [[ "${output}" == *"summary"$'\t'"passed=1 failed=1 pending=0"* ]]
+    [[ "${output}" == *"summary passed=1 failed=1 pending=0"* ]]
 }
 
 @test "pr checks reads required checks from branch protection, from rulesets, from both without duplicates, and from neither" {
@@ -2614,25 +2616,25 @@ run_pr_checks() {
     write_protection main a b
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b summary" ]
+    [ "$(cut -sf1 <<< "${output}" | paste -sd ' ')" = "a b" ]
 
     write_branch main
     write_rulesets main b c
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "b c summary" ]
+    [ "$(cut -sf1 <<< "${output}" | paste -sd ' ')" = "b c" ]
 
     write_protection main a b
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b c summary" ]
+    [ "$(cut -sf1 <<< "${output}" | paste -sd ' ')" = "a b c" ]
     [[ "${output}" == *"passed=3 failed=0 pending=0"* ]]
 
     write_branch main
     write_no_rulesets main
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b c d summary" ]
+    [ "$(cut -sf1 <<< "${output}" | paste -sd ' ')" = "a b c d" ]
 
     # Required checks switched off on a protected branch can still be listed; they require nothing.
     jq -n --arg sha "${HEAD_SHA}" '{name: "main", commit: {sha: $sha}, protected: true,
@@ -2640,7 +2642,7 @@ run_pr_checks() {
         | write_api "repos/${REPO}/branches/main"
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [ "$(cut -f1 <<< "${output}" | paste -sd ' ')" = "a b c d summary" ]
+    [ "$(cut -sf1 <<< "${output}" | paste -sd ' ')" = "a b c d" ]
 }
 
 @test "pr checks treats a 404 from the rulesets as a failed read (exit 1), never as no rulesets" {
@@ -2688,6 +2690,23 @@ run_pr_checks() {
     [ "$(gh_call_count "branches/release/v2")" -eq 1 ]
 }
 
+@test "pr checks --branch judges a name as git does, even run from a repository where @{-1} names a branch" {
+    local repo="${TEST_TMP}/checkout"
+    git init -q -b main "${repo}"
+    git -C "${repo}" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
+        commit -q --allow-empty -m first
+    git -C "${repo}" switch -q -c feature
+    cd "${repo}"
+    [ "$(git -C "${repo}" rev-parse --abbrev-ref '@{-1}')" = main ]
+    local branch
+    for branch in '@{-1}' HEAD -main main.lock a..b; do
+        run_pr_checks --branch "${branch}"
+        [ "${status}" -eq 2 ] || { echo "accepted: ${branch} (${status})" >&2; return 1; }
+        [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --branch: "* ]]
+        [ ! -s "${GH_LOG}" ]
+    done
+}
+
 @test "pr checks percent-encodes a branch name git allows but an API path cannot hold as it is, rather than refusing it" {
     jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "release/v2+lts"}}' | write_api "repos/${REPO}/pulls/42"
     write_protection "release/v2%2Blts" build
@@ -2708,6 +2727,13 @@ run_pr_checks() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     [ "$(gh_call_count "api repos/${REPO}/branches/feat/caf%C3%A9%40x%25y --jq ")" -eq 1 ]
+
+    # git allows @ alone as a branch name (only the whole ref @ is refused), so cfwf does too.
+    write_protection "%40" build
+    write_no_rulesets "%40"
+    run_pr_checks --branch @
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/%40 --jq ")" -eq 1 ]
 
     # A base branch GitHub returns that git itself would never allow is an unexpected answer.
     jq -n --arg sha "${HEAD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "a..b"}}' | write_api "repos/${REPO}/pulls/42"
@@ -2759,7 +2785,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build cancelled 100 "" "" 15368 7)" "$(check_run build success 101 "" "" 15368 8)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary"$'\t'"passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
 
     # A newer success clears an older failure the same way, whatever order GitHub lists them in.
     write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build failure 100 "" "" 15368 7)"
@@ -2771,7 +2797,7 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run build success 100 "" "" 15368 7)" "$(check_run build failure 101 "" "" 15368 8)"
     run_pr_checks --pr 42
     [ "${status}" -eq 3 ]
-    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary"$'\t'"passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
 
     # A newer run still going in a later suite keeps the name pending.
     write_check_runs "${HEAD_SHA}" "$(check_run build success 101 "" "" 15368 8)" "$(check_run build "" 102 "" "" 15368 9)"
@@ -2812,7 +2838,7 @@ run_pr_checks() {
     [[ "${output}" == *"ci/error"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"33"* ]]
     [[ "${output}" == *"ci/legacy"$'\t'"fail"* ]]
     [[ "${output}" == *"ci/waiting"$'\t'"pending"$'\t'$'\t'"34"* ]]
-    [[ "${output}" == *"summary"$'\t'"passed=1 failed=2 pending=1"* ]]
+    [[ "${output}" == *"summary passed=1 failed=2 pending=1"* ]]
 }
 
 @test "pr checks puts a check name with a tab or a newline on one line of the output" {
@@ -2821,7 +2847,18 @@ run_pr_checks() {
     write_check_runs "${HEAD_SHA}" "$(check_run $'odd\tname\nhere' success 11)"
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
-    [ "${output}" = "odd name here"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary"$'\t'"passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "${output}" = "odd name here"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+}
+
+@test "pr checks keeps a check named summary apart from the summary line, the only line with no tab" {
+    prepare_pr_checks
+    write_protection main summary
+    write_check_runs "${HEAD_SHA}" "$(check_run summary success 11)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "summary"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "$(grep -v $'\t' <<< "${output}")" = "summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "$(grep -c $'\t' <<< "${output}")" -eq 1 ]
 }
 
 @test "pr checks reports a transport failure as a runtime failure (exit 1), never as a failed check" {
