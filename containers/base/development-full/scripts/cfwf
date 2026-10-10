@@ -32,15 +32,53 @@ bearer_value_pattern() {
     done
     printf '(%s|%s{19,}[0-9])' "${alternatives}" "${other}"
 }
+# The name of an Authorization header up to where its scheme starts, as written in a header, a
+# curl -H or JSON.
+readonly AUTHORIZATION_HEADER_PATTERN="([Aa]uthorization|AUTHORIZATION)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?"
 # An Authorization header whose Bearer value starts with a token character (so a placeholder such
-# as <token>, $TOKEN or ${{ ... }} passes), in a header, a curl -H or JSON; or Bearer anywhere and a
-# value of 20 or more token characters with a digit among them, which ordinary prose ("a Bearer
-# token", "Bearer authentication-mechanism-description") never has.
-BEARER_PATTERN="([Aa]uthorization|AUTHORIZATION)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?([Bb]earer|BEARER)[[:space:]]+[A-Za-z0-9._~+/-]|(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+$(bearer_value_pattern)"
+# as <token>, $TOKEN or ${{ ... }} passes); or Bearer anywhere and a value of 20 or more token
+# characters with a digit among them, which ordinary prose ("a Bearer token", "Bearer
+# authentication-mechanism-description") never has.
+BEARER_PATTERN="${AUTHORIZATION_HEADER_PATTERN}([Bb]earer|BEARER)[[:space:]]+[A-Za-z0-9._~+/-]|(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+$(bearer_value_pattern)"
 readonly BEARER_PATTERN
+# An Authorization header whose Basic value starts with a base64 character, so the same
+# placeholders pass. Basic is matched only in the header: on its own it is an ordinary word.
+readonly BASIC_AUTH_PATTERN="${AUTHORIZATION_HEADER_PATTERN}([Bb]asic|BASIC)[[:space:]]+[A-Za-z0-9+/]"
+# Keys that are a prefix and a set number of characters: an npm token, a Google API key and a
+# legacy OpenAI key. The prefix with fewer after it (npm_config_registry) passes; a longer run is
+# refused too, since the first of it is a key. TOKEN_PATTERN adds the word start before the prefix,
+# so a word ending in sk- passes.
+readonly FIXED_LENGTH_KEY_PATTERN='npm_[A-Za-z0-9]{36}|AIza[A-Za-z0-9_-]{35}|sk-[A-Za-z0-9]{48}'
+# A password is whatever lies between the colon and the @ of a URL's user:password@host, or after
+# the user name x-access-token that a Git remote URL carries a GitHub token under. It cannot hold
+# whitespace, a slash, a question mark or a hash: a URL has to percent-encode those in a password,
+# and they end the host part of a URL with a port and no password, whose path or query may hold @.
+# Nor can it hold a double quote or a backtick, which no URL holds unencoded and which close a URL
+# with a port written in JSON or as Markdown code, where an email address may follow with no space.
+readonly PASSWORD_PATTERN='[^[:space:]/?#@"`]+'
+# What comes before the colon that starts a password: a URL's :// and its user name, which may be
+# empty and holds no colon, or the user name x-access-token wherever it is written.
+readonly URL_USER_PATTERN='://[^[:space:]/@:]*'
+readonly ACCESS_TOKEN_USER='x-access-token'
+readonly URL_CREDENTIAL_PATTERN="${URL_USER_PATTERN}:${PASSWORD_PATTERN}@"
+readonly ACCESS_TOKEN_USER_PATTERN="${ACCESS_TOKEN_USER}:${PASSWORD_PATTERN}@"
+# A password that is an obvious placeholder: a variable or secret reference (it starts with $), a
+# name in angle brackets, a run of asterisks or of the letter x, or the word password. ERE cannot
+# say "any password but one of these", so check_text_patterns scans for tokens in a copy where
+# each of these is parted from its @ by a space (PLACEHOLDER_PARTING) and so is no longer a
+# password. The placeholder itself stays, so a token written inside one is still found. Only a
+# placeholder that is the whole password is parted, which is why the parting starts at the user
+# name: a password may hold a colon, and one that merely ends in :xxx is still a password. The
+# user name x-access-token has to be at a word start and not straight after a colon, so that it is
+# not the end of a longer password; one that holds other punctuation and then x-access-token: and
+# a placeholder is the case this still parts. A
+# reference is at most 128 characters after its $, which bounds the work sed does at each user
+# name on a long line that never reaches an @.
+readonly PLACEHOLDER_PASSWORD_PATTERN='(\$[^[:space:]/@]{0,128}|<[^[:space:]/@<>]*>|\*+|[xX]+|[Pp]assword|PASSWORD)'
+readonly PLACEHOLDER_PARTING="s#((${URL_USER_PATTERN}|(^|[^A-Za-z0-9:])${ACCESS_TOKEN_USER}):${PLACEHOLDER_PASSWORD_PATTERN})@#\\1 @#g"
 # A Discord webhook URL with its id and the start of its token: the URL is the credential.
 readonly DISCORD_WEBHOOK_PATTERN='[Dd]iscord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]'
-readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])(gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${BEARER_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
+readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])((gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|${FIXED_LENGTH_KEY_PATTERN}|${ACCESS_TOKEN_USER_PATTERN})|github_pat_[A-Za-z0-9_]|A[KS]IA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${URL_CREDENTIAL_PATTERN}|${BEARER_PATTERN}|${BASIC_AUTH_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
 # A host path is one of three shapes. First, /home/ and the like at the start of a path: the start
 # of a line or after any byte that cannot continue a word or a relative path (a letter, digit, dot,
 # tilde or dash), so ./tmp/ and ~/tmp/ pass while a slash, a colon, a comma, markdown emphasis and
@@ -309,12 +347,22 @@ body runs first, so a body can be tested before it is used.
 
 A body is refused when it contains, in this order (the first rule that matches wins):
   token               ghp_, gho_, ghs_, ghu_, ghr_, github_pat_, glpat-, sk-ant-, sk-proj-,
-                      xoxa-, xoxb-, xoxp-, xoxr- or xoxs- followed by a token character, an
-                      AWS access key id, a PRIVATE KEY block line, a Discord webhook URL
-                      (discord.com or discordapp.com /api/webhooks/<digits>/ and a token
-                      character), an Authorization header whose Bearer value starts with a
-                      token character, Bearer and 20 or more token characters with a
-                      digit among them (so hyphenated prose after Bearer passes), or
+                      xoxa-, xoxb-, xoxp-, xoxr- or xoxs- followed by a token character,
+                      npm_ and 36 letters or digits, AIza and 35 letters, digits, _ or -,
+                      sk- and 48 letters or digits, an AWS access key id (AKIA or ASIA and
+                      16 upper-case letters or digits), a PRIVATE KEY block line, a Discord
+                      webhook URL (discord.com or discordapp.com /api/webhooks/<digits>/
+                      and a token character), a URL with a password
+                      (<scheme>://<user>:<password>@) or x-access-token:<token>@, where
+                      the password holds no whitespace, /, ?, #, double quote or backtick,
+                      unless the whole password is a placeholder: one that starts with \$
+                      (a reference such as \$NAME or \${...}, of up to 128 characters after
+                      the \$), a name in angle brackets, asterisks only, the letter x only,
+                      or the word password; an Authorization header
+                      whose Bearer value starts with a token character or whose Basic
+                      value starts with a base64 character, Bearer and 20 or more token
+                      characters with a digit among them (so hyphenated prose after Bearer
+                      passes), or
                       NAME=value where NAME is upper case and is TOKEN, SECRET, KEY or
                       PASSWORD or ends in _TOKEN, _SECRET, _KEY or _PASSWORD, and the value
                       (after an optional quote) does not start with \$, so a reference such
@@ -973,12 +1021,21 @@ write_nul_free_copy() {
     LC_ALL=C tr '\000' '\001' < "$1" > "${SCAN_TMP}" || die "could not scan the $2"
 }
 
+# Writes a copy of the file $1 (the text $2 names) to SCAN_TMP with each placeholder password
+# parted from its @, line for line, so the token rule does not take it for a real one. It is a file
+# for the same reason as the NUL-free copy.
+write_placeholder_parted_copy() {
+    ensure_temp_file SCAN_TMP
+    LC_ALL=C sed -E "${PLACEHOLDER_PARTING}" < "$1" > "${SCAN_TMP}" || die "could not scan the $2"
+}
+
 # Applies the token, host path, control character and invalid UTF-8 rules, in that order, to the
 # file $1 (the text $2 names), refusing at the first that matches. The UTF-8 rule comes before the
 # length is counted, because wc -m does not count a byte that is not valid UTF-8.
 check_text_patterns() {
     local text="$1" subject="$2"
-    refuse_first_match "${subject}" token "${TOKEN_PATTERN}" "${text}"
+    write_placeholder_parted_copy "${text}" "${subject}"
+    refuse_first_match "${subject}" token "${TOKEN_PATTERN}" "${SCAN_TMP}"
     refuse_first_match "${subject}" "host path" "${HOST_PATH_PATTERN}" "${text}"
     write_nul_free_copy "${text}" "${subject}"
     refuse_first_match "${subject}" "control character" "${CONTROL_PATTERN}" "${SCAN_TMP}"
