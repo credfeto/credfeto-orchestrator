@@ -71,9 +71,8 @@ readonly ACCESS_TOKEN_USER_PATTERN="${ACCESS_TOKEN_USER}:${PASSWORD_PATTERN}@"
 # name: a password may hold a colon, and one that merely ends in :xxx is still a password. The
 # user name x-access-token has to be at a word start and not straight after a colon, so that it is
 # not the end of a longer password; one that holds other punctuation and then x-access-token: and
-# a placeholder is the case this still parts. A
-# reference is at most 128 characters after its $, which bounds the work sed does at each user
-# name on a long line that never reaches an @.
+# a placeholder is the case this still parts. A reference is at most 128 characters after its $,
+# which bounds the work sed does at each user name on a long line that never reaches an @.
 readonly PLACEHOLDER_PASSWORD_PATTERN='(\$[^[:space:]/@]{0,128}|<[^[:space:]/@<>]*>|\*+|[xX]+|[Pp]assword|PASSWORD)'
 readonly PLACEHOLDER_PARTING="s#((${URL_USER_PATTERN}|(^|[^A-Za-z0-9:])${ACCESS_TOKEN_USER}):${PLACEHOLDER_PASSWORD_PATTERN})@#\\1 @#g"
 # A Discord webhook URL with its id and the start of its token: the URL is the credential.
