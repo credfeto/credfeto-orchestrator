@@ -1,0 +1,27 @@
+{
+  "agent": "credfeto-orchestrator",
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "model": "opusplan",
+  "advisorModel": "fable",
+  "theme": "dark",
+  "tui": "default",
+  "outputStyle": "Concise",
+  "autoCompactEnabled": true,
+  "autoMemoryEnabled": false,
+  "remoteControlAtStartup": true,
+  "includeGitInstructions": false,
+  "agentPushNotifEnabled": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+    "CLAUDE_AUTO_BACKGROUND_TASKS": "1",
+    "DISABLE_EXTRA_USAGE_COMMAND": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP": "1",
+    "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+    "GH_HOST": "github-api.markridgwell.com"
+  }
+}

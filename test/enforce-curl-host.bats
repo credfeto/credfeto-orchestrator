@@ -321,11 +321,11 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
-# --- DENIED_HOSTS parity with claude-settings.json's WebFetch deny list -----
+# --- DENIED_HOSTS parity with claude-managed-settings.json's WebFetch deny list -----
 #
 # Reads static repo files only (no HOME/PATH/git interaction), mirroring
 # test/command-allowlist-parity.bats's own approach for the exact same reason: without an
-# automated check, claude-settings.json's WebFetch(domain:...) deny list is free to gain (or
+# automated check, claude-managed-settings.json's WebFetch(domain:...) deny list is free to gain (or
 # lose) a host that this hook's DENIED_HOSTS array never learns about, silently reopening the
 # gap this hook exists to close for curl specifically.
 
@@ -352,8 +352,8 @@ teardown() {
     [ -z "${missing}" ]
 }
 
-@test "enforce-curl-host's DENIED_HOSTS matches claude-settings.json's WebFetch deny domains exactly" {
-    local settings="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
+@test "enforce-curl-host's DENIED_HOSTS matches claude-managed-settings.json's WebFetch deny domains exactly" {
+    local settings="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
     local settings_domains hook_domains
 
     settings_domains=$(jq -r '.permissions.deny[]' "${settings}" | sed -nE 's/^WebFetch\(domain:(.+)\)$/\1/p' | sort -u)
