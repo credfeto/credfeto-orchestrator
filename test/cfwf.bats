@@ -1922,8 +1922,7 @@ BODIES
     write_visibility credfeto/hidden-thing PRIVATE
     printf '%s\n' "credfeto/open-thing#1" "fine" "https://github.com/credfeto/hidden-thing" "credfeto/hidden-thing#9" > "${TEST_TMP}/leak.md"
     run_body_check
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: body refused: private repository (line 3)" ]
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
 }
 
 @test "a visibility lookup that fails is a runtime failure (exit 1), never a pass or a refusal" {
@@ -2487,6 +2486,20 @@ run_pr_checks() {
     [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all --paginate ")" -eq 1 ]
     [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100 --paginate ")" -eq 1 ]
     [ "$(gh_call_count " api graphql")" -eq 0 ]
+}
+
+@test "pr checks reads a PR number given with leading zeros as that number, without them" {
+    run_pr_checks --pr 042
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: ${REPO}#42 was not found" ]
+
+    prepare_pr_checks
+    : > "${GH_LOG}"
+    run_pr_checks --pr 00042
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/42 ")" -eq 1 ]
+    [ "$(gh_call_count "pulls/0")" -eq 0 ]
 }
 
 @test "pr checks exits 3 for each failing conclusion, and for a conclusion it does not know" {
@@ -3173,7 +3186,7 @@ run_comment_add() {
 
 @test "comment add posts on a PR with gh pr comment, stdin closed, and prints only the comment URL" {
     prepare_comment
-    run --separate-stderr "${SCRIPT}" comment add --repo "${REPO}" --pr 1623 --body-file "${TEST_TMP}/comment.md" <<< "stray stdin"
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md" <<< "stray stdin"
     [ "${status}" -eq 0 ]
     [ "${output}" = "${COMMENT_PR_URL}" ]
     [ -z "${stderr}" ]
@@ -3310,9 +3323,7 @@ run_comment_add() {
     for line in "Approved" "lgtm" "LGTM, ship it" "This is APPROVED." "  approved" "the plan is (approved)" "x - Lgtm" "- > approved"; do
         write_leak_body "${line}"
         run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
-        [ "${status}" -eq 8 ]
-        [ "${stderr}" = "cfwf: body refused: approval keyword (line 3)" ]
-        [ -z "${output}" ]
+        assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
     done
     [ ! -f "${GH_LOG}" ]
 }
