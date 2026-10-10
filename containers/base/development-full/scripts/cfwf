@@ -11,11 +11,11 @@ readonly TITLE_LIMIT=256
 readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
+readonly ISSUE_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
-readonly ISSUE_NOT_FOUND_EXIT=9
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
@@ -72,8 +72,6 @@ readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf]
 # with nothing but what jq's regular expressions and gh's (gojq, Go's) read alike, and holds no
 # quote or backslash, so it goes in a jq string as it is.
 readonly SIGN_OFF_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
-# How GitHub answers gh issue view for a number that is neither an issue nor a pull request.
-readonly ISSUE_NOT_FOUND_TEXT='Could not resolve to an issue or pull request with the number'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
@@ -706,8 +704,8 @@ resolve_status() {
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
 # The board read, the visibility lookup, the issue read of issue view and issue plan-status and
 # every pr checks read go through here (resolve_project, the field list, the board listing and the
-# closing-issue labels still call gh directly); each
-# caller uses GH_OUTPUT and GH_ERROR before its next gh call.
+# closing-issue labels still call gh directly); each caller uses GH_OUTPUT and GH_ERROR before its
+# next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -729,6 +727,14 @@ printable_first_line() {
 gh_failure_text() {
     printable_first_line "${GH_ERROR:-${GH_OUTPUT}}"
 }
+
+# A jq definition, put before a filter that uses it: printable is the string it is given with each
+# control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F) turned into a
+# space, so it fits on one line of the output, cannot be taken for a field separator and carries no
+# terminal escape. The range is written out because gh's --jq (gojq, Go regular expressions) reads
+# [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
+# would not.
+readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -1380,18 +1386,17 @@ parse_issue_read_options() {
     require ISSUE --issue
 }
 
+# How GitHub answers gh issue view for a number that is neither an issue nor a pull request.
+readonly ISSUE_NOT_FOUND_TEXT='Could not resolve to an issue or pull request with the number'
 issue_not_found() {
     printf 'cfwf: %s\n' "$*" >&2
     exit "${ISSUE_NOT_FOUND_EXIT}"
 }
 
-# A jq definition, put before a filter that uses it: printable is the string it is given with each
-# control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F) turned into a
-# space, so it fits on one line of the output, cannot be taken for a field separator and carries no
-# terminal escape. The range is written out because gh's --jq (gojq, Go regular expressions) reads
-# [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
-# would not.
-readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+unexpected_issue_result() {
+    die "gh returned an unexpected result for ${REPO}#${ISSUE}"
+}
+
 # A jq definition, put before a filter that uses it: signs_off is whether the comment body it is
 # given holds a plan sign-off keyword on a line that is not a Markdown quote: a > after at most
 # three spaces, because Markdown reads a deeper indent, or a tab, as code. The body is split into
@@ -1417,7 +1422,7 @@ read_issue() {
     fi
     kind="${GH_OUTPUT%%$'\n'*}"
     [ "${kind}" != pull ] || issue_not_found "${REPO}#${ISSUE} is a pull request, not an issue"
-    [ "${kind}" = issue ] && [[ "${GH_OUTPUT}" == *$'\n'* ]] || die "gh returned an unexpected result for ${REPO}#${ISSUE}"
+    [ "${kind}" = issue ] && [[ "${GH_OUTPUT}" == *$'\n'* ]] || unexpected_issue_result
     GH_OUTPUT="${GH_OUTPUT#*$'\n'}"
 }
 
@@ -1433,7 +1438,7 @@ issue_view() {
     state="${GH_OUTPUT#*$'\n'}"
     state="${state%%$'\n'*}"
     [[ "${state}" == "state"$'\t'@(OPEN|CLOSED) && "${GH_OUTPUT}" == *"${OUTPUT_END}" ]] \
-        || die "gh returned an unexpected result for ${REPO}#${ISSUE}"
+        || unexpected_issue_result
     printf '%s\n' "${GH_OUTPUT%"${OUTPUT_END}"}"
 }
 
@@ -1447,13 +1452,13 @@ issue_plan_status() {
          | ([$comments | to_entries[] | select(.value.body // "" | split("\n") | any(rtrimstr("\r") == "## Implementation Plan")) | .key] | last) as $plan
          | ("plan\t" + (if $plan == null then "no" else "yes" end)),
            ("blocked\t" + (if any(.labels[]; .name | ascii_downcase == "blocked") then "yes" else "no" end)),
-           (select($plan != null) | ("plan-at\t" + ($comments[$plan].createdAt | printable)),
-              ($comments[$plan] | ["plan-by", (.author.login // ""), (.authorAssociation // ""), .url]
-               | map(printable) | join("\t")),
+           (select($plan != null)
+            | ($comments[$plan]
+               | ["plan-at", .createdAt], ["plan-by", (.author.login // ""), (.authorAssociation // ""), .url]),
               ($comments[($plan + 1):][]
                | ["comment", .createdAt, (.author.login // ""), (.authorAssociation // ""),
-                  (if (.body // "" | signs_off) then "yes" else "no" end), .url]
-               | map(printable) | join("\t")))'
+                  (if (.body // "" | signs_off) then "yes" else "no" end), .url])
+            | map(printable) | join("\t"))'
     printf '%s\n' "${GH_OUTPUT}"
 }
 

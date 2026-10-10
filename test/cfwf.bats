@@ -3182,6 +3182,12 @@ plan_lines() {
     printf 'plan-at\t%s\nplan-by\t%s\t%s\t%s' "$(comment_time "$1")" "$2" "$3" "$(comment_url "$1")"
 }
 
+# The two lines every plan-status answer starts with: whether there is a plan ($1) and whether the
+# issue is Blocked ($2), each yes or no.
+plan_status_head() {
+    printf 'plan\t%s\nblocked\t%s' "$1" "$2"
+}
+
 # The comment line plan-status prints for the issue_comment whose number is $1, login $2,
 # association $3 and sign-off answer $4.
 comment_line() {
@@ -3293,21 +3299,21 @@ assert_sign_off() {
             [[ "${stderr}" != *"cfwf issue create"* ]]
         done
 
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue ""
+        run_issue_read "${subcommand}" --issue ""
         [ "${status}" -eq 2 ]
         [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --issue: it must be a number" ]]
 
         run --separate-stderr "${SCRIPT}" issue "${subcommand}" --issue 7
         [[ "${stderr%%$'\n'*}" == "cfwf: missing required option --repo" ]]
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}"
+        run_issue_read "${subcommand}"
         [[ "${stderr%%$'\n'*}" == "cfwf: missing required option --issue" ]]
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --repo "${REPO}"
+        run_issue_read "${subcommand}" --issue 7 --repo "${REPO}"
         [[ "${stderr%%$'\n'*}" == "cfwf: --repo can only be given once" ]]
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --issue 8
+        run_issue_read "${subcommand}" --issue 7 --issue 8
         [[ "${stderr%%$'\n'*}" == "cfwf: --issue can only be given once" ]]
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue x7
+        run_issue_read "${subcommand}" --issue x7
         [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --issue: it must be a number" ]]
-        run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7 --json title
+        run_issue_read "${subcommand}" --issue 7 --json title
         [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 7; its value is not shown)" ]]
     done
     [ ! -f "${GH_LOG}" ]
@@ -3358,18 +3364,16 @@ assert_sign_off() {
 
 @test "issue view and issue plan-status exit 9 for a number that is no issue, or that is a pull request's" {
     local subcommand
-    for subcommand in view plan-status; do
-        run_issue_read "${subcommand}" --issue 404
-        [ "${status}" -eq 9 ]
-        [ -z "${output}" ]
-        [ "${stderr}" = "cfwf: ${REPO}#404 was not found" ]
-    done
-
     # gh issue view answers a pull request's number with the pull request.
     write_issue 8 "A pull request" MERGED "Its description."
     jq --arg url "https://github.com/${REPO}/pull/8" '.url = $url' "$(issue_fixture 8).json" > "${TEST_TMP}/pull.json"
     mv "${TEST_TMP}/pull.json" "$(issue_fixture 8).json"
     for subcommand in view plan-status; do
+        run_issue_read "${subcommand}" --issue 404
+        [ "${status}" -eq 9 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${REPO}#404 was not found" ]
+
         run_issue_read "${subcommand}" --issue 8
         [ "${status}" -eq 9 ]
         [ -z "${output}" ]
@@ -3409,10 +3413,10 @@ assert_sign_off() {
     mkdir -p "${scratch}"
     write_issue 7 "A title" OPEN "The request."
     for subcommand in view plan-status; do
-        TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 7
+        TMPDIR="${scratch}" run_issue_read "${subcommand}" --issue 7
         [ "${status}" -eq 0 ]
         [ -z "$(ls -A "${scratch}")" ]
-        TMPDIR="${scratch}" run --separate-stderr "${SCRIPT}" issue "${subcommand}" --repo "${REPO}" --issue 404
+        TMPDIR="${scratch}" run_issue_read "${subcommand}" --issue 404
         [ "${status}" -eq 9 ]
         [ -z "$(ls -A "${scratch}")" ]
     done
@@ -3424,7 +3428,7 @@ assert_sign_off() {
     write_issue 7 "A title" OPEN "${PLAN_HEADING} in the description is not a plan comment."
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+    [ "${output}" = "$(plan_status_head no no)" ]
     [ -z "${stderr}" ]
     assert_one_issue_read 7 "${PLAN_STATUS_FIELDS}"
 
@@ -3441,7 +3445,7 @@ assert_sign_off() {
         "$(issue_comment 9 credfeto OWNER "${keyword}")"
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+    [ "${output}" = "$(plan_status_head no no)" ]
 }
 
 @test "issue plan-status takes a comment as a plan wherever its heading line is, with LF or CRLF line endings" {
@@ -3451,7 +3455,7 @@ assert_sign_off() {
         "A preamble."$'\r\n\r\n'"${PLAN_HEADING}"$'\r\n'"Step one."$'\r\n' "${PLAN_HEADING}"$'\r'; do
         write_comments 7 "$(issue_comment 1 planner-bot NONE "${body}")"
         run_issue_read plan-status --issue 7
-        [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)" ] || { echo "not a plan: ${body}" >&2; return 1; }
+        [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)" ] || { echo "not a plan: ${body}" >&2; return 1; }
     done
 }
 
@@ -3463,7 +3467,7 @@ assert_sign_off() {
         "$(issue_comment 4 someone MEMBER "Another remark.")"
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 planner-bot NONE)"$'\n'"$(comment_line 3 credfeto OWNER no)"$'\n'"$(comment_line 4 someone MEMBER no)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 2 planner-bot NONE)"$'\n'"$(comment_line 3 credfeto OWNER no)"$'\n'"$(comment_line 4 someone MEMBER no)" ]
     [ -z "${stderr}" ]
     assert_one_issue_read 7 "${PLAN_STATUS_FIELDS}"
 
@@ -3471,7 +3475,7 @@ assert_sign_off() {
     write_comments 7 "$(issue_comment 1 early-bird CONTRIBUTOR "A question before the plan.")" \
         "$(issue_comment 2 planner-bot NONE "${PLAN_HEADING}")"
     run_issue_read plan-status --issue 7
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 planner-bot NONE)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 2 planner-bot NONE)" ]
 }
 
 @test "issue plan-status takes the latest of two plans, and only the comments after it" {
@@ -3484,13 +3488,13 @@ assert_sign_off() {
         "$(issue_comment 4 credfeto OWNER "Still reading.")"
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 3 planner-bot NONE)"$'\n'"$(comment_line 4 credfeto OWNER no)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 3 planner-bot NONE)"$'\n'"$(comment_line 4 credfeto OWNER no)" ]
 
     # A later comment whose heading is in another case is not a plan, so it does not become the latest.
     write_comments 7 "$(issue_comment 1 planner-bot NONE "${PLAN_HEADING}")" \
         "$(issue_comment 2 someone NONE "${PLAN_HEADING^^}")"
     run_issue_read plan-status --issue 7
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 someone NONE no)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 someone NONE no)" ]
 }
 
 @test "issue plan-status reports who wrote the latest plan, so a caller can tell a plan from an author it does not trust" {
@@ -3502,12 +3506,12 @@ assert_sign_off() {
         "$(issue_comment 3 credfeto OWNER "${keyword}")"
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 2 stranger NONE)"$'\n'"$(comment_line 3 credfeto OWNER yes)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 2 stranger NONE)"$'\n'"$(comment_line 3 credfeto OWNER yes)" ]
 
     # A plan from a deleted account has an empty login, and keeps its four fields.
     write_comments 7 "$(issue_comment 1 "" NONE "${PLAN_HEADING}")"
     run_issue_read plan-status --issue 7
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 "" NONE)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 "" NONE)" ]
 }
 
 @test "issue plan-status reports blocked for a label named Blocked in any case, and for no other label" {
@@ -3516,16 +3520,16 @@ assert_sign_off() {
         write_issue 7 "A title" OPEN "The request." AI-Work "${label}" Medium
         run_issue_read plan-status --issue 7
         [ "${status}" -eq 0 ]
-        [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"yes" ] || { echo "${label}: ${output}" >&2; return 1; }
+        [ "${output}" = "$(plan_status_head no yes)" ] || { echo "${label}: ${output}" >&2; return 1; }
     done
     for label in Blocked-by-upstream Unblocked "Not Blocked" On-Hold; do
         write_issue 7 "A title" OPEN "The request." AI-Work "${label}"
         run_issue_read plan-status --issue 7
-        [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ] || { echo "${label}: ${output}" >&2; return 1; }
+        [ "${output}" = "$(plan_status_head no no)" ] || { echo "${label}: ${output}" >&2; return 1; }
     done
     write_issue 7 "A title" OPEN "The request."
     run_issue_read plan-status --issue 7
-    [ "${output}" = "plan"$'\t'"no"$'\n'"blocked"$'\t'"no" ]
+    [ "${output}" = "$(plan_status_head no no)" ]
 }
 
 @test "issue plan-status says yes for a sign-off keyword as a whole word, in any case, with punctuation or Markdown emphasis around it" {
@@ -3564,7 +3568,7 @@ assert_sign_off() {
         "$(issue_comment 3 "" NONE "from a deleted account")"
     run_issue_read plan-status --issue 7
     [ "${status}" -eq 0 ]
-    [ "${output}" = "plan"$'\t'"yes"$'\n'"blocked"$'\t'"no"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
+    [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
     [[ "${output}" != *marker* && "${output}" != *"request body"* && "${output}" != *"deleted account"* ]]
     [ -z "${stderr}" ]
 }
