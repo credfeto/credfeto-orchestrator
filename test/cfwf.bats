@@ -2663,6 +2663,28 @@ run_pr_checks() {
     [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Resource not accessible by integration (HTTP 403)" ]
 }
 
+@test "pr checks reads the 403 for a plan with no rulesets as no rulesets, and still judges the branch protection" {
+    # A private repository on GitHub Free cannot have rulesets, and GitHub refuses the read.
+    prepare_pr_checks
+    fail_api "repos/${REPO}/rules/branches/main" \
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ -z "${stderr}" ]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 11)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+
+    # The same text with any other status is still a failed read.
+    fail_api "repos/${REPO}/rules/branches/main" \
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 404)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
 @test "pr checks --branch judges the branch tip against that branch's required checks" {
     write_protection release/v2 build
     write_no_rulesets release/v2
@@ -2819,6 +2841,50 @@ run_pr_checks() {
     [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'* ]]
 }
 
+@test "pr checks never lets a skipped run replace a run of its name that ran, whatever their order" {
+    prepare_pr_checks
+    # A relabelled PR starts a new suite whose job skips itself: the older failure still fails it.
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build skipped 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    # The same whatever order GitHub lists them in.
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 101 "" "" 15368 8)" "$(check_run build failure 100 "" "" 15368 7)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'* ]]
+
+    # An older success with a newer skipped run passes on the success.
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 100 "" "" 15368 7)" "$(check_run build skipped 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"100"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+
+    # Only skipped runs (a check skipped while the PR was a draft, with nothing newer) pass, on the newest.
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 100 "" "" 15368 7)" "$(check_run build skipped 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+
+    # An older skipped run with a newer failure fails.
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 100 "" "" 15368 7)" "$(check_run build failure 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"101"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    # A run that has not finished replaces a skipped one, and still replaces an older failure.
+    write_check_runs "${HEAD_SHA}" "$(check_run build skipped 100 "" "" 15368 7)" "$(check_run build "" 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+    [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'"101"$'\n'* ]]
+
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 100 "" "" 15368 7)" "$(check_run build "" 101 "" "" 15368 8)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 4 ]
+    [[ "${output}" == "build"$'\t'"pending"$'\t'$'\t'"101"$'\n'* ]]
+}
+
 @test "pr checks judges commit statuses, and a check run and a status of the same name must both pass" {
     prepare_pr_checks
     write_protection main build ci/legacy ci/error ci/waiting
@@ -2848,6 +2914,32 @@ run_pr_checks() {
     run_pr_checks --pr 42
     [ "${status}" -eq 0 ]
     [ "${output}" = "odd name here"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+}
+
+@test "pr checks keeps apart two names that differ only in a control character, though both print alike" {
+    prepare_pr_checks
+    write_protection main
+    write_check_runs "${HEAD_SHA}" "$(check_run $'a\tb' failure 11)" "$(check_run "a b" success 12)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "a b"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"a b"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"summary passed=1 failed=1 pending=0 head=${HEAD_SHA}" ]
+
+    # A required name matches only the name it is, byte for byte.
+    write_protection main "a b"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "a b"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+}
+
+@test "pr checks judges a check really named like the app label of a name required twice apart from that name" {
+    prepare_pr_checks
+    write_branch main
+    write_rulesets main foo#15368 foo#57789 "foo (app 15368)"
+    write_check_runs "${HEAD_SHA}" "$(check_run foo success 11 "" "" 15368 5)" "$(check_run foo success 12 "" "" 57789 6)" \
+        "$(check_run "foo (app 15368)" failure 13 "" "" 15368 5)"
+    run_pr_checks --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "foo (app 15368)"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"13"$'\n'"foo (app 15368)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"foo (app 57789)"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"12"$'\n'"summary passed=2 failed=1 pending=0 head=${HEAD_SHA}" ]
 }
 
 @test "pr checks keeps a check named summary apart from the summary line, the only line with no tab" {

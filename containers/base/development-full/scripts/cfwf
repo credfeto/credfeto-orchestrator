@@ -389,7 +389,9 @@ The head is resolved first, so a check on an older head (before a force-push) is
 The check runs and commit statuses of that commit are read: the newest run of a name from each app
 is judged, whichever check suite it is in, so a run cancelled or failed in an older suite (before a
 PR was marked ready, say) no longer counts once a newer run of that name exists, and a name fails
-when any of those, or a commit status of that name, failed. The required checks of the branch are
+when any of those, or a commit status of that name, failed. A skipped run never replaces a run of
+its name that ran, so a newer suite whose job skips itself cannot hide an older failure; a skipped
+run counts (as a pass) only when no run of its name ran. The required checks of the branch are
 read from its branch protection and its rulesets (one pinned to an app is satisfied only by a run
 from that app, though a failed commit status of its name still fails it); read access to the
 repository is enough. Without --all only the required checks are judged, or every check when the
@@ -1369,17 +1371,21 @@ api_read() {
     die "${failure}: $(gh_failure_text)"
 }
 
-# A check name with each control character (a tab or a newline included) turned into a space, so it
-# fits on one line of the output and in one field of a row.
-readonly CHECK_NAME_FILTER='gsub("[[:cntrl:]]"; " ")'
-# The fields of a row read from gh: \x1f, which no check name holds once CHECK_NAME_FILTER has run.
-# A tab would not do: read collapses consecutive tabs, so an empty field would shift the rest.
+# A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
+# name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
+# byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
+# name with each control character (a tab or a newline included) turned into a space, is only
+# printed, so it fits on one line of the output; two names that print the same are still judged
+# apart.
+readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[[:cntrl:]]"; " ");'
+# The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
+# name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
+# field would shift the rest.
 readonly ROW_SEPARATOR=$'\x1f'
-# The app a required check must come from, in branch protection and in a ruleset: empty for any
-# source, which GitHub shows as a null (or -1) app_id in branch protection and leaves out of a
-# ruleset.
-readonly PROTECTION_APP_FILTER='(if (.app_id // -1) == -1 then "" else (.app_id | tostring) end)'
-readonly RULESET_APP_FILTER='(if (.integration_id // -1) == -1 then "" else (.integration_id | tostring) end)'
+# A jq definition, put before a filter that uses it: app_of(f) is the app a required check must
+# come from, read from its field f (app_id in branch protection, integration_id in a ruleset):
+# empty for any source, which GitHub shows as a null (or -1) app_id and leaves out of a ruleset.
+readonly APP_OF_DEF='def app_of(f): if (f // -1) == -1 then "" else (f | tostring) end;'
 HEAD_SHA=""
 RULES_BRANCH=""
 BRANCH_READ=""
@@ -1400,9 +1406,9 @@ read_branch() {
     [ "${BRANCH_READ}" != "${repo}${ROW_SEPARATOR}${branch}" ] || return 0
     BRANCH_PATH="$(branch_path "${branch}")"
     api_read "${failure}" "repos/${repo}/branches/${BRANCH_PATH}" \
-        ".commit.sha, (.protection.required_status_checks | select(.enforcement_level != \"off\") | (.checks // []) as \$checks
-            | ((\$checks[] | [(.context | ${CHECK_NAME_FILTER}), ${PROTECTION_APP_FILTER}]),
-               (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [(. | ${CHECK_NAME_FILTER}), \"\"]))
+        "${APP_OF_DEF} ${NAME_FIELDS_DEF} .commit.sha, (.protection.required_status_checks | select(.enforcement_level != \"off\") | (.checks // []) as \$checks
+            | ((\$checks[] | [(.context | name_fields), app_of(.app_id)]),
+               (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [name_fields, \"\"]))
             | join(\"\\u001f\"))" \
         || die "${missing}"
     BRANCH_TIP="${GH_OUTPUT%%$'\n'*}"
@@ -1433,7 +1439,7 @@ resolve_checks_head() {
     valid_branch_name "${RULES_BRANCH}" || die "gh returned an unexpected branch whose required checks apply for ${REPO}"
 }
 
-# Fills REQUIRED_CHECKS, keyed by check name and the app id it must come from (empty for any
+# Fills REQUIRED_CHECKS, keyed by check name (its key from name_fields) and the app id it must come from (empty for any
 # source), joined by ROW_SEPARATOR, with the checks the branch $2 of the repository $1 requires:
 # those of its classic branch protection and those of every ruleset that applies to it, without
 # duplicates. The protection is read from the branch itself (read_branch, so a branch
@@ -1442,21 +1448,30 @@ resolve_checks_head() {
 # rights), and an enforcement level of off requires nothing whatever it lists. A branch that is not
 # there is a runtime failure, and so is any failed read of the rulesets, a 404 included: GitHub
 # answers a branch no ruleset applies to (whether or not it exists) with an empty list, so a 404
-# means the rules could not be read, and taking it as none would judge too few checks.
-declare -gA REQUIRED_CHECKS=()
+# means the rules could not be read, and taking it as none would judge too few checks. The one
+# exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no rulesets (a private one on
+# GitHub Free) can have none, so that refusal is read as no rulesets. Each name
+# read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its key.
+declare -gA REQUIRED_CHECKS=() PRINTED_NAME=()
+# The start of the HTTP 403 GitHub answers the rulesets read with when the repository's plan has
+# no rulesets, as seen in practice (the REST reference lists only 200 for it).
+readonly RULESETS_NOT_IN_PLAN='Upgrade to GitHub Pro or make this repository public'
 read_required_checks() {
-    local repo="$1" branch="$2" names name app
+    local repo="$1" branch="$2" names name printed app
     read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
         "the branch whose required checks apply was not found in ${repo}"
     names="${PROTECTION_ROWS}"
-    api_read "could not read the rulesets of ${repo}" "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" \
-        ".[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
-            | [(.context | ${CHECK_NAME_FILTER}), ${RULESET_APP_FILTER}] | join(\"\\u001f\")" --paginate \
-        || die "could not read the rulesets of ${repo}: $(gh_failure_text)"
+    if ! gh_capture api "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" --paginate \
+        --jq "${APP_OF_DEF} ${NAME_FIELDS_DEF} .[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
+            | [(.context | name_fields), app_of(.integration_id)] | join(\"\\u001f\")"; then
+        [[ "${GH_ERROR}" == *"${RULESETS_NOT_IN_PLAN}"*"(HTTP 403)"* ]] || die "could not read the rulesets of ${repo}: $(gh_failure_text)"
+        GH_OUTPUT=""
+    fi
     names+=$'\n'"${GH_OUTPUT}"
-    while IFS="${ROW_SEPARATOR}" read -r name app; do
+    while IFS="${ROW_SEPARATOR}" read -r name printed app; do
         [ -n "${name}" ] || continue
         [[ "${app}" =~ ^[0-9]*$ ]] || die "gh returned an unexpected app for a required check of ${repo}"
+        PRINTED_NAME["${name}"]="${printed}"
         REQUIRED_CHECKS["${name}${ROW_SEPARATOR}${app}"]=1
     done <<< "${names}"
 }
@@ -1481,7 +1496,7 @@ commit_status_verdict() {
     esac
 }
 
-# Records the rows $2 (name, conclusion or state, id, completed_at, app id, kind) with the verdict
+# Records the rows $2 (name key, printed name, conclusion or state, id, completed_at, app id, kind) with the verdict
 # function $1, keeping the newest result (highest id) of each group: the runs of one name from one
 # app, across every check suite on the commit, as GitHub's merge gate is seen to take only the
 # latest run of a required name. So a re-run, or a new run of the workflow in a new check suite (a
@@ -1490,21 +1505,30 @@ commit_status_verdict() {
 # same name from another app stays a result of its own and is still judged. Newest is creation order
 # (the id): GitHub does not document how it orders runs, and creation order agrees with it when a
 # newer run supersedes an older one, while a newer run that has not finished keeps the name pending.
+# A skipped check run did not run, so it never replaces a run of its group that did (finished or
+# not), and a run that did always replaces a skipped one: a skipped run decides only a group that
+# holds nothing else. So a newer suite whose job skips itself (a relabelled PR whose job's if: is
+# false) cannot hide an older failure, though GitHub counts skipped as a pass and may let it.
 # The kind is "run" for a check run and "status" for a commit status, which has no app id, so a
 # status never replaces a check run (GitHub requires both to pass when a check run and a status
 # share a name), and the combined status already has one per name. NAME_GROUPS indexes the groups of
-# each name, one per line (a name holds no newline once CHECK_NAME_FILTER has run), so judging a
-# name reads only its own groups.
-declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() NAME_GROUPS=()
+# each name, one per line (a name key holds no newline), so judging a name reads only its own
+# groups.
+declare -gA GROUP_VERDICT=() GROUP_RUN_ID=() GROUP_COMPLETED_AT=() GROUP_SKIPPED=() NAME_GROUPS=()
 VERDICT=""
 record_check_rows() {
-    local verdict_of="$1" rows="$2" name result id completed_at app kind group
-    while IFS="${ROW_SEPARATOR}" read -r name result id completed_at app kind; do
+    local verdict_of="$1" rows="$2" name printed result id completed_at app kind group skipped
+    while IFS="${ROW_SEPARATOR}" read -r name printed result id completed_at app kind; do
         [ -n "${name}" ] || continue
         [[ "${id}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected id for a check on ${HEAD_SHA}"
+        PRINTED_NAME["${name}"]="${printed}"
         group="${name}${ROW_SEPARATOR}${app}${ROW_SEPARATOR}${kind}"
+        skipped=""
+        [ "${kind}" != run ] || [ "${result}" != skipped ] || skipped=1
         if [ -z "${GROUP_RUN_ID["${group}"]:-}" ]; then
             NAME_GROUPS["${name}"]+="${group}"$'\n'
+        elif [ "${skipped}" != "${GROUP_SKIPPED["${group}"]}" ]; then
+            [ -z "${skipped}" ] || continue
         elif [ "${id}" -le "${GROUP_RUN_ID["${group}"]}" ]; then
             continue
         fi
@@ -1512,6 +1536,7 @@ record_check_rows() {
         GROUP_VERDICT["${group}"]="${VERDICT}"
         GROUP_RUN_ID["${group}"]="${id}"
         GROUP_COMPLETED_AT["${group}"]="${completed_at}"
+        GROUP_SKIPPED["${group}"]="${skipped}"
     done <<< "${rows}"
 }
 
@@ -1520,14 +1545,14 @@ record_check_rows() {
 # HEAD_SHA. Both endpoints answer for that one commit only; resolve_checks_head having found the current head first is what
 # keeps a result on an older, force-pushed head out.
 read_check_results() {
-    local runs
+    local runs missing="the commit ${HEAD_SHA} was not found in ${REPO}"
     api_read "could not read the check runs of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=${API_PAGE_SIZE}&filter=all" \
-        ".check_runs[]? | [(.name | ${CHECK_NAME_FILTER}), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), \"run\"] | join(\"\\u001f\")" --paginate \
-        || die "the commit ${HEAD_SHA} was not found in ${REPO}"
+        "${NAME_FIELDS_DEF} .check_runs[]? | [(.name | name_fields), (.conclusion // \"\"), (.id | tostring), (.completed_at // \"\"), (.app.id // \"\" | tostring), \"run\"] | join(\"\\u001f\")" --paginate \
+        || die "${missing}"
     runs="${GH_OUTPUT}"
     api_read "could not read the commit statuses of ${HEAD_SHA}" "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=${API_PAGE_SIZE}" \
-        ".statuses[]? | [(.context | ${CHECK_NAME_FILTER}), .state, (.id | tostring), (if .state == \"pending\" then \"\" else (.updated_at // \"\") end), \"\", \"status\"] | join(\"\\u001f\")" --paginate \
-        || die "the commit ${HEAD_SHA} was not found in ${REPO}"
+        "${NAME_FIELDS_DEF} .statuses[]? | [(.context | name_fields), .state, (.id | tostring), (if .state == \"pending\" then \"\" else (.updated_at // \"\") end), \"\", \"status\"] | join(\"\\u001f\")" --paginate \
+        || die "${missing}"
     record_check_rows check_run_verdict "${runs}"
     record_check_rows commit_status_verdict "${GH_OUTPUT}"
 }
@@ -1573,7 +1598,9 @@ judge_check() {
 # with the verdict. Every read has already succeeded, so a failed read never leaves a partial
 # report. A judged check is a name and the app it must come from (empty for any source), so a name
 # required from two apps is judged, and printed, once for each; each of those lines pinned to an
-# app shows it as "<name> (app <id>)", so no two lines carry the same name.
+# app shows it as "<name> (app <id>)". Checks are judged by name key and app; only the label is made
+# printable here, so two checks whose lines look alike (names that differ only in a control
+# character, or a check really named "<name> (app <id>)") are still judged, and counted, apart.
 report_checks() {
     local check name app label passed=0 failed=0 pending=0
     local -a lines=()
@@ -1598,7 +1625,7 @@ report_checks() {
             fail) failed=$((failed + 1)) ;;
             *) pending=$((pending + 1)) ;;
         esac
-        label="${name}"
+        label="${PRINTED_NAME["${name}"]}"
         [ -z "${app}" ] || [ "${required_count["${name}"]:-0}" -le 1 ] || label+=" (app ${app})"
         lines+=("${label}"$'\t'"${VERDICT}"$'\t'"${RESULT_AT}"$'\t'"${RESULT_ID}")
     done
