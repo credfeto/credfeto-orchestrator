@@ -62,6 +62,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The Workflow board's built-in Status field now carries the ten workflow states, replacing the separate Workflow Status field and the coarse Todo, In Progress and Done set alongside it; create-project and the orchestrator convert each board in place, keeping GitHub's own board automations working, setting anything already closed or merged to Complete, and deleting the Workflow Status field only once every item's value has been copied across and read back, and a board that cannot be converted gets a Discord alert and its repository is skipped until it can; cfwf workflow-status --check prints just the status name, and cfwf follows whichever field a board uses while boards are converted (#1519)
 - enforce-background-for-long-running-commands now also blocks buildtest unless run_in_background is true, and enforce-git-dash-c allows git -C <dir> ls-files and ls-tree with any flags (#1526)
 - The fleet health check now reports stalled and quit sessions from the per-day session-denials logs, to the private Discord channel only, and no longer excludes a denial that ended a session as known-by-design (#1561)
+- Issue titles in this repository now start with the tool or component they affect, using a `<scope>: <rest>` format (#1581)
 ### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
