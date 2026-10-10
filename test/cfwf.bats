@@ -445,6 +445,23 @@ gh_line_of() {
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id wf_3" "${GH_LOG}"
 }
 
+@test "--set builds the item URL from a number given with leading zeros as that number, without them" {
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 01346 --status Approved
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Set ${ISSUE_URL} to Approved" ]
+    grep -qxF "project item-add 74 --owner credfeto --url ${ISSUE_URL} --format json --jq .id" "${GH_LOG}"
+
+    : > "${GH_LOG}"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --pr 0001481 --status Approved
+    [ "${status}" -eq 0 ]
+    grep -qxF "project item-add 74 --owner credfeto --url https://github.com/credfeto/credfeto-orchestrator/pull/1481 --format json --jq .id" "${GH_LOG}"
+
+    : > "${GH_LOG}"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 000 --status Approved
+    [ "${status}" -eq 0 ]
+    grep -qxF "project item-add 74 --owner credfeto --url https://github.com/credfeto/credfeto-orchestrator/issues/0 --format json --jq .id" "${GH_LOG}"
+}
+
 @test "--set matches the board's option name without regard to case (#1519)" {
     jq -n '{fields: [{id: "PVTSSF_status", name: "Status", options: [{id: "st_3", name: "APPROVED"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
     set_args
@@ -555,6 +572,24 @@ gh_line_of() {
     grep -qF -- "-f o=credfeto -f r=credfeto-orchestrator -F n=1346" "${GH_LOG}"
     grep -qF 'select(.project.id=="PVT_proj")' "${GH_LOG}"
     grep -qF 'projectItems(first:100)' "${GH_LOG}"
+}
+
+@test "--check reads a number given with leading zeros as that number, directly and from the listing" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    grep -qF -- "-F n=1346 " "${GH_LOG}"
+
+    use_fallback
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    grep -qF '.content.number==1346 ' "${GH_LOG}"
+
+    use_fallback "GraphQL: Could not resolve to an Issue with the number of 1481."
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01481
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "cfwf: ${REPO}#1481 is not on project 74" ]
 }
 
 @test "--check --issue asks for issue(number:) and --pr asks for pullRequest(number:)" {
@@ -766,6 +801,15 @@ gh_line_of() {
     run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf 'AI-Work\nMedium\nSecurity')" ]
+}
+
+@test "closing-issue-labels reads a PR number given with leading zeros as that number, without them" {
+    write_pr_view "credfeto/credfeto-orchestrator 10"
+    jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
+    run "${SCRIPT}" closing-issue-labels --repo "${REPO}" --pr 01481
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Medium" ]
+    grep -qF "pr view 1481 --repo ${REPO} " "${GH_LOG}"
 }
 
 @test "closing-issue-labels does not exclude labels that merely contain Blocked or On-Hold" {
