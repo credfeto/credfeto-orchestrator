@@ -180,7 +180,7 @@ Standalone scripts maintained in this repo (`containers/base/development-full/sc
 
 - `pre-commit-check`: runs the active `pre-commit` hook chain with `--all-files` against the current checkout. See [pre-commit-check](../../../docs/development/scripts/pre-commit-check.md).
 - `querydb`: runs `sqlcmd` with the connection settings from `.database` files. See [querydb](../../../docs/development/scripts/querydb.md).
-- `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board, creating an issue or judging the checks on a PR's head (with exit codes that keep a failed check apart from a failed read), and checks every body, title and label it posts for leaks (tokens, host paths, private repository names) first. See [cfwf](../../../docs/development/scripts/cfwf.md).
+- `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board, creating an issue, adding a comment to a PR or an issue or judging the checks on a PR's head (with exit codes that keep a failed check apart from a failed read), and checks every body, title and label it posts for leaks (tokens, host paths, private repository names) first. See [cfwf](../../../docs/development/scripts/cfwf.md).
 
 Every name is registered on `claude-hooks/command-allowlist` and `claude-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
 
