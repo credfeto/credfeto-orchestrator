@@ -1613,6 +1613,7 @@ leak_credential_forms() {
         "https:/""/user:${tail}@localhost?at=12:30" "https:/""/user:${tail}@localhost#line:5" \
         "http://localhost:8080,someone@example.com" "'http://localhost:8080','someone@example.com'" \
         "ssh:/""/git@localhost:22,someone@example.com" "https:/""/user:@localhost,someone@example.com" \
+        "docker:/""/alpine:3.20@sha256:0123abcd" \
         "$(url_with_password https user "password@${tail}")" "x-access-token"":xxx@${tail}@""example.com" \
         "$(url_with_password https user "@${tail}")" "$(url_with_password https user "@@${tail}")" \
         "$(url_with_password https "" "@${tail}")" "$(url_with_password https x-access-token "@${tail}")" \
@@ -1646,6 +1647,7 @@ harmless_credential_shapes() {
         "$(url_with_password smtp "someone@example.com" "")" "smtp://someone@example.com@smtp.example.com/path" \
         "ssh://git@example.com" "https://user@example.com" "ssh://git@example.com:22" "git@example.com:owner/repo.git" \
         "ssh://git@example.com:owner/repo.git" "docker://alpine@sha256:0123abcd" \
+        "docker://library/alpine:3.20@sha256:0123abcd" "image: alpine:3.20@sha256:0123abcd" \
         "https://user@example.com:8080/path?to=someone@example.com" "ssh://git@localhost:22, then mail someone@example.com"
 }
 
