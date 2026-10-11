@@ -1902,14 +1902,13 @@ assign_pr_comment_option() {
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
-            PR="${value#"${value%%[!0]*}"}"
-            [ -n "${PR}" ] || usage_error "invalid value for ${flag}: it must be above 0"
+            [ "${PR}" != 0 ] || usage_error "invalid value for ${flag}: it must be above 0"
             ;;
         --comment-id)
             assign_once COMMENT_ID "${flag}"
             validate "${value}" '^[0-9]{1,19}$' "${flag}" "it must be a number of at most 19 digits"
-            COMMENT_ID="${value#"${value%%[!0]*}"}"
-            [ -n "${COMMENT_ID}" ] || usage_error "invalid value for ${flag}: it must be above 0"
+            COMMENT_ID=$(without_leading_zeros "${value}")
+            [ "${COMMENT_ID}" != 0 ] || usage_error "invalid value for ${flag}: it must be above 0"
             ;;
         --body-file)
             assign_issue_option "${flag}" "${value}"
