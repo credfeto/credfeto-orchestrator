@@ -38,6 +38,7 @@ setup() {
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3.json"; [ -f "${f}" ] || exit 1; emit "${f}" ;;' \
         '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
+        '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -169,6 +170,7 @@ gh_line_of() {
         [[ "${output}" == *"issue create"* ]]
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
+        [[ "${output}" == *"comment add"* ]]
     done
 }
 
@@ -196,6 +198,10 @@ gh_line_of() {
     [[ "${output}" == *"and exits 8"* ]]
     [[ "${output}" == *"CFWF_PRIVATE_OWNERS"* ]]
     [[ "${output}" == *"There is no option to skip"*"the check."* ]]
+
+    run "${SCRIPT}" help comment
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->"* ]]
 }
 
 @test "the workflow-status help states that --set does not read back, the fallback listing limit and the GraphQL exception" {
@@ -441,6 +447,23 @@ gh_line_of() {
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id wf_3" "${GH_LOG}"
 }
 
+@test "--set builds the item URL from a number given with leading zeros as that number, without them" {
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 01346 --status Approved
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Set ${ISSUE_URL} to Approved" ]
+    grep -qxF "project item-add 74 --owner credfeto --url ${ISSUE_URL} --format json --jq .id" "${GH_LOG}"
+
+    : > "${GH_LOG}"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --pr 0001481 --status Approved
+    [ "${status}" -eq 0 ]
+    grep -qxF "project item-add 74 --owner credfeto --url https://github.com/credfeto/credfeto-orchestrator/pull/1481 --format json --jq .id" "${GH_LOG}"
+
+    : > "${GH_LOG}"
+    run "${SCRIPT}" workflow-status --set --repo "${REPO}" --issue 000 --status Approved
+    [ "${status}" -eq 0 ]
+    grep -qxF "project item-add 74 --owner credfeto --url https://github.com/credfeto/credfeto-orchestrator/issues/0 --format json --jq .id" "${GH_LOG}"
+}
+
 @test "--set matches the board's option name without regard to case (#1519)" {
     jq -n '{fields: [{id: "PVTSSF_status", name: "Status", options: [{id: "st_3", name: "APPROVED"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
     set_args
@@ -551,6 +574,24 @@ gh_line_of() {
     grep -qF -- "-f o=credfeto -f r=credfeto-orchestrator -F n=1346" "${GH_LOG}"
     grep -qF 'select(.project.id=="PVT_proj")' "${GH_LOG}"
     grep -qF 'projectItems(first:100)' "${GH_LOG}"
+}
+
+@test "--check reads a number given with leading zeros as that number, directly and from the listing" {
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    grep -qF -- "-F n=1346 " "${GH_LOG}"
+
+    use_fallback
+    run --separate-stderr "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01346
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Approved" ]
+    grep -qF '.content.number==1346 ' "${GH_LOG}"
+
+    use_fallback "GraphQL: Could not resolve to an Issue with the number of 1481."
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --issue 01481
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "cfwf: ${REPO}#1481 is not on project 74" ]
 }
 
 @test "--check --issue asks for issue(number:) and --pr asks for pullRequest(number:)" {
@@ -762,6 +803,15 @@ gh_line_of() {
     run "${SCRIPT}" closing-issue-labels --repo credfeto/credfeto-orchestrator --pr 1481
     [ "${status}" -eq 0 ]
     [ "${output}" = "$(printf 'AI-Work\nMedium\nSecurity')" ]
+}
+
+@test "closing-issue-labels reads a PR number given with leading zeros as that number, without them" {
+    write_pr_view "credfeto/credfeto-orchestrator 10"
+    jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
+    run "${SCRIPT}" closing-issue-labels --repo "${REPO}" --pr 01481
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Medium" ]
+    grep -qF "pr view 1481 --repo ${REPO} " "${GH_LOG}"
 }
 
 @test "closing-issue-labels does not exclude labels that merely contain Blocked or On-Hold" {
@@ -1872,8 +1922,7 @@ BODIES
     write_visibility credfeto/hidden-thing PRIVATE
     printf '%s\n' "credfeto/open-thing#1" "fine" "https://github.com/credfeto/hidden-thing" "credfeto/hidden-thing#9" > "${TEST_TMP}/leak.md"
     run_body_check
-    [ "${status}" -eq 8 ]
-    [ "${stderr}" = "cfwf: body refused: private repository (line 3)" ]
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
 }
 
 @test "a visibility lookup that fails is a runtime failure (exit 1), never a pass or a refusal" {
@@ -2437,6 +2486,20 @@ run_pr_checks() {
     [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all --paginate ")" -eq 1 ]
     [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100 --paginate ")" -eq 1 ]
     [ "$(gh_call_count " api graphql")" -eq 0 ]
+}
+
+@test "pr checks reads a PR number given with leading zeros as that number, without them" {
+    run_pr_checks --pr 042
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: ${REPO}#42 was not found" ]
+
+    prepare_pr_checks
+    : > "${GH_LOG}"
+    run_pr_checks --pr 00042
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/42 ")" -eq 1 ]
+    [ "$(gh_call_count "pulls/0")" -eq 0 ]
 }
 
 @test "pr checks exits 3 for each failing conclusion, and for a conclusion it does not know" {
@@ -3105,4 +3168,280 @@ run_pr_checks() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not read the check runs of ${HEAD_SHA}: gh: Validation Failed (HTTP 422)" ]
+}
+
+# --- comment add ---------------------------------------------------------------
+
+COMMENT_PR_URL="https://github.com/credfeto/credfeto-orchestrator/pull/1623#issuecomment-4242"
+COMMENT_ISSUE_URL="https://github.com/credfeto/credfeto-orchestrator/issues/1585#issuecomment-4343"
+
+prepare_comment() {
+    printf 'A comment.\n\nWith a second paragraph.\n' > "${TEST_TMP}/comment.md"
+    printf '%s\n' "${1-${COMMENT_PR_URL}}" > "${GH_FIXTURES}/comment.out"
+}
+
+run_comment_add() {
+    run --separate-stderr "${SCRIPT}" comment add --repo "${REPO}" "$@"
+}
+
+@test "comment add posts on a PR with gh pr comment, stdin closed, and prints only the comment URL" {
+    prepare_comment
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md" <<< "stray stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr comment 1623 --repo ${REPO} --body-file BODY"
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    cmp "${TEST_TMP}/comment.md" "${GH_FIXTURES}/comment-body.txt"
+    [ "$(cat "${GH_FIXTURES}/comment-stdin.txt")" = /dev/null ]
+    [ "$(gh_call_count "--body-file ${TEST_TMP}/comment.md")" -eq 0 ]
+}
+
+@test "comment add posts on an issue with gh issue comment" {
+    prepare_comment "${COMMENT_ISSUE_URL}"
+    run_comment_add --issue 1585 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_ISSUE_URL}" ]
+    issue_create_called_with "issue comment 1585 --repo ${REPO} --body-file BODY"
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    cmp "${TEST_TMP}/comment.md" "${GH_FIXTURES}/comment-body.txt"
+}
+
+@test "comment add reads the body from stdin for --body-file -, and an empty stdin is refused without calling gh" {
+    prepare_comment
+    run_comment_add --pr 1623 --body-file - <<< "A comment from stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "A comment from stdin" ]
+
+    rm -f "${GH_LOG}"
+    run_comment_add --pr 1623 --body-file - < /dev/null
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add usage errors exit 2 with the usage on stderr and never call gh" {
+    prepare_comment
+    local body="${TEST_TMP}/comment.md"
+
+    run_comment_add --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --pr or --issue"* ]]
+    [[ "${stderr}" == *"Usage: cfwf comment add"* ]]
+
+    run_comment_add --pr 1 --issue 2 --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"--pr or --issue can only be given once, and not both"* ]]
+
+    run_comment_add --pr 1 --pr 2 --body-file "${body}"
+    [ "${status}" -eq 2 ]
+
+    local number
+    for number in abc 1a -1 "" "1 2"; do
+        run_comment_add --pr "${number}" --body-file "${body}"
+        [ "${status}" -eq 2 ]
+        run_comment_add --issue "${number}" --body-file "${body}"
+        [ "${status}" -eq 2 ]
+    done
+    [[ "${stderr}" == *"invalid value for --issue: it must be a number"* ]]
+
+    run_comment_add --pr 1
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --body-file"* ]]
+
+    run_comment_add --pr 1 --body-file "${body}" --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"--body-file can only be given once"* ]]
+
+    run_comment_add --pr 1 --body-file
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"--body-file needs a value"* ]]
+
+    run --separate-stderr "${SCRIPT}" comment add --pr 1 --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --repo"* ]]
+
+    local flag
+    for flag in --body --edit-last --json --jq --title --status; do
+        run_comment_add --pr 1 --body-file "${body}" "${flag}" value
+        [ "${status}" -eq 2 ]
+        [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 9; its value is not shown)" ]
+    done
+
+    run_comment_add --pr 1 --edit-last --body-file "${body}"
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add refuses a missing, unreadable, empty or blank body as a runtime failure, without calling gh" {
+    run_comment_add --pr 1 --body-file "${TEST_TMP}/nope.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: cannot read the --body-file" ]
+
+    run_comment_add --pr 1 --body-file "${TEST_TMP}"
+    [ "${status}" -eq 1 ]
+
+    : > "${TEST_TMP}/empty.md"
+    run_comment_add --pr 1 --body-file "${TEST_TMP}/empty.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+
+    printf ' \n\t\n' > "${TEST_TMP}/blank.md"
+    run_comment_add --issue 1 --body-file "${TEST_TMP}/blank.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add refuses a leaking body with exit 8, naming the rule only, and posts nothing" {
+    prepare_comment
+    local secret="gh""p_LEAKMARKER0123456789"
+    write_leak_body "the value is ${secret} here"
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" token "${secret}"
+
+    write_leak_body "see /home/someone/notes"
+    run_comment_add --issue 1585 --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "host path" "/home/someone"
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add refuses a body naming a private repository on a public target, before posting" {
+    prepare_comment
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/secret-thing PRIVATE
+    write_leak_body "see credfeto/secret-thing#3"
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "secret-thing"
+    [ "$(gh_call_count "comment")" -eq 0 ]
+}
+
+@test "comment add refuses a plan-approval keyword outside a quote with exit 8, in any case, naming only the line" {
+    prepare_comment
+    local line
+    for line in "Approved" "lgtm" "LGTM, ship it" "This is APPROVED." "  approved" "the plan is (approved)" "x - Lgtm" "- > approved" "_Approved_" "__LGTM__" "so _lgtm_." "    > approved" $'\t> lgtm'; do
+        write_leak_body "${line}"
+        run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
+        assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add posts a plan-approval keyword inside a Markdown quote, and a longer word holding the letters" {
+    prepare_comment
+    local line
+    for line in "> approved" ">LGTM" "   > The human said: Approved" "> > lgtm" "disapproved" "unapproved_change" "lgtm2" "approvedness" "plan_approved" "approved_change" "x_lgtm_y"; do
+        write_leak_body "${line}"
+        rm -f "${GH_LOG}"
+        run_comment_add --pr 1623 --body-file "${TEST_TMP}/leak.md"
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${COMMENT_PR_URL}" ]
+        cmp "${TEST_TMP}/leak.md" "${GH_FIXTURES}/comment-body.txt"
+    done
+}
+
+@test "comment add runs the leak check before the keyword rule" {
+    prepare_comment
+    printf 'lgtm\n/tmp/x\n' > "${TEST_TMP}/both.md"
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/both.md"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: host path (line 2)" ]
+}
+
+@test "body check does not apply the plan-approval keyword rule" {
+    write_leak_body "approved"
+    run_body_check
+    [ "${status}" -eq 0 ]
+}
+
+@test "comment add accepts a comment URL from another host, and a pull URL for an issue number" {
+    prepare_comment "https://proxy.example.com:8443/credfeto/renamed/pull/1585#issuecomment-1"
+    run_comment_add --issue 1585 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "https://proxy.example.com:8443/credfeto/renamed/pull/1585#issuecomment-1" ]
+
+    printf 'gh says something first\n%s\n' "${COMMENT_PR_URL}" > "${GH_FIXTURES}/comment.out"
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+}
+
+@test "comment add posts on a number given with leading zeros as that number, without them" {
+    prepare_comment
+    run_comment_add --pr 01623 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    issue_create_called_with "pr comment 1623 --repo ${REPO} --body-file BODY"
+
+    rm -f "${GH_LOG}"
+    prepare_comment "https://github.com/credfeto/credfeto-orchestrator/issues/0#issuecomment-1"
+    run_comment_add --issue 000 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 0 ]
+    issue_create_called_with "issue comment 0 --repo ${REPO} --body-file BODY"
+}
+
+@test "comment add exits 1, printing nothing on stdout, when the result is not the comment URL of the target" {
+    local url
+    for url in "" "https://github.com/credfeto/credfeto-orchestrator/pull/1623" \
+        "https://github.com/credfeto/credfeto-orchestrator/pull/1624#issuecomment-1" \
+        "http://github.com/credfeto/credfeto-orchestrator/pull/1623#issuecomment-1" \
+        "https://github.com/credfeto/credfeto-orchestrator/pull/1623#issuecomment-" \
+        "https://github.com/credfeto/credfeto-orchestrator/commit/1623#issuecomment-1" \
+        "https://github.com/credfeto/credfeto-orchestrator/pull/1623#issuecomment-1 trailing"; do
+        prepare_comment "${url}"
+        run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the comment, which may have been posted on ${REPO}#1623" ]
+    done
+}
+
+@test "comment add exits 1 when gh cannot post the comment" {
+    prepare_comment
+    touch "${GH_FIXTURES}/comment.fail"
+    run_comment_add --issue 1585 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not post the comment on ${REPO}#1585"* ]]
+}
+
+@test "comment help, -h and a missing or unknown subcommand, none of which call gh" {
+    local args
+    for args in "help comment add" "help comment" "comment add -h" "comment add --help" "comment -h" "comment --help"; do
+        # shellcheck disable=SC2086  # each entry is a list of words
+        run --separate-stderr "${SCRIPT}" ${args}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf comment add"* ]]
+        [[ "${output}" == *"two plan-approval keywords"* ]]
+        [[ "${output}" == *'with "(line <n>)" where there is one'* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" comment
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"comment needs a subcommand (add)"* ]]
+
+    run --separate-stderr "${SCRIPT}" comment edit
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"unknown comment subcommand (argument 2; its value is not shown)"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add leaves no temporary file behind, for a stdin body, a refusal and a run that succeeds" {
+    prepare_comment
+    local scratch="${TEST_TMP}/tmp"
+    mkdir -p "${scratch}"
+
+    TMPDIR="${scratch}" run_comment_add --pr 1623 --body-file - <<< "from stdin"
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    TMPDIR="${scratch}" run_comment_add --pr 1623 --body-file - <<< "lgtm"
+    [ "${status}" -eq 8 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    touch "${GH_FIXTURES}/comment.fail"
+    TMPDIR="${scratch}" run_comment_add --pr 1623 --body-file "${TEST_TMP}/comment.md"
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
 }

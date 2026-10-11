@@ -64,6 +64,12 @@ readonly CONTROL_PATTERN=$'[\x01-\x08\x0b-\x1f\x7f]|\xc2[\x80-\x9f]'
 # byte from another encoding (a Latin-1 or CP1252 0x85, say) or a broken sequence, which the C1
 # byte scan above cannot see and wc -m does not count.
 readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf]{2}|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf]{2}|[\xf1-\xf3][\x80-\xbf]{3}|\xf4[\x80-\x8f][\x80-\xbf]{2})*'
+# The two plan-approval keywords, matched as whole words without regard to case
+# (check_comment_for_approval_keywords): an agent's comment that holds one outside a quote can be
+# read as a human approving a plan. A letter, digit or underscore on either side makes a longer
+# word (plan_approved), which passes; underscores with nothing but a boundary beyond them are
+# Markdown emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is refused.
+readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
@@ -217,6 +223,7 @@ Commands:
   issue create             Create an issue and put it on the Workflow board as Not Started
   body check               Check a body for leaks without posting it (exit 8 when refused)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
+  comment add              Post a comment on a PR or an issue and print its URL
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -422,6 +429,36 @@ prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
 USAGE
 }
 
+usage_comment() {
+    cat << USAGE
+Usage: cfwf comment add --repo <owner/repo> (--pr <n> | --issue <n>) --body-file <file|->
+
+Posts a top-level comment on a pull request or an issue, then prints the comment URL and
+nothing else.
+
+--repo       Always required; never taken from the current directory.
+--pr         The pull request to comment on. Exactly one of --pr and --issue is required.
+--issue      The issue to comment on.
+--body-file  The comment: a regular file, or - to read it from stdin. An empty body is an error.
+             It is read once, into a private copy that is both checked and posted.
+
+There is no --body (the comment is only ever taken from --body-file), and no --edit-last,
+--json or --jq.
+
+The body is checked for leaks before anything is posted (see 'cfwf help body'). It is also
+refused when either of the two plan-approval keywords is on a line that is not a Markdown quote
+(a line starting with >, after at most three spaces), as a whole word in any case, because
+such a comment could be read as a human approving a plan; quoting a human's own approval on
+a > line is allowed. A refused body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>",
+with "(line <n>)" where there is one, on stderr, never naming the matched text, and nothing
+is posted. 'cfwf body check' does not apply the keyword rule.
+
+Exit codes: 0 posted; ${BODY_REFUSED_EXIT} refused; 1 a runtime failure, including an unreadable or
+blank body, a failed post or a result that is not a comment URL (the comment may then have
+been posted); 2 a usage error.
+USAGE
+}
+
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
@@ -429,6 +466,7 @@ usage_for() {
         issue) usage_issue ;;
         body) usage_body ;;
         pr) usage_pr ;;
+        comment) usage_comment ;;
         *) usage_general ;;
     esac
 }
@@ -458,6 +496,13 @@ validate() {
     [[ "${value}" =~ ${pattern} ]] || usage_error "invalid value for ${flag}: ${rule}"
 }
 
+# gh reads 0123 as 123 and answers with the URL of 123, so a number is kept without its leading
+# zeros: every URL built from it, and every URL gh answers with, then names it the same way.
+without_leading_zeros() {
+    local number="${1#"${1%%[!0]*}"}"
+    printf '%s\n' "${number:-0}"
+}
+
 assign_option() {
     local flag="$1" value="$2"
     case "${flag}" in
@@ -471,11 +516,11 @@ assign_option() {
             ;;
         --pr)
             validate "${value}" '^[0-9]+$' "${flag}" "it must be a number"
-            PR="${value}"
+            PR=$(without_leading_zeros "${value}")
             ;;
         --issue)
             validate "${value}" '^[0-9]+$' "${flag}" "it must be a number"
-            ISSUE="${value}"
+            ISSUE=$(without_leading_zeros "${value}")
             ;;
         --status)
             # Only ever compared against the board's own option names, never put in a filter.
@@ -842,6 +887,10 @@ assign_issue_option() {
     case "${flag}" in
         --repo)
             assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --pr | --issue)
+            [ -z "${PR}${ISSUE}" ] || usage_error "--pr or --issue can only be given once, and not both"
             assign_option "${flag}" "${value}"
             ;;
         --priority)
@@ -1666,6 +1715,43 @@ cmd_pr() {
     dispatch_subcommand pr checks pr_checks "$@"
 }
 
+# Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
+# word on a line that is not a Markdown quote: a > after at most three spaces, because Markdown
+# reads a deeper indent, or a tab, as code. Quote lines are blanked, not deleted, in a copy so the
+# line numbers stay those of the body. SCAN_TMP is reused: the leak check is done with it.
+check_comment_for_approval_keywords() {
+    ensure_temp_file SCAN_TMP
+    LC_ALL=C sed -E 's/^ {0,3}>.*//' "$1" > "${SCAN_TMP}" || die "could not scan the body"
+    refuse_first_match body "approval keyword" "${APPROVAL_KEYWORD_PATTERN}" "${SCAN_TMP}" -i
+}
+
+comment_add() {
+    parse_command_options assign_issue_option "--repo --pr --issue --body-file" "" "$@"
+    require REPO --repo
+    require_target
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    check_comment_for_approval_keywords "${BODY_FILE}"
+
+    local kind="issue" url
+    [ -z "${PR}" ] || kind="pr"
+    url=$(gh "${kind}" comment "${TARGET_NUMBER}" --repo "${REPO}" --body-file "${BODY_FILE}" < /dev/null) \
+        || die "could not post the comment on ${REPO}#${TARGET_NUMBER}"
+    url="${url##*$'\n'}"
+    # As for issue create, the host and the repository are not compared: a proxy answers with its
+    # own host and a renamed repository with its new name. pull and issues are both accepted
+    # whichever was asked for, because GitHub answers a comment on a pull request made through its
+    # issue number with the pull request URL.
+    [[ "${url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/${TARGET_NUMBER}#issuecomment-[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${TARGET_NUMBER}"
+    printf '%s\n' "${url}"
+}
+
+cmd_comment() {
+    dispatch_subcommand comment add comment_add "$@"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -1684,6 +1770,7 @@ main() {
         issue) cmd_issue "$@" ;;
         body) cmd_body "$@" ;;
         pr) cmd_pr "$@" ;;
+        comment) cmd_comment "$@" ;;
         *) unknown_argument command "$(($# + 1))" ;;
     esac
 }
