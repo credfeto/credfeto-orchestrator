@@ -1437,6 +1437,9 @@ INLINE_COMMENTS=0
 # and their printed blocks.
 readonly DISCUSSION_LISTS=(comments reviews threads)
 declare -gA LIST_OPEN=() LIST_CURSOR=() LIST_PAGES=() LIST_TOTAL=() LIST_GATHERED=() LIST_TEXT=() SEEN_CURSORS=()
+# The printed blocks of the page being taken apart, in the order they came, and the list each is of.
+PAGE_BLOCKS=()
+PAGE_BLOCK_LISTS=()
 readonly DISCUSSION_PAGE_LIMIT=100
 # Starts a control row in the answer to the discussion read. No printed line can start with it or
 # hold ROW_SEPARATOR: a header line starts with its key, a body line with |, and both bytes are
@@ -1502,7 +1505,7 @@ usage_pr_comments() {
 Usage: cfwf pr comments --repo <owner/repo> --pr <n>
 
 Prints everything said on a pull request: its top-level comments, its reviews and its review
-threads with their inline comments, read to the end however many there are.
+threads with their inline comments, each list read to its end.
 
 --repo  Always required; never taken from the current directory.
 --pr    The pull request's number, above 0.
@@ -1557,7 +1560,8 @@ account as an empty value. No login holds a slash, so only a user can print as a
 
 Every page of every list is read before anything is printed, and the items read are checked
 against GitHub's own counts. Nothing is printed when a read fails, when the lists changed or were
-cut short while they were read, or when one thread has more than ${API_PAGE_SIZE} comments.
+cut short while they were read, when one thread has more than ${API_PAGE_SIZE} comments, or when one list
+has more than ${DISCUSSION_PAGE_LIMIT} pages of ${API_PAGE_SIZE} items.
 
 Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
 runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a usage error.
@@ -1579,11 +1583,11 @@ Posts one reply in the review thread of an inline comment.
               body is an error. It is read once, into a private copy that is both checked and
               posted.
 
-The body is checked for leaks before GitHub is called at all (see 'cfwf help body'). A refused
-body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" on stderr, never naming the text that matched, and
-nothing is posted. There is no option to skip the check. No other word is refused in the body: a
-plan sign-off is read only from an issue's top-level comments, so an inline reply can never be
-taken for one.
+The body is checked for leaks before the comment is read or anything is posted (see 'cfwf help
+body'). A refused body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" on stderr, never naming the text
+that matched, and nothing is posted. There is no option to skip the check. No other word is
+refused in the body: a plan sign-off is read only from an issue's top-level comments, so an inline
+reply can never be taken for one.
 
 On success it prints three lines, with the keys 'cfwf pr comments' uses:
   inline       the new comment's id
@@ -1594,8 +1598,8 @@ It posts once and never tries again. When GitHub refuses the post with HTTP 400,
 410 or 422, the error says the reply was not posted. After any other failure (a timeout, an HTTP
 5xx, any other HTTP 4xx, an answer that is not a comment) it says the reply may have been posted:
 do not run it again blindly. Run 'cfwf pr comments', look in the thread for an inline block with
-the same in-reply-to and your own login, allow a few seconds for GitHub to catch up, and post
-again only if it is not there.
+the same in-reply-to and your own author value (your login, or app/<slug> when you post as an
+app), allow a few seconds for GitHub to catch up, and post again only if it is not there.
 
 Exit codes: 0 posted; ${BODY_REFUSED_EXIT} the body was refused; ${PR_NOT_FOUND_EXIT} --comment-id is not an inline review comment of that
 pull request (the id of a top-level comment or of a review included); 1 a runtime failure, such as
@@ -1697,19 +1701,43 @@ record_page_row() {
     done
 }
 
+# Keeps the block $2, which is of the list $1, when it has any text.
+keep_page_block() {
+    [ -z "$2" ] || {
+        PAGE_BLOCKS+=("$2")
+        PAGE_BLOCK_LISTS+=("$1")
+    }
+}
+
+# Adds the blocks kept from the page to the text of the list each is of, once for each list.
+add_page_text() {
+    local list index text
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        text=""
+        for index in "${!PAGE_BLOCKS[@]}"; do
+            [ "${PAGE_BLOCK_LISTS[index]}" != "${list}" ] || text+="${PAGE_BLOCKS[index]}"
+        done
+        LIST_TEXT["${list}"]+="${text}"
+    done
+}
+
 # Takes the page in GH_OUTPUT apart: each control row starts a block (its last field the block's id,
 # digits) and the lines after it are that block's. The blocks received are counted against the
 # page's own control row and a thread's inline blocks against the thread's count, so a page that
-# lost a block is never taken as whole. The page's text is gathered on its own and added to its
-# list's once, so the cost of adding a line does not grow with everything read before the page.
+# lost a block is never taken as whole. A line is added only to its own block, a block is kept
+# whole and a list's text is added to once a page, so the cost of adding a line grows neither with
+# what the page holds nor with what was read before it: appending each line to one text for the
+# list copies that text every time, and a page of long bodies then takes minutes to take apart.
 record_discussion_page() {
-    local line list="" kind inline_expected=0 inline_received=0
+    local line list="" kind block="" inline_expected=0 inline_received=0
     local -a fields page=()
-    local -A received=() text=()
+    local -A received=()
+    PAGE_BLOCKS=()
+    PAGE_BLOCK_LISTS=()
     while IFS= read -r line; do
         if [[ "${line}" != "${CONTROL_ROW}"* ]]; then
             [ -n "${list}" ] || discussion_unexpected
-            text["${list}"]+="${line}"$'\n'
+            block+="${line}"$'\n'
             continue
         fi
         IFS="${ROW_SEPARATOR}" read -ra fields <<< "${line#"${CONTROL_ROW}"}"
@@ -1719,6 +1747,8 @@ record_discussion_page() {
             continue
         fi
         [ "${#fields[@]}" -eq "${DISCUSSION_ROW_FIELDS["${kind}"]:--1}" ] && [[ "${fields[*]: -1}" =~ ^[0-9]+$ ]] || discussion_unexpected
+        keep_page_block "${list}" "${block}"
+        block=""
         case "${kind}" in
             comment) list=comments ;;
             review | empty-review) list=reviews ;;
@@ -1735,17 +1765,16 @@ record_discussion_page() {
         if [ "${kind}" = empty-review ]; then
             EMPTY_REVIEWS=$((EMPTY_REVIEWS + 1))
         else
-            text["${list}"]+=$'\n'
+            block=$'\n'
         fi
         [ "${kind}" = inline ] || received["${list}"]=$((${received["${list}"]:-0} + 1))
     done <<< "${GH_OUTPUT}"
+    keep_page_block "${list}" "${block}"
 
     record_page_row "${received[comments]:-0}" "${received[reviews]:-0}" "${received[threads]:-0}" "${page[@]}"
     [ "${inline_received}" -eq "${inline_expected}" ] || discussion_incomplete
     INLINE_COMMENTS=$((INLINE_COMMENTS + inline_received))
-    for list in "${DISCUSSION_LISTS[@]}"; do
-        LIST_TEXT["${list}"]+="${text["${list}"]:-}"
-    done
+    add_page_text
 }
 
 # Reads the next page of every list that is not finished, in one call. A cursor goes only with a
@@ -2280,7 +2309,14 @@ main() {
     local command="$1"
     shift
     case "${command}" in
-        help | -h | --help) usage_for "${1:-}" ;;
+        help | -h | --help)
+            # A command of two words that has a usage of its own is asked for by both; any other
+            # command is known by its first word.
+            case "${1:-} ${2:-}" in
+                "pr comments" | "pr reply") usage_for "$1 $2" ;;
+                *) usage_for "${1:-}" ;;
+            esac
+            ;;
         workflow-status) cmd_workflow_status "$@" ;;
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         issue) cmd_issue "$@" ;;
