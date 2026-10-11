@@ -2274,6 +2274,9 @@ has_eight_field_lines() {
         [[ "${output}" == *"exactly eight tab-separated fields and none is empty"* ]]
         [[ "${output}" == *"At most 1000 pull requests are listed. More than that to list (with --head, more on that"$'\n'"branch) is a runtime failure and nothing is printed, never part of the list."* ]]
         [[ "${output}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error." ]]
+        # A fork line is anyone's to open, so the help must say it proves nothing and is never the caller's.
+        [[ "${output}" == *"  fork            the head branch is in another repository. Anyone can open such a pull"$'\n'*"access to this repository"*"never the pull request of a branch in this repository"*"no proof of earlier work on an issue"* ]]
+        [[ "${output}" == *"matches too, flagged \"fork\": ignore that line when looking for the pull request of a"$'\n'*"branch in this repository."* ]]
     done
 
     # Options before --help are still checked, and those after it are never looked at.

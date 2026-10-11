@@ -382,7 +382,8 @@ Lists a repository's open pull requests in a single read, one line each.
          the flag "issue" to each one whose head branch holds that number.
 --head   Lists only the pull requests whose head branch has exactly this name: never a prefix, a
          pattern or a search, and not the owner:branch form. A fork's branch of the same name
-         matches too, flagged "fork", so more than one line is possible.
+         matches too, flagged "fork": ignore that line when looking for the pull request of a
+         branch in this repository.
 --json, --jq, --search, --state, --limit, --author, --app, --base, --draft and --web are not
 options: only open pull requests are listed, and the output has one fixed format.
 
@@ -397,7 +398,10 @@ flags is a comma-joined list, in this order, or "-" when there is none:
                   no digit on either side, so --issue 12 flags feat/12-x and feat/012-x but not
                   feat/123-x. Never set without --issue.
   github-actions  the author is app/github-actions
-  fork            the head branch is in another repository
+  fork            the head branch is in another repository. Anyone can open such a pull
+                  request, with any branch name and title and without access to this repository,
+                  so it is never the pull request of a branch in this repository, and its
+                  "issue" flag and its title are no proof of earlier work on an issue.
 
 At most ${PR_LIST_LIMIT} pull requests are listed. More than that to list (with --head, more on that
 branch) is a runtime failure and nothing is printed, never part of the list.
