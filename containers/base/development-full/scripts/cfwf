@@ -557,7 +557,7 @@ Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]
 Prints a pull request's state and metadata in a single read.
 
 --repo   Always required; never taken from the current directory.
---pr     The pull request's number.
+--pr     The pull request's number, above 0.
 --field  Optional and repeatable: one of the fields below. Only the fields named are printed.
 --json, --jq and --template are not options: the output has one fixed format.
 
@@ -847,10 +847,10 @@ resolve_status() {
 
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
-# The board read, the visibility lookup, the issue read of issue view and issue plan-status and
-# every pr checks read go through here (resolve_project, the field list, the board listing and the
-# closing-issue labels still call gh directly); each caller uses GH_OUTPUT and GH_ERROR before its
-# next gh call.
+# The board read, the visibility lookup, the issue read of issue view and issue plan-status, every
+# pr checks read and the pr view read go through here (resolve_project, the field list, the board
+# listing and the closing-issue labels still call gh directly); each caller uses GH_OUTPUT and
+# GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -2047,6 +2047,9 @@ assign_view_option() {
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
+            # gh does not take 0 as a pull request's number: it looks for a branch of that name
+            # instead, so the answer would be a failed read, or another pull request.
+            [[ "${PR}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
             ;;
         --field)
             is_one_of "${value}" "${PR_VIEW_FIELD_NAMES[@]}" \

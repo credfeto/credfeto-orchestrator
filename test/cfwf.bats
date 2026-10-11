@@ -4148,10 +4148,11 @@ read_once_asking_for() {
     [ "$(wc -l < "${GH_LOG}")" -eq 1 ] && [ "$(gh_call_count "pr view 42 --repo ${REPO} --json $1 --jq ")" -eq 1 ]
 }
 
-@test "pr view help, from pr view --help and pr view -h, lists every field and exit code and calls no gh" {
+@test "pr view help, from help pr view, pr view --help and pr view -h, lists every field and exit code and calls no gh" {
     local flag name
-    for flag in --help -h; do
-        run "${SCRIPT}" pr view "${flag}"
+    for flag in "pr view --help" "pr view -h" "help pr view"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${flag}
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]"* ]]
         [[ "${output}" != *"cfwf pr checks"* ]]
@@ -4168,7 +4169,7 @@ read_once_asking_for() {
     run "${SCRIPT}" pr view --help --field nonsense
     [ "${status}" -eq 0 ]
 
-    for flag in "help pr" "pr -h" "pr --help" "help pr view"; do
+    for flag in "help pr" "pr -h" "pr --help"; do
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${flag}
         [ "${status}" -eq 0 ]
@@ -4449,6 +4450,8 @@ read_once_asking_for() {
         "--repo ${REPO} --pr 42x"
         "--repo ${REPO} --pr -1"
         "--repo ${REPO} --pr 4.2"
+        "--repo ${REPO} --pr 0"
+        "--repo ${REPO} --pr 000"
         "--repo ${REPO} --pr"
         "--repo not-a-repo --pr 42"
         "--repo ${REPO} --pr 42 --field"
@@ -4489,7 +4492,10 @@ read_once_asking_for() {
     run_pr_view --repo "${REPO}"
     [[ "${stderr}" == "cfwf: --repo can only be given once"* ]]
     run --separate-stderr "${SCRIPT}" pr view --repo "${REPO}" --pr x42
-    [[ "${stderr}" == "cfwf: invalid value for --pr: it must be a number"* ]]
+    [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --pr: it must be a number" ]]
+    # gh would look for a branch named 0 rather than a pull request numbered 0.
+    run --separate-stderr "${SCRIPT}" pr view --repo "${REPO}" --pr 0
+    [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --pr: it must be a number above 0" ]]
     run_pr_view --field
     [[ "${stderr}" == "cfwf: --field needs a value"* ]]
 
