@@ -266,6 +266,7 @@ Commands:
   body check               Check a body for leaks without posting it (exit 8 when refused)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
+  pr list                  List a repository's open pull requests, one line each
   comment add              Post a comment on a PR or an issue and print its URL
   help [command]           Show this help, or the help for one command
 
@@ -498,9 +499,46 @@ failure, including a scan that fails or a visibility lookup that fails other tha
 USAGE
 }
 
+usage_pr_list() {
+    cat << USAGE
+Usage: cfwf pr list --repo <owner/repo> [--issue <n>] [--head <branch>]
+
+Lists a repository's open pull requests in a single read, one line each.
+
+--repo   Always required; never taken from the current directory.
+--issue  An issue number, above 0. It does not change which pull requests are listed: it adds
+         the flag "issue" to each one whose head branch holds that number.
+--head   Lists only the pull requests whose head branch has exactly this name: never a prefix, a
+         pattern or a search, and not the owner:branch form. A fork's branch of the same name
+         matches too, flagged "fork", so more than one line is possible.
+--json, --jq, --search, --state, --limit, --author, --app, --base, --draft and --web are not
+options: only open pull requests are listed, and the output has one fixed format.
+
+Output, tab separated, sorted by number, with no header and no summary:
+  <number>  <head>  <base>  <author>  <draft|ready>  <flags>  <url>  <title>
+Each line has exactly eight tab-separated fields and none is empty: a field with no value is "-".
+Each control character in a field (a tab or a newline included) is printed as a space, so a title
+or a branch name can never add a line or a field.
+
+flags is a comma-joined list, in this order, or "-" when there is none:
+  issue           the head branch holds the --issue number: a run of digits with that value and
+                  no digit on either side, so --issue 12 flags feat/12-x and feat/012-x but not
+                  feat/123-x. Never set without --issue.
+  github-actions  the author is app/github-actions
+  fork            the head branch is in another repository
+
+At most ${PR_LIST_LIMIT} pull requests are listed. More than that to list (with --head, more on that
+branch) is a runtime failure and nothing is printed, never part of the list.
+
+Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
+gh or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_pr() {
     cat << USAGE
 Usage: cfwf pr checks --repo <owner/repo> (--pr <n> | --sha <40-hex> | --branch <name>) [--all]
+Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 
 Judges the checks on one head commit in a single read, and never waits or polls: poll by running
 it again later.
@@ -650,6 +688,7 @@ usage_for() {
         body | "body check") usage_body ;;
         pr | "pr checks") usage_pr ;;
         "pr view") usage_pr_view ;;
+        "pr list") usage_pr_list ;;
         comment | "comment add") usage_comment ;;
         *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
@@ -1991,6 +2030,92 @@ report_checks() {
     exit 0
 }
 
+# The most pull requests pr list prints. One more is asked for, so a repository with more open ones
+# is seen to have more and is refused, never listed in part.
+readonly PR_LIST_LIMIT=1000
+LIST_HEAD=""
+
+assign_list_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            [[ "${ISSUE}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
+            ;;
+        --head)
+            assign_once LIST_HEAD "${flag}"
+            if ! valid_branch_name "${value}" || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must be a branch name git allows, with no control character"
+            fi
+            LIST_HEAD="${value}"
+            ;;
+    esac
+}
+
+# Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
+# (git refuses both, so valid_branch_name is asked first), matched byte by byte in the C locale as the
+# leak rules are. git allows a C1 control in a branch name, and pr list prints one as a space,
+# so a --head holding one could never equal the head it is compared with.
+holds_control_character() {
+    local LC_ALL=C
+    [[ "$1" =~ ${CONTROL_PATTERN} ]]
+}
+
+# Prints the jq program of pr list: the number of pull requests on its first line, then a row for
+# each, sorted by number. Every string goes through field, so no value can add a line or a field
+# and none is empty, which keeps a row at eight fields however it is split. ISSUE, digits only, is
+# the one value of the caller's that is ever put in a jq program.
+pr_list_program() {
+    local holds_issue=false
+    [ -z "${ISSUE}" ] || holds_issue="(.headRefName // \"\" | test(\"(^|[^0-9])0*${ISSUE}([^0-9]|\$)\"))"
+    printf '%s' "${PRINTABLE_DEF}" \
+        ' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;' \
+        ' sort_by(.number) | (length | tostring), (.[] | [(.number | field), (.headRefName | field), (.baseRefName | field), (.author.login | field),' \
+        ' (if .isDraft then "draft" else "ready" end),' \
+        " ([(if ${holds_issue} then \"issue\" else empty end)," \
+        ' (if .author.login == "app/github-actions" then "github-actions" else empty end),' \
+        ' (if .isCrossRepository then "fork" else empty end)] | join(",") | field),' \
+        ' (.url | field), (.title | field)] | join("\t"))'
+}
+
+# Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
+# read. Nothing is printed until the whole answer has been checked: the count gh gave must be the
+# number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each number
+# must be one; and with LIST_HEAD each head must be exactly it, whatever gh matched.
+pr_list() {
+    parse_command_options assign_list_option "--repo --issue --head" "" "$@"
+    require REPO --repo
+    require_gh
+
+    local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))") rows=()
+    local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
+    local count row number head
+    [ -z "${LIST_HEAD}" ] || listing+=(--head "${LIST_HEAD}")
+    listing+=(--json "number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url" --jq "$(pr_list_program)")
+    gh_capture "${listing[@]}" || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
+
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    count="${rows[0]}"
+    rows=("${rows[@]:1}")
+    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "${unexpected}"
+    [ "${count}" -le "${PR_LIST_LIMIT}" ] \
+        || die "${REPO} has more than ${PR_LIST_LIMIT} open pull requests, so none is printed"
+    [ "${count}" -eq "${#rows[@]}" ] || die "${unexpected}"
+    for row in "${rows[@]}"; do
+        number="${row%%$'\t'*}"
+        head="${row#*$'\t'}"
+        head="${head%%$'\t'*}"
+        [[ "${number}" =~ ^[0-9]+$ ]] || die "${unexpected}"
+        [ -z "${LIST_HEAD}" ] || [ "${head}" = "${LIST_HEAD}" ] || die "${unexpected}"
+    done
+    [ "${count}" -eq 0 ] || printf '%s\n' "${rows[@]}"
+}
+
 pr_checks() {
     parse_pr_checks_options "$@"
     require REPO --repo
@@ -2147,7 +2272,7 @@ pr_view() {
 }
 
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks view pr_view -- "$@"
+    dispatch_subcommand pr checks pr_checks view pr_view list pr_list -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
