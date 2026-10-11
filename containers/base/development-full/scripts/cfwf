@@ -12,11 +12,13 @@ readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
 readonly ISSUE_NOT_FOUND_EXIT=9
+# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view and the issue
+# commands.
+readonly PR_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
-readonly PR_NOT_FOUND_EXIT=9
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
