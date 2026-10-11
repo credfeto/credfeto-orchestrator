@@ -4360,8 +4360,8 @@ read_once_asking_for() {
     body_prints "no newline at the end" --field body
 
     # A body that ends in the character cfwf marks its end with loses nothing.
-    write_pull_request '.body = "ends in a full stop.\n."'
-    body_prints $'ends in a full stop.\n.'
+    write_pull_request '.body = "ends in the mark\n\u001f"'
+    body_prints $'ends in the mark\n\x1f'
 }
 
 @test "pr view --field body prints nothing for an empty body or none" {

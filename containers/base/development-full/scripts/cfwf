@@ -2032,9 +2032,6 @@ PR_VIEW_FIELD_NAMES=("${PR_VIEW_FIELDS[@]%%|*}")
 readonly PR_VIEW_FIELD_NAMES
 # The fields that are not a key and value line, so each is printed only when asked for alone.
 readonly PR_VIEW_ALONE_FIELDS=(files body)
-# Put after the body by jq and taken off again before it is printed: command substitution drops
-# every trailing newline, the body's own included, unless something follows them.
-readonly BODY_END_MARK='.'
 VIEW_NAMES=()
 VIEW_EXPRESSIONS=()
 VIEW_JSON_FIELDS=""
@@ -2129,9 +2126,11 @@ print_view_files() {
     [ "${listed}" -eq 0 ] || printf '%s\n' "${rows[@]:1}"
 }
 
+# Prints the body as GitHub returns it. jq puts OUTPUT_END (\u001f) after it, so the body's own
+# trailing newlines are kept, and it is taken off again before the body is printed.
 print_view_body() {
-    read_pull_request "(${VIEW_EXPRESSIONS[0]} // \"\") + \"${BODY_END_MARK}\""
-    printf '%s' "${GH_OUTPUT%"${BODY_END_MARK}"}"
+    read_pull_request "(${VIEW_EXPRESSIONS[0]} // \"\") + \"\\u001f\""
+    printf '%s' "${GH_OUTPUT%"${OUTPUT_END}"}"
 }
 
 pr_view() {
