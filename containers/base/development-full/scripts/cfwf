@@ -15,6 +15,7 @@ readonly BODY_REFUSED_EXIT=8
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
+readonly PR_NOT_FOUND_EXIT=9
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
@@ -252,6 +253,8 @@ Commands:
   workflow-status --set    Move an issue or PR to a Workflow board status
   workflow-status --check  Print the current Workflow board status of an issue or PR
   closing-issue-labels     Print the labels of the issues a PR closes (Blocked and On-Hold excluded)
+  pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
+  pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
   issue create             Create an issue and put it on the Workflow board as Not Started
   body check               Check a body for leaks without posting it (exit 8 when refused)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
@@ -288,9 +291,10 @@ when it has none. It exits non-zero when the item is not on the board.
 
 --check reads the board with a read-only GraphQL query for the single item (gh api graphql),
 because gh project has no command that reads one item and listing the whole board is capped
-and can be slow to show a freshly added item. This is the only place cfwf uses GraphQL: every
-write uses native gh project commands. If the query fails, cfwf warns on stderr and falls
-back to listing the board.
+and can be slow to show a freshly added item. --check and 'cfwf pr comments' are the only
+places cfwf uses GraphQL, and both only read:
+every board write uses native gh project commands, and every other write a native gh command
+or the REST API. If the query fails, cfwf warns on stderr and falls back to listing the board.
 USAGE
     printf 'The fallback listing reads at most %s items.\n' "${ITEM_LIMIT}"
 }
@@ -424,6 +428,9 @@ Usage: cfwf pr checks --repo <owner/repo> (--pr <n> | --sha <40-hex> | --branch 
 Judges the checks on one head commit in a single read, and never waits or polls: poll by running
 it again later.
 
+Run 'cfwf pr comments --help' and 'cfwf pr reply --help' for reading and answering a pull
+request's comments.
+
 --repo    Always required; never taken from the current directory.
 --pr      The pull request's head commit; required checks come from its base branch.
 --sha     That commit (40 hexadecimal digits); required checks come from the default branch.
@@ -502,6 +509,8 @@ USAGE
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
+        "pr comments") usage_pr_comments ;;
+        "pr reply") usage_pr_reply ;;
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
         body) usage_body ;;
@@ -728,6 +737,14 @@ printable_first_line() {
 gh_failure_text() {
     printable_first_line "${GH_ERROR:-${GH_OUTPUT}}"
 }
+
+# A jq definition, put before a filter that uses it: printable is the string it is given with each
+# control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F) turned into a
+# space, so it fits on one line of the output, cannot be taken for a field separator and carries no
+# terminal escape. The range is written out because gh's --jq (gojq, Go regular expressions) reads
+# [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
+# would not.
+readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -1409,6 +1426,453 @@ branch_path() {
     printf '%s' "${encoded}"
 }
 
+COMMENT_ID=""
+REPLY_ROOT=""
+REVIEW_DECISION=""
+EMPTY_REVIEWS=0
+UNRESOLVED_THREADS=0
+INLINE_COMMENTS=0
+# The three lists of a pull request's discussion, each paged on its own: whether it still has a page
+# to read, the cursor of that page, the pages read, GitHub's count of its items, the items gathered
+# and their printed blocks.
+readonly DISCUSSION_LISTS=(comments reviews threads)
+declare -gA LIST_OPEN=() LIST_CURSOR=() LIST_PAGES=() LIST_TOTAL=() LIST_GATHERED=() LIST_TEXT=() SEEN_CURSORS=()
+readonly DISCUSSION_PAGE_LIMIT=100
+# Starts a control row in the answer to the discussion read. No printed line can start with it or
+# hold ROW_SEPARATOR: a header line starts with its key, a body line with |, and both bytes are
+# control characters, which are printed as a space wherever GitHub's own text holds them.
+readonly CONTROL_ROW=$'\x1e'
+# How many fields each kind of control row has, its kind included, as PR_DISCUSSION_FILTER prints
+# them. A row is refused unless it has exactly that many, because read drops an empty last field:
+# without the count a row whose own id is missing would pass with the field before it as its id.
+# The page row gives the review decision, then LIST_STATE_FIELDS fields for each list, then "end".
+declare -grA DISCUSSION_ROW_FIELDS=([comment]=2 [review]=2 [empty-review]=2 [thread]=6 [inline]=4)
+readonly LIST_STATE_FIELDS=4
+readonly PAGE_ROW_FIELDS=$((2 + ${#DISCUSSION_LISTS[@]} * LIST_STATE_FIELDS + 1))
+# One query text for every page: each list has its own cursor and its own @include switch, so a
+# page asks only for the lists that are not finished. gh's --paginate drives a single cursor, so it
+# cannot page three lists. Ids are fullDatabaseId, the ids the REST API uses, so the id printed for
+# an inline comment is the one pr reply takes.
+readonly DISCUSSION_PAGE_FIELDS="totalCount pageInfo{hasNextPage endCursor}"
+readonly DISCUSSION_COMMENT_FIELDS="fullDatabaseId author{__typename login} authorAssociation createdAt isMinimized url body"
+PR_DISCUSSION_QUERY="query(\$o:String!,\$r:String!,\$n:Int!,\$comments:Boolean!,\$reviews:Boolean!,\$threads:Boolean!,\$commentsAfter:String,\$reviewsAfter:String,\$threadsAfter:String)"
+PR_DISCUSSION_QUERY+="{repository(owner:\$o,name:\$r){pullRequest(number:\$n){reviewDecision"
+PR_DISCUSSION_QUERY+=" comments(first:${API_PAGE_SIZE},after:\$commentsAfter) @include(if:\$comments){${DISCUSSION_PAGE_FIELDS} nodes{${DISCUSSION_COMMENT_FIELDS}}}"
+PR_DISCUSSION_QUERY+=" reviews(first:${API_PAGE_SIZE},after:\$reviewsAfter) @include(if:\$reviews){${DISCUSSION_PAGE_FIELDS} nodes{fullDatabaseId author{__typename login} authorAssociation state submittedAt url body}}"
+PR_DISCUSSION_QUERY+=" reviewThreads(first:${API_PAGE_SIZE},after:\$threadsAfter) @include(if:\$threads){${DISCUSSION_PAGE_FIELDS} nodes{isResolved isOutdated path line originalLine"
+PR_DISCUSSION_QUERY+=" comments(first:${API_PAGE_SIZE}){${DISCUSSION_PAGE_FIELDS} nodes{${DISCUSSION_COMMENT_FIELDS} replyTo{fullDatabaseId} pullRequestReview{fullDatabaseId}}}}}}}}"
+readonly PR_DISCUSSION_QUERY
+# The jq program for one page, put after PRINTABLE_DEF. It prints every block ready to print, each
+# after a control row that names its kind and ends with its id, and the page's control row last, so
+# an answer that was cut short has none. A list the page did not ask for is absent and counts as
+# empty. gh runs it with gojq and the tests with jq, so it avoids what the two may read differently:
+# an empty body is tested for, because they split an empty string differently, the end of a body
+# is \z, the end of the text in both, and blank is a written-out character class, not \s. text is
+# what every header value and every body line is printed through: printable, and the two Unicode
+# line ends it leaves alone (U+2028 and U+2029) as a space too, so that neither a body nor a value
+# GitHub does not choose, a file's path say, can start a new line for a reader that splits on them.
+# shellcheck disable=SC2016  # the $ names below are jq variables
+readonly PR_DISCUSSION_FILTER='
+def text: if . == null then "" else tostring | printable | gsub("[\\x{2028}\\x{2029}]"; " ") end;
+def id: .fullDatabaseId | text;
+def flag: if . == true then "yes" else "no" end;
+def who: if . == null then "" elif .__typename == "User" then .login | text elif .__typename == "Bot" then "app/" + (.login | text) else (.__typename | text | ascii_downcase) + "/" + (.login | text) end;
+def header(key; value): key + "\t" + (value | text);
+def row: "\u001e" + (map(text) | join("\u001f"));
+def body_lines: . // "" | sub("[\\r\\n]+\\z"; "") | if . == "" then [] else split("\n") | map(rtrimstr("\r") | text | if . == "" then "|" else "| " + . end) end;
+def block(headers): (.body | body_lines) as $lines | headers, header("lines"; $lines | length), $lines[];
+def written: header("author"; .author | who), header("association"; .authorAssociation);
+def comment_headers: written, header("created-at"; .createdAt), header("minimized"; .isMinimized | flag), header("url"; .url);
+def wrapper_only: .state == "COMMENTED" and (.body // "" | test("[^ \\t\\r\\n]") | not);
+def list_state: .totalCount, (.nodes | length), .pageInfo.hasNextPage, .pageInfo.endCursor;
+.data.repository.pullRequest as $pr
+| ($pr.comments.nodes[]? | (["comment", id] | row), block(header("comment"; id), comment_headers)),
+  ($pr.reviews.nodes[]? | if wrapper_only then ["empty-review", id] | row
+      else (["review", id] | row), block(header("review"; id), written, header("state"; .state), header("submitted-at"; .submittedAt), header("url"; .url)) end),
+  ($pr.reviewThreads.nodes[]? | (.comments.nodes[0] | id) as $first
+      | ([ "thread", .comments.pageInfo.hasNextPage, .comments.totalCount, (.comments.nodes | length), (.isResolved | flag), $first ] | row),
+        header("thread"; $first), header("resolved"; .isResolved | flag), header("outdated"; .isOutdated | flag), header("path"; .path),
+        header("line"; .line), header("original-line"; .originalLine), header("comments"; .comments.nodes | length),
+        (.comments.nodes[]? | ([ "inline", (.replyTo | id), (.pullRequestReview | id), id ] | row),
+            block(header("inline"; id), header("in-reply-to"; .replyTo | id), header("review"; .pullRequestReview | id), comment_headers))),
+  ([ "page", $pr.reviewDecision, ($pr.comments | list_state), ($pr.reviews | list_state), ($pr.reviewThreads | list_state), "end" ] | row)'
+
+usage_pr_comments() {
+    cat << USAGE
+Usage: cfwf pr comments --repo <owner/repo> --pr <n>
+
+Prints everything said on a pull request: its top-level comments, its reviews and its review
+threads with their inline comments, read to the end however many there are.
+
+--repo  Always required; never taken from the current directory.
+--pr    The pull request's number, above 0.
+--json, --jq, --template and --unresolved are not options: the output has one fixed format.
+
+The output is blocks separated by one blank line, in this order: the pull request; each top-level
+comment, oldest first; each review, oldest first; each review thread, followed by its inline
+comments in thread order; then the summary. A block is header lines, each a key, a tab and a
+value, and then, for a block that can have a body, the body's lines, each starting with "| " (an
+empty line is "|" alone):
+  pr               <owner/repo>#<n>
+  review-decision  GitHub's own value, such as APPROVED, CHANGES_REQUESTED or REVIEW_REQUIRED;
+                   empty when there is none
+  comment          a top-level comment's id
+  review           a review's id; on an inline comment, the id of the review it belongs to
+  thread           the id of the thread's first inline comment
+  inline           an inline comment's id, the id 'cfwf pr reply --comment-id' takes
+  in-reply-to      the id of the comment an inline comment answers; empty on a thread's first
+  author           who wrote it (see below)
+  association      GitHub's own value, such as OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR or NONE
+  state            a review's state: APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED or PENDING
+  created-at       when a comment was written
+  submitted-at     when a review was submitted; empty for one not submitted
+  minimized        yes or no: whether the comment is hidden; it is printed either way
+  url              its URL
+  resolved         yes or no, for a thread
+  outdated         yes or no, for a thread
+  path             the file a thread is on
+  line             the line a thread is on; empty for an outdated or file-level thread
+  original-line    the line the thread was first on
+  comments         the number of inline comments in a thread
+  lines            the number of body lines that follow; the last header of a comment, a review
+                   and an inline comment
+  summary comments=<a> reviews=<b> reviews-empty=<c> threads=<d> unresolved=<e> inline=<f>
+
+A header value has each control character (a tab or a newline included), U+2028 and U+2029
+printed as a space, so it is always one line with one tab. A body has its trailing line ends
+dropped and the same characters in a line (a tab included) printed as a space, so a body line
+never holds a tab and always starts with "|": no body can pass for a header, a blank separator or
+the summary. Bidi formatting characters are not changed. The summary is the last line and the only
+line that is not empty and has neither a tab nor a leading "|"; output without it is a cut-off
+copy, so run the command again.
+
+A review with a blank body and the state COMMENTED is only the wrapper GitHub puts around inline
+comments. It is not printed; it is counted as reviews-empty, and its inline comments are printed in
+their threads.
+
+author is who GitHub says wrote the item, and cfwf makes no trust decision: the caller decides
+whose words to act on. A user prints as the login alone (credfeto); a bot as app/<slug>
+(app/github-actions); any other kind of account as <kind>/<login> (mannequin/<login>); a deleted
+account as an empty value. No login holds a slash, so only a user can print as a user's login.
+
+Every page of every list is read before anything is printed, and the items read are checked
+against GitHub's own counts. Nothing is printed when a read fails, when the lists changed or were
+cut short while they were read, or when one thread has more than ${API_PAGE_SIZE} comments.
+
+Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
+runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_pr_reply() {
+    cat << USAGE
+Usage: cfwf pr reply --repo <owner/repo> --pr <n> --comment-id <id> --body-file <file|->
+
+Posts one reply in the review thread of an inline comment.
+
+--repo        Always required; never taken from the current directory.
+--pr          The pull request's number, above 0.
+--comment-id  The id of an inline comment of that pull request: any "inline" id that
+              'cfwf pr comments' prints. The id of a reply is taken as its thread: GitHub keeps a
+              thread flat, so the reply is posted to the thread's first comment.
+--body-file   The reply: a regular file, or - to read it from stdin. There is no --body. An empty
+              body is an error. It is read once, into a private copy that is both checked and
+              posted.
+
+The body is checked for leaks before GitHub is called at all (see 'cfwf help body'). A refused
+body exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" on stderr, never naming the text that matched, and
+nothing is posted. There is no option to skip the check. No other word is refused in the body: a
+plan sign-off is read only from an issue's top-level comments, so an inline reply can never be
+taken for one.
+
+On success it prints three lines, with the keys 'cfwf pr comments' uses:
+  inline       the new comment's id
+  in-reply-to  the id of the thread's first comment
+  url          the new comment's URL
+
+It posts once and never tries again. When GitHub refuses the post with HTTP 400, 401, 403, 404,
+410 or 422, the error says the reply was not posted. After any other failure (a timeout, an HTTP
+5xx, any other HTTP 4xx, an answer that is not a comment) it says the reply may have been posted:
+do not run it again blindly. Run 'cfwf pr comments', look in the thread for an inline block with
+the same in-reply-to and your own login, allow a few seconds for GitHub to catch up, and post
+again only if it is not there.
+
+Exit codes: 0 posted; ${BODY_REFUSED_EXIT} the body was refused; ${PR_NOT_FOUND_EXIT} --comment-id is not an inline review comment of that
+pull request (the id of a top-level comment or of a review included); 1 a runtime failure, such as
+a blank or unreadable body, a failed read or a failed or unverifiable post, prefixed "cfwf:"; 2 a
+usage error.
+USAGE
+}
+
+assign_pr_comment_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --pr)
+            assign_once PR "${flag}"
+            assign_option "${flag}" "${value}"
+            PR="${value#"${value%%[!0]*}"}"
+            [ -n "${PR}" ] || usage_error "invalid value for ${flag}: it must be above 0"
+            ;;
+        --comment-id)
+            assign_once COMMENT_ID "${flag}"
+            validate "${value}" '^[0-9]{1,19}$' "${flag}" "it must be a number of at most 19 digits"
+            COMMENT_ID="${value#"${value%%[!0]*}"}"
+            [ -n "${COMMENT_ID}" ] || usage_error "invalid value for ${flag}: it must be above 0"
+            ;;
+        --body-file)
+            assign_issue_option "${flag}" "${value}"
+            ;;
+    esac
+}
+
+# Exits PR_NOT_FOUND_EXIT with the message $1: what was asked for is not there, which a caller must
+# be able to tell from a read that failed.
+discussion_not_found() {
+    printf 'cfwf: %s\n' "$1" >&2
+    exit "${PR_NOT_FOUND_EXIT}"
+}
+
+discussion_incomplete() {
+    die "the comments of ${REPO}#${PR} changed or were cut short while they were read; nothing is printed"
+}
+
+discussion_unexpected() {
+    die "gh returned an unexpected answer for the comments of ${REPO}#${PR}; nothing is printed"
+}
+
+# Records what a page said of the list $1, of which $2 blocks were received: GitHub's count $3 of
+# the list, the number $4 of items jq saw on the page, whether there is another page ($5) and the
+# cursor $6 of that page. A cursor is checked before it is ever sent, and one seen before would
+# read the same page for ever.
+record_list_page() {
+    local list="$1" received="$2" total="$3" count="$4" more="$5" cursor="$6"
+    [[ "${total}" =~ ^[0-9]+$ && "${count}" =~ ^[0-9]+$ ]] || discussion_unexpected
+    [ "${count}" -eq "${received}" ] || discussion_incomplete
+    LIST_TOTAL["${list}"]="${total}"
+    LIST_GATHERED["${list}"]=$((${LIST_GATHERED["${list}"]} + received))
+    case "${more}" in
+        false) LIST_OPEN["${list}"]=false ;;
+        true)
+            [[ "${cursor}" =~ ^[A-Za-z0-9+/=_-]+$ ]] || discussion_unexpected
+            [ -z "${SEEN_CURSORS["${list} ${cursor}"]:-}" ] \
+                || die "GitHub returned the same page of the ${list} of ${REPO}#${PR} twice; nothing is printed"
+            SEEN_CURSORS["${list} ${cursor}"]=1
+            LIST_PAGES["${list}"]=$((${LIST_PAGES["${list}"]} + 1))
+            [ "${LIST_PAGES["${list}"]}" -lt "${DISCUSSION_PAGE_LIMIT}" ] \
+                || die "the ${list} of ${REPO}#${PR} run to more than ${DISCUSSION_PAGE_LIMIT} pages; nothing is printed"
+            LIST_CURSOR["${list}"]="${cursor}"
+            ;;
+        *) discussion_unexpected ;;
+    esac
+}
+
+# Checks the control row of a thread: whether it has more comments than came with it ($1), its own
+# count of its comments ($2), the comments that came with it ($3), whether it is resolved ($4) and
+# the id of its first comment ($5). A thread that has more comments than one page holds is refused:
+# its other comments would be feedback nobody saw.
+record_thread_row() {
+    local more="$1" total="$2" count="$3" resolved="$4" id="$5"
+    [ "${more}" != true ] \
+        || die "the thread that starts with the inline comment ${id} of ${REPO}#${PR} has more than ${API_PAGE_SIZE} comments, which cfwf cannot read; nothing is printed"
+    [[ "${more}" = false && "${total}" =~ ^[0-9]+$ && "${count}" =~ ^[0-9]+$ ]] || discussion_unexpected
+    [ "${total}" -eq "${count}" ] || discussion_incomplete
+    [ "${resolved}" = yes ] || UNRESOLVED_THREADS=$((UNRESOLVED_THREADS + 1))
+}
+
+# Checks the page's own control row, which jq prints last, so a page that lost its end is never
+# taken as whole: $1 to $3 are the blocks received for each list, in the order of DISCUSSION_LISTS,
+# and the rest are the row's fields. Each list the page was asked for is then recorded.
+record_page_row() {
+    local -a blocks=("${@:1:3}") page=("${@:4}")
+    local list position=0
+    [ "${#page[@]}" -eq "${PAGE_ROW_FIELDS}" ] && [ "${page[PAGE_ROW_FIELDS - 1]}" = end ] || discussion_unexpected
+    REVIEW_DECISION="${page[1]}"
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        [ "${LIST_OPEN["${list}"]}" != true ] \
+            || record_list_page "${list}" "${blocks[position]}" "${page[@]:2 + position * LIST_STATE_FIELDS:LIST_STATE_FIELDS}"
+        position=$((position + 1))
+    done
+}
+
+# Takes the page in GH_OUTPUT apart: each control row starts a block (its last field the block's id,
+# digits) and the lines after it are that block's. The blocks received are counted against the
+# page's own control row and a thread's inline blocks against the thread's count, so a page that
+# lost a block is never taken as whole. The page's text is gathered on its own and added to its
+# list's once, so the cost of adding a line does not grow with everything read before the page.
+record_discussion_page() {
+    local line list="" kind inline_expected=0 inline_received=0
+    local -a fields page=()
+    local -A received=() text=()
+    while IFS= read -r line; do
+        if [[ "${line}" != "${CONTROL_ROW}"* ]]; then
+            [ -n "${list}" ] || discussion_unexpected
+            text["${list}"]+="${line}"$'\n'
+            continue
+        fi
+        IFS="${ROW_SEPARATOR}" read -ra fields <<< "${line#"${CONTROL_ROW}"}"
+        kind="${fields[0]:-none}"
+        if [ "${kind}" = page ]; then
+            page=("${fields[@]}")
+            continue
+        fi
+        [ "${#fields[@]}" -eq "${DISCUSSION_ROW_FIELDS["${kind}"]:--1}" ] && [[ "${fields[*]: -1}" =~ ^[0-9]+$ ]] || discussion_unexpected
+        case "${kind}" in
+            comment) list=comments ;;
+            review | empty-review) list=reviews ;;
+            thread)
+                list=threads
+                record_thread_row "${fields[@]:1}"
+                inline_expected=$((inline_expected + 10#${fields[3]}))
+                ;;
+            inline)
+                [[ "${list}" = threads && "${fields[1]}" =~ ^[0-9]*$ && "${fields[2]}" =~ ^[0-9]*$ ]] || discussion_unexpected
+                inline_received=$((inline_received + 1))
+                ;;
+        esac
+        if [ "${kind}" = empty-review ]; then
+            EMPTY_REVIEWS=$((EMPTY_REVIEWS + 1))
+        else
+            text["${list}"]+=$'\n'
+        fi
+        [ "${kind}" = inline ] || received["${list}"]=$((${received["${list}"]:-0} + 1))
+    done <<< "${GH_OUTPUT}"
+
+    record_page_row "${received[comments]:-0}" "${received[reviews]:-0}" "${received[threads]:-0}" "${page[@]}"
+    [ "${inline_received}" -eq "${inline_expected}" ] || discussion_incomplete
+    INLINE_COMMENTS=$((INLINE_COMMENTS + inline_received))
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        LIST_TEXT["${list}"]+="${text["${list}"]:-}"
+    done
+}
+
+# Reads the next page of every list that is not finished, in one call. A cursor goes only with a
+# list that has one: an empty cursor is not the same as none. A pull request GitHub does not have
+# (the number of an issue is answered the same way) exits PR_NOT_FOUND_EXIT, on gh's own error text
+# alone, so that words in a comment can never pass for it; any other failure dies with gh's error.
+read_discussion_page() {
+    local list
+    local -a arguments=(api graphql -f query="${PR_DISCUSSION_QUERY}" -f o="${REPO%%/*}" -f r="${REPO#*/}" -F n="${PR}")
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        arguments+=(-F "${list}=${LIST_OPEN["${list}"]}")
+        [ -z "${LIST_CURSOR["${list}"]}" ] || arguments+=(-f "${list}After=${LIST_CURSOR["${list}"]}")
+        LIST_CURSOR["${list}"]=""
+    done
+    if ! gh_capture "${arguments[@]}" --jq "${PRINTABLE_DEF} ${PR_DISCUSSION_FILTER}"; then
+        [[ "${GH_ERROR}" != *"Could not resolve to a PullRequest with the number"* ]] \
+            || discussion_not_found "the pull request ${REPO}#${PR} was not found"
+        die "could not read the comments of ${REPO}#${PR}: $(gh_failure_text)"
+    fi
+    record_discussion_page
+}
+
+# Reads every page of the three lists, then checks each list against GitHub's own count of it, so a
+# list that changed while it was read is refused rather than printed with an item missing or twice.
+read_pr_discussion() {
+    local list
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        LIST_OPEN["${list}"]=true
+        LIST_CURSOR["${list}"]=""
+        LIST_PAGES["${list}"]=0
+        LIST_GATHERED["${list}"]=0
+        LIST_TEXT["${list}"]=""
+    done
+    while [[ "${LIST_OPEN[comments]}${LIST_OPEN[reviews]}${LIST_OPEN[threads]}" == *true* ]]; do
+        read_discussion_page
+    done
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        [ "${LIST_GATHERED["${list}"]}" -eq "${LIST_TOTAL["${list}"]}" ] || discussion_incomplete
+    done
+}
+
+# Prints the discussion, which is complete: every page was read and counted first. The summary is
+# the only line that is not empty and has neither a tab nor a leading |, so it also marks the
+# output as whole.
+print_pr_discussion() {
+    local gathered_reviews="${LIST_GATHERED[reviews]}"
+    printf 'pr\t%s#%s\nreview-decision\t%s\n' "${REPO}" "${PR}" "${REVIEW_DECISION}"
+    printf '%s' "${LIST_TEXT[comments]}${LIST_TEXT[reviews]}${LIST_TEXT[threads]}"
+    printf '\nsummary comments=%s reviews=%s reviews-empty=%s threads=%s unresolved=%s inline=%s\n' \
+        "${LIST_GATHERED[comments]}" "$((gathered_reviews - EMPTY_REVIEWS))" "${EMPTY_REVIEWS}" \
+        "${LIST_GATHERED[threads]}" "${UNRESOLVED_THREADS}" "${INLINE_COMMENTS}"
+}
+
+pr_comments() {
+    parse_command_options assign_pr_comment_option "--repo --pr" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_gh
+    read_pr_discussion
+    print_pr_discussion
+}
+
+# A jq definition, put before a filter that uses it: fields_row is the list it is given as one row,
+# each field printable (nothing for one GitHub left out) and the fields joined by ROW_SEPARATOR. A
+# filter ends its list with "end", because read drops an empty last field.
+readonly FIELDS_ROW_DEF="${PRINTABLE_DEF} def fields_row: map(if . == null then \"\" else tostring | printable end) | join(\"\\u001f\");"
+
+# Sets REPLY_ROOT to the comment a reply to COMMENT_ID is posted to: the comment itself, or the
+# first comment of its thread when it is a reply, because GitHub refuses a reply to a reply. The
+# comment must be an inline comment of the pull request PR; the id of anything else, which GitHub
+# answers with 404, or of a comment on another pull request, exits PR_NOT_FOUND_EXIT. Only the
+# number that ends pull_request_url is compared: gh may be reached through a proxy that answers
+# with its own host.
+resolve_reply_root() {
+    local id parent pull end
+    local missing="the comment ${COMMENT_ID} is not an inline review comment of ${REPO}#${PR}"
+    api_read "could not read the comment ${COMMENT_ID} of ${REPO}" "repos/${REPO}/pulls/comments/${COMMENT_ID}" \
+        "${FIELDS_ROW_DEF} [.id, .in_reply_to_id, .pull_request_url, \"end\"] | fields_row" \
+        || discussion_not_found "${missing}"
+    IFS="${ROW_SEPARATOR}" read -r id parent pull end <<< "${GH_OUTPUT}"
+    [[ "${id}" = "${COMMENT_ID}" && "${parent}" =~ ^[0-9]*$ && "${end}" = end ]] \
+        || die "gh returned an unexpected answer for the comment ${COMMENT_ID} of ${REPO}"
+    [[ "${pull}" =~ /pulls/0*([0-9]+)$ && "${BASH_REMATCH[1]}" = "${PR}" ]] || discussion_not_found "${missing}"
+    REPLY_ROOT="${parent:-${COMMENT_ID}}"
+}
+
+# The first line of gh's error when GitHub refused a post without making it: the line ends with one
+# of the statuses that only ever mean the request was turned down as it stood (malformed, not
+# signed in, not allowed, no such comment, gone, not valid). Every other status is left out on
+# purpose, the rest of 4xx included: a 408, a 409 or a 429 can come from a proxy or a limit after
+# the request was passed on, and saying "not posted" of a reply that is there leads to a duplicate,
+# where saying "may have been posted" of one that is not costs the caller only a look.
+readonly REPLY_REFUSED_PATTERN='\(HTTP (400|401|403|404|410|422)\)$'
+
+# Posts the checked copy of the body as a reply to REPLY_ROOT, once. gh reads the body from the
+# file, so it is never an argument, and the comment replied to is in the path. A post is never
+# tried again: only an answer in REPLY_REFUSED_PATTERN says GitHub refused it, and after anything
+# else the reply may be there, so a second post could be a duplicate. Neither the host nor the
+# repository of the new comment's URL is compared with anything, for the reason issue_create gives.
+post_reply() {
+    local id url end reason
+    local check="run 'cfwf pr comments' and look for it in the thread before posting again"
+    if ! gh_capture api --method POST "repos/${REPO}/pulls/${PR}/comments/${REPLY_ROOT}/replies" -F "body=@${BODY_FILE}" \
+        --jq "${FIELDS_ROW_DEF} [.id, .html_url, \"end\"] | fields_row"; then
+        [[ ! "${GH_ERROR%%$'\n'*}" =~ ${REPLY_REFUSED_PATTERN} ]] || die "the reply was not posted: $(gh_failure_text)"
+        reason="$(gh_failure_text)"
+        die "the reply may have been posted (${reason:-gh gave no error text}); ${check}"
+    fi
+    IFS="${ROW_SEPARATOR}" read -r id url end <<< "${GH_OUTPUT}"
+    [[ "${id}" =~ ^[0-9]+$ && "${end}" = end && "${url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/${PR}#discussion_r${id}$ ]] \
+        || die "the reply may have been posted (gh returned an unexpected answer); ${check}"
+    printf 'inline\t%s\nin-reply-to\t%s\nurl\t%s\n' "${id}" "${REPLY_ROOT}" "${url}"
+}
+
+pr_reply() {
+    parse_command_options assign_pr_comment_option "--repo --pr --comment-id --body-file" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require COMMENT_ID --comment-id
+    require BODY_FILE --body-file
+    require_gh
+    resolve_body
+    resolve_reply_root
+    post_reply
+}
+
 assign_checks_option() {
     local flag="$1" value="${2:-}"
     case "${flag}" in
@@ -1464,12 +1928,9 @@ api_read() {
 # A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
 # name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
 # byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
-# name with each control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F)
-# turned into a space, is only printed, so it fits on one line of the output and carries no
-# terminal escape; two names that print the same are still judged apart. The range is written out
-# because gh's --jq (gojq, Go regular expressions) reads [[:cntrl:]] as ASCII only, so it would let
-# a C1 control such as U+009B (CSI) through, where jq's would not.
-readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# name made printable (PRINTABLE_DEF), is only printed; two names that print the same are still
+# judged apart.
+readonly NAME_FIELDS_DEF="${PRINTABLE_DEF} def name_fields: tojson, printable;"
 # The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
 # name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
 # field would shift the rest.
@@ -1752,7 +2213,23 @@ pr_checks() {
 }
 
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks "$@"
+    case "${1:-}" in
+        comments)
+            shift
+            CURRENT_COMMAND="pr comments"
+            pr_comments "$@"
+            ;;
+        reply)
+            shift
+            CURRENT_COMMAND="pr reply"
+            pr_reply "$@"
+            ;;
+        "")
+            CURRENT_COMMAND="pr"
+            usage_error "pr needs a subcommand (checks, comments or reply)"
+            ;;
+        *) dispatch_subcommand pr checks pr_checks "$@" ;;
+    esac
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
