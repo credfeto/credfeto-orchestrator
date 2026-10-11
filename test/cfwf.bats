@@ -3817,6 +3817,25 @@ assert_sign_off() {
     done
 }
 
+@test "issue view and issue plan-status read a number given with leading zeros as that number, without them" {
+    local subcommand fields
+    write_issue 7 "A title" OPEN "The request."
+    for subcommand in view plan-status; do
+        fields="${VIEW_FIELDS}"
+        [ "${subcommand}" = view ] || fields="${PLAN_STATUS_FIELDS}"
+        rm -f "${GH_LOG}"
+        run_issue_read "${subcommand}" --issue 007
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        assert_one_issue_read 7 "${fields}"
+
+        # A message names the number the same way.
+        run_issue_read "${subcommand}" --issue 00404
+        [ "${status}" -eq 9 ]
+        [ "${stderr}" = "cfwf: ${REPO}#404 was not found" ]
+    done
+}
+
 @test "issue view and issue plan-status report a failing gh as a runtime failure (exit 1), never as a missing issue" {
     local subcommand
     write_issue 7 "A title" OPEN "The request."
