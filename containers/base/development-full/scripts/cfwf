@@ -15,6 +15,7 @@ readonly BODY_REFUSED_EXIT=8
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
+readonly PR_NOT_FOUND_EXIT=9
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
@@ -149,6 +150,7 @@ CURRENT_COMMAND=""
 MODE=""
 REPO=""
 PR=""
+declare -gA REQUESTED_FIELDS=()
 ISSUE=""
 STATUS=""
 SHA=""
@@ -217,6 +219,7 @@ Commands:
   issue create             Create an issue and put it on the Workflow board as Not Started
   body check               Check a body for leaks without posting it (exit 8 when refused)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
+  pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -422,13 +425,72 @@ prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
 USAGE
 }
 
+usage_pr_view() {
+    cat << USAGE
+Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]
+
+Prints a pull request's state and metadata in a single read.
+
+--repo   Always required; never taken from the current directory.
+--pr     The pull request's number.
+--field  Optional and repeatable: one of the fields below. Only the fields named are printed.
+--json, --jq and --template are not options: the output has one fixed format.
+
+Fields, in the order they are printed whatever order they are asked for in (one named more than
+once is printed once):
+  state            OPEN, CLOSED or MERGED
+  draft            yes or no
+  title            the title
+  url              the pull request's URL
+  base             the base branch
+  head             the head branch
+  head-sha         the head commit
+  auto-merge       on or off
+  review-decision  GitHub's own value, such as APPROVED, CHANGES_REQUESTED or REVIEW_REQUIRED;
+                   empty when there is none
+  merge-state      GitHub's own value, such as BEHIND, BLOCKED, CLEAN, DIRTY, DRAFT or UNKNOWN
+  mergeable        GitHub's own value: MERGEABLE, CONFLICTING or UNKNOWN
+  created-at       when it was created
+  merged-at        when it was merged; empty when it is not merged
+  merge-commit     the merge commit's SHA; empty when it is not merged
+  labels           the label names, comma-joined
+  assignees        the assignees' logins, comma-joined
+  author           the author's login
+  commit-authors   the distinct logins of the commit authors, in the order first seen, comma-joined
+                   (a commit can have several authors; one with no login is left out)
+  files            the changed paths, one a line; only when asked for alone
+  body             the body, unchanged, byte for byte; only when asked for alone
+
+With no --field, every field but files and body is printed, each as one line:
+  <field><TAB><value>
+A field with no value prints its name, the tab and nothing after it. Each control character in a
+value (a tab or a newline included) is printed as a space, so a line is always one field. The same
+is done to each path of files. Asking for files or body together with another field is a usage
+error.
+
+GitHub is asked only for what the fields printed need, so name the fields wanted: the commits are
+read only for commit-authors, which the default output includes.
+
+gh lists at most 100 files and reads at most 100 commits. files is refused (exit 1) when the pull
+request changes more files than gh listed, never printed in part; commit-authors has no such
+check, so on a pull request of more than 100 commits it can miss an author.
+
+Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
+runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
         body) usage_body ;;
-        pr) usage_pr ;;
+        pr)
+            usage_pr
+            printf "\nRun 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.\n"
+            ;;
+        "pr view") usage_pr_view ;;
         *) usage_general ;;
     esac
 }
@@ -643,6 +705,14 @@ printable_first_line() {
 gh_failure_text() {
     printable_first_line "${GH_ERROR:-${GH_OUTPUT}}"
 }
+
+# A jq definition, put before a filter that uses it: printable is the string it is given with each
+# control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F) turned into a
+# space, so it fits on one line of the output, cannot be taken for a field separator and carries no
+# terminal escape. The range is written out because gh's --jq (gojq, Go regular expressions) reads
+# [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
+# would not.
+readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -1375,12 +1445,9 @@ api_read() {
 # A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
 # name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
 # byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
-# name with each control character (C0, a tab or a newline included, DEL, and C1, U+0080 to U+009F)
-# turned into a space, is only printed, so it fits on one line of the output and carries no
-# terminal escape; two names that print the same are still judged apart. The range is written out
-# because gh's --jq (gojq, Go regular expressions) reads [[:cntrl:]] as ASCII only, so it would let
-# a C1 control such as U+009B (CSI) through, where jq's would not.
-readonly NAME_FIELDS_DEF='def name_fields: tojson, gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# name made printable (PRINTABLE_DEF), is only printed; two names that print the same are still
+# judged apart.
+readonly NAME_FIELDS_DEF="${PRINTABLE_DEF} def name_fields: tojson, printable;"
 # The fields of a row read from gh: \x1f, which no field holds (a name key escapes it, and a printed
 # name has it turned into a space). A tab would not do: read collapses consecutive tabs, so an empty
 # field would shift the rest.
@@ -1662,8 +1729,161 @@ pr_checks() {
     report_checks
 }
 
+# The fields of pr view, in the order they are printed: the name, the gh pr view --json fields it is
+# read from, and the jq expression of its value. A value that is null prints as empty.
+readonly PR_VIEW_FIELDS=(
+    'state|state|.state'
+    'draft|isDraft|if .isDraft then "yes" else "no" end'
+    'title|title|.title'
+    'url|url|.url'
+    'base|baseRefName|.baseRefName'
+    'head|headRefName|.headRefName'
+    'head-sha|headRefOid|.headRefOid'
+    'auto-merge|autoMergeRequest|if .autoMergeRequest then "on" else "off" end'
+    'review-decision|reviewDecision|.reviewDecision'
+    'merge-state|mergeStateStatus|.mergeStateStatus'
+    'mergeable|mergeable|.mergeable'
+    'created-at|createdAt|.createdAt'
+    'merged-at|mergedAt|.mergedAt'
+    'merge-commit|mergeCommit|.mergeCommit.oid'
+    'labels|labels|[.labels[]?.name] | join(",")'
+    'assignees|assignees|[.assignees[]?.login] | join(",")'
+    'author|author|.author.login'
+    # Each login is kept where it is first seen: grouped by login, then put back in commit order.
+    'commit-authors|commits|[.commits[]?.authors[]?.login | select(. != null and . != "")] | to_entries | group_by(.value) | map(min_by(.key)) | sort_by(.key) | map(.value) | join(",")'
+    # changedFiles is the count print_view_files checks the list against.
+    'files|files,changedFiles|.files[]?.path'
+    'body|body|.body'
+)
+PR_VIEW_FIELD_NAMES=("${PR_VIEW_FIELDS[@]%%|*}")
+readonly PR_VIEW_FIELD_NAMES
+# The fields that are not a key and value line, so each is printed only when asked for alone.
+readonly PR_VIEW_ALONE_FIELDS=(files body)
+# Put after the body by jq and taken off again before it is printed: command substitution drops
+# every trailing newline, the body's own included, unless something follows them.
+readonly BODY_END_MARK='.'
+VIEW_NAMES=()
+VIEW_EXPRESSIONS=()
+VIEW_JSON_FIELDS=""
+
+assign_view_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --pr)
+            assign_once PR "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --field)
+            is_one_of "${value}" "${PR_VIEW_FIELD_NAMES[@]}" \
+                || usage_error "unknown --field: it must be one of the fields listed below"
+            REQUESTED_FIELDS["${value}"]=1
+            ;;
+    esac
+}
+
+# Refuses (exit 2) a field that is printed only alone when another was asked for with it, then sets
+# VIEW_NAMES and VIEW_EXPRESSIONS to the fields to print, in the order of PR_VIEW_FIELDS, and
+# VIEW_JSON_FIELDS to the gh fields they are read from: the fields asked for, or with none asked
+# for every field that is a key and value line.
+resolve_view_fields() {
+    local row name rest
+    if [ "${#REQUESTED_FIELDS[@]}" -eq 0 ]; then
+        for name in "${PR_VIEW_FIELD_NAMES[@]}"; do
+            is_one_of "${name}" "${PR_VIEW_ALONE_FIELDS[@]}" || REQUESTED_FIELDS["${name}"]=1
+        done
+    elif [ "${#REQUESTED_FIELDS[@]}" -gt 1 ]; then
+        for name in "${PR_VIEW_ALONE_FIELDS[@]}"; do
+            [ -z "${REQUESTED_FIELDS["${name}"]:-}" ] \
+                || usage_error "--field ${name} can only be asked for alone: it is not printed as a key and value line"
+        done
+    fi
+    for row in "${PR_VIEW_FIELDS[@]}"; do
+        name="${row%%|*}"
+        [ -n "${REQUESTED_FIELDS["${name}"]:-}" ] || continue
+        rest="${row#*|}"
+        VIEW_NAMES+=("${name}")
+        VIEW_JSON_FIELDS+="${VIEW_JSON_FIELDS:+,}${rest%%|*}"
+        VIEW_EXPRESSIONS+=("${rest#*|}")
+    done
+}
+
+# Reads the pull request in the one gh call pr view makes, with the jq program $1, leaving its
+# output in GH_OUTPUT. A pull request GitHub does not have (the number of an issue is answered the
+# same way) exits PR_NOT_FOUND_EXIT; any other failure, a repository that is not there included,
+# dies with gh's error.
+read_pull_request() {
+    gh_capture pr view "${PR}" --repo "${REPO}" --json "${VIEW_JSON_FIELDS}" --jq "$1" && return 0
+    case "${GH_ERROR}${GH_OUTPUT}" in
+        *"Could not resolve to a PullRequest with the number"*)
+            printf 'cfwf: the pull request %s#%s was not found\n' "${REPO}" "${PR}" >&2
+            exit "${PR_NOT_FOUND_EXIT}"
+            ;;
+    esac
+    die "could not read ${REPO}#${PR}: $(gh_failure_text)"
+}
+
+# Prints each of VIEW_NAMES as its name, a tab and its value made printable, so no value can add a
+# line or a field. A final empty value keeps its tab: only newlines are dropped from GH_OUTPUT.
+print_view_lines() {
+    local program="" index
+    for index in "${!VIEW_NAMES[@]}"; do
+        program+="${program:+, }(\"${VIEW_NAMES[index]}\\t\" + ((${VIEW_EXPRESSIONS[index]}) // \"\" | tostring | printable))"
+    done
+    read_pull_request "${PRINTABLE_DEF} ${program}"
+    printf '%s\n' "${GH_OUTPUT}"
+}
+
+# Prints the changed paths, one a line, each made printable so a path holding a newline stays one
+# line. gh lists the first 100 files only, so the list is checked against the number of files the
+# pull request changes and refused when it is short: part of a list is never printed as the whole.
+print_view_files() {
+    local changed listed
+    local -a rows=()
+    read_pull_request "${PRINTABLE_DEF} (.changedFiles | tostring), (${VIEW_EXPRESSIONS[0]} | tostring | printable)"
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    changed="${rows[0]}"
+    listed=$((${#rows[@]} - 1))
+    [[ "${changed}" =~ ^[0-9]+$ ]] || die "gh returned an unexpected number of changed files for ${REPO}#${PR}"
+    [ "${changed}" -le "${listed}" ] \
+        || die "${REPO}#${PR} changes ${changed} files and gh listed only the first ${listed}, so none is printed"
+    [ "${listed}" -eq 0 ] || printf '%s\n' "${rows[@]:1}"
+}
+
+print_view_body() {
+    read_pull_request "(${VIEW_EXPRESSIONS[0]} // \"\") + \"${BODY_END_MARK}\""
+    printf '%s' "${GH_OUTPUT%"${BODY_END_MARK}"}"
+}
+
+pr_view() {
+    parse_command_options assign_view_option "--repo --pr --field" "" "$@"
+    require REPO --repo
+    require PR --pr
+    resolve_view_fields
+    require_gh
+    case "${VIEW_NAMES[0]}" in
+        files) print_view_files ;;
+        body) print_view_body ;;
+        *) print_view_lines ;;
+    esac
+}
+
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks "$@"
+    case "${1:-}" in
+        view)
+            shift
+            CURRENT_COMMAND="pr view"
+            pr_view "$@"
+            ;;
+        "")
+            CURRENT_COMMAND="pr"
+            usage_error "pr needs a subcommand (checks or view)"
+            ;;
+        *) dispatch_subcommand pr checks pr_checks "$@" ;;
+    esac
 }
 
 main() {
