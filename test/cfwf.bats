@@ -32,7 +32,7 @@ setup() {
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
-        '  "pr view") [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit "${GH_FIXTURES}/pr-view.json" ;;' \
+        '  "pr view") [ -f "${GH_FIXTURES}/pr-view.fail" ] && { cat "${GH_FIXTURES}/pr-view.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${GH_FIXTURES}/pr-view.json" > "${GH_FIXTURES}/pr-view.asked.json"; emit "${GH_FIXTURES}/pr-view.asked.json" ;;' \
         '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
@@ -172,6 +172,7 @@ gh_line_of() {
         [[ "${output}" == *"issue plan-status"* ]]
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
+        [[ "${output}" == *"pr view"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"comment add"* ]]
     done
 }
@@ -4077,4 +4078,538 @@ assert_sign_off() {
     [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
     [[ "${output}" != *marker* && "${output}" != *"request body"* && "${output}" != *"deleted account"* ]]
     [ -z "${stderr}" ]
+}
+
+# --- pr view --------------------------------------------------------------------
+
+PR_URL="https://github.com/credfeto/credfeto-orchestrator/pull/42"
+CREATED_AT="2026-10-01T08:00:00Z"
+MERGED_AT="2026-10-02T09:30:00Z"
+MERGE_SHA="3333333333333333333333333333333333333333"
+DEFAULT_JSON_FIELDS="state,isDraft,title,url,baseRefName,headRefName,headRefOid,autoMergeRequest,reviewDecision,mergeStateStatus,mergeable,createdAt,mergedAt,mergeCommit,labels,assignees,author,commits"
+
+# Writes PR 42 as gh pr view --json answers it: open, ready, with no review decision, no labels, no
+# assignees, one commit and one changed file. $1, when given, is a jq filter that changes it. It
+# holds every field cfwf can ask for; the stub hands over only those a call names in --json.
+write_pull_request() {
+    jq -n --arg url "${PR_URL}" --arg sha "${HEAD_SHA}" --arg created "${CREATED_AT}" '{
+        state: "OPEN", isDraft: false, title: "feat: add a thing", url: $url,
+        baseRefName: "main", headRefName: "feat/thing", headRefOid: $sha,
+        autoMergeRequest: null, reviewDecision: "", mergeStateStatus: "BLOCKED", mergeable: "MERGEABLE",
+        createdAt: $created, mergedAt: null, mergeCommit: null,
+        labels: [], assignees: [], author: {login: "prpixie", is_bot: false},
+        commits: [{oid: "c1", authors: [{login: "credfeto", name: "Mark"}]}],
+        files: [{path: "README.md", additions: 1, deletions: 0}], changedFiles: 1,
+        body: "Summary\n"} | '"${1:-.}" > "${GH_FIXTURES}/pr-view.json"
+}
+
+# Makes the pull request read fail with the error text $1.
+fail_pull_request() {
+    printf '%s\n' "$1" > "${GH_FIXTURES}/pr-view.fail"
+}
+
+run_pr_view() {
+    run --separate-stderr "${SCRIPT}" pr view --repo "${REPO}" --pr 42 "$@"
+}
+
+# Prints the default output of the pull request write_pull_request writes with no filter, with the
+# values given as name=value in place of its own.
+default_view() {
+    local -A values=(
+        [state]=OPEN [draft]=no [title]="feat: add a thing" [url]="${PR_URL}" [base]=main [head]=feat/thing
+        [head-sha]="${HEAD_SHA}" [auto-merge]=off [review-decision]="" [merge-state]=BLOCKED
+        [mergeable]=MERGEABLE [created-at]="${CREATED_AT}" [merged-at]="" [merge-commit]="" [labels]=""
+        [assignees]="" [author]=prpixie [commit-authors]=credfeto
+    )
+    local change name
+    for change in "$@"; do
+        values["${change%%=*}"]="${change#*=}"
+    done
+    for name in state draft title url base head head-sha auto-merge review-decision merge-state mergeable \
+        created-at merged-at merge-commit labels assignees author commit-authors; do
+        printf '%s\t%s\n' "${name}" "${values["${name}"]}"
+    done
+}
+
+# Succeeds when gh was called exactly once, as pr view of PR 42 asking for exactly the fields $1.
+read_once_asking_for() {
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ] && [ "$(gh_call_count "pr view 42 --repo ${REPO} --json $1 --jq ")" -eq 1 ]
+}
+
+@test "pr view help, from pr view --help and pr view -h, lists every field and exit code and calls no gh" {
+    local flag name
+    for flag in --help -h; do
+        run "${SCRIPT}" pr view "${flag}"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]"* ]]
+        [[ "${output}" != *"cfwf pr checks"* ]]
+        for name in state draft title url base head head-sha auto-merge review-decision merge-state mergeable \
+            created-at merged-at merge-commit labels assignees author commit-authors files body; do
+            grep -qE "^  ${name} +[A-Za-z]" <<< "${output}" || { echo "not listed: ${name}" >&2; return 1; }
+        done
+        [[ "${output}" == *"Exit codes: 0 printed; 9 the pull request does not exist (the number of an issue included); 1 a"* ]]
+        [[ "${output}" == *"2 a usage error."* ]]
+        [[ "${output}" == *"--json, --jq and --template are not options"* ]]
+        [[ "${output}" == *"only when asked for alone"* ]]
+    done
+
+    # Help comes before any other option is looked at.
+    run "${SCRIPT}" pr view --help --field nonsense
+    [ "${status}" -eq 0 ]
+
+    for flag in "help pr" "pr -h" "pr --help" "help pr view"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${flag}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr view prints every field but files and body for an open pull request, in the fixed order, empty where there is no value" {
+    write_pull_request
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(default_view)" ]
+    [ -z "${stderr}" ]
+    [ "$(grep -c . <<< "${output}")" -eq 18 ]
+    # Each empty value keeps its tab, the last line's included.
+    [ "$(grep -c $'^[a-z-]*\t' <<< "${output}")" -eq 18 ]
+    [ "$(grep -cx $'review-decision\t' <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx $'merged-at\t' <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx $'merge-commit\t' <<< "${output}")" -eq 1 ]
+}
+
+@test "pr view prints a draft pull request" {
+    write_pull_request '.isDraft = true | .mergeStateStatus = "DRAFT" | .reviewDecision = "REVIEW_REQUIRED"'
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(default_view draft=yes merge-state=DRAFT review-decision=REVIEW_REQUIRED)" ]
+}
+
+@test "pr view prints a merged pull request, with when it merged and the merge commit's SHA" {
+    write_pull_request '.state = "MERGED" | .mergedAt = "'"${MERGED_AT}"'" | .mergeCommit = {oid: "'"${MERGE_SHA}"'"}
+        | .reviewDecision = "APPROVED" | .mergeStateStatus = "UNKNOWN" | .mergeable = "UNKNOWN"
+        | .autoMergeRequest = {enabledAt: "2026-10-02T09:00:00Z", mergeMethod: "MERGE"}'
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(default_view state=MERGED merged-at="${MERGED_AT}" merge-commit="${MERGE_SHA}" \
+        review-decision=APPROVED merge-state=UNKNOWN mergeable=UNKNOWN auto-merge=on)" ]
+}
+
+@test "pr view prints a closed pull request, which has no merge time and no merge commit" {
+    write_pull_request '.state = "CLOSED" | .mergeStateStatus = "DIRTY" | .mergeable = "CONFLICTING" | .reviewDecision = "CHANGES_REQUESTED"'
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(default_view state=CLOSED merge-state=DIRTY mergeable=CONFLICTING review-decision=CHANGES_REQUESTED)" ]
+    [ "$(grep -cx $'merged-at\t' <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx $'merge-commit\t' <<< "${output}")" -eq 1 ]
+}
+
+@test "pr view --field prints each field alone, asking gh for that field only" {
+    local -a cases=(
+        "state|state|MERGED"
+        "draft|isDraft|no"
+        "title|title|feat: add a thing"
+        "url|url|${PR_URL}"
+        "base|baseRefName|main"
+        "head|headRefName|feat/thing"
+        "head-sha|headRefOid|${HEAD_SHA}"
+        "auto-merge|autoMergeRequest|on"
+        "review-decision|reviewDecision|APPROVED"
+        "merge-state|mergeStateStatus|BLOCKED"
+        "mergeable|mergeable|MERGEABLE"
+        "created-at|createdAt|${CREATED_AT}"
+        "merged-at|mergedAt|${MERGED_AT}"
+        "merge-commit|mergeCommit|${MERGE_SHA}"
+        "labels|labels|AI-Work,High"
+        "assignees|assignees|credfeto,prpixie"
+        "author|author|prpixie"
+        "commit-authors|commits|credfeto"
+    )
+    local case name rest
+    write_pull_request '.state = "MERGED" | .mergedAt = "'"${MERGED_AT}"'" | .mergeCommit = {oid: "'"${MERGE_SHA}"'"}
+        | .reviewDecision = "APPROVED" | .autoMergeRequest = {mergeMethod: "MERGE"}
+        | .labels = [{name: "AI-Work"}, {name: "High"}] | .assignees = [{login: "credfeto"}, {login: "prpixie"}]'
+    for case in "${cases[@]}"; do
+        name="${case%%|*}"
+        rest="${case#*|}"
+        rm -f "${GH_LOG}"
+        run_pr_view --field "${name}"
+        [ "${status}" -eq 0 ] || { echo "${name}: ${status} ${stderr}" >&2; return 1; }
+        [ "${output}" = "${name}"$'\t'"${rest#*|}" ] || { echo "${name}: ${output}" >&2; return 1; }
+        read_once_asking_for "${rest%%|*}" || { echo "${name}: $(cat "${GH_LOG}")" >&2; return 1; }
+    done
+}
+
+@test "pr view --field prints several fields in the fixed order, not the order given, and a repeated one once" {
+    write_pull_request
+    run_pr_view --field mergeable --field head-sha --field state --field draft
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "state"$'\t'"OPEN"$'\n'"draft"$'\t'"no"$'\n'"head-sha"$'\t'"${HEAD_SHA}"$'\n'"mergeable"$'\t'"MERGEABLE" ]
+    read_once_asking_for "state,isDraft,headRefOid,mergeable"
+
+    rm -f "${GH_LOG}"
+    run_pr_view --field state --field title --field state --field state
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "state"$'\t'"OPEN"$'\n'"title"$'\t'"feat: add a thing" ]
+    read_once_asking_for "state,title"
+
+    # The last line keeps its tab when its value is empty.
+    run_pr_view --field merge-commit --field state
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "state"$'\t'"OPEN"$'\n'"merge-commit"$'\t' ]
+}
+
+@test "pr view asks gh only for the fields the request needs: no body or files by default, and commits only for commit-authors" {
+    write_pull_request
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    read_once_asking_for "${DEFAULT_JSON_FIELDS}"
+    [[ ",${DEFAULT_JSON_FIELDS}," != *",body,"* && ",${DEFAULT_JSON_FIELDS}," != *",files,"* ]]
+
+    rm -f "${GH_LOG}"
+    run_pr_view --field state
+    [ "${status}" -eq 0 ]
+    read_once_asking_for "state"
+
+    rm -f "${GH_LOG}"
+    run_pr_view --field body
+    [ "${status}" -eq 0 ]
+    read_once_asking_for "body"
+
+    rm -f "${GH_LOG}"
+    run_pr_view --field files
+    [ "${status}" -eq 0 ]
+    read_once_asking_for "files,changedFiles"
+
+    # No other gh command, and no pass-through of the caller's own filter.
+    [ "$(gh_call_count " api ")" -eq 0 ]
+}
+
+@test "pr view prints auto-merge as on or off and draft as yes or no" {
+    write_pull_request
+    run_pr_view --field auto-merge --field draft
+    [ "${output}" = "draft"$'\t'"no"$'\n'"auto-merge"$'\t'"off" ]
+
+    write_pull_request '.isDraft = true | .autoMergeRequest = {enabledAt: "2026-10-02T09:00:00Z", enabledBy: {login: "credfeto"}, mergeMethod: "SQUASH"}'
+    run_pr_view --field auto-merge --field draft
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "draft"$'\t'"yes"$'\n'"auto-merge"$'\t'"on" ]
+}
+
+@test "pr view comma-joins labels and assignees, and prints an empty value when there are none" {
+    write_pull_request
+    run_pr_view --field labels --field assignees
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "labels"$'\t'$'\n'"assignees"$'\t' ]
+
+    write_pull_request '.labels = [{name: "AI-Work", color: "ffa500"}, {name: "Tech Debt"}, {name: "C#"}]
+        | .assignees = [{login: "credfeto", name: "Mark"}, {login: "prpixie"}, {login: "dependabot[bot]"}]'
+    run_pr_view --field labels --field assignees
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "labels"$'\t'"AI-Work,Tech Debt,C#"$'\n'"assignees"$'\t'"credfeto,prpixie,dependabot[bot]" ]
+
+    write_pull_request '.labels = [{name: "Low"}] | .assignees = [{login: "credfeto"}]'
+    run_pr_view --field labels --field assignees
+    [ "${output}" = "labels"$'\t'"Low"$'\n'"assignees"$'\t'"credfeto" ]
+}
+
+@test "pr view prints the distinct commit authors in first-seen order, across several authors of one commit, skipping one with no login" {
+    write_pull_request '.commits = [
+        {authors: [{login: "zoe"}]},
+        {authors: [{login: "credfeto"}, {login: "", name: "No Account"}, {login: "zoe"}]},
+        {authors: [{login: null, name: "Also None"}, {login: "amy"}]},
+        {authors: []},
+        {authors: [{login: "credfeto"}]},
+        {authors: [{login: "dependabot[bot]"}, {login: "amy"}]}]'
+    run_pr_view --field commit-authors
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "commit-authors"$'\t'"zoe,credfeto,amy,dependabot[bot]" ]
+
+    write_pull_request '.commits = [{authors: [{login: ""}]}]'
+    run_pr_view --field commit-authors
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "commit-authors"$'\t' ]
+
+    write_pull_request '.commits = []'
+    run_pr_view --field commit-authors
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "commit-authors"$'\t' ]
+}
+
+@test "pr view --field body prints the body unchanged, byte for byte, with its tabs, blank lines, carriage returns and trailing newlines" {
+    printf '%s' $'## Summary\n\n\tindented\twith tabs\r\n\n\n- item\x1b[1m\n   \nlast line\n\n\n' > "${TEST_TMP}/expected-body"
+    write_pull_request '.body = "## Summary\n\n\tindented\twith tabs\r\n\n\n- item\u001b[1m\n   \nlast line\n\n\n"'
+
+    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
+    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+    read_once_asking_for "body"
+
+    # No newline is added to a body that ends without one, and a repeated --field body is still alone.
+    write_pull_request '.body = "no newline at the end"'
+    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body --field body > "${TEST_TMP}/printed-body"
+    printf '%s' "no newline at the end" > "${TEST_TMP}/expected-body"
+    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+
+    # A body that ends in the character cfwf marks its end with loses nothing.
+    write_pull_request '.body = "ends in a full stop.\n."'
+    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
+    printf '%s' $'ends in a full stop.\n.' > "${TEST_TMP}/expected-body"
+    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+}
+
+@test "pr view --field body prints nothing for an empty body or none" {
+    local body
+    for body in '""' null; do
+        write_pull_request ".body = ${body}"
+        run_pr_view --field body
+        [ "${status}" -eq 0 ]
+        "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
+        [ ! -s "${TEST_TMP}/printed-body" ]
+    done
+}
+
+@test "pr view --field files prints one changed path a line, and nothing when there are none" {
+    write_pull_request '.files = [{path: "README.md"}, {path: "docs/a file with spaces.md"}, {path: "src/Thing.cs"}] | .changedFiles = 3'
+    run_pr_view --field files
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "README.md"$'\n'"docs/a file with spaces.md"$'\n'"src/Thing.cs" ]
+    [ -z "${stderr}" ]
+
+    write_pull_request '.files = [{path: "README.md"}] | .changedFiles = 1'
+    run_pr_view --field files --field files
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "README.md" ]
+
+    write_pull_request '.files = [] | .changedFiles = 0'
+    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field files > "${TEST_TMP}/printed-files"
+    [ ! -s "${TEST_TMP}/printed-files" ]
+
+    # A path holding a newline or a tab is still one line.
+    write_pull_request '.files = [{path: "odd\nname\there"}, {path: "b"}] | .changedFiles = 2'
+    run_pr_view --field files
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "odd name here"$'\n'"b" ]
+}
+
+@test "pr view --field files refuses a list gh cut short (exit 1), never printing part of it as the whole" {
+    write_pull_request '.files = [{path: "a"}, {path: "b"}] | .changedFiles = 209'
+    run_pr_view --field files
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#42 changes 209 files and gh listed only the first 2, so none is printed" ]
+
+    write_pull_request '.files = [] | .changedFiles = 1'
+    run_pr_view --field files
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    # Without the count there is nothing to check the list against.
+    write_pull_request 'del(.changedFiles)'
+    run_pr_view --field files
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected number of changed files for ${REPO}#42" ]
+}
+
+@test "pr view refuses body or files together with another field (exit 2) before any gh call" {
+    local -a cases=(
+        "--field body --field state"
+        "--field state --field body"
+        "--field files --field state"
+        "--field title --field files"
+        "--field body --field files"
+        "--field files --field body --field body"
+    )
+    local args
+    write_pull_request
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_pr_view ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr%%$'\n'*}" == "cfwf: --field "*" can only be asked for alone: it is not printed as a key and value line" ]]
+        [[ "${stderr}" == *"Usage: cfwf pr view"* ]]
+    done
+    run_pr_view --field body --field state
+    [[ "${stderr%%$'\n'*}" == "cfwf: --field body can only be asked for alone"* ]]
+    run_pr_view --field state --field files
+    [[ "${stderr%%$'\n'*}" == "cfwf: --field files can only be asked for alone"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr view usage errors exit 2 with the pr view usage, before any gh call" {
+    local -a cases=(
+        "--repo ${REPO}"
+        "--repo ${REPO} --pr 42 --pr 43"
+        "--repo ${REPO} --repo ${REPO} --pr 42"
+        "--repo ${REPO} --pr x42"
+        "--repo ${REPO} --pr 42x"
+        "--repo ${REPO} --pr -1"
+        "--repo ${REPO} --pr 4.2"
+        "--repo ${REPO} --pr"
+        "--repo not-a-repo --pr 42"
+        "--repo ${REPO} --pr 42 --field"
+        "--repo ${REPO} --pr 42 --field nonsense"
+        "--repo ${REPO} --pr 42 --field State"
+        "--repo ${REPO} --pr 42 --field isDraft"
+        "--repo ${REPO} --pr 42 --field headRefOid"
+        "--repo ${REPO} --pr 42 --field state,title"
+        "--repo ${REPO} --pr 42 --field number"
+        "--repo ${REPO} --pr 42 --json state"
+        "--repo ${REPO} --pr 42 --jq .state"
+        "--repo ${REPO} --pr 42 --template x"
+        "--repo ${REPO} --pr 42 --web"
+        "--repo ${REPO} --pr 42 --comments"
+        "--repo ${REPO} --pr 42 --issue 42"
+        "--repo ${REPO} --pr 42 --sha ${HEAD_SHA}"
+        "--repo ${REPO} --pr 42 --all"
+        "--repo ${REPO} --pr 42 state"
+        "--repo ${REPO} 42"
+    )
+    local args
+    write_pull_request
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr view ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]"* ]]
+        [[ "${stderr}" != *"cfwf pr checks"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" pr view --pr 42
+    [[ "${stderr}" == "cfwf: missing required option --repo"* ]]
+    run --separate-stderr "${SCRIPT}" pr view --repo "${REPO}"
+    [[ "${stderr}" == "cfwf: missing required option --pr"* ]]
+    run_pr_view --pr 43
+    [[ "${stderr}" == "cfwf: --pr can only be given once"* ]]
+    run_pr_view --repo "${REPO}"
+    [[ "${stderr}" == "cfwf: --repo can only be given once"* ]]
+    run --separate-stderr "${SCRIPT}" pr view --repo "${REPO}" --pr x42
+    [[ "${stderr}" == "cfwf: invalid value for --pr: it must be a number"* ]]
+    run_pr_view --field
+    [[ "${stderr}" == "cfwf: --field needs a value"* ]]
+
+    # An unknown field is named by the rule it broke, never by its value, and so is an unknown option.
+    run_pr_view --field nonsense
+    [[ "${stderr%%$'\n'*}" == "cfwf: unknown --field: it must be one of the fields listed below" ]]
+    run_pr_view --json nonsense
+    [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 7; its value is not shown)" ]]
+
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr without a subcommand names both, and pr checks still runs as before" {
+    run --separate-stderr "${SCRIPT}" pr
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view)"* ]]
+    [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
+
+    run --separate-stderr "${SCRIPT}" pr frobnicate
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown pr subcommand (argument 2; its value is not shown)"* ]]
+    [ ! -f "${GH_LOG}" ]
+
+    prepare_pr_checks
+    run_pr_checks --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]]
+}
+
+@test "pr view exits 9 for a pull request that does not exist, and for the number of an issue, which gh answers the same way" {
+    fail_pull_request "GraphQL: Could not resolve to a PullRequest with the number of 42. (repository.pullRequest)"
+    run_pr_view
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+
+    run_pr_view --field body
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    run_pr_view --field files
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+}
+
+@test "pr view reports a failing gh as a runtime failure (exit 1), a repository that is not there included, and prints nothing" {
+    write_pull_request
+    fail_pull_request "HTTP 502: Bad Gateway (https://api.github.com/graphql)"
+    run_pr_view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#42: HTTP 502: Bad Gateway (https://api.github.com/graphql)" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+
+    local field
+    for field in body files state; do
+        run_pr_view --field "${field}"
+        [ "${status}" -eq 1 ] || { echo "${field}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+    done
+
+    fail_pull_request "GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)"
+    run_pr_view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#42: GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" ]
+
+    # Only the first line of gh's error is quoted, with no terminal escape.
+    fail_pull_request $'first \x1b[31mline\nsecond line'
+    run_pr_view
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#42: first [31mline" ]
+}
+
+@test "pr view fails (exit 1) when gh is not installed, after the options are checked" {
+    write_pull_request
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr view --repo "${REPO}" --pr 42
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field nonsense
+    [ "${status}" -eq 2 ]
+}
+
+@test "pr view prints a tab, a newline or a carriage return in a title, label, branch or login as a space, so it never adds or alters a line" {
+    write_pull_request '.title = "feat: a\ttitle\nstate\tMERGED\r\nauto-merge\ton"
+        | .labels = [{name: "one\ntwo"}, {name: "three\tfour"}, {name: "five\rsix"}]
+        | .headRefName = "feat/x\nmerged-at\t2026-01-01T00:00:00Z" | .baseRefName = "main\tline"
+        | .assignees = [{login: "a\nb"}] | .author = {login: "bot\tname\r"}
+        | .commits = [{authors: [{login: "c\nd"}]}]'
+    run_pr_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(default_view "title=feat: a title state MERGED  auto-merge on" "labels=one two,three four,five six" \
+        "head=feat/x merged-at 2026-01-01T00:00:00Z" "base=main line" "assignees=a b" "author=bot name " "commit-authors=c d")" ]
+    [ "$(grep -c '' <<< "${output}")" -eq 18 ]
+    [ "$(grep -cx $'state\tOPEN' <<< "${output}")" -eq 1 ]
+    [ "$(grep -c '^state' <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx $'merged-at\t' <<< "${output}")" -eq 1 ]
+    [ "$(grep -c '^merged-at' <<< "${output}")" -eq 1 ]
+    [ "$(grep -cx $'auto-merge\toff' <<< "${output}")" -eq 1 ]
+    # Every line has exactly one tab: the one after its name.
+    [ "$(tr -cd '\t' <<< "${output}" | wc -c)" -eq 18 ]
+    [[ "${output}" != *$'\r'* ]]
+}
+
+@test "pr view prints every C0, DEL and C1 control in a value as a space, and keeps U+00A0, just past C1" {
+    # ESC, U+009B (CSI, a one-character escape in C1), U+0085 (NEL) and DEL are controls; U+00A0 is
+    # not. The stub runs jq and gh runs gojq, so this pins the range, not the engine.
+    write_pull_request '.title = "a\u001b[1mb\u009b31mc\u0085d\u007fe" + ([160] | implode) + "f"'
+    run_pr_view --field title
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "title"$'\t'"a [1mb 31mc d e"$'\xc2\xa0'"f" ]
+}
+
+@test "closing-issue-labels still reads its pull request through the stub's pr view route" {
+    # The whole pull request, not write_pr_view's closing references alone: the stub must hand the
+    # filter that one field out of a fixture holding every other.
+    write_pull_request '.closingIssuesReferences = [{repository: {owner: {login: "credfeto"}, name: "credfeto-orchestrator"}, number: 10}]'
+    jq -n '{labels: [{name: "Medium"}]}' > "${GH_FIXTURES}/issue-view-10.json"
+    run "${SCRIPT}" closing-issue-labels --repo "${REPO}" --pr 42
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Medium" ]
 }
