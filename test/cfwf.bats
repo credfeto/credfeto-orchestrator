@@ -4087,6 +4087,9 @@ CREATED_AT="2026-10-01T08:00:00Z"
 MERGED_AT="2026-10-02T09:30:00Z"
 MERGE_SHA="3333333333333333333333333333333333333333"
 DEFAULT_JSON_FIELDS="state,isDraft,title,url,baseRefName,headRefName,headRefOid,autoMergeRequest,reviewDecision,mergeStateStatus,mergeable,createdAt,mergedAt,mergeCommit,labels,assignees,author,commits"
+# The fields printed as a key and value line, in the order they are printed.
+VIEW_LINE_FIELDS=(state draft title url base head head-sha auto-merge review-decision merge-state mergeable
+    created-at merged-at merge-commit labels assignees author commit-authors)
 
 # Writes PR 42 as gh pr view --json answers it: open, ready, with no review decision, no labels, no
 # assignees, one commit and one changed file. $1, when given, is a jq filter that changes it. It
@@ -4125,10 +4128,19 @@ default_view() {
     for change in "$@"; do
         values["${change%%=*}"]="${change#*=}"
     done
-    for name in state draft title url base head head-sha auto-merge review-decision merge-state mergeable \
-        created-at merged-at merge-commit labels assignees author commit-authors; do
+    for name in "${VIEW_LINE_FIELDS[@]}"; do
         printf '%s\t%s\n' "${name}" "${values["${name}"]}"
     done
+}
+
+# Succeeds when pr view --field body, with any further arguments, exits 0 and prints exactly the
+# bytes $1. The script is not run through bats' run, which drops the trailing newlines.
+body_prints() {
+    local expected="$1"
+    shift
+    printf '%s' "${expected}" > "${TEST_TMP}/expected-body"
+    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body "$@" > "${TEST_TMP}/printed-body" || return 1
+    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
 }
 
 # Succeeds when gh was called exactly once, as pr view of PR 42 asking for exactly the fields $1.
@@ -4143,8 +4155,7 @@ read_once_asking_for() {
         [ "${status}" -eq 0 ]
         [[ "${output}" == "Usage: cfwf pr view --repo <owner/repo> --pr <n> [--field <name> ...]"* ]]
         [[ "${output}" != *"cfwf pr checks"* ]]
-        for name in state draft title url base head head-sha auto-merge review-decision merge-state mergeable \
-            created-at merged-at merge-commit labels assignees author commit-authors files body; do
+        for name in "${VIEW_LINE_FIELDS[@]}" files body; do
             grep -qE "^  ${name} +[A-Za-z]" <<< "${output}" || { echo "not listed: ${name}" >&2; return 1; }
         done
         [[ "${output}" == *"Exit codes: 0 printed; 9 the pull request does not exist (the number of an issue included); 1 a"* ]]
@@ -4339,34 +4350,24 @@ read_once_asking_for() {
 }
 
 @test "pr view --field body prints the body unchanged, byte for byte, with its tabs, blank lines, carriage returns and trailing newlines" {
-    printf '%s' $'## Summary\n\n\tindented\twith tabs\r\n\n\n- item\x1b[1m\n   \nlast line\n\n\n' > "${TEST_TMP}/expected-body"
     write_pull_request '.body = "## Summary\n\n\tindented\twith tabs\r\n\n\n- item\u001b[1m\n   \nlast line\n\n\n"'
-
-    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
-    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+    body_prints $'## Summary\n\n\tindented\twith tabs\r\n\n\n- item\x1b[1m\n   \nlast line\n\n\n'
     read_once_asking_for "body"
 
     # No newline is added to a body that ends without one, and a repeated --field body is still alone.
     write_pull_request '.body = "no newline at the end"'
-    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body --field body > "${TEST_TMP}/printed-body"
-    printf '%s' "no newline at the end" > "${TEST_TMP}/expected-body"
-    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+    body_prints "no newline at the end" --field body
 
     # A body that ends in the character cfwf marks its end with loses nothing.
     write_pull_request '.body = "ends in a full stop.\n."'
-    "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
-    printf '%s' $'ends in a full stop.\n.' > "${TEST_TMP}/expected-body"
-    cmp "${TEST_TMP}/expected-body" "${TEST_TMP}/printed-body"
+    body_prints $'ends in a full stop.\n.'
 }
 
 @test "pr view --field body prints nothing for an empty body or none" {
     local body
     for body in '""' null; do
         write_pull_request ".body = ${body}"
-        run_pr_view --field body
-        [ "${status}" -eq 0 ]
-        "${SCRIPT}" pr view --repo "${REPO}" --pr 42 --field body > "${TEST_TMP}/printed-body"
-        [ ! -s "${TEST_TMP}/printed-body" ]
+        body_prints ""
     done
 }
 
