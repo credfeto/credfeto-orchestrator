@@ -1611,6 +1611,94 @@ leak_tokens() {
         "Bear""er 0abcdefghijklmnopqrst" "Bear""er abcdefghijklmnopqrs9" "BEAR""ER abcdefghijklmnopqrstuvwxyz-7" \
         "GH_TO""KEN=${tail}" "export DB_PASS""WORD=${tail}" "MY_SEC""RET=${tail}" "(API_K""EY=${tail})" \
         "TO""KEN=${tail}" "K""EY=${tail}" "GH_TO""KEN=\"${tail}\"" "GH_TO""KEN='${tail}'" "AWS_2_SEC""RET=${tail}"
+    leak_credential_forms
+}
+
+# Prints the character $1 repeated $2 times.
+run_of() {
+    local padding
+    printf -v padding '%*s' "$2" ''
+    printf '%s' "${padding// /$1}"
+}
+
+# Prints a URL of the scheme $1 whose user is $2 and whose password is $3, built from pieces so
+# that no secret scanner takes this file to hold a URL with a password.
+url_with_password() {
+    printf '%s:/%s/%s:%s@%s' "$1" "" "$2" "$3" "example.com/path"
+}
+
+# The keys of an exact length, the Authorization headers, the URL passwords and the x-access-token
+# user, built from pieces for the same reason as leak_tokens, which ends with them. A header is
+# refused for having a value and a URL for having a password, so a placeholder is here too.
+leak_credential_forms() {
+    local tail="LEAKMARKER0123456789"
+    printf '%s\n' "np""m_$(run_of a 36)" "AI""za$(run_of b 33)_-" "sk""-$(run_of c 48)" "ASI""A$(run_of Q 16)" \
+        "np""m_$(run_of a 37)" "AI""za$(run_of b 36)" "sk""-$(run_of c 49)" \
+        "Authorization: Bas""ic ${tail}=" "-H 'authorization: bas""ic ${tail}'" "{\"Authorization\": \"Bas""ic ${tail}\"}" \
+        "AUTHORIZATION=BAS""IC x" "Authorization: Bas""ic <base64>" "Authorization: Bas""ic \$CREDENTIALS" \
+        "-H \"Authorization: Bas""ic \${{ secrets.CREDENTIALS }}\"" \
+        "Authorization: Bear""er <token>" "Authorization: Bear""er \$GH_TOKEN" \
+        "-H \"Authorization: Bear""er \${{ secrets.GITHUB_TOKEN }}\"" \
+        "Authorization: Dig""est username=\"user\", response=\"${tail}\"" "Authorization: Negot""iate ${tail}" \
+        "Authorization: tok""en ${tail}" "authorization: AWS4-HMAC-SHA256 Credential=${tail}/aws4_request" \
+        "Authorization: ${tail}" "Authorization:${tail}" "authorization=x" "Authorization: <value>" \
+        "{\"Authorization\": \"\"}" "\`Authorization:\` is the header" \
+        "-d \"{\\\"Authorization\\\": \\\"Bas""ic ${tail}\\\"}\"" "{\\\"Proxy-Authorization\\\":\\\"Dig""est ${tail}\\\"}" \
+        "Proxy-Authorization: Bas""ic ${tail}" "-H 'proxy-authorization: bear""er x'" "PROXY-AUTHORIZATION=${tail}" \
+        "{\"Proxy-Authorization\": \"Dig""est ${tail}\"}" "Proxy-Authorization: <value>" \
+        "$(url_with_password https user "${tail}")" "$(url_with_password postgres app hunter)" \
+        "$(url_with_password https "" "${tail}")" "$(url_with_password https user "${tail}:xxx")" \
+        "$(url_with_password https user password)" "$(url_with_password https user PASSWORD)" \
+        "$(url_with_password https user Password)" "$(url_with_password https user "<password>")" \
+        "$(url_with_password https user "***")" "$(url_with_password https user xxx)" "$(url_with_password https user XXXX)" \
+        "$(url_with_password https user "\$DB_PASSWORD")" "$(url_with_password postgres app "\${DB_PASSWORD}")" \
+        "$(url_with_password https user "<password>")?to=someone@example.com" \
+        "$(url_with_password https x-access-token "${tail}")" "x-access-token"":${tail}@""example.com" \
+        "$(url_with_password https x-access-token "\${{secrets.GITHUB_TOKEN}}")" \
+        "$(url_with_password https x-access-token "<token>")" "x-access-token"":<token>@""example.com" \
+        "x-access-token"":\$GH_TOKEN@""example.com" "x-access-token"":***@""example.com" \
+        "{\"url\":\"$(url_with_password postgres app "${tail}")\",\"email\":\"someone@example.com\"}" \
+        "{\"url\":\"https:/""/user:password@localhost\",\"email\":\"someone@example.com\"}" \
+        "\`https:/""/user:xxx@localhost:8080\`,\`someone@example.com\`" \
+        "https:/""/user:${tail}@localhost?at=12:30" "https:/""/user:${tail}@localhost#line:5" \
+        "http://localhost:8080,someone@example.com" "'http://localhost:8080','someone@example.com'" \
+        "ssh:/""/git@localhost:22,someone@example.com" "https:/""/user:@localhost,someone@example.com" \
+        "docker:/""/alpine:3.20@sha256:0123abcd" \
+        "$(url_with_password https user "password@${tail}")" "x-access-token"":xxx@${tail}@""example.com" \
+        "$(url_with_password https user "@${tail}")" "$(url_with_password https user "@@${tail}")" \
+        "$(url_with_password https "" "@${tail}")" "$(url_with_password https x-access-token "@${tail}")" \
+        "x-access-token"":@${tail}@""example.com" \
+        "$(url_with_password smtp "someone@example.com" "${tail}")" "$(url_with_password imap "a@b@example.com" hunter)" \
+        "$(url_with_password smtp "someone@example.com" "<password>")" "$(url_with_password smtp "someone@example.com" "@hunter")"
+}
+
+# Text that looks like one of the credential forms and is not: a key one character short, a key
+# prefix inside a longer word, an Authorization header name with no value, or a URL with no
+# password (a user name alone, an empty password or a port).
+harmless_credential_shapes() {
+    printf '%s\n' "np""m_$(run_of a 35) is one short" "npm_config_registry and npm_package_version" \
+        "AI""za$(run_of b 34) is one short" "sk""-$(run_of c 47) is one short" "de""sk-$(run_of c 48)" \
+        "ASI""A$(run_of Q 15) is one short" \
+        "Authorization:" "Authorization: " "\"Authorization\":" "Proxy-Authorization:" "authorization =" \
+        "The Authorization header carries the credential." "Set the Proxy-Authorization header with a Basic value." \
+        "Authorization header: Bearer" "Basic authentication sends an Authorization header." "The basic steps are below." \
+        "Digest and Negotiate are Authorization schemes too." \
+        "The user name is x-access-token: the token follows it." "x-access-token:@example.com" \
+        "$(url_with_password https x-access-token "\${{ secrets.GITHUB_TOKEN }}")" \
+        "{\"url\":\"http://localhost:8080\",\"email\":\"someone@example.com\"}" \
+        "\`http://localhost:8080\`,\`someone@example.com\`" "http://localhost:8080/path" \
+        "https://example.com:8080/path?user=someone@example.com" "ssh://git@example.com:22/path" "http://[::1]:8080/path" \
+        "https://example.com:8080?user=someone@example.com and https://example.com:8080#someone@example.com" \
+        "https://example.com?at=12:30&to=someone@example.com" "https://example.com#line:5@someone" \
+        "https://user@example.com?at=12:30&to=someone@example.com" \
+        "Mail someone@example.com about https://example.com:8443 and ask @someone at 12:30." \
+        "https:/""/user:@example.com/path" "https:/""/user:@example.com/path?to=someone@example.com" \
+        "https:/""/user:@localhost, then mail someone@example.com" \
+        "$(url_with_password smtp "someone@example.com" "")" "smtp://someone@example.com@smtp.example.com/path" \
+        "ssh://git@example.com" "https://user@example.com" "ssh://git@example.com:22" "git@example.com:owner/repo.git" \
+        "ssh://git@example.com:owner/repo.git" "docker://alpine@sha256:0123abcd" \
+        "docker://library/alpine:3.20@sha256:0123abcd" "image: alpine:3.20@sha256:0123abcd" \
+        "https://user@example.com:8080/path?to=someone@example.com" "ssh://git@localhost:22, then mail someone@example.com"
 }
 
 @test "issue create refuses a body with any token form with exit 8, naming the rule and line only, before calling gh" {
@@ -1622,6 +1710,18 @@ leak_tokens() {
         assert_refused "${status}" "${output}" "${stderr}" token "${token}"
         [ ! -f "${GH_LOG}" ]
     done < <(leak_tokens)
+}
+
+@test "body check passes a key one character short, a key prefix inside a word, an Authorization header name with no value and a URL with no password" {
+    local body
+    while IFS= read -r body; do
+        printf '%s\n' "${body}" > "${TEST_TMP}/leak.md"
+        run_body_check
+        [ "${status}" -eq 0 ] || { echo "refused: ${body}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ -z "${stderr}" ]
+        [ ! -f "${GH_LOG}" ]
+    done < <(harmless_credential_shapes)
 }
 
 @test "body check refuses a token at the very start of the body, and one after punctuation" {
@@ -1754,7 +1854,7 @@ leak_tokens() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "body check passes a token prefix, a Bearer placeholder or a webhook placeholder with no secret after it" {
+@test "body check passes a token prefix, Bearer with no token after it or a webhook placeholder with no secret after it" {
     local body
     while IFS= read -r body; do
         printf '%s\n' "${body}" > "${TEST_TMP}/leak.md"
@@ -1765,9 +1865,6 @@ leak_tokens() {
 An Anthropic key starts sk-ant- and a project key sk-proj- on their own.
 desk-proj-x and task-ant-y are words.
 A Slack prefix such as xoxz-abc is not one of the token forms.
-Authorization: Bearer <token>
-Authorization: Bearer $GH_TOKEN
--H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"
 A Bearer token is sent in the Authorization header.
 Bearer <token>
 Bearer authentication is used.
@@ -2139,7 +2236,7 @@ BODIES
 @test "issue create refuses a title or a label with a token or a host path, naming only the rule, before calling gh" {
     prepare_issue_create
     local leak
-    for leak in "fix gh""p_LEAKMARKER0123456789 now" "see /home/someone/work" "set MY_SEC""RET=LEAKMARKER"; do
+    for leak in "fix gh""p_LEAKMARKER0123456789 now" "see /home/someone/work" "set MY_SEC""RET=LEAKMARKER" "clone $(url_with_password https user LEAKMARKER)"; do
         run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${leak}" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 8 ]
         [[ "${stderr}" == "cfwf: title refused: "@(token|host path) ]]

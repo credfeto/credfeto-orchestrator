@@ -32,15 +32,47 @@ bearer_value_pattern() {
     done
     printf '(%s|%s{19,}[0-9])' "${alternatives}" "${other}"
 }
-# An Authorization header whose Bearer value starts with a token character (so a placeholder such
-# as <token>, $TOKEN or ${{ ... }} passes), in a header, a curl -H or JSON; or Bearer anywhere and a
-# value of 20 or more token characters with a digit among them, which ordinary prose ("a Bearer
-# token", "Bearer authentication-mechanism-description") never has.
-BEARER_PATTERN="([Aa]uthorization|AUTHORIZATION)[\"']?[[:space:]]*[:=][[:space:]]*[\"']?([Bb]earer|BEARER)[[:space:]]+[A-Za-z0-9._~+/-]|(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+$(bearer_value_pattern)"
+# An Authorization header with a value, as written in a header, a curl -H or JSON: the name, a
+# colon or an equals sign and one character that is not whitespace. The scheme is not looked at
+# (Basic, Bearer, Digest, Negotiate, a signature), and nor is whether the value is a placeholder,
+# so nothing has to tell a secret from an example of one. Nothing has to come before the name, so
+# Proxy-Authorization is one too. The name with no value after it, as in prose, passes. The quote
+# that closes the name may be escaped with a backslash, as it is in JSON held inside a string.
+readonly AUTHORIZATION_HEADER_PATTERN="([Aa]uthorization|AUTHORIZATION)(\\\\?[\"'])?[[:space:]]*[:=][[:space:]]*[^[:space:]]"
+# Bearer anywhere and a value of 20 or more token characters with a digit among them, which
+# ordinary prose ("a Bearer token", "Bearer authentication-mechanism-description") never has.
+BEARER_PATTERN="(^|[^A-Za-z0-9])([Bb]earer|BEARER)[[:space:]]+$(bearer_value_pattern)"
 readonly BEARER_PATTERN
+# Keys that are a prefix and a set number of characters: an npm token, a Google API key and a
+# legacy OpenAI key. The prefix with fewer after it (npm_config_registry) passes; a longer run is
+# refused too, since the first of it is a key. TOKEN_PATTERN adds the word start before the prefix,
+# so a word ending in sk- passes.
+readonly FIXED_LENGTH_KEY_PATTERN='npm_[A-Za-z0-9]{36}|AIza[A-Za-z0-9_-]{35}|sk-[A-Za-z0-9]{48}'
+# A password is whatever lies between the colon and the @ of a URL's user:password@host, or after
+# the user name x-access-token that a Git remote URL carries a GitHub token under. It cannot hold
+# whitespace, a slash, a question mark or a hash: a URL has to percent-encode those in a password,
+# and they end the host part of a URL with a port and no password, whose path or query may hold @.
+# Nor can it hold a double quote or a backtick, which no URL holds unencoded and which close a URL
+# with a port written in JSON or as Markdown code, where an email address may follow with no space.
+readonly PASSWORD_PATTERN='[^[:space:]/?#@"`]+'
+# What comes before the colon that starts a password: a URL's :// and its user name, which may be
+# empty and holds no colon, or the user name x-access-token wherever it is written. A user name
+# may hold an unencoded @ (an email address as the login of a mail server URL), the first colon
+# being what ends it, so only whitespace, a slash, a question mark and a hash, which end the host
+# of a URL with no user name, are left out with the colon: a colon and an @ further on are then in
+# the path, the query or the fragment.
+readonly URL_USER_PATTERN='://[^[:space:]/:?#]*'
+# The password of a credential, from its colon to an @. A password may hold an unencoded @, the
+# last one before the host ends being the one that ends it, so it may start with any number of
+# them: a colon and an @ with a second @ further on (user:@secret@host) is a password, while an
+# empty password (user:@host) has no second one. What the password is does not matter: a
+# placeholder is refused like any other, so nothing has to tell a real one from an example.
+readonly CREDENTIAL_PASSWORD_PATTERN=":@*${PASSWORD_PATTERN}@"
+readonly URL_CREDENTIAL_PATTERN="${URL_USER_PATTERN}${CREDENTIAL_PASSWORD_PATTERN}"
+readonly ACCESS_TOKEN_USER_PATTERN="x-access-token${CREDENTIAL_PASSWORD_PATTERN}"
 # A Discord webhook URL with its id and the start of its token: the URL is the credential.
 readonly DISCORD_WEBHOOK_PATTERN='[Dd]iscord(app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]'
-readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])(gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]|AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${BEARER_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
+readonly TOKEN_PATTERN="(^|[^A-Za-z0-9])((gh[porsu]_|xox[abprs]-|glpat-|sk-ant-|sk-proj-)[A-Za-z0-9_-]|${FIXED_LENGTH_KEY_PATTERN}|${ACCESS_TOKEN_USER_PATTERN})|github_pat_[A-Za-z0-9_]|A[KS]IA[0-9A-Z]{16}|-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----|${DISCORD_WEBHOOK_PATTERN}|${URL_CREDENTIAL_PATTERN}|${AUTHORIZATION_HEADER_PATTERN}|${BEARER_PATTERN}|${SECRET_ASSIGNMENT_PATTERN}"
 # A host path is one of three shapes. First, /home/ and the like at the start of a path: the start
 # of a line or after any byte that cannot continue a word or a relative path (a letter, digit, dot,
 # tilde or dash), so ./tmp/ and ~/tmp/ pass while a slash, a colon, a comma, markdown emphasis and
@@ -316,12 +348,20 @@ body runs first, so a body can be tested before it is used.
 
 A body is refused when it contains, in this order (the first rule that matches wins):
   token               ghp_, gho_, ghs_, ghu_, ghr_, github_pat_, glpat-, sk-ant-, sk-proj-,
-                      xoxa-, xoxb-, xoxp-, xoxr- or xoxs- followed by a token character, an
-                      AWS access key id, a PRIVATE KEY block line, a Discord webhook URL
-                      (discord.com or discordapp.com /api/webhooks/<digits>/ and a token
-                      character), an Authorization header whose Bearer value starts with a
-                      token character, Bearer and 20 or more token characters with a
-                      digit among them (so hyphenated prose after Bearer passes), or
+                      xoxa-, xoxb-, xoxp-, xoxr- or xoxs- followed by a token character,
+                      npm_ and 36 letters or digits, AIza and 35 letters, digits, _ or -,
+                      sk- and 48 letters or digits, an AWS access key id (AKIA or ASIA and
+                      16 upper-case letters or digits), a PRIVATE KEY block line, a Discord
+                      webhook URL (discord.com or discordapp.com /api/webhooks/<digits>/
+                      and a token character), a URL with a password
+                      (<scheme>://<user>:<password>@) or x-access-token:<token>@, where
+                      the password holds no whitespace, /, ?, #, double quote or backtick
+                      and may be anything else, a placeholder included (describe such a
+                      URL in words instead), an Authorization or Proxy-Authorization
+                      header with any value after its : or =, whatever the scheme and
+                      placeholder or not (the header name alone passes), Bearer and 20 or
+                      more token characters with a digit among them (so hyphenated prose
+                      after Bearer passes), or
                       NAME=value where NAME is upper case and is TOKEN, SECRET, KEY or
                       PASSWORD or ends in _TOKEN, _SECRET, _KEY or _PASSWORD, and the value
                       (after an optional quote) does not start with \$, so a reference such
