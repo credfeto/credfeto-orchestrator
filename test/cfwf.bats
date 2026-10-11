@@ -1054,6 +1054,8 @@ reply_posts() {
         done
         [[ "${output}" == *"summary comments=<a> reviews=<b> reviews-empty=<c> threads=<d> unresolved=<e> inline=<f>"* ]]
         [[ "${output}" == *"cfwf makes no trust decision"* ]]
+        [[ "${output}" == *"each list read to its end."* ]]
+        [[ "${output}" == *"when one thread has more than 100 comments, or when one list"*"has more than 100 pages of 100 items."* ]]
         [[ "${output}" == *"line that is not empty and has neither a tab nor a leading \"|\""* ]]
         [[ "${output}" == *"Exit codes: 0 printed; 9 the pull request does not exist (the number of an issue included); 1 a"* ]]
         [[ "${output}" == *"2 a usage error."* ]]
@@ -1062,11 +1064,13 @@ reply_posts() {
         [ "${status}" -eq 0 ]
         [[ "${output}" == *"Usage: cfwf pr reply --repo <owner/repo> --pr <n> --comment-id <id> --body-file <file|->"* ]]
         [[ "${output}" == *"There is no --body."* ]]
-        [[ "${output}" == *"A refused"*"body exits 8"* ]]
+        [[ "${output}" == *"The body is checked for leaks before the comment is read or anything is posted (see 'cfwf help"* ]]
+        [[ "${output}" == *"A refused body exits 8"* ]]
         [[ "${output}" == *"It posts once and never tries again. When GitHub refuses the post with HTTP 400, 401, 403, 404,"* ]]
         [[ "${output}" == *"any other HTTP 4xx"*"it says the reply may have been posted"* ]]
         [[ "${output}" == *"do not run it again blindly"* ]]
-        [[ "${output}" == *"an inline reply can never be"*"taken for one"* ]]
+        [[ "${output}" == *"the same in-reply-to and your own author value (your login, or app/<slug> when you post as an"* ]]
+        [[ "${output}" == *"so an inline"*"reply can never be taken for one."* ]]
         [[ "${output}" == *"Exit codes: 0 posted; 8 the body was refused; 9 --comment-id is not an inline review comment"* ]]
     done
 
@@ -1075,7 +1079,17 @@ reply_posts() {
     [[ "${output}" == *"pr reply "*"(exit 8 when the body is refused)"* ]]
 
     run "${SCRIPT}" help pr
+    [[ "${output}" == "Usage: cfwf pr checks "* ]]
     [[ "${output}" == *"Run 'cfwf pr comments --help' and 'cfwf pr reply --help' for reading and answering a pull"* ]]
+
+    run "${SCRIPT}" help pr comments
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf pr comments --repo <owner/repo> --pr <n>"* ]]
+    run "${SCRIPT}" help pr reply
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf pr reply --repo <owner/repo> --pr <n> --comment-id <id> --body-file <file|->"* ]]
+    run "${SCRIPT}" help pr checks
+    [[ "${output}" == "Usage: cfwf pr checks "* ]]
 
     run "${SCRIPT}" help workflow-status
     [[ "${output}" == *"--check and 'cfwf pr comments' are the only"*"places cfwf uses GraphQL, and both only read"* ]]
@@ -1219,8 +1233,8 @@ reply_posts() {
     [[ "${output}" == *$'\n'"thread${TAB}4220417677"$'\n'* ]]
     [[ "${output}" == *$'\n'"inline${TAB}4220734699"$'\n'"in-reply-to${TAB}4220417677"$'\n'"review${TAB}5458415385"$'\n'* ]]
     [ "$(grep -cE "^(comment|review|thread|inline|in-reply-to)${TAB}1\$" <<< "${output}")" -eq 0 ]
-    [ "$(grep -c "fullDatabaseId" "${GH_LOG}")" -eq 1 ]
-    [ "$(grep -c "databaseId" "${GH_LOG}")" -eq 0 ]
+    [ "$(gh_call_count fullDatabaseId)" -eq 1 ]
+    [ "$(gh_call_count databaseId)" -eq 0 ]
 
     # An id that is not a number is never printed.
     write_page "" null "$(discussion_list 1 false "" "$(issue_comment_node "12 34" credfeto User a)")" "$(empty_list)" "$(empty_list)"
@@ -1361,8 +1375,8 @@ reply_posts() {
             local -A position=([comments]=0 [reviews]=1 [threads]=2)
             later[${position[${list}]}]="-F ${list}=true -f ${list}After=p2"
             [ "$(sed -n 2p "${GH_LOG}" | grep -cF -- " -F n=42 ${later[*]} --jq ")" -eq 1 ]
-            [ "$(grep -c "After=" "${GH_LOG}")" -eq "$((pages - 1))" ]
-            [ "$(grep -c "After=p3" "${GH_LOG}")" -eq "$((pages - 2))" ]
+            [ "$(gh_call_count "After=")" -eq "$((pages - 1))" ]
+            [ "$(gh_call_count "After=p3")" -eq "$((pages - 2))" ]
         done
     done
 }
@@ -1388,7 +1402,7 @@ reply_posts() {
     [ "$(wc -l < "${GH_LOG}")" -eq 3 ]
     [ "$(sed -n 2p "${GH_LOG}" | grep -cF -- "-F comments=true -f commentsAfter=c2 -F reviews=true -f reviewsAfter=r2 -F threads=true -f threadsAfter=t2 --jq")" -eq 1 ]
     [ "$(sed -n 3p "${GH_LOG}" | grep -cF -- "-F comments=false -F reviews=true -f reviewsAfter=r3 -F threads=false --jq")" -eq 1 ]
-    [ "$(grep -c mutation "${GH_LOG}")" -eq 0 ]
+    [ "$(gh_call_count mutation)" -eq 0 ]
 }
 
 @test "pr comments prints nothing when a list is shorter than GitHub's count of it, or a page lost a block" {
@@ -1522,7 +1536,7 @@ reply_posts() {
     write_page "-comments-Y3Vy+c29y_Onb-yOpHP=" null "$(discussion_list 1 false "" "$(issue_comment_node 1 credfeto User one)")" "" ""
     run_pr_comments --pr 42
     [ "${status}" -eq 0 ]
-    [ "$(grep -cF -- "-f commentsAfter=Y3Vy+c29y_Onb-yOpHP= " "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "-f commentsAfter=Y3Vy+c29y_Onb-yOpHP= ")" -eq 1 ]
 
     rm -f "${GH_FIXTURES}"/discussion* "${GH_LOG}"
     local page

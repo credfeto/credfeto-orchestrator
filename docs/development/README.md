@@ -156,8 +156,8 @@ These have all been seen in practice. Where a script has to cope with one, its g
   finding one means listing the whole board. Listing pages at 100 items per request and stops
   at the `-L` limit (30 by default), so a board larger than the limit silently loses items.
   `cfwf workflow-status --check` reads the single item with a read-only GraphQL query instead
-  (the one documented use of `gh api graphql` there) and falls back to a listing with a raised
-  limit.
+  (one of the two documented uses of `gh api graphql` there; the other is the `cfwf pr comments`
+  read) and falls back to a listing with a raised limit.
 - **Writes can be idempotent.** `gh project item-add` for an item already on the board returns
   the existing item, so "add then set" is safe to repeat.
 - **Default Workflows target an option by id.** The board's workflow lives in the project's
