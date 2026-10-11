@@ -102,14 +102,10 @@ readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf]
 # read as a human approving a plan. A letter, digit or underscore on either side makes a longer
 # word (plan_approved), which passes; underscores with nothing but a boundary beyond them are
 # Markdown emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is refused.
+# SIGNS_OFF_DEF matches it too, one line at a time, so it is written with nothing but what grep -E,
+# jq's regular expressions and gh's (gojq, Go's) read alike, and holds no quote or backslash, so it
+# goes in a jq string as it is.
 readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
-# A plan sign-off keyword as a whole word, matched without regard to case on one line at a time
-# (SIGNS_OFF_DEF). A letter, digit or underscore on either side makes a longer word
-# (plan_approved), which is not one; underscores with only a boundary beyond them are Markdown
-# emphasis (_approved_, __lgtm__), which renders as the keyword alone, so it is one. It is written
-# with nothing but what jq's regular expressions and gh's (gojq, Go's) read alike, and holds no
-# quote or backslash, so it goes in a jq string as it is.
-readonly SIGN_OFF_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
@@ -1491,7 +1487,7 @@ unexpected_issue_result() {
 # three spaces, because Markdown reads a deeper indent, or a tab, as code. The body is split into
 # lines first, so ^ and $ in either pattern mean the same to jq, where they match at every line,
 # and to gh's gojq, where they match only at the ends of the text.
-readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | not) and test("'"${SIGN_OFF_KEYWORD_PATTERN}"'"; "i"));'
+readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | not) and test("'"${APPROVAL_KEYWORD_PATTERN}"'"; "i"));'
 # What ends the output of a filter whose last field must keep its trailing newlines: a command
 # substitution drops every newline at the end of what it captures, and none before this.
 readonly OUTPUT_END=$'\x1f'
