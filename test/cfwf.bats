@@ -3700,6 +3700,41 @@ assert_sign_off() {
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
+    local pair spelling expected
+    for pair in "issue create" "issue view" "issue plan-status" "body check" "pr checks" "comment add"; do
+        # shellcheck disable=SC2086  # each pair is split into its two words on purpose
+        run "${SCRIPT}" ${pair} -h
+        [ "${status}" -eq 0 ]
+        expected="${output}"
+        [[ "${expected}" == "Usage: cfwf ${pair} "* ]]
+        for spelling in help -h --help; do
+            # shellcheck disable=SC2086  # each pair is split into its two words on purpose
+            run "${SCRIPT}" "${spelling}" ${pair}
+            [ "${status}" -eq 0 ]
+            [ "${output}" = "${expected}" ] || { echo "${spelling} ${pair} differs from ${pair} -h" >&2; return 1; }
+        done
+    done
+
+    # A subcommand the command does not have, or a word after a command that has none, is not an
+    # error for help: it prints the usage of the command, and the general usage for no command.
+    run "${SCRIPT}" help issue
+    expected="${output}"
+    [[ "${expected}" == *"Usage: cfwf issue view ${ISSUE_READ_USAGE}"* ]]
+    run "${SCRIPT}" help issue frobnicate
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+    run "${SCRIPT}" help closing-issue-labels frobnicate
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf closing-issue-labels "* ]]
+    run "${SCRIPT}" help
+    expected="${output}"
+    run "${SCRIPT}" help frobnicate view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
 @test "issue view and issue plan-status usage errors exit 2 with their own usage, before any gh call" {
     local -a cases=(
         "--repo ${REPO}"
@@ -4001,6 +4036,22 @@ assert_sign_off() {
     while IFS= read -r keyword; do
         assert_sign_off no "plan_${keyword}" "${keyword}_by" "un${keyword}" "${keyword}s" "${keyword}2" "x_${keyword}_y" "_${keyword}_x" \
             "A comment with no keyword." ""
+    done < <(sign_off_keywords)
+}
+
+@test "comment add refuses, and issue plan-status says no for, a keyword right against a non-ASCII character that folds to an ASCII letter" {
+    # U+212A (the Kelvin sign) and U+017F (the long s) are two such: jq, ignoring case, counts each as
+    # a letter, so the keyword is part of a longer word, while grep in the C locale sees only bytes
+    # that are no letter. comment add is the stricter, so nothing it posts is answered yes.
+    local keyword line kelvin=$'\xe2\x84\xaa' long_s=$'\xc5\xbf'
+    prepare_comment
+    while IFS= read -r keyword; do
+        assert_sign_off no "${kelvin}${keyword}" "${keyword}${long_s}"
+        for line in "${kelvin}${keyword}" "${keyword}${long_s}"; do
+            write_leak_body "${line}"
+            run_comment_add --issue 7 --body-file "${TEST_TMP}/leak.md"
+            assert_refused "${status}" "${output}" "${stderr}" "approval keyword" "${line}"
+        done
     done < <(sign_off_keywords)
 }
 
