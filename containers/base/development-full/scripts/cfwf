@@ -575,6 +575,8 @@ been posted); 2 a usage error.
 USAGE
 }
 
+# Prints the usage of $1: a command, or a command and its subcommand as one word pair. A pair it
+# does not know prints the usage of its command, so help for a mistyped subcommand still helps.
 usage_for() {
     case "$1" in
         workflow-status) usage_workflow_status ;;
@@ -586,6 +588,7 @@ usage_for() {
         body | "body check") usage_body ;;
         pr | "pr checks") usage_pr ;;
         comment | "comment add") usage_comment ;;
+        *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
     esac
 }
@@ -1989,7 +1992,7 @@ main() {
     local command="$1"
     shift
     case "${command}" in
-        help | -h | --help) usage_for "${1:-}" ;;
+        help | -h | --help) usage_for "${1:-}${2:+ $2}" ;;
         workflow-status) cmd_workflow_status "$@" ;;
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         issue) cmd_issue "$@" ;;
