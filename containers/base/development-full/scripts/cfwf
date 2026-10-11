@@ -422,6 +422,8 @@ Exit codes: 0 every judged check passed; ${CHECKS_FAILED_EXIT} at least one fail
 pending; ${NO_CHECKS_EXIT} the head has no check runs or statuses at all (expected for a PR whose checks wait
 until it is marked ready, so not a pass); 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
+
+Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
 USAGE
 }
 
@@ -486,10 +488,7 @@ usage_for() {
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
         body) usage_body ;;
-        pr)
-            usage_pr
-            printf "\nRun 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.\n"
-            ;;
+        pr) usage_pr ;;
         "pr view") usage_pr_view ;;
         *) usage_general ;;
     esac
