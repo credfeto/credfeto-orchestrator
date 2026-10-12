@@ -5994,7 +5994,7 @@ read_once_asking_for() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "pr without a subcommand names both, and pr checks still runs as before" {
+@test "pr without a subcommand names every subcommand, and pr checks still runs as before" {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
