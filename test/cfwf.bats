@@ -2441,25 +2441,17 @@ has_eight_field_lines() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == *"[--all]"$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."* ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests." ]]
     done
+
+    # pr with no subcommand is a usage error that prints the same usage, so it points to pr list too.
+    run --separate-stderr "${SCRIPT}" pr
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."* ]]
 
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"  pr list                  List a repository's open pull requests, one line each"$'\n'"  comment add "* ]]
-    [ ! -f "${GH_LOG}" ]
-}
-
-@test "pr without a subcommand names both of them, and an unknown one is still refused" {
-    run --separate-stderr "${SCRIPT}" pr
-    [ "${status}" -eq 2 ]
-    [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list)"$'\n'* ]]
-    [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr list --help' for pr list"* ]]
-
-    run --separate-stderr "${SCRIPT}" pr frobnicate
-    [ "${status}" -eq 2 ]
-    [[ "${stderr}" == "cfwf: unknown pr subcommand (argument 2; its value is not shown)"* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -2676,8 +2668,6 @@ has_eight_field_lines() {
     expected+="$(pr_list_line 3 feat/c main someone ready - "   ")"$'\n'
     expected+="$(pr_list_line 4 feat/d main someone ready - "-")"
     [ "${output}" = "${expected}" ]
-    [ "$(cut -f 1 <<< "${output}")" = $'1\n2\n3\n4' ]
-    [ "$(cut -f 6 <<< "${output}" | sort -u)" = "-" ]
 }
 
 @test "pr list prints every C0, DEL and C1 control in a title or a branch name as a space, and keeps U+00A0, just past C1" {

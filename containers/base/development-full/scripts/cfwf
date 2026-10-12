@@ -542,7 +542,6 @@ USAGE
 usage_pr() {
     cat << USAGE
 Usage: cfwf pr checks --repo <owner/repo> (--pr <n> | --sha <40-hex> | --branch <name>) [--all]
-Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 
 Judges the checks on one head commit in a single read, and never waits or polls: poll by running
 it again later.
@@ -591,6 +590,7 @@ until it is marked ready, so not a pass); 1 a runtime failure, such as a gh or n
 prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
 
 Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
+Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 USAGE
 }
 
@@ -2034,92 +2034,6 @@ report_checks() {
     exit 0
 }
 
-# The most pull requests pr list prints. One more is asked for, so a repository with more open ones
-# is seen to have more and is refused, never listed in part.
-readonly PR_LIST_LIMIT=1000
-LIST_HEAD=""
-
-assign_list_option() {
-    local flag="$1" value="$2"
-    case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
-        --issue)
-            assign_once ISSUE "${flag}"
-            assign_option "${flag}" "${value}"
-            [[ "${ISSUE}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
-            ;;
-        --head)
-            assign_once LIST_HEAD "${flag}"
-            if ! valid_branch_name "${value}" || holds_control_character "${value}"; then
-                usage_error "invalid value for ${flag}: it must be a branch name git allows, with no control character"
-            fi
-            LIST_HEAD="${value}"
-            ;;
-    esac
-}
-
-# Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
-# (git refuses both, so valid_branch_name is asked first), matched byte by byte in the C locale as the
-# leak rules are. git allows a C1 control in a branch name, and pr list prints one as a space,
-# so a --head holding one could never equal the head it is compared with.
-holds_control_character() {
-    local LC_ALL=C
-    [[ "$1" =~ ${CONTROL_PATTERN} ]]
-}
-
-# Prints the jq program of pr list: the number of pull requests on its first line, then a row for
-# each, sorted by number. Every string goes through field, so no value can add a line or a field
-# and none is empty, which keeps a row at eight fields however it is split. ISSUE, digits only, is
-# the one value of the caller's that is ever put in a jq program.
-pr_list_program() {
-    local holds_issue=false
-    [ -z "${ISSUE}" ] || holds_issue="(.headRefName // \"\" | test(\"(^|[^0-9])0*${ISSUE}([^0-9]|\$)\"))"
-    printf '%s' "${PRINTABLE_DEF}" \
-        ' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;' \
-        ' sort_by(.number) | (length | tostring), (.[] | [(.number | field), (.headRefName | field), (.baseRefName | field), (.author.login | field),' \
-        ' (if .isDraft then "draft" else "ready" end),' \
-        " ([(if ${holds_issue} then \"issue\" else empty end)," \
-        ' (if .author.login == "app/github-actions" then "github-actions" else empty end),' \
-        ' (if .isCrossRepository then "fork" else empty end)] | join(",") | field),' \
-        ' (.url | field), (.title | field)] | join("\t"))'
-}
-
-# Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
-# read. Nothing is printed until the whole answer has been checked: the count gh gave must be the
-# number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each number
-# must be one; and with LIST_HEAD each head must be exactly it, whatever gh matched.
-pr_list() {
-    parse_command_options assign_list_option "--repo --issue --head" "" "$@"
-    require REPO --repo
-    require_gh
-
-    local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))") rows=()
-    local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
-    local count row number head
-    [ -z "${LIST_HEAD}" ] || listing+=(--head "${LIST_HEAD}")
-    listing+=(--json "number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url" --jq "$(pr_list_program)")
-    gh_capture "${listing[@]}" || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
-
-    mapfile -t rows <<< "${GH_OUTPUT}"
-    count="${rows[0]}"
-    rows=("${rows[@]:1}")
-    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "${unexpected}"
-    [ "${count}" -le "${PR_LIST_LIMIT}" ] \
-        || die "${REPO} has more than ${PR_LIST_LIMIT} open pull requests, so none is printed"
-    [ "${count}" -eq "${#rows[@]}" ] || die "${unexpected}"
-    for row in "${rows[@]}"; do
-        number="${row%%$'\t'*}"
-        head="${row#*$'\t'}"
-        head="${head%%$'\t'*}"
-        [[ "${number}" =~ ^[0-9]+$ ]] || die "${unexpected}"
-        [ -z "${LIST_HEAD}" ] || [ "${head}" = "${LIST_HEAD}" ] || die "${unexpected}"
-    done
-    [ "${count}" -eq 0 ] || printf '%s\n' "${rows[@]}"
-}
-
 pr_checks() {
     parse_pr_checks_options "$@"
     require REPO --repo
@@ -2273,6 +2187,92 @@ pr_view() {
         body) print_view_body ;;
         *) print_view_lines ;;
     esac
+}
+
+# The most pull requests pr list prints. One more is asked for, so a repository with more open ones
+# is seen to have more and is refused, never listed in part.
+readonly PR_LIST_LIMIT=1000
+LIST_HEAD=""
+
+assign_list_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            [[ "${ISSUE}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
+            ;;
+        --head)
+            assign_once LIST_HEAD "${flag}"
+            if ! valid_branch_name "${value}" || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must be a branch name git allows, with no control character"
+            fi
+            LIST_HEAD="${value}"
+            ;;
+    esac
+}
+
+# Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
+# (git refuses both, so valid_branch_name is asked first), matched byte by byte in the C locale as the
+# leak rules are. git allows a C1 control in a branch name, and pr list prints one as a space,
+# so a --head holding one could never equal the head it is compared with.
+holds_control_character() {
+    local LC_ALL=C
+    [[ "$1" =~ ${CONTROL_PATTERN} ]]
+}
+
+# Prints the jq program of pr list: the number of pull requests on its first line, then a row for
+# each, sorted by number. Every string goes through field, so no value can add a line or a field
+# and none is empty, which keeps a row at eight fields however it is split. ISSUE, digits only, is
+# the one value of the caller's that is ever put in a jq program.
+pr_list_program() {
+    local holds_issue=false
+    [ -z "${ISSUE}" ] || holds_issue="(.headRefName // \"\" | test(\"(^|[^0-9])0*${ISSUE}([^0-9]|\$)\"))"
+    printf '%s' "${PRINTABLE_DEF}" \
+        ' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;' \
+        ' sort_by(.number) | (length | tostring), (.[] | [(.number | field), (.headRefName | field), (.baseRefName | field), (.author.login | field),' \
+        ' (if .isDraft then "draft" else "ready" end),' \
+        " ([(if ${holds_issue} then \"issue\" else empty end)," \
+        ' (if .author.login == "app/github-actions" then "github-actions" else empty end),' \
+        ' (if .isCrossRepository then "fork" else empty end)] | join(",") | field),' \
+        ' (.url | field), (.title | field)] | join("\t"))'
+}
+
+# Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
+# read. Nothing is printed until the whole answer has been checked: the count gh gave must be the
+# number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each number
+# must be one; and with LIST_HEAD each head must be exactly it, whatever gh matched.
+pr_list() {
+    parse_command_options assign_list_option "--repo --issue --head" "" "$@"
+    require REPO --repo
+    require_gh
+
+    local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))") rows=()
+    local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
+    local count row number head
+    [ -z "${LIST_HEAD}" ] || listing+=(--head "${LIST_HEAD}")
+    listing+=(--json "number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url" --jq "$(pr_list_program)")
+    gh_capture "${listing[@]}" || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
+
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    count="${rows[0]}"
+    rows=("${rows[@]:1}")
+    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "${unexpected}"
+    [ "${count}" -le "${PR_LIST_LIMIT}" ] \
+        || die "${REPO} has more than ${PR_LIST_LIMIT} open pull requests, so none is printed"
+    [ "${count}" -eq "${#rows[@]}" ] || die "${unexpected}"
+    for row in "${rows[@]}"; do
+        number="${row%%$'\t'*}"
+        head="${row#*$'\t'}"
+        head="${head%%$'\t'*}"
+        [[ "${number}" =~ ^[0-9]+$ ]] || die "${unexpected}"
+        [ -z "${LIST_HEAD}" ] || [ "${head}" = "${LIST_HEAD}" ] || die "${unexpected}"
+    done
+    [ "${count}" -eq 0 ] || printf '%s\n' "${rows[@]}"
 }
 
 cmd_pr() {
