@@ -12,7 +12,7 @@ This applies to issue titles only. Pull request titles keep the Conventional Com
 
 ## Choosing the scope
 
-- **Top-level scripts** use their bare name: `oneshot`, `interactive`, `loop`, `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure`. `lib/*` and its prompt text count as `oneshot`.
+- **Top-level scripts** use their bare name: `oneshot`, `loop`, `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure`. `lib/*` and its prompt text count as `oneshot`.
 - **Scripts under `containers/base/development-full/scripts/`** use `tool(<name>)`, for example `tool(cfwf)`, `tool(pre-commit-check)` or `tool(querydb)`.
 - **Hooks** use `hook(<name>)` for one hook, and `hooks` for several hooks or the hook framework.
 - **Containers** use `container(<image>)` for one image, and `containers` for several.
