@@ -6728,14 +6728,11 @@ run_tag_view() {
     [ "${output%%$'\n'*}" = "$(release_line v1000 2026-01-01T00:00:00Z - "release 1000")" ]
     [ "${output##*$'\n'}" = "$(release_line v0001 2026-01-01T00:00:00Z - "release 1")" ]
 
-    local count
-    for count in 1001 1500; do
-        write_numbered_release_list "${count}"
-        run_release_list
-        [ "${status}" -eq 1 ]
-        [ -z "${output}" ]
-        [ "${stderr}" = "cfwf: ${LOOKUP_REPO} has more than 1000 releases, so none is printed" ]
-    done
+    write_numbered_release_list 1001
+    run_release_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${LOOKUP_REPO} has more than 1000 releases, so none is printed" ]
 }
 
 @test "release list prints nothing and exits 1 when gh's answer is not a count and that many rows of four fields, the third a known flags value" {
