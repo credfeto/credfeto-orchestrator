@@ -939,7 +939,7 @@ prepare_pr_comments() {
         '  "api graphql") case "$*" in *reviewThreads*) answer "${GH_FIXTURES}/discussion${cursors}" ;; esac ;;' \
         '  "api --method") case "$3 $4" in "POST repos/"*"/replies") cp "${body}" "${GH_FIXTURES}/reply-body.txt"; answer "${GH_FIXTURES}/reply" ;; esac ;;' \
         '  "api repos/"*) [ ! -f "${GH_FIXTURES}/rewrite" ] || printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/rewrite")"; answer "${GH_FIXTURES}/api-${2//\//_}" ;;' \
-        '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; jq -r "${jq_expr}" < "${f}.json"; exit 0 ;; esac ;;' \
+        '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; jq -r "${jq_expr}" < "${f}.json"; exit 0 ;; esac ;;' \
         'esac' \
         'echo "gh stub: unexpected call: $*" >&2; exit 99'
 }
@@ -1837,14 +1837,13 @@ reply_posts() {
 
 @test "pr reply posts a body holding a plan sign-off keyword: only an issue's top-level comments are read for one" {
     prepare_pr_reply
-    # Each keyword is built from pieces, so this file never holds one as a word.
     local keyword
-    for keyword in "appr""oved" "LG""TM"; do
+    while IFS= read -r keyword; do
         printf 'Looks right to me: %s.\n\n%s\n' "${keyword}" "${keyword}" > "${TEST_TMP}/reply.md"
         run_pr_reply --pr 42 --comment-id 500 --body-file "${TEST_TMP}/reply.md"
         [ "${status}" -eq 0 ]
         cmp "${TEST_TMP}/reply.md" "${GH_FIXTURES}/reply-body.txt"
-    done
+    done < <(sign_off_keywords)
     [ "$(reply_posts)" -eq 2 ]
 }
 
