@@ -6,7 +6,7 @@
 
 ## Format (MANDATORY)
 
-Every issue title in this repository has the form `<scope>: <rest>`, where `<scope>` names the tool or component the issue affects. The scope shows at a glance which component an issue affects, and makes the issue list easy to filter.
+Every issue title in this repository has the form `<scope>: <rest>`, where `<scope>` names the tool or component the issue affects, so the issue list shows each issue's component at a glance and is easy to filter.
 
 This applies to issue titles only. Pull request titles keep the Conventional Commits format.
 
@@ -25,6 +25,6 @@ A new script, image, hook or task gets its scope under the same rules, without a
 
 ## The rest of the title
 
-- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on) or a category word (`Security:`, `Design:`, `Track:`), because labels already carry them. Use the scope alone, never a combined form such as `fix(oneshot):`.
+- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on), even in a combined form such as `fix(oneshot):`, or a category word (`Security:`, `Design:`, `Track:`), because labels already carry them.
 - Drop a leading tool name that the scope makes redundant.
 - Capitalise the first word after the scope, for example `tool(cfwf): List a repository's open issues with labels`.
