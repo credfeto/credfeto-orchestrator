@@ -26,6 +26,7 @@ setup() {
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'case "$1 $2" in' \
+        '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; jq --arg hd "${hd}" --argjson lim "${lim}" "[.[] | select(\$hd == \"\" or .headRefName == \$hd)] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
         '  "project field-list") emit "${GH_FIXTURES}/field-list.json" ;;' \
         '  "project item-add") [ -f "${GH_FIXTURES}/item-add.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-add.json" ;;' \
@@ -2364,6 +2365,475 @@ BODIES
     [ ! -f "${GH_LOG}" ]
 }
 
+# --- pr list --------------------------------------------------------------------
+
+PR_LIST_UNEXPECTED="cfwf: gh returned an unexpected result for the open pull requests of ${REPO}"
+
+# One open pull request as gh pr list --json gives it: number, head branch, base branch, author
+# login ("" for an author with no login), draft (true or false), cross-repository (true or false)
+# and title. The number is JSON, so a test can give one that is not a number.
+pull_request() {
+    jq -n --argjson number "$1" --arg head "$2" --arg base "$3" --arg author "$4" --argjson draft "$5" \
+        --argjson fork "$6" --arg title "$7" --arg repo "${REPO}" \
+        '{number: $number, title: $title, headRefName: $head, baseRefName: $base, isDraft: $draft, isCrossRepository: $fork,
+          author: (if $author == "" then {} else {login: $author, is_bot: ($author | startswith("app/"))} end),
+          url: "https://github.com/\($repo)/pull/\($number)"}'
+}
+
+# Writes the open pull requests of the repository, in the order given: each argument a pull_request
+# object. With no argument the repository has none.
+write_pr_list() {
+    printf '%s\n' "$@" | jq -s '.' > "${GH_FIXTURES}/pr-list.json"
+}
+
+# Writes $1 open pull requests, numbered from 1, each on a branch of its own.
+write_numbered_pr_list() {
+    jq -n --argjson count "$1" --arg repo "${REPO}" '[range(1; $count + 1) | {number: ., title: "change \(.)",
+        headRefName: "feat/\(.)-change", baseRefName: "main", isDraft: false, isCrossRepository: false,
+        author: {login: "someone", is_bot: false}, url: "https://github.com/\($repo)/pull/\(.)"}]' > "${GH_FIXTURES}/pr-list.json"
+}
+
+run_pr_list() {
+    run --separate-stderr "${SCRIPT}" pr list --repo "${REPO}" "$@"
+}
+
+# Prints one line of pr list for the pull request numbered $1: the number, the fields given as the
+# rest of the arguments up to the flags, its URL, and the last argument, its title.
+pr_list_line() {
+    local IFS=$'\t'
+    local -a fields=("${@:1:$#-1}" "https://github.com/${REPO}/pull/$1" "${!#}")
+    printf '%s\n' "${fields[*]}"
+}
+
+# Succeeds when the text $1 has $2 lines, each of exactly eight tab-separated fields, none empty.
+has_eight_field_lines() {
+    awk -F '\t' -v expected="$2" '
+        NF != 8 { bad = 1 }
+        { for (i = 1; i <= NF; i++) if ($i == "") bad = 1 }
+        END { exit (bad || NR != expected) ? 1 : 0 }' <<< "$1"
+}
+
+@test "pr list help gives the usage line, the eight columns, the limit and the exit codes, help pr and the general help point to it, and none calls gh" {
+    local flag invocation
+    for flag in --help -h; do
+        run "${SCRIPT}" pr list "${flag}"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr list --repo <owner/repo> [--issue <n>] [--head <branch>]"* ]]
+        [[ "${output}" == *"  <number>  <head>  <base>  <author>  <draft|ready>  <flags>  <url>  <title>"* ]]
+        [[ "${output}" == *"exactly eight tab-separated fields and none is empty"* ]]
+        [[ "${output}" == *"At most 1000 pull requests are listed. More than that to list (with --head, more on that"$'\n'"branch) is a runtime failure and nothing is printed, never part of the list."* ]]
+        [[ "${output}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error." ]]
+        # A fork line is anyone's to open, so the help must say it proves nothing and is never the caller's.
+        [[ "${output}" == *"  fork            the head branch is in another repository. Anyone can open such a pull"$'\n'*"access to this repository"*"never the pull request of a branch in this repository"*"no proof of earlier work on an issue"* ]]
+        [[ "${output}" == *"matches too, flagged \"fork\": ignore that line when looking for the pull request of a"$'\n'*"branch in this repository."* ]]
+    done
+
+    # Options before --help are still checked, and those after it are never looked at.
+    run "${SCRIPT}" pr list --repo "${REPO}" --help --bogus
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf pr list "* ]]
+
+    run "${SCRIPT}" help pr list
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Usage: cfwf pr list "* ]]
+
+    for invocation in "help pr" "pr -h" "pr --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests." ]]
+    done
+
+    # pr with no subcommand is a usage error that prints the same usage, so it points to pr list too.
+    run --separate-stderr "${SCRIPT}" pr
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."* ]]
+
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  pr list                  List a repository's open pull requests, one line each"$'\n'"  comment add "* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr list usage errors exit 2 before any gh call, each with the pr list usage" {
+    write_pr_list "$(pull_request 5 feat/5-x main someone false false "a title")"
+    local -a cases=(
+        "--repo ${REPO}"
+        "--issue 1 --issue 2"
+        "--head feat/a --head feat/b"
+        "--issue x"
+        "--issue 1x"
+        "--issue -1"
+        "--issue 0"
+        "--issue 000"
+        "--issue"
+        "--head"
+        "--json number"
+        "--jq ."
+        "--search x"
+        "--state all"
+        "--limit 5"
+        "--author someone"
+        "--app dependabot"
+        "--base main"
+        "--draft"
+        "--web"
+        "--pr 5"
+        "extra"
+        "--issue 5 extra"
+    )
+    local args
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_pr_list ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"Usage: cfwf pr list --repo <owner/repo> [--issue <n>] [--head <branch>]"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" pr list
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: missing required option --repo"* ]]
+
+    local bad
+    for bad in "./x" "x/.." "../.."; do
+        run --separate-stderr "${SCRIPT}" pr list --repo "${bad}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: invalid value for --repo: neither the owner nor the repository can be . or .."* ]]
+    done
+
+    run_pr_list --repo "${REPO}"
+    [[ "${stderr}" == "cfwf: --repo can only be given once"* ]]
+    run_pr_list --issue 1 --issue 2
+    [[ "${stderr}" == "cfwf: --issue can only be given once"* ]]
+    run_pr_list --head feat/a --head feat/b
+    [[ "${stderr}" == "cfwf: --head can only be given once"* ]]
+    run_pr_list --issue x
+    [[ "${stderr}" == "cfwf: invalid value for --issue: it must be a number"$'\n'* ]]
+    run_pr_list --issue ""
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --issue: it must be a number"$'\n'* ]]
+    for bad in 0 000; do
+        run_pr_list --issue "${bad}"
+        [[ "${stderr}" == "cfwf: invalid value for --issue: it must be a number above 0"$'\n'* ]]
+    done
+    run_pr_list --head
+    [[ "${stderr}" == "cfwf: --head needs a value"* ]]
+    run_pr_list --json number
+    [[ "${stderr}" == "cfwf: unknown option (argument 5; its value is not shown)"* && "${stderr%%$'\n'*}" != *json* ]]
+    run_pr_list --issue 5 extra
+    [[ "${stderr}" == "cfwf: unknown option (argument 7; its value is not shown)"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr list refuses a --head git would not allow, or one holding a control character, without echoing it or calling gh" {
+    write_pr_list "$(pull_request 5 feat/5-x main someone false false "a title")"
+    local head
+    # The last five hold a control character: a tab, a newline and DEL, which git refuses, and two C1
+    # controls (U+009B and U+0085), which git allows and only the control-character check refuses.
+    for head in "" "-x" "a..b" "a b" "HEAD" "a@{b" "owner:branch" "feat/x.lock" $'feat/a\tb' $'feat/a\nb' $'feat/a\x7fb' \
+        $'feat/a\xc2\x9bb' $'feat/a\xc2\x85b'; do
+        run_pr_list --head "${head}"
+        [ "${status}" -eq 2 ] || { printf 'accepted: %q (%s)\n' "${head}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        # The first line is the rule alone, so the value is not in it.
+        [[ "${stderr}" == "cfwf: invalid value for --head: it must be a branch name git allows, with no control character"$'\n\n'"Usage: cfwf pr list "* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    # A character just past C1 (U+00A0), and any other letter, is a branch name like any other.
+    run_pr_list --head $'feat/a\xc2\xa0\xc3\xa9'
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "pr list prints each open pull request as eight tab-separated fields, sorted by number, from one read of the open ones with no search" {
+    write_pr_list "$(pull_request 57 feat/123-add-widget main app/github-actions true false "feat: add the widget")" \
+        "$(pull_request 9 fix/9-typo release/1 someone false false "fix: a typo")" \
+        "$(pull_request 31 chore/deps main app/dependabot false true "chore: bump a dependency")"
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="$(pr_list_line 9 fix/9-typo release/1 someone ready - "fix: a typo")"$'\n'
+    expected+="$(pr_list_line 31 chore/deps main app/dependabot ready fork "chore: bump a dependency")"$'\n'
+    expected+="$(pr_list_line 57 feat/123-add-widget main app/github-actions draft github-actions "feat: add the widget")"
+    [ "${output}" = "${expected}" ]
+    has_eight_field_lines "${output}" 3
+
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "pr list --repo ${REPO} --state open --limit 1001 --json number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url --jq ")" -eq 1 ]
+    [ "$(gh_call_count "--search")" -eq 0 ]
+    [ "$(gh_call_count "--head")" -eq 0 ]
+}
+
+@test "pr list prints nothing and exits 0 when there is no open pull request, with and without --head" {
+    write_pr_list
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+
+    run_pr_list --head feat/x
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+
+    # run drops trailing newlines, so the bytes are counted: an empty list is no output at all, not
+    # a blank line, which is not an eight-field row.
+    [ "$("${SCRIPT}" pr list --repo "${REPO}" | wc -c)" -eq 0 ]
+    [ "$("${SCRIPT}" pr list --repo "${REPO}" --head feat/x | wc -c)" -eq 0 ]
+
+    write_pr_list "$(pull_request 5 feat/5-x main someone false false "a title")"
+    run_pr_list --head feat/x --issue 5
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+}
+
+@test "pr list --issue flags a head branch that holds the number with no digit on either side, however the number is written, and nothing without --issue" {
+    local -a heads=(feat/12-x fix/12 12-x feat/x-12_y feat/012-x 12 feat/123-x feat/312-x feat/1x2 feat/120 feat/1-2 feat/x)
+    local -a pull_requests=()
+    local index
+    for index in "${!heads[@]}"; do
+        pull_requests+=("$(pull_request "$((index + 1))" "${heads[index]}" main someone false false "a title")")
+    done
+    write_pr_list "${pull_requests[@]}"
+
+    local expected=$'feat/12-x\tissue\nfix/12\tissue\n12-x\tissue\nfeat/x-12_y\tissue\nfeat/012-x\tissue\n12\tissue\n'
+    expected+=$'feat/123-x\t-\nfeat/312-x\t-\nfeat/1x2\t-\nfeat/120\t-\nfeat/1-2\t-\nfeat/x\t-'
+    local number
+    for number in 12 012 00012; do
+        run_pr_list --issue "${number}"
+        [ "${status}" -eq 0 ]
+        [ "$(cut -f 2,6 <<< "${output}")" = "${expected}" ] || { echo "--issue ${number}: ${output}" >&2; return 1; }
+        has_eight_field_lines "${output}" "${#heads[@]}"
+    done
+
+    # The number goes in the filter without its leading zeros, and nothing else of the caller's does.
+    [ "$(gh_call_count '0*12([^0-9]|$)')" -eq 3 ]
+    [ "$(gh_call_count '0*012(')" -eq 0 ]
+
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ "$(cut -f 6 <<< "${output}" | sort -u)" = "-" ]
+
+    run_pr_list --issue 2
+    [ "$(cut -f 2,6 <<< "${output}" | grep $'\tissue$')" = $'feat/1x2\tissue\nfeat/1-2\tissue' ]
+}
+
+@test "pr list flags only the author app/github-actions, and prints an author with no login as -" {
+    write_pr_list "$(pull_request 1 feat/a main app/github-actions false false "a title")" \
+        "$(pull_request 2 feat/b main app/dependabot false false "a title")" \
+        "$(pull_request 3 feat/c main someone false false "a title")" \
+        "$(pull_request 4 feat/d main github-actions false false "a title")" \
+        "$(pull_request 5 feat/e main app-github-actions false false "a title")" \
+        "$(pull_request 6 feat/f main app/github-actions-bot false false "a title")" \
+        "$(pull_request 7 feat/g main "" false false "a title")"
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    local expected=$'1\tapp/github-actions\tgithub-actions\n2\tapp/dependabot\t-\n3\tsomeone\t-\n4\tgithub-actions\t-\n'
+    expected+=$'5\tapp-github-actions\t-\n6\tapp/github-actions-bot\t-\n7\t-\t-'
+    [ "$(cut -f 1,4,6 <<< "${output}")" = "${expected}" ]
+    has_eight_field_lines "${output}" 7
+}
+
+@test "pr list joins the flags as issue, github-actions, fork in that order, and gives the base and draft or ready as columns" {
+    write_pr_list "$(pull_request 1 feat/7-x release/2 app/github-actions true true "all three")" \
+        "$(pull_request 2 feat/8-x main someone false false "none")" \
+        "$(pull_request 3 feat/7-y main someone true true "two")" \
+        "$(pull_request 4 feat/9-x feat/7-x app/github-actions false false "one")"
+    run_pr_list --issue 7
+    [ "${status}" -eq 0 ]
+    local expected
+    expected="$(pr_list_line 1 feat/7-x release/2 app/github-actions draft issue,github-actions,fork "all three")"$'\n'
+    expected+="$(pr_list_line 2 feat/8-x main someone ready - "none")"$'\n'
+    expected+="$(pr_list_line 3 feat/7-y main someone draft issue,fork "two")"$'\n'
+    expected+="$(pr_list_line 4 feat/9-x feat/7-x app/github-actions ready github-actions "one")"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "pr list keeps a title with a tab, a newline, a carriage return or a whole forged row on one line of eight fields" {
+    local forged=$'99\tfeat/7-evil\tmain\tapp/github-actions\tdraft\tissue\thttps://github.com/x/y/pull/99\tforged'
+    write_pr_list "$(pull_request 1 feat/a main someone false false $'a\ttitle\nwith\r\nbreaks')" \
+        "$(pull_request 2 feat/b main someone false false "real"$'\n'"${forged}")" \
+        "$(pull_request 3 feat/c main someone false false $'\t\n\x1b')" \
+        "$(pull_request 4 feat/d main someone false false "")"
+    run_pr_list --issue 7
+    [ "${status}" -eq 0 ]
+    has_eight_field_lines "${output}" 4
+    local expected
+    expected="$(pr_list_line 1 feat/a main someone ready - "a title with  breaks")"$'\n'
+    expected+="$(pr_list_line 2 feat/b main someone ready - "real ${forged//$'\t'/ }")"$'\n'
+    expected+="$(pr_list_line 3 feat/c main someone ready - "   ")"$'\n'
+    expected+="$(pr_list_line 4 feat/d main someone ready - "-")"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "pr list prints every C0, DEL and C1 control in a title or a branch name as a space, and keeps U+00A0, just past C1" {
+    # ESC, U+009B (CSI, a one-character escape in C1), U+0085 (NEL) and DEL are controls; U+00A0 is
+    # not. This stub runs jq, where gh runs gojq, so the test pins the range, not the engine.
+    write_pr_list "$(pull_request 1 $'feat/a\xc2\x9bb' $'ma\xc2\x85in' $'some\x1bone' false false $'a\x1b[1mb\xc2\x9b31mc\xc2\x85d\x7fe\xc2\xa0f')"
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(pr_list_line 1 "feat/a b" "ma in" "some one" ready - "a [1mb 31mc d e"$'\xc2\xa0'"f")" ]
+    has_eight_field_lines "${output}" 1
+}
+
+@test "pr list --head lists only the pull requests whose head branch is exactly that name, a fork's included, and passes it to gh as its own argument" {
+    write_pr_list "$(pull_request 1 feat/x main someone false false "the branch")" \
+        "$(pull_request 2 feat/x-2 main someone false false "a longer name")" \
+        "$(pull_request 3 xfeat/x main someone false false "a longer name still")" \
+        "$(pull_request 4 feat/x main stranger false true "a fork's branch of the same name")" \
+        "$(pull_request 5 feat/X main someone false false "another case")"
+    run_pr_list --head feat/x
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="$(pr_list_line 1 feat/x main someone ready - "the branch")"$'\n'
+    expected+="$(pr_list_line 4 feat/x main stranger ready fork "a fork's branch of the same name")"
+    [ "${output}" = "${expected}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "pr list --repo ${REPO} --state open --limit 1001 --head feat/x --json number,")" -eq 1 ]
+    [ "$(gh_call_count "--search")" -eq 0 ]
+
+    write_pr_list "$(pull_request 8 feat/12-x main someone true false "the branch")" \
+        "$(pull_request 9 feat/12-y main someone false false "another branch of the issue")"
+    run_pr_list --head feat/12-x --issue 12
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(pr_list_line 8 feat/12-x main someone draft issue "the branch")" ]
+    run_pr_list --issue 13 --head feat/12-x
+    [ "${output}" = "$(pr_list_line 8 feat/12-x main someone draft - "the branch")" ]
+}
+
+@test "pr list --head prints nothing and exits 1 when gh answers with a pull request of any other head branch" {
+    : > "${GH_FIXTURES}/pr-list.ignore-head"
+    write_pr_list "$(pull_request 1 feat/x main someone false false "the branch")" \
+        "$(pull_request 2 feat/x-2 main someone false false "another branch")"
+    run_pr_list --head feat/x
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${PR_LIST_UNEXPECTED}" ]
+
+    # A head that differs only by a control character prints much like the name asked for, and is
+    # still another branch.
+    local head
+    for head in $'feat/x\xc2\x9b' $'feat/\x1bx' $'feat/x\n'; do
+        write_pr_list "$(pull_request 1 "${head}" main someone false false "the branch")"
+        run_pr_list --head feat/x
+        [ "${status}" -eq 1 ] || { printf 'listed: %q\n' "${head}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${PR_LIST_UNEXPECTED}" ]
+    done
+
+    write_pr_list "$(pull_request 1 feat/x main someone false false "the branch")"
+    run_pr_list --head feat/x
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(pr_list_line 1 feat/x main someone ready - "the branch")" ]
+}
+
+@test "pr list prints exactly 1000 pull requests, and with more open prints none and exits 1" {
+    write_numbered_pr_list 1000
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    has_eight_field_lines "${output}" 1000
+    [ "${output%%$'\n'*}" = "$(pr_list_line 1 feat/1-change main someone ready - "change 1")" ]
+    [ "${output##*$'\n'}" = "$(pr_list_line 1000 feat/1000-change main someone ready - "change 1000")" ]
+
+    write_numbered_pr_list 1001
+    run_pr_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 open pull requests, so none is printed" ]
+
+    write_numbered_pr_list 1500
+    run_pr_list --issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 open pull requests, so none is printed" ]
+
+    # The limit is on what the read returns: gh filters on --head before it counts, so a branch is
+    # still found in a repository with more open pull requests than the limit.
+    run_pr_list --head feat/7-change
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(pr_list_line 7 feat/7-change main someone ready - "change 7")" ]
+}
+
+@test "pr list prints nothing and exits 1 when gh's answer is not a count and that many rows, each starting with a number" {
+    local row
+    row="$(pr_list_line 5 feat/5-x main someone ready - "a title")"
+    local -a answers=(
+        ""
+        "x"
+        "one"$'\n'"${row}"
+        "-1"$'\n'"${row}"
+        "1.0"$'\n'"${row}"
+        "99999999999999999999"$'\n'"${row}"
+        "${row}"
+        "2"$'\n'"${row}"
+        "0"$'\n'"${row}"
+        "1"$'\n'"${row}"$'\n'"${row}"
+        "1"
+        "1"$'\n'"x${row}"
+        "2"$'\n'"${row}"$'\n'"${row#5}"
+        "2"$'\n\n'"${row}"
+    )
+    local answer
+    for answer in "${answers[@]}"; do
+        printf '%s\n' "${answer}" > "${GH_FIXTURES}/pr-list.out"
+        run_pr_list
+        [ "${status}" -eq 1 ] || { printf 'accepted: %q (%s)\n' "${answer}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${PR_LIST_UNEXPECTED}" ]
+    done
+
+    printf '1\n%s\n' "${row}" > "${GH_FIXTURES}/pr-list.out"
+    run_pr_list
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${row}" ]
+
+    # A number that is not one, as the filter itself prints it.
+    rm -f "${GH_FIXTURES}/pr-list.out"
+    write_pr_list "$(pull_request 5 feat/5-x main someone false false "a title")" "$(pull_request '"6x"' feat/6-x main someone false false "a title")"
+    run_pr_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${PR_LIST_UNEXPECTED}" ]
+}
+
+@test "pr list treats a failed read, or a repository that is not found, as a runtime failure (exit 1), never as an empty list" {
+    write_pr_list
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/pr-list.fail"
+    run_pr_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the open pull requests of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+
+    printf '%s\n' "GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" > "${GH_FIXTURES}/pr-list.fail"
+    run_pr_list --head feat/x
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the open pull requests of ${REPO}: GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" ]
+}
+
+@test "pr list fails (exit 1) when gh is not installed, after the options are checked" {
+    mkdir -p "${TEST_TMP}/empty-path"
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr list --repo "${REPO}" --issue 12
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr list --repo "${REPO}" --issue 0
+    [ "${status}" -eq 2 ]
+
+    # --head is judged by git, so a host without it is a runtime failure, not a usage error.
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr list --repo "${REPO}" --head feat/x
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == "cfwf: git is not installed"* ]]
+}
+
 # --- pr checks ------------------------------------------------------------------
 
 HEAD_SHA="1111111111111111111111111111111111111111"
@@ -4512,7 +4982,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
