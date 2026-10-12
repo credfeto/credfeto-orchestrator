@@ -12,8 +12,8 @@ readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
 readonly ISSUE_NOT_FOUND_EXIT=9
-# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view and the issue
-# commands.
+# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view, pr comments, pr reply
+# and the issue commands.
 readonly PR_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
@@ -111,6 +111,9 @@ readonly UTF8_LINE_PATTERN=$'([\x01-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf]
 readonly APPROVAL_KEYWORD_PATTERN='(^|[^A-Za-z0-9_])_*(approved|lgtm)_*([^A-Za-z0-9_]|$)'
 readonly OWNER_PATTERN='[A-Za-z0-9][A-Za-z0-9-]*'
 readonly REPOSITORY_PATTERN="${OWNER_PATTERN}/[A-Za-z0-9_.-]+"
+# The start of every URL gh answers a write with: any host, with or without a port, then any owner
+# and any repository. issue_create says why neither the host nor the repository is compared with anything.
+readonly REPOSITORY_URL_PATTERN='^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'
 # A character that may come just before a bare owner/repo, then any underscores that open Markdown
 # emphasis (_owner/repo#5_, __owner/repo__; * is a boundary byte itself); a letter, digit,
 # underscore, slash, dot or dash before those means it is part of a longer word, path or host name.
@@ -1009,9 +1012,10 @@ resolve_status() {
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
 # The board read, the visibility lookup, the issue read of issue view and issue plan-status, every
-# pr checks read, the pr view read and the pr list read go through here (resolve_project, the field
-# list, the board listing and the closing-issue labels still call gh directly); each caller uses
-# GH_OUTPUT and GH_ERROR before its next gh call.
+# pr checks read, the pr view read, the pr list read, the pr comments read and the read and the post
+# of pr reply go through here (resolve_project, the field list, the board listing and the
+# closing-issue labels still call gh directly); each caller uses GH_OUTPUT and GH_ERROR before its
+# next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -1641,7 +1645,7 @@ issue_create() {
     # Neither the host nor the repository in the URL is compared with anything: gh may be reached
     # through a proxy that answers with its own host, and a renamed or transferred repository
     # answers with its new name.
-    [[ "${url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+$ ]] \
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/[0-9]+$ ]] \
         || die "gh returned an unexpected result for the new issue, which may have been created: ${url}"
     CREATED_URL="${url}"
 
@@ -2544,10 +2548,10 @@ record_thread_row() {
 }
 
 # Checks the page's own control row, which jq prints last, so a page that lost its end is never
-# taken as whole: $1 to $3 are the blocks received for each list, in the order of DISCUSSION_LISTS,
-# and the rest are the row's fields. Each list the page was asked for is then recorded.
+# taken as whole: the first arguments are the blocks received for each list, one for each of
+# DISCUSSION_LISTS in its order, and the rest are the row's fields. Each list the page was asked for is then recorded.
 record_page_row() {
-    local -a blocks=("${@:1:3}") page=("${@:4}")
+    local -a blocks=("${@:1:${#DISCUSSION_LISTS[@]}}") page=("${@:${#DISCUSSION_LISTS[@]} + 1}")
     local list position=0
     [ "${#page[@]}" -eq "${PAGE_ROW_FIELDS}" ] && [ "${page[PAGE_ROW_FIELDS - 1]}" = end ] || discussion_unexpected
     REVIEW_DECISION="${page[1]}"
@@ -2587,7 +2591,7 @@ add_page_text() {
 # list copies that text every time, and a page of long bodies then takes minutes to take apart.
 record_discussion_page() {
     local line list="" kind block="" inline_expected=0 inline_received=0
-    local -a fields page=()
+    local -a fields page=() blocks=()
     local -A received=()
     PAGE_BLOCKS=()
     PAGE_BLOCK_LISTS=()
@@ -2628,7 +2632,10 @@ record_discussion_page() {
     done <<< "${GH_OUTPUT}"
     keep_page_block "${list}" "${block}"
 
-    record_page_row "${received[comments]:-0}" "${received[reviews]:-0}" "${received[threads]:-0}" "${page[@]}"
+    for list in "${DISCUSSION_LISTS[@]}"; do
+        blocks+=("${received["${list}"]:-0}")
+    done
+    record_page_row "${blocks[@]}" "${page[@]}"
     [ "${inline_received}" -eq "${inline_expected}" ] || discussion_incomplete
     INLINE_COMMENTS=$((INLINE_COMMENTS + inline_received))
     add_page_text
@@ -2741,7 +2748,7 @@ post_reply() {
         die "the reply may have been posted (${reason:-gh gave no error text}); ${check}"
     fi
     IFS="${ROW_SEPARATOR}" read -r id url end <<< "${GH_OUTPUT}"
-    [[ "${id}" =~ ^[0-9]+$ && "${end}" = end && "${url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/${PR}#discussion_r${id}$ ]] \
+    [[ "${id}" =~ ^[0-9]+$ && "${end}" = end && "${url}" =~ ${REPOSITORY_URL_PATTERN}/pull/${PR}#discussion_r${id}$ ]] \
         || die "the reply may have been posted (gh returned an unexpected answer); ${check}"
     printf 'inline\t%s\nin-reply-to\t%s\nurl\t%s\n' "${id}" "${REPLY_ROOT}" "${url}"
 }
@@ -2790,7 +2797,7 @@ comment_add() {
     # own host and a renamed repository with its new name. pull and issues are both accepted
     # whichever was asked for, because GitHub answers a comment on a pull request made through its
     # issue number with the pull request URL.
-    [[ "${url}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(pull|issues)/${TARGET_NUMBER}#issuecomment-[0-9]+$ ]] \
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/(pull|issues)/${TARGET_NUMBER}#issuecomment-[0-9]+$ ]] \
         || die "gh returned an unexpected result for the comment, which may have been posted on ${REPO}#${TARGET_NUMBER}"
     printf '%s\n' "${url}"
 }
