@@ -6230,6 +6230,7 @@ run_tag_view() {
         [[ "${output}" == *"  latest      the release GitHub marks as latest. It is not always the first line"* ]]
         [[ "${output}" == *"  prerelease  the release is marked as a pre-release"* ]]
         [[ "${output}" == *"Draft releases are never listed. The order is by time, never by version"* ]]
+        [[ "${output}" == *"Releases published at the same time are in reverse"$'\n'"text order of their tags, so v1.0.1 is above v1.0.0 and v9 is above v10."* ]]
         [[ "${output}" == *"so read them as untrusted text."* ]]
         [[ "${output}" == *"At most 1000 releases are listed. More than that is a runtime failure and nothing is printed,"$'\n'"never part of the list."* ]]
         [[ "${output}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error." ]]
@@ -6494,16 +6495,18 @@ run_tag_view() {
         [ "${stderr}" = "${TAG_UNEXPECTED}" ]
     done
     [ "$(gh_call_count "git/tags/")" -eq 0 ]
+}
 
-    # A tag object GitHub has just named and then does not have is an unexpected answer, not a tag
-    # that is not there.
-    write_tag_ref v4 tag "${TAG_OBJECT}"
-    rm "$(api_fixture "repos/${LOOKUP_REPO}/git/tags/${TAG_OBJECT}").json"
+@test "tag view treats a tag object GitHub has just named and then does not have as an unexpected result (exit 1), never as a tag that is not there (exit 9)" {
+    # The repository is there, so reading it could only answer that the tag is missing.
     write_repository
+    write_tag_ref v4 tag "${TAG_OBJECT}"
     run_tag_view --tag v4
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "${TAG_UNEXPECTED}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [ "$(gh_line_of "api repos/${LOOKUP_REPO}/git/tags/${TAG_OBJECT} --jq ")" -eq 2 ]
 }
 
 @test "tag view exits 9, naming the repository and never the tag, for a tag that is not there, and 1 when the repository is not there either" {
