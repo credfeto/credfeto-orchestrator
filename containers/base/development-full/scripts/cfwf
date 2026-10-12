@@ -856,7 +856,8 @@ flags is a comma-joined list, in this order, or "-" when there is none:
   prerelease  the release is marked as a pre-release
 
 Draft releases are never listed. The order is by time, never by version: to find the lowest
-version that meets a rule, read every line.
+version that meets a rule, read every line. Releases published at the same time are in reverse
+text order of their tags, so v1.0.1 is above v1.0.0 and v9 is above v10.
 
 At most ${RELEASE_LIST_LIMIT} releases are listed. More than that is a runtime failure and nothing is printed,
 never part of the list.
