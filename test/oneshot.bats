@@ -9628,6 +9628,10 @@ STUBEOF
     chmod +x "${STUB_BIN}/gh"
 }
 
+@test "the rate-limit tracker issue title carries the oneshot scope and is exactly the text the open tracker is found by" {
+    [ "${RATE_LIMIT_ISSUE_TITLE}" = "oneshot: Unparseable Claude rate-limit reset time" ]
+}
+
 @test "report_unparseable_rate_limit creates a new issue, on the Workflow board, when no open tracking issue exists" {
     local gh_log="${TEST_TMP}/gh_args"
     make_cfwf_gh_stub "${gh_log}"
