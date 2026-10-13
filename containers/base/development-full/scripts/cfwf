@@ -270,6 +270,9 @@ Commands:
   issue view               Print an issue's title, state, labels, assignees and body (exit 9 when not found)
   issue plan-status        Print whether an issue has a plan and is Blocked, and the comments since the plan
   body check               Check a body for leaks without posting it (exit 8 when refused)
+  repo view                Print a repository's default branch, visibility, merge methods and description
+  repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
+  auth status              Print the authenticated login, the host and the gh version, never a token
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
@@ -508,6 +511,107 @@ the check.
 Exit codes: 0 the body passes (nothing is printed); ${BODY_REFUSED_EXIT} refused; 1 a runtime
 failure, including a scan that fails or a visibility lookup that fails other than as not found
 (access denied, HTTP 403, among them); 2 a usage error.
+USAGE
+}
+
+usage_repo_view() {
+    cat << 'USAGE'
+Usage: cfwf repo view --repo <owner/repo>
+
+Prints a repository's default branch, visibility, allowed merge methods and description in a
+single read. It only reads, so the repository can be any the caller can see.
+
+--repo  Always required; never taken from the current directory.
+--json, --jq, --template, --branch and --web are not options: the output has one fixed format.
+
+Output, one line for each field, always in this order, each <field><TAB><value>:
+  default-branch      the default branch; nothing after the tab for an empty repository
+  visibility          GitHub's own value: PUBLIC, PRIVATE or INTERNAL
+  allow-merge-commit  yes or no: whether a pull request may be merged with a merge commit
+  allow-squash-merge  yes or no: whether a pull request may be squash merged
+  allow-rebase-merge  yes or no: whether a pull request may be rebase merged
+  description         the description; nothing after the tab when there is none
+A merge method GitHub did not give prints nothing after the tab: read that as not known, never as
+no. Each control character in a value (a tab or a newline included) is printed as a space, so a
+line is always one field. The description is written by whoever owns the repository and is not
+filtered in any other way, so read it as untrusted text. Nothing is printed unless the read
+succeeded.
+
+Exit codes: 0 printed; 1 a runtime failure, such as a gh or network error or a repository that was
+not found or that the caller cannot see, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_repo_collaborators() {
+    cat << USAGE
+Usage: cfwf repo collaborators --repo <owner/repo>
+
+Lists a repository's collaborators and the role of each, every page read before anything is
+printed.
+
+--repo  Always required; never taken from the current directory.
+--json, --jq, --affiliation, --permission, --paginate and --limit are not options: every
+collaborator is listed (GitHub's default affiliation, all), in one fixed format.
+
+Output, tab separated, sorted by login in the C locale (byte order, so every upper-case letter
+comes before every lower-case one), with no header and no summary:
+  <login>  <role>
+Each line has exactly two tab-separated fields and neither is empty. role is GitHub's own name for
+the collaborator's role: admin, maintain, write, triage or read, or the name of a custom role, and
+"-" when GitHub gives none. Each control character in a role is printed as a space. A login is
+letters, digits, - and _, with [bot] after an app's; an answer holding anything else as a login is
+a runtime failure and nothing is printed.
+
+At most ${COLLABORATOR_LIMIT} collaborators are listed. More than that is a runtime failure and nothing is
+printed, never part of the list.
+
+GitHub shows a repository's collaborators only to a caller with push access to it. Without it the
+read is refused (HTTP 403), which is a runtime failure, never an empty list.
+
+Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
+gh or network error, no push access or a repository that was not found or that the caller cannot
+see, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_repo() {
+    usage_repo_view
+    printf '\n'
+    usage_repo_collaborators
+}
+
+usage_auth() {
+    cat << 'USAGE'
+Usage: cfwf auth status [--rate-limit]
+
+Prints who gh is authenticated as, the host it is pointed at and its version, and proves the
+credential works by asking GitHub. It never prints a token.
+
+--rate-limit  Also print what is left of the REST (core) and GraphQL rate limits.
+There is no --repo and no way to name a host: --hostname, --show-token, --active, --json and --jq
+are not options.
+
+Output, one line for each field, always in this order, each <field><TAB><value>:
+  login  the authenticated login, as GitHub answers now, never from a cache
+  host   the value of GH_HOST, or github.com when it is unset or empty
+  gh     the version of gh
+and then, with --rate-limit:
+  core-remaining     the REST requests left before the limit resets
+  core-limit         the REST requests allowed between resets
+  core-reset         when the REST limit resets, ISO 8601 in UTC
+  graphql-remaining  the GraphQL points left before the limit resets
+  graphql-limit      the GraphQL points allowed between resets
+  graphql-reset      when the GraphQL limit resets, ISO 8601 in UTC
+Nothing is printed unless every read asked for succeeded.
+
+gh is asked only for its version, for the authenticated user and, with --rate-limit, for the rate
+limit. cfwf never runs gh auth status, gh auth token or gh config and never asks gh for a response
+header, so no token, header or configuration value is ever in its hands. No environment variable
+but GH_HOST is printed, and gh's own configured default host is not consulted.
+
+Exit codes: 0 printed; 1 a runtime failure, prefixed "cfwf:": "cfwf: not authenticated" when gh
+has no credential or GitHub refuses the one it has (HTTP 401), and another message for any other
+failed read; 2 a usage error.
 USAGE
 }
 
@@ -912,6 +1016,10 @@ usage_for() {
         "issue view") usage_issue_view ;;
         "issue plan-status") usage_issue_plan_status ;;
         body | "body check") usage_body ;;
+        repo) usage_repo ;;
+        "repo view") usage_repo_view ;;
+        "repo collaborators") usage_repo_collaborators ;;
+        auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
         "pr view") usage_pr_view ;;
         "pr list") usage_pr_list ;;
@@ -941,6 +1049,14 @@ unknown_argument() {
     usage_error "unknown $1 (argument $((ARGUMENT_COUNT - $2 + 1)); its value is not shown)"
 }
 
+# Succeeds when $1 matches the extended regular expression $2, byte by byte in the C locale as the
+# leak rules are, so an answer from GitHub is judged the same whatever locale cfwf is run in. What
+# each group matched is left in BASH_REMATCH.
+matches_pattern() {
+    local LC_ALL=C
+    [[ "$1" =~ $2 ]]
+}
+
 # Refuses (exit 2) the value $1 of the option $3 unless it matches the pattern $2, naming the option
 # and the rule $4 it broke but never the value: a free-text value such as a title can hold a token,
 # and a usage error comes before the leak check, so echoing it would be the leak. The match is made
@@ -948,8 +1064,7 @@ unknown_argument() {
 # whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule.
 validate() {
     local value="$1" pattern="$2" flag="$3" rule="$4"
-    local LC_ALL=C
-    [[ "${value}" =~ ${pattern} ]] || usage_error "invalid value for ${flag}: ${rule}"
+    matches_pattern "${value}" "${pattern}" || usage_error "invalid value for ${flag}: ${rule}"
 }
 
 # gh reads 0123 as 123 and answers with the URL of 123, so a number is kept without its leading
@@ -1128,11 +1243,7 @@ resolve_status() {
 
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
-# The board read, the visibility lookup, the issue read of issue view and issue plan-status, every
-# pr checks read, the pr view read, the pr list read, the pr comments read, the read and the post of
-# pr reply, the release view read, the release list read and the tag view reads go through here
-# (resolve_project, the field list, the board listing and the closing-issue labels still call gh
-# directly); each caller uses GH_OUTPUT and GH_ERROR before its next gh call.
+# Each caller uses GH_OUTPUT and GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -1166,6 +1277,10 @@ readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; "
 # value it is given as a printable string, or - when there is none. No field is ever empty, because
 # a reader that splits a row on tabs with read collapses consecutive tabs.
 readonly ROW_FIELD_DEF="${PRINTABLE_DEF}"' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;'
+# A jq definition, put before a filter that uses it: line is one line of a command that prints a
+# field a line, the name it is given, a tab and the value as a printable string, nothing when there
+# is none, so every line has exactly one tab.
+readonly LINE_DEF="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -1360,13 +1475,16 @@ assign_once() {
     [ -z "${!1}" ] || usage_error "$2 can only be given once${3:+: $3}"
 }
 
+# Assigns --repo ($1) its value $2, refusing a second one.
+assign_repository_option() {
+    assign_once REPO "$1"
+    assign_option "$1" "$2"
+}
+
 assign_issue_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr | --issue)
             [ -z "${PR}${ISSUE}" ] || usage_error "--pr or --issue can only be given once, and not both"
             assign_option "${flag}" "${value}"
@@ -1594,23 +1712,34 @@ repository_references() {
     done <<< "${words}"
 }
 
+# Reads the repository $1 with one gh repo view: the fields $2 (comma separated) through the jq
+# filter $3, whose output is left in GH_OUTPUT. Returns 1 when GitHub does not show the repository
+# to the caller (it is not there, or the caller cannot see it, which GitHub answers alike) and 2 on
+# any other failure, with gh's error in GH_ERROR, so each caller says what a missing repository
+# means to it and a transport error is never read as one.
+read_repository() {
+    gh_capture repo view "$1" --json "$2" --jq "$3" && return 0
+    [[ "${GH_ERROR}" != *"Could not resolve to a Repository"* && "${GH_ERROR}" != *"HTTP 404"* ]] || return 1
+    return 2
+}
+
 # Records in REPOSITORY_VISIBILITY whether the repository $1 is public, private (or internal) or
 # missing (GitHub does not show it to the caller), asking GitHub once per run; any other failure
 # dies with $2.
 look_up_visibility() {
-    local repository="$1" failure="$2" key="${1,,}"
+    local repository="$1" failure="$2" key="${1,,}" read_status=0
     [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ] || return 0
-    if gh_capture repo view "${repository}" --json visibility --jq .visibility; then
-        case "${GH_OUTPUT,,}" in
-            public) REPOSITORY_VISIBILITY["${key}"]=public ;;
-            private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
-            *) die "${failure}: gh gave an unexpected answer" ;;
-        esac
-    elif [[ "${GH_ERROR}" == *"Could not resolve to a Repository"* || "${GH_ERROR}" == *"HTTP 404"* ]]; then
+    read_repository "${repository}" visibility .visibility || read_status=$?
+    if [ "${read_status}" -eq 1 ]; then
         REPOSITORY_VISIBILITY["${key}"]=missing
-    else
-        die "${failure}"
+        return 0
     fi
+    [ "${read_status}" -eq 0 ] || die "${failure}"
+    case "${GH_OUTPUT,,}" in
+        public) REPOSITORY_VISIBILITY["${key}"]=public ;;
+        private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
+        *) die "${failure}: gh gave an unexpected answer" ;;
+    esac
 }
 
 # Succeeds when the repository $1, named in the text, is public. One GitHub does not show the
@@ -1807,10 +1936,12 @@ dispatch_subcommand() {
 assign_issue_read_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo) assign_once REPO "${flag}" ;;
-        --issue) assign_once ISSUE "${flag}" ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
     esac
-    assign_option "${flag}" "${value}"
 }
 
 # Parses and checks the options of a command that reads one issue: --repo and --issue, both
@@ -1913,6 +2044,139 @@ cmd_body() {
     dispatch_subcommand body check body_check -- "$@"
 }
 
+# A login as the REST API gives it: letters, digits, - and _ (the login of a managed user holds
+# one), with [bot] after an app's. Nothing in it can add a field or a line to what is printed.
+readonly LOGIN_PATTERN='^[A-Za-z0-9_-]+(\[bot\])?$'
+
+# What repo view reads: the gh repo view --json fields, and the jq program that prints a line for
+# each field, its name, a tab and its value made printable, with the description, the free text,
+# last. A merge method is yes or no, and empty when GitHub gave neither.
+readonly REPO_VIEW_FIELDS="defaultBranchRef,description,visibility,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"
+readonly REPO_VIEW_PROGRAM="${LINE_DEF}"' def allowed: if . == true then "yes" elif . == false then "no" else "" end;'\
+' line("default-branch"; .defaultBranchRef.name), line("visibility"; .visibility),'\
+' line("allow-merge-commit"; .mergeCommitAllowed | allowed), line("allow-squash-merge"; .squashMergeAllowed | allowed),'\
+' line("allow-rebase-merge"; .rebaseMergeAllowed | allowed), line("description"; .description)'
+# The whole of what repo view prints: its six lines in their order, each one field, with a
+# visibility and nothing but yes, no or an empty value for a merge method.
+readonly REPO_VIEW_PATTERN=$'^default-branch\t[^\t\n]*\nvisibility\t[A-Z_]+\nallow-merge-commit\t(yes|no)?\nallow-squash-merge\t(yes|no)?\nallow-rebase-merge\t(yes|no)?\ndescription\t[^\t\n]*$'
+
+# Prints the default branch, visibility, merge methods and description of REPO from one read
+# (read_repository, the read look_up_visibility makes). gh repo view is used rather than the REST
+# repository endpoint, which gives the merge methods as null to a caller without push access.
+# Nothing is printed until the answer has been checked to be the six lines.
+repo_view() {
+    local read_status=0
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    read_repository "${REPO}" "${REPO_VIEW_FIELDS}" "${REPO_VIEW_PROGRAM}" || read_status=$?
+    [ "${read_status}" -ne 1 ] || repository_not_found "${REPO}"
+    [ "${read_status}" -eq 0 ] || die "could not read ${REPO}: $(gh_failure_text)"
+    matches_pattern "${GH_OUTPUT}" "${REPO_VIEW_PATTERN}" || die "gh returned an unexpected result for ${REPO}"
+    printf '%s\n' "${GH_OUTPUT}"
+}
+
+# The most collaborators repo collaborators prints. A repository with more is refused, never listed
+# in part.
+readonly COLLABORATOR_LIMIT=1000
+
+# Lists the collaborators of REPO and the role of each, sorted by login in the C locale, from one
+# paged REST read: role_name exists only there, and with --paginate gh runs the jq program on each
+# page, so a row is printed for each collaborator and there is no count to check the rows against.
+# Each row ends with "end" (FIELDS_ROW_DEF), and nothing is printed until every row has been
+# checked: its login is one and it has exactly its fields. GitHub answers a caller without push
+# access with HTTP 403, which api_read dies on, so no access is never read as an empty list; a 404
+# is the repository not being there or not being shown to the caller.
+repo_collaborators() {
+    local row login role end
+    local -a rows=() lines=()
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    api_read "could not list the collaborators of ${REPO}" "repos/${REPO}/collaborators?per_page=${API_PAGE_SIZE}" \
+        "${FIELDS_ROW_DEF} .[] | [.login, .role_name, \"end\"] | fields_row" --paginate \
+        || repository_not_found "${REPO}"
+    [ -n "${GH_OUTPUT}" ] || return 0
+
+    mapfile -t rows <<< "${GH_OUTPUT}"
+    [ "${#rows[@]}" -le "${COLLABORATOR_LIMIT}" ] \
+        || die "${REPO} has more than ${COLLABORATOR_LIMIT} collaborators, so none is printed"
+    for row in "${rows[@]}"; do
+        IFS="${ROW_SEPARATOR}" read -r login role end <<< "${row}"
+        if ! matches_pattern "${login}" "${LOGIN_PATTERN}" || [ "${end}" != end ]; then
+            die "gh returned an unexpected result for the collaborators of ${REPO}"
+        fi
+        lines+=("${login}"$'\t'"${role:--}")
+    done
+    printf '%s\n' "${lines[@]}" | LC_ALL=C sort
+}
+
+cmd_repo() {
+    dispatch_subcommand repo view repo_view collaborators repo_collaborators -- "$@"
+}
+
+RATE_LIMIT_ASKED=""
+RATE_LIMIT_LINES=""
+# A host name, with or without a port: what GH_HOST must be for auth status to print it.
+readonly HOST_NAME_PATTERN='^[A-Za-z0-9.-]+(:[0-9]+)?$'
+# The first line of gh --version, whose version number is all that is kept of it.
+readonly GH_VERSION_PATTERN='^gh version ([0-9]+(\.[0-9]+)+[0-9A-Za-z.+-]*)( |$)'
+
+# --rate-limit takes no value, so a second one changes nothing and is not refused.
+assign_auth_option() {
+    RATE_LIMIT_ASKED=1
+}
+
+# Ends a run whose read of the account failed, with $1 and gh's error, or with "not authenticated"
+# when gh has no credential (its own prompt to log in) or GitHub refused the one it has (HTTP 401).
+# Only what gh wrote to stderr is read for either, so nothing in an answer can pass for them.
+auth_read_failed() {
+    [[ "${GH_ERROR}" != *"HTTP 401"* && "${GH_ERROR}" != *"gh auth login"* ]] || die "not authenticated"
+    die "$1: $(gh_failure_text)"
+}
+
+# Sets RATE_LIMIT_LINES to the six lines auth status prints for the REST (core) and GraphQL rate
+# limits: what is left, the limit and when it resets, GitHub's epoch seconds as ISO 8601 in UTC.
+# The answer is one row, refused unless each count is digits and each reset is such a time.
+read_rate_limit() {
+    local reset='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' limit
+    limit="([0-9]+)${ROW_SEPARATOR}([0-9]+)${ROW_SEPARATOR}(${reset})${ROW_SEPARATOR}"
+    gh_capture api rate_limit \
+        --jq "${FIELDS_ROW_DEF} .resources | [(.core, .graphql | .remaining, .limit, (.reset | if type == \"number\" then todate else null end)), \"end\"] | fields_row" \
+        || auth_read_failed "could not read the rate limit"
+    matches_pattern "${GH_OUTPUT}" "^${limit}${limit}end\$" || die "gh returned an unexpected result for the rate limit"
+    printf -v RATE_LIMIT_LINES 'core-remaining\t%s\ncore-limit\t%s\ncore-reset\t%s\ngraphql-remaining\t%s\ngraphql-limit\t%s\ngraphql-reset\t%s' \
+        "${BASH_REMATCH[@]:1:6}"
+}
+
+# Prints the authenticated login, the host gh is pointed at and the version of gh, and with
+# --rate-limit the rate limits. The login is asked of GitHub each time, never taken from a cache:
+# the read is what proves the credential works. gh is run only as gh --version, gh api user and gh
+# api rate_limit, never as gh auth or gh config and never with an option that prints a response
+# header or names a host, so no token, header or configuration value is ever read; GH_HOST is the
+# one environment variable printed, and only when it is a host name. Nothing is printed until every
+# read asked for has succeeded and been checked.
+auth_status() {
+    local host="${GH_HOST:-github.com}" version login
+    parse_command_options assign_auth_option "" "--rate-limit" "$@"
+    require_gh
+    matches_pattern "${host}" "${HOST_NAME_PATTERN}" || die "GH_HOST is not a host name, with or without a port"
+    gh_capture --version || die "could not read the version of gh: $(gh_failure_text)"
+    matches_pattern "${GH_OUTPUT%%$'\n'*}" "${GH_VERSION_PATTERN}" || die "gh returned an unexpected version"
+    version="${BASH_REMATCH[1]}"
+    gh_capture api user --jq '.login // ""' || auth_read_failed "could not read the authenticated user"
+    login="${GH_OUTPUT}"
+    matches_pattern "${login}" "${LOGIN_PATTERN}" || die "gh returned an unexpected result for the authenticated user"
+    [ -z "${RATE_LIMIT_ASKED}" ] || read_rate_limit
+
+    printf 'login\t%s\nhost\t%s\ngh\t%s\n' "${login}" "${host}" "${version}"
+    [ -z "${RATE_LIMIT_ASKED}" ] || printf '%s\n' "${RATE_LIMIT_LINES}"
+}
+
+cmd_auth() {
+    dispatch_subcommand auth status auth_status -- "$@"
+}
+
 # Succeeds when $1 is a branch name git allows, as git itself judges it, so cfwf never has to keep
 # a copy of git's rules in step. GIT_DIR=/dev/null keeps git out of any repository the caller is
 # in: inside one, git check-ref-format --branch expands the previous-checkout syntax (@{-1}) and
@@ -1960,10 +2224,7 @@ branch_path() {
 assign_checks_option() {
     local flag="$1" value="${2:-}"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
@@ -2332,10 +2593,7 @@ VIEW_JSON_FIELDS=""
 assign_view_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
@@ -2447,10 +2705,7 @@ LIST_HEAD=""
 assign_list_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --issue)
             assign_once ISSUE "${flag}"
             assign_option "${flag}" "${value}"
@@ -2472,8 +2727,7 @@ assign_list_option() {
 # answer has one made printable, a space, before it is compared (the head in pr list, the ref in
 # resolve_tag), so a --head or a --tag holding one could never equal what it is compared with.
 holds_control_character() {
-    local LC_ALL=C
-    [[ "$1" =~ ${CONTROL_PATTERN} ]]
+    matches_pattern "$1" "${CONTROL_PATTERN}"
 }
 
 # Prints the jq program of pr list: the number of pull requests on its first line, then a row for
@@ -2611,10 +2865,7 @@ def list_state: .totalCount, (.nodes | length), .pageInfo.hasNextPage, .pageInfo
 assign_pr_comment_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
@@ -2948,10 +3199,7 @@ cmd_comment() {
 assign_release_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --tag)
             assign_once TAG "${flag}"
             if ! valid_tag_name "${value}" || holds_control_character "${value}"; then
@@ -2975,8 +3223,7 @@ not_found_in_repository() {
 
 # The jq program of release view: a line for each field, its name, a tab and its value made
 # printable, with the name, the free text, last. The release's notes are never read.
-readonly RELEASE_VIEW_PROGRAM="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'\
-' line("tag"; .tag_name), line("published-at"; .published_at), line("url"; .html_url), line("name"; .name)'
+readonly RELEASE_VIEW_PROGRAM="${LINE_DEF}"' line("tag"; .tag_name), line("published-at"; .published_at), line("url"; .html_url), line("name"; .name)'
 
 # Prints the latest release of REPO, the one GitHub marks as latest, from one read. The tag is what
 # a caller goes on to look up, so a release with none is refused.
@@ -3091,6 +3338,8 @@ main() {
         closing-issue-labels) cmd_closing_issue_labels "$@" ;;
         issue) cmd_issue "$@" ;;
         body) cmd_body "$@" ;;
+        repo) cmd_repo "$@" ;;
+        auth) cmd_auth "$@" ;;
         pr) cmd_pr "$@" ;;
         comment) cmd_comment "$@" ;;
         release) cmd_release "$@" ;;
