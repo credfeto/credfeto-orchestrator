@@ -12,9 +12,11 @@ readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
 readonly ISSUE_NOT_FOUND_EXIT=9
-# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view, pr comments, pr reply
-# and the issue commands.
+# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view, pr comments, pr reply,
+# release view, tag view and the issue commands.
 readonly PR_NOT_FOUND_EXIT=9
+readonly RELEASE_NOT_FOUND_EXIT=9
+readonly TAG_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
@@ -202,6 +204,7 @@ ISSUE=""
 STATUS=""
 SHA=""
 BRANCH=""
+TAG=""
 ALL_CHECKS=""
 TARGET_NUMBER=""
 TARGET_TYPE=""
@@ -273,6 +276,9 @@ Commands:
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   comment add              Post a comment on a PR or an issue and print its URL
+  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
+  release list             List a repository's releases, newest first, one line each
+  tag view                 Print the commit a repository's tag points to (exit 9 when not found)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -796,6 +802,105 @@ been posted); 2 a usage error.
 USAGE
 }
 
+usage_release_view() {
+    cat << USAGE
+Usage: cfwf release view --repo <owner/repo>
+
+Prints the latest release of a repository in a single read. It only reads, so the repository can
+be any the caller can see, such as that of a GitHub Action.
+
+--repo  Always required; never taken from the current directory.
+There is no option that names a release: only the latest is printed. --json, --jq and --template
+are not options: the output has one fixed format.
+
+The latest release is the one GitHub marks as latest, which is never a draft or a pre-release.
+
+Output, one line for each field, in this order:
+  tag           the release's tag
+  published-at  when it was published
+  url           the release's URL
+  name          the release's name; nothing after the tab when it has none
+Each line is <field><TAB><value>. Each control character in a value (a tab or a newline included)
+is printed as a space, so a line is always one field. The tag and the name are chosen by whoever
+publishes the release, so read them as untrusted text. The release's notes are never printed.
+
+Run 'cfwf tag view' with the tag for the commit to pin it to.
+
+Exit codes: 0 printed; ${RELEASE_NOT_FOUND_EXIT} the repository has no latest release; 1 a runtime failure, such as a gh
+or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_release_list() {
+    cat << USAGE
+Usage: cfwf release list --repo <owner/repo>
+
+Lists the releases of a repository in a single read, one line each. It only reads, so the
+repository can be any the caller can see, such as that of a GitHub Action.
+
+--repo  Always required; never taken from the current directory.
+--json, --jq, --limit, --order, --exclude-drafts and --exclude-pre-releases are not options: the
+output has one fixed format.
+
+Output, tab separated, newest first by publication time and then by tag, with no header and no
+summary:
+  <tag>  <published-at>  <flags>  <name>
+Each line has exactly four tab-separated fields and none is empty: a field with no value is "-".
+Each control character in a field (a tab or a newline included) is printed as a space, so a name
+can never add a line or a field. The tag and the name are chosen by whoever publishes the release,
+so read them as untrusted text. The release's notes are never printed.
+
+flags is a comma-joined list, in this order, or "-" when there is none:
+  latest      the release GitHub marks as latest. It is not always the first line: a release
+              published after it for an older version, such as a backport, is listed above it.
+  prerelease  the release is marked as a pre-release
+
+Draft releases are never listed. The order is by time, never by version: to find the lowest
+version that meets a rule, read every line. Releases published at the same time are in reverse
+text order of their tags, so v1.0.1 is above v1.0.0 and v9 is above v10.
+
+At most ${RELEASE_LIST_LIMIT} releases are listed. More than that is a runtime failure and nothing is printed,
+never part of the list.
+
+Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
+gh or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_release() {
+    usage_release_view
+    printf '\n'
+    usage_release_list
+}
+
+usage_tag_view() {
+    cat << USAGE
+Usage: cfwf tag view --repo <owner/repo> --tag <tag>
+
+Prints the commit a tag of a repository points to, which is the SHA to pin a GitHub Action to. It
+only reads, so the repository can be any the caller can see.
+
+--repo  Always required; never taken from the current directory.
+--tag   The tag's own name, such as v4 or v4.2.2, without refs/tags/ before it. It must be a tag
+        name git allows, with no control character. Only a tag is looked up, and only by its
+        exact name: never a branch, a commit SHA, a prefix or a pattern.
+--json, --jq and --template are not options: the output has one fixed format.
+
+Output, two lines, each <field><TAB><value>:
+  sha   the commit the tag points to: 40 hexadecimal digits
+  type  lightweight (the tag names the commit itself) or annotated (the tag names a tag object,
+        which names the commit)
+The sha is the commit's for both types, never the tag object's. A tag that points to anything
+else (a tree, a blob or another tag) is a runtime failure.
+
+A tag can be moved, and a major version tag such as v4 is moved on purpose: the answer is where
+the tag points now.
+
+Exit codes: 0 printed; ${TAG_NOT_FOUND_EXIT} the repository has no tag of that name; 1 a runtime failure, such as a gh
+or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 # Prints the usage of $1: a command, or a command and its subcommand as one word pair. A pair it
 # does not know prints the usage of its command, so help for a mistyped subcommand still helps.
 usage_for() {
@@ -813,6 +918,10 @@ usage_for() {
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
+        release) usage_release ;;
+        "release view") usage_release_view ;;
+        "release list") usage_release_list ;;
+        tag | "tag view") usage_tag_view ;;
         *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
     esac
@@ -931,6 +1040,14 @@ require_gh() {
     command -v gh > /dev/null 2>&1 || die "gh is not installed"
 }
 
+require_git() {
+    command -v git > /dev/null 2>&1 || die "git is not installed"
+}
+
+repository_not_found() {
+    die "the repository $1 was not found, or the caller cannot see it"
+}
+
 # Finds the open project titled "Workflow" linked to REPO (a closed one left over from a
 # replaced board is ignored) and sets PROJECT_ID, PROJECT_NUMBER and OWNER. The owner is read
 # from the project's own path rather than assumed to be the repository's owner.
@@ -1012,10 +1129,10 @@ resolve_status() {
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
 # The board read, the visibility lookup, the issue read of issue view and issue plan-status, every
-# pr checks read, the pr view read, the pr list read, the pr comments read and the read and the post
-# of pr reply go through here (resolve_project, the field list, the board listing and the
-# closing-issue labels still call gh directly); each caller uses GH_OUTPUT and GH_ERROR before its
-# next gh call.
+# pr checks read, the pr view read, the pr list read, the pr comments read, the read and the post of
+# pr reply, the release view read, the release list read and the tag view reads go through here
+# (resolve_project, the field list, the board listing and the closing-issue labels still call gh
+# directly); each caller uses GH_OUTPUT and GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -1045,6 +1162,10 @@ gh_failure_text() {
 # [[:cntrl:]] as ASCII only, so it would let a C1 control such as U+009B (CSI) through, where jq's
 # would not.
 readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; " ");'
+# A jq definition, put before a filter that uses it: field is one field of a tab-separated row, the
+# value it is given as a printable string, or - when there is none. No field is ever empty, because
+# a reader that splits a row on tabs with read collapses consecutive tabs.
+readonly ROW_FIELD_DEF="${PRINTABLE_DEF}"' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -1505,7 +1626,7 @@ repository_is_public() {
 # Any other failure dies with $2.
 target_is_public() {
     repository_is_public "$1" "$2" && return 0
-    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" != missing ] || die "the repository ${1} was not found, or the caller cannot see it"
+    [ "${REPOSITORY_VISIBILITY["${1,,}"]}" != missing ] || repository_not_found "$1"
     return 1
 }
 
@@ -1800,14 +1921,24 @@ cmd_body() {
 # goes in an API path.
 valid_branch_name() {
     local name="$1"
-    command -v git > /dev/null 2>&1 || die "git is not installed"
+    require_git
     [ -n "${name}" ] && [ "$(GIT_DIR=/dev/null git check-ref-format --branch "${name}" 2> /dev/null)" = "${name}" ]
 }
 
-# Prints the branch name $1 as it goes in an API path: each byte other than a letter, digit, ., _,
-# ~, - or / percent-encoded, so no name can alter the path or the query. / is kept, because GitHub
-# reads a branch name with slashes from the rest of the path. valid_branch_name has already refused
-# a . or .. component, the only path segments left unencoded that could change the path.
+# Succeeds when $1 is a tag name git allows, judged by git as valid_branch_name judges a branch.
+# The whole ref is checked, so a name that only a branch cannot have (a leading -, HEAD) is a tag
+# like any other, and a . or .. component, which could change an API path, is refused.
+valid_tag_name() {
+    local name="$1"
+    require_git
+    [ -n "${name}" ] && GIT_DIR=/dev/null git check-ref-format "refs/tags/${name}" 2> /dev/null
+}
+
+# Prints the branch or tag name $1 as it goes in an API path: each byte other than a letter, digit,
+# ., _, ~, - or / percent-encoded, so no name can alter the path or the query. / is kept, because
+# GitHub reads a name with slashes from the rest of the path. The caller's own check
+# (valid_branch_name or valid_tag_name) has already refused a . or .. component, the only path
+# segments left unencoded that could change the path.
 branch_path() {
     local LC_ALL=C
     local name="$1" encoded="" char code index
@@ -1936,8 +2067,7 @@ resolve_checks_head() {
         HEAD_SHA="${BRANCH_TIP}"
         RULES_BRANCH="${BRANCH}"
     else
-        api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' \
-            || die "the repository ${REPO} was not found, or the caller cannot see it"
+        api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' || repository_not_found "${REPO}"
         HEAD_SHA="${SHA}"
         RULES_BRANCH="${GH_OUTPUT}"
     fi
@@ -2337,9 +2467,10 @@ assign_list_option() {
 }
 
 # Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
-# (git refuses both, so valid_branch_name is asked first), matched byte by byte in the C locale as the
-# leak rules are. git allows a C1 control in a branch name, and pr list prints one as a space,
-# so a --head holding one could never equal the head it is compared with.
+# (git refuses both, so valid_branch_name or valid_tag_name is asked first), matched byte by byte in
+# the C locale as the leak rules are. git allows a C1 control in a branch or tag name, and GitHub's
+# answer has one made printable, a space, before it is compared (the head in pr list, the ref in
+# resolve_tag), so a --head or a --tag holding one could never equal what it is compared with.
 holds_control_character() {
     local LC_ALL=C
     [[ "$1" =~ ${CONTROL_PATTERN} ]]
@@ -2352,14 +2483,28 @@ holds_control_character() {
 pr_list_program() {
     local holds_issue=false
     [ -z "${ISSUE}" ] || holds_issue="(.headRefName // \"\" | test(\"(^|[^0-9])0*${ISSUE}([^0-9]|\$)\"))"
-    printf '%s' "${PRINTABLE_DEF}" \
-        ' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;' \
+    printf '%s' "${ROW_FIELD_DEF}" \
         ' sort_by(.number) | (length | tostring), (.[] | [(.number | field), (.headRefName | field), (.baseRefName | field), (.author.login | field),' \
         ' (if .isDraft then "draft" else "ready" end),' \
         " ([(if ${holds_issue} then \"issue\" else empty end)," \
         ' (if .author.login == "app/github-actions" then "github-actions" else empty end),' \
         ' (if .isCrossRepository then "fork" else empty end)] | join(",") | field),' \
         ' (.url | field), (.title | field)] | join("\t"))'
+}
+
+# Sets COUNTED_ROWS to the rows of the listing in GH_OUTPUT, whose first line is the number of rows
+# its jq program says follow. That number must be one, at most $1 (otherwise the run dies with $3)
+# and the number of rows that did follow: a row a value managed to add, or an answer cut short, dies
+# with $2, so a caller that prints the rows never prints part of a list or a forged line.
+COUNTED_ROWS=()
+take_counted_rows() {
+    local limit="$1" unexpected="$2" too_many="$3" count
+    mapfile -t COUNTED_ROWS <<< "${GH_OUTPUT}"
+    count="${COUNTED_ROWS[0]}"
+    COUNTED_ROWS=("${COUNTED_ROWS[@]:1}")
+    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "${unexpected}"
+    [ "${count}" -le "${limit}" ] || die "${too_many}"
+    [ "${count}" -eq "${#COUNTED_ROWS[@]}" ] || die "${unexpected}"
 }
 
 # Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
@@ -2371,28 +2516,22 @@ pr_list() {
     require REPO --repo
     require_gh
 
-    local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))") rows=()
+    local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))")
     local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
-    local count row number head
+    local row number head
     [ -z "${LIST_HEAD}" ] || listing+=(--head "${LIST_HEAD}")
     listing+=(--json "number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url" --jq "$(pr_list_program)")
     gh_capture "${listing[@]}" || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
 
-    mapfile -t rows <<< "${GH_OUTPUT}"
-    count="${rows[0]}"
-    rows=("${rows[@]:1}")
-    [[ "${count}" =~ ^[0-9]{1,9}$ ]] || die "${unexpected}"
-    [ "${count}" -le "${PR_LIST_LIMIT}" ] \
-        || die "${REPO} has more than ${PR_LIST_LIMIT} open pull requests, so none is printed"
-    [ "${count}" -eq "${#rows[@]}" ] || die "${unexpected}"
-    for row in "${rows[@]}"; do
+    take_counted_rows "${PR_LIST_LIMIT}" "${unexpected}" "${REPO} has more than ${PR_LIST_LIMIT} open pull requests, so none is printed"
+    for row in "${COUNTED_ROWS[@]}"; do
         number="${row%%$'\t'*}"
         head="${row#*$'\t'}"
         head="${head%%$'\t'*}"
         [[ "${number}" =~ ^[0-9]+$ ]] || die "${unexpected}"
         [ -z "${LIST_HEAD}" ] || [ "${head}" = "${LIST_HEAD}" ] || die "${unexpected}"
     done
-    [ "${count}" -eq 0 ] || printf '%s\n' "${rows[@]}"
+    [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
 }
 
 COMMENT_ID=""
@@ -2806,6 +2945,135 @@ cmd_comment() {
     dispatch_subcommand comment add comment_add -- "$@"
 }
 
+assign_release_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo)
+            assign_once REPO "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
+        --tag)
+            assign_once TAG "${flag}"
+            if ! valid_tag_name "${value}" || holds_control_character "${value}"; then
+                usage_error "invalid value for ${flag}: it must be a tag name git allows, with no control character"
+            fi
+            TAG="${value}"
+            ;;
+    esac
+}
+
+# Ends a run whose read of something in REPO was answered 404, which is also how GitHub answers
+# when the repository itself is not there or the caller cannot see it. That is a failed read, never
+# a not found, so the repository is read first, and only when it is there does the run exit $1 with
+# the message $2.
+not_found_in_repository() {
+    local code="$1" message="$2"
+    api_read "could not read ${REPO}" "repos/${REPO}" '.id' || repository_not_found "${REPO}"
+    printf 'cfwf: %s\n' "${message}" >&2
+    exit "${code}"
+}
+
+# The jq program of release view: a line for each field, its name, a tab and its value made
+# printable, with the name, the free text, last. The release's notes are never read.
+readonly RELEASE_VIEW_PROGRAM="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'\
+' line("tag"; .tag_name), line("published-at"; .published_at), line("url"; .html_url), line("name"; .name)'
+
+# Prints the latest release of REPO, the one GitHub marks as latest, from one read. The tag is what
+# a caller goes on to look up, so a release with none is refused.
+release_view() {
+    local first
+    parse_command_options assign_release_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    api_read "could not read the latest release of ${REPO}" "repos/${REPO}/releases/latest" \
+        "${RELEASE_VIEW_PROGRAM}" \
+        || not_found_in_repository "${RELEASE_NOT_FOUND_EXIT}" "${REPO} has no latest release"
+    first="${GH_OUTPUT%%$'\n'*}"
+    [[ "${first}" == "tag"$'\t'?* ]] || die "gh returned an unexpected result for the latest release of ${REPO}"
+    printf '%s\n' "${GH_OUTPUT}"
+}
+
+# The most releases release list prints. One more is asked for, so a repository with more is seen
+# to have more and is refused, never listed in part.
+readonly RELEASE_LIST_LIMIT=1000
+# The jq program of release list: the number of releases on its first line, then a row for each,
+# newest first. A draft is dropped here as well as by gh, so one gh returned all the same is never
+# listed. Publication times are ISO 8601 in UTC, which sort as text.
+readonly RELEASE_LIST_PROGRAM="${ROW_FIELD_DEF}"' map(select(.isDraft != true)) | sort_by([(.publishedAt // ""), (.tagName // "")]) | reverse'\
+' | (length | tostring), (.[] | [(.tagName | field), (.publishedAt | field),'\
+' ([(if .isLatest == true then "latest" else empty end), (if .isPrerelease == true then "prerelease" else empty end)] | join(",") | field),'\
+' (.name | field)] | join("\t"))'
+# A row of release list: four fields, none empty, the third one of the values flags can have.
+readonly RELEASE_ROW_PATTERN=$'^[^\t]+\t[^\t]+\t(-|latest|prerelease|latest,prerelease)\t[^\t]+$'
+
+# Lists the releases of REPO in one read. Nothing is printed until the whole answer has been
+# checked: the count and the rows (take_counted_rows), and the shape of each row.
+release_list() {
+    local unexpected row
+    parse_command_options assign_release_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    unexpected="gh returned an unexpected result for the releases of ${REPO}"
+    gh_capture release list --repo "${REPO}" --exclude-drafts --limit "$((RELEASE_LIST_LIMIT + 1))" \
+        --json "tagName,name,isDraft,isPrerelease,isLatest,publishedAt" --jq "${RELEASE_LIST_PROGRAM}" \
+        || die "could not list the releases of ${REPO}: $(gh_failure_text)"
+
+    take_counted_rows "${RELEASE_LIST_LIMIT}" "${unexpected}" "${REPO} has more than ${RELEASE_LIST_LIMIT} releases, so none is printed"
+    for row in "${COUNTED_ROWS[@]}"; do
+        [[ "${row}" =~ ${RELEASE_ROW_PATTERN} ]] || die "${unexpected}"
+    done
+    [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
+}
+
+cmd_release() {
+    dispatch_subcommand release view release_view list release_list -- "$@"
+}
+
+TAG_COMMIT=""
+TAG_TYPE=""
+
+# Sets TAG_COMMIT to the commit the tag TAG of REPO points to and TAG_TYPE to lightweight or
+# annotated. Only refs/tags/<TAG> is read, and the ref GitHub answers with must be exactly it, so
+# neither a branch of the same name nor a tag that only starts with it is ever taken for the tag.
+# A lightweight tag names the commit itself; an annotated one names a tag object, which is read
+# for the commit it names. That one step is all that is followed: a tag of a tag, or of anything
+# that is not a commit, dies. The SHA of the tag object is checked before it goes in a path. A tag
+# that is not there, a 404 on the first read, exits TAG_NOT_FOUND_EXIT; a tag object that is not,
+# which GitHub has just named, is an unexpected answer.
+resolve_tag() {
+    local ref type sha end
+    local failure="could not read the --tag of ${REPO}" unexpected="gh returned an unexpected result for the --tag of ${REPO}"
+    api_read "${failure}" "repos/${REPO}/git/ref/tags/$(branch_path "${TAG}")" \
+        "${FIELDS_ROW_DEF} [.ref, .object.type, .object.sha, \"end\"] | fields_row" \
+        || not_found_in_repository "${TAG_NOT_FOUND_EXIT}" "the --tag was not found in ${REPO}"
+    IFS="${ROW_SEPARATOR}" read -r ref type sha end <<< "${GH_OUTPUT}"
+    [[ "${ref}" = "refs/tags/${TAG}" && "${sha}" =~ ^[0-9a-f]{40}$ && "${end}" = end ]] || die "${unexpected}"
+    TAG_TYPE=lightweight
+    if [ "${type}" = tag ]; then
+        TAG_TYPE=annotated
+        api_read "${failure}" "repos/${REPO}/git/tags/${sha}" \
+            "${FIELDS_ROW_DEF} [.object.type, .object.sha, \"end\"] | fields_row" \
+            || die "${unexpected}"
+        IFS="${ROW_SEPARATOR}" read -r type sha end <<< "${GH_OUTPUT}"
+        [[ "${sha}" =~ ^[0-9a-f]{40}$ && "${end}" = end ]] || die "${unexpected}"
+    fi
+    [ "${type}" = commit ] || die "the --tag of ${REPO} does not point to a commit, itself or through one annotated tag"
+    TAG_COMMIT="${sha}"
+}
+
+tag_view() {
+    parse_command_options assign_release_option "--repo --tag" "" "$@"
+    require REPO --repo
+    require TAG --tag
+    require_gh
+    resolve_tag
+    printf 'sha\t%s\ntype\t%s\n' "${TAG_COMMIT}" "${TAG_TYPE}"
+}
+
+cmd_tag() {
+    dispatch_subcommand tag view tag_view -- "$@"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -2825,6 +3093,8 @@ main() {
         body) cmd_body "$@" ;;
         pr) cmd_pr "$@" ;;
         comment) cmd_comment "$@" ;;
+        release) cmd_release "$@" ;;
+        tag) cmd_tag "$@" ;;
         *) unknown_argument command "$(($# + 1))" ;;
     esac
 }
