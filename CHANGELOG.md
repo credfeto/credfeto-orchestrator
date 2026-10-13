@@ -76,6 +76,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - The fleet health check now reports stalled and quit sessions from the per-day session-denials logs, to the private Discord channel only, and no longer excludes a denial that ended a session as known-by-design (#1561)
 - cfwf body leak check also refuses npm tokens, Google API keys, an Authorization or Proxy-Authorization header with a value after its colon or equals sign, a password in the user:password@ part of a URL, x-access-token Git URLs, legacy OpenAI keys and AWS temporary access key IDs (#1614)
 - The `Locally Maintained` marker now appears only in the local instruction index; it was removed from the individual local instruction files (#1581)
+- The tracking issue that oneshot files when it cannot parse a Claude rate-limit reset time is now titled oneshot: Unparseable Claude rate-limit reset time, so it follows the repository's issue title format, and the lookup for an open tracking issue uses the same title (#1609)
 ### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
