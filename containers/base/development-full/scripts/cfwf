@@ -1475,8 +1475,7 @@ assign_once() {
     [ -z "${!1}" ] || usage_error "$2 can only be given once${3:+: $3}"
 }
 
-# Assigns --repo, once: the --repo arm of an assign function, and the one option of repo view and
-# repo collaborators.
+# Assigns --repo ($1) its value $2, refusing a second one.
 assign_repository_option() {
     assign_once REPO "$1"
     assign_option "$1" "$2"
@@ -1937,10 +1936,12 @@ dispatch_subcommand() {
 assign_issue_read_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo) assign_once REPO "${flag}" ;;
-        --issue) assign_once ISSUE "${flag}" ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            ;;
     esac
-    assign_option "${flag}" "${value}"
 }
 
 # Parses and checks the options of a command that reads one issue: --repo and --issue, both
@@ -2121,7 +2122,7 @@ readonly HOST_NAME_PATTERN='^[A-Za-z0-9.-]+(:[0-9]+)?$'
 # The first line of gh --version, whose version number is all that is kept of it.
 readonly GH_VERSION_PATTERN='^gh version ([0-9]+(\.[0-9]+)+[0-9A-Za-z.+-]*)( |$)'
 
-# The one option of auth status, --rate-limit, which takes no value.
+# --rate-limit takes no value, so a second one changes nothing and is not refused.
 assign_auth_option() {
     RATE_LIMIT_ASKED=1
 }
