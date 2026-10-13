@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Fingerprinting Instructions
 
 [Back to Local Instructions Index](index.md)

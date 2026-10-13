@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Docker Base Image Instructions
 
 [Back to Local Instructions Index](index.md)

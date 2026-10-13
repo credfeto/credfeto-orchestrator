@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Time Reporting
 
 [Back to Local Instructions Index](index.md)

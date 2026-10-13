@@ -1,4 +1,3 @@
-<!-- Locally Maintained -->
 # Oneshot Prompt Instructions
 
 [Back to Local Instructions Index](index.md)
