@@ -25,7 +25,8 @@ setup() {
         'jq_expr=""; prev=""' \
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
-        'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json"; exit ;; " api repos/"*"/collaborators?"*) f="${GH_FIXTURES}/collaborators.out"; [ -f "${f}" ] && { cat "${f}"; exit 0; } ;; esac' \
+        'emit_asked() { f="$1"; shift; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json"; }' \
+        'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit_asked "${f}" "$@"; exit ;; " api repos/"*"/collaborators?"*) f="${GH_FIXTURES}/collaborators.out"; [ -f "${f}" ] && { cat "${f}"; exit 0; } ;; esac' \
         'case "$1 $2" in' \
         '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; jq --arg hd "${hd}" --argjson lim "${lim}" "[.[] | select(\$hd == \"\" or .headRefName == \$hd)] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "repo view") case " $* " in *" --json visibility "*) v="${3,,}"; f="${GH_FIXTURES}/visibility-${v//\//_}"; [ -f "${f}.fail" ] && { if [ -s "${f}.fail" ]; then cat "${f}.fail" >&2; else echo "HTTP 502: Bad Gateway" >&2; fi; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit "${f}.json"; exit 0 ;; esac; [ -f "${GH_FIXTURES}/repo-view.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/repo-view.json" ;;' \
@@ -34,7 +35,7 @@ setup() {
         '  "project item-edit") [ -f "${GH_FIXTURES}/item-edit.fail" ] && { echo "boom" >&2; exit 1; }; exit 0 ;;' \
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
-        '  "pr view") [ -f "${GH_FIXTURES}/pr-view.fail" ] && { cat "${GH_FIXTURES}/pr-view.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${GH_FIXTURES}/pr-view.json" > "${GH_FIXTURES}/pr-view.asked.json"; emit "${GH_FIXTURES}/pr-view.asked.json" ;;' \
+        '  "pr view") [ -f "${GH_FIXTURES}/pr-view.fail" ] && { cat "${GH_FIXTURES}/pr-view.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit_asked "${GH_FIXTURES}/pr-view" "$@" ;;' \
         '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
@@ -4447,6 +4448,14 @@ run_pr_checks() {
     [ "$(gh_call_count "pulls/")" -eq 0 ]
 }
 
+@test "pr checks --sha exits 1 with the repository message and nothing on stdout for a repository GitHub does not show the caller" {
+    run_pr_checks --sha "${HEAD_SHA}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    [ "$(gh_call_count "api repos/${REPO} --jq ")" -eq 1 ]
+}
+
 @test "pr checks never counts a run on an older head" {
     prepare_pr_checks
     write_check_runs "${OLD_SHA}" "$(check_run build failure 9 completed "${OLD_SHA}")"
@@ -5594,8 +5603,7 @@ repository_fixture() {
 write_repository_metadata() {
     jq -n '{defaultBranchRef: {name: "main"}, description: "Runs the agents", visibility: "PUBLIC",
             mergeCommitAllowed: true, squashMergeAllowed: false, rebaseMergeAllowed: false,
-            name: "decoy-name", url: "https://example.com/decoy"}' \
-        | jq "${1:-.}" > "$(repository_fixture).json"
+            name: "decoy-name", url: "https://example.com/decoy"} | '"${1:-.}" > "$(repository_fixture).json"
 }
 
 # Makes the repo view read of REPO fail with the error text $1.
@@ -5629,16 +5637,24 @@ write_collaborators() {
     printf '%s\n' "$@" | jq -s '.' | write_api "${COLLABORATORS_ENDPOINT}"
 }
 
+# Writes the rate limits as the REST API answers them, with fields auth status does not ask for. An
+# optional jq filter $1 changes them; further arguments are options for jq.
+write_rate_limit() {
+    local filter="${1:-.}"
+    shift || true
+    jq -n --argjson core "${CORE_RESET}" --argjson graphql "${GRAPHQL_RESET}" "$@" \
+        '{resources: {core: {limit: 5000, remaining: 4992, reset: $core, used: 8},
+                      search: {limit: 30, remaining: 29, reset: 1, used: 1},
+                      graphql: {limit: 6000, remaining: 5996, reset: $graphql, used: 4}},
+          rate: {limit: 1, remaining: 1, reset: 1, used: 0}} | '"${filter}" | write_api rate_limit
+}
+
 # Writes the answers auth status reads: the first lines of gh --version, the authenticated user
 # credfeto and the rate limits, each with fields auth status does not ask for.
 prepare_auth_status() {
     printf '%s\n' "gh version 2.102.0 (2026-09-30)" "https://github.com/cli/cli/releases/tag/v2.102.0" > "${GH_FIXTURES}/gh-version.out"
     jq -n '{login: "credfeto", id: 1, name: "decoy-name", email: "decoy@example.com"}' | write_api user
-    jq -n --argjson core "${CORE_RESET}" --argjson graphql "${GRAPHQL_RESET}" \
-        '{resources: {core: {limit: 5000, remaining: 4992, reset: $core, used: 8},
-                      search: {limit: 30, remaining: 29, reset: 1, used: 1},
-                      graphql: {limit: 6000, remaining: 5996, reset: $graphql, used: 4}},
-          rate: {limit: 1, remaining: 1, reset: 1, used: 0}}' | write_api rate_limit
+    write_rate_limit
 }
 
 # Runs auth status with no GH_HOST, whatever the host running the tests has set.
@@ -5649,6 +5665,12 @@ run_auth_status() {
 # The three lines auth status always prints, for the host $1 (github.com when none is given).
 auth_status_lines() {
     printf 'login\tcredfeto\nhost\t%s\ngh\t2.102.0' "${1:-github.com}"
+}
+
+# The six lines --rate-limit adds for the rate limits write_rate_limit writes.
+rate_limit_lines() {
+    printf 'core-remaining\t4992\ncore-limit\t5000\ncore-reset\t%s\ngraphql-remaining\t5996\ngraphql-limit\t6000\ngraphql-reset\t%s' \
+        "${CORE_RESET_AT}" "${GRAPHQL_RESET_AT}"
 }
 
 @test "repo view, repo collaborators and auth status help is the same from -h, --help and help with the command and its subcommand, is that command's alone, states its format, order, limit, refusals and exit codes, help repo gives both repo usages, and none calls gh" {
@@ -6106,7 +6128,7 @@ auth_status_lines() {
     prepare_auth_status
     run_auth_status --rate-limit
     [ "${status}" -eq 0 ]
-    [ "${output}" = "$(auth_status_lines)"$'\n'"core-remaining"$'\t'"4992"$'\n'"core-limit"$'\t'"5000"$'\n'"core-reset"$'\t'"${CORE_RESET_AT}"$'\n'"graphql-remaining"$'\t'"5996"$'\n'"graphql-limit"$'\t'"6000"$'\n'"graphql-reset"$'\t'"${GRAPHQL_RESET_AT}" ]
+    [ "${output}" = "$(auth_status_lines)"$'\n'"$(rate_limit_lines)" ]
     [ -z "${stderr}" ]
     [ "$(wc -l < "${GH_LOG}")" -eq 3 ]
     [ "$(sed -n 1p "${GH_LOG}")" = "--version" ]
@@ -6115,17 +6137,10 @@ auth_status_lines() {
 }
 
 @test "auth status takes --rate-limit given twice as given once, as pr checks takes --all: the same nine lines from the same three gh calls" {
-    local once
     prepare_auth_status
-    run_auth_status --rate-limit
-    [ "${status}" -eq 0 ]
-    once="${output}"
-    [ "$(wc -l <<< "${once}")" -eq 9 ]
-
-    rm -f "${GH_LOG}"
     run_auth_status --rate-limit --rate-limit
     [ "${status}" -eq 0 ]
-    [ "${output}" = "${once}" ]
+    [ "${output}" = "$(auth_status_lines)"$'\n'"$(rate_limit_lines)" ]
     [ -z "${stderr}" ]
     [ "$(wc -l < "${GH_LOG}")" -eq 3 ]
     [ "$(gh_call_count "api rate_limit")" -eq 1 ]
@@ -6133,10 +6148,10 @@ auth_status_lines() {
 
 @test "auth status exits 1 with not authenticated, and prints nothing, for an HTTP 401 or gh's own prompt to log in, from the user read or the rate limit read, and never for the same words on the stdout of a read that failed otherwise" {
     local error endpoint
+    prepare_auth_status
     for error in "gh: Bad credentials (HTTP 401)" "gh: Requires authentication (HTTP 401)" \
         $'To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.'; do
         for endpoint in user rate_limit; do
-            prepare_auth_status
             fail_api "${endpoint}" "${error}"
             run_auth_status --rate-limit
             [ "${status}" -eq 1 ] || { echo "${endpoint}: ${error}" >&2; return 1; }
@@ -6152,7 +6167,6 @@ auth_status_lines() {
     for endpoint in user rate_limit; do
         message="could not read the authenticated user"
         [ "${endpoint}" = user ] || message="could not read the rate limit"
-        prepare_auth_status
         printf '%s\n' "${body}" > "$(api_fixture "${endpoint}").failout"
         fail_api "${endpoint}"
         run_auth_status --rate-limit
@@ -6177,7 +6191,6 @@ auth_status_lines() {
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not read the authenticated user: gh: Bad Gateway (HTTP 502)" ]
 
-    prepare_auth_status
     rm -f "$(api_fixture user).fail"
     fail_api rate_limit $'gh: Not Found (HTTP 404)\nsecond-line-marker'
     run_auth_status --rate-limit
@@ -6194,8 +6207,8 @@ auth_status_lines() {
 
 @test "auth status prints nothing and exits 1 for a gh version, a login or a rate limit that is not what it expects, and takes a version of two or more parts, with a suffix or with nothing after it" {
     local version login filter
+    prepare_auth_status
     for version in "" "gh version" "gh version DEV" "GitHub CLI 2.102.0" "gh version v2.102.0" "version 2.102.0" "gh version 2" $'\ngh version 2.102.0'; do
-        prepare_auth_status
         printf '%s\n' "${version}" > "${GH_FIXTURES}/gh-version.out"
         run_auth_status
         [ "${status}" -eq 1 ] || { echo "printed: ${version}" >&2; return 1; }
@@ -6203,7 +6216,6 @@ auth_status_lines() {
         [ "${stderr}" = "cfwf: gh returned an unexpected version" ]
     done
     for version in "2.102.0" "2.40" "2.103.0-pre.1" "2.102.0+build.5"; do
-        prepare_auth_status
         printf '%s\n' "gh version ${version} (2026-09-30)" > "${GH_FIXTURES}/gh-version.out"
         run_auth_status
         [ "${status}" -eq 0 ]
@@ -6216,7 +6228,6 @@ auth_status_lines() {
     # An empty login and a null one are two paths: the null is what the program's own alternative
     # turns into an empty value, and without it would print as the word null, which is a login's shape.
     for login in '""' 'null' '"two words"' '"line\nlogin\tmallory"' '"a/b"' '"tab\tbed"'; do
-        prepare_auth_status
         jq -n "{login: ${login}}" | write_api user
         run_auth_status
         [ "${status}" -eq 1 ] || { echo "printed: ${login}" >&2; return 1; }
@@ -6224,12 +6235,11 @@ auth_status_lines() {
         [ "${stderr}" = "cfwf: gh returned an unexpected result for the authenticated user" ]
     done
 
+    prepare_auth_status
     for filter in '.resources.core.remaining = "many"' '.resources.core.limit = null' '.resources.core.reset = "soon"' \
         '.resources.graphql.remaining = -1' '.resources.graphql.limit = 1.5' 'del(.resources.graphql.reset)' \
         'del(.resources.graphql)' 'del(.resources)' '.resources.core.remaining = "1\u001f2"'; do
-        prepare_auth_status
-        jq "${filter}" "$(api_fixture rate_limit).json" > "${TEST_TMP}/rate.json"
-        write_api rate_limit < "${TEST_TMP}/rate.json"
+        write_rate_limit "${filter}"
         run_auth_status --rate-limit
         [ "${status}" -eq 1 ] || { echo "printed: ${filter}" >&2; return 1; }
         [ -z "${output}" ]
@@ -6242,8 +6252,7 @@ auth_status_lines() {
     token="gh""p_$(run_of Z 36)"
     prepare_auth_status
     jq -n --arg token "${token}" '{login: "credfeto", token: $token, authorization: ("Bearer " + $token)}' | write_api user
-    jq --arg token "${token}" '.token = $token | .resources.core.token = $token' "$(api_fixture rate_limit).json" > "${TEST_TMP}/rate.json"
-    write_api rate_limit < "${TEST_TMP}/rate.json"
+    write_rate_limit ".token = \$token | .resources.core.token = \$token" --arg token "${token}"
 
     run --separate-stderr env GH_TOKEN="${token}" GITHUB_TOKEN="${token}" GH_ENTERPRISE_TOKEN="${token}" GH_HOST=github-api.example.com \
         "${SCRIPT}" auth status --rate-limit
