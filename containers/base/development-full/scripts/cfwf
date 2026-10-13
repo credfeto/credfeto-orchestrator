@@ -141,6 +141,7 @@ readonly GITHUB_RESERVED_PATHS=" about account advisories apps codespaces collec
 readonly PRIORITIES=(Security Urgent High Medium Low)
 readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
 readonly NEW_ISSUE_STATUS="Not Started"
+readonly NEW_PR_STATUS="Development"
 # The ten workflow states, in board order, which the project's built-in "Status" field carries
 # (#1519). cfwf is installed alone and cannot source lib/project-status, which holds the same list;
 # test/status-mapping-parity.bats fails when the two differ.
@@ -224,6 +225,8 @@ BODY_FILE=""
 PRIORITY=""
 LABELS=()
 CREATED_URL=""
+# What the EXIT trap says of CREATED_URL when a run fails after the item it names came to be.
+CREATED_NOTE="the issue was already created"
 BODY_PATH_TMP=""
 SCAN_TMP=""
 VALUE_TMP=""
@@ -237,11 +240,12 @@ die() {
 }
 
 # The EXIT trap, installed once in main: removes every temporary file cfwf may have made, and,
-# when it exits non-zero after an issue was created, names that issue so it is never lost.
+# when it exits non-zero after an issue or a pull request was created, or an existing pull request
+# was found, names it (CREATED_NOTE says which) so it is never lost.
 cleanup() {
     local exit_status=$?
     if [ "${exit_status}" -ne 0 ] && [ -n "${CREATED_URL}" ]; then
-        printf 'cfwf: the issue was already created: %s\n' "${CREATED_URL}" >&2
+        printf 'cfwf: %s: %s\n' "${CREATED_NOTE}" "${CREATED_URL}" >&2
     fi
     rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}"
 }
@@ -275,6 +279,7 @@ Commands:
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
+  pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
   comment add              Post a comment on a PR or an issue and print its URL
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
@@ -311,8 +316,9 @@ when it has none. It exits non-zero when the item is not on the board.
 
 --check reads the board with a read-only GraphQL query for the single item (gh api graphql),
 because gh project has no command that reads one item and listing the whole board is capped
-and can be slow to show a freshly added item. --check and 'cfwf pr comments' are the only
-places cfwf uses GraphQL, and both only read:
+and can be slow to show a freshly added item. This query (which 'cfwf pr create' also makes,
+for a pull request that already exists) and that of 'cfwf pr comments' are the only places
+cfwf uses GraphQL, and both only read:
 every board write uses native gh project commands, and every other write a native gh command
 or the REST API. If the query fails, cfwf warns on stderr and falls back to listing the board.
 USAGE
@@ -606,6 +612,60 @@ review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
+Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board.
+USAGE
+}
+
+usage_pr_create() {
+    cat << USAGE
+Usage: cfwf pr create --repo <owner/repo> --head <branch> --title <title> --body-file <file|-> [--base <branch>]
+
+Creates a draft pull request and puts it on the repository's Workflow board in one step, as
+${NEW_PR_STATUS}, then prints the pull request URL and nothing else. When the head branch already has an
+open pull request, none is created: that one's URL is printed instead (see below).
+
+--repo       Always required; never taken from the current directory.
+--head       Always required: the name of the head branch, which must already be pushed to the
+             repository. The branch name alone, not the owner:branch form, and never taken from
+             the current directory. A branch in a fork is not supported.
+--title      Always required: a Conventional Commits title, <type>[(<scope>)][!]: <description>,
+             with a lower-case type, such as "feat(cfwf): add a command". At most ${TITLE_LIMIT}
+             characters. It is checked for leaks as the body is.
+--body-file  Always required: the pull request body, a regular file, or - to read it from stdin
+             (a pipe or /dev/stdin is not a regular file; use -). An empty body is an error. It is
+             read once, into a private copy that is both checked and posted, so a later change to
+             the file is not posted. There is no --body.
+--base       Optional: the branch to merge into. Default: the repository's default branch, read
+             from GitHub. It must not be the --head.
+The pull request is always a draft and always ${NEW_PR_STATUS}: there is no --draft, --ready or --status,
+and --label, --assignee, --reviewer, --fill, --web, --json and --jq are not options either.
+
+Everything is checked before anything is created, including that a Workflow board is linked to
+the repository and that the head branch is there, so a bad call leaves no pull request behind.
+The body is checked for leaks before anything is read from the board or created (see
+'cfwf help body'), and so is the title, with the same rules except the length. A refused body
+exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" on stderr and a refused title with "cfwf: title refused:
+<rule>" (never naming which text matched), and nothing is created.
+
+When a pull request already exists. The same pull request is an open one in this repository whose
+head branch is exactly --head, whatever its base; one from a fork's branch of the same name is
+ignored. cfwf looks for it before creating, and again if the create fails (so one opened in the
+meantime is found; the create is never run twice). When there is one, cfwf exits 0 and prints its
+URL: its title, body and draft state are neither read nor changed, and stderr carries
+  cfwf: note: an open pull request already exists for the --head (base <base>); its title and body were not changed
+Its Workflow status only moves forward: one that is not on the board, has no status or is before
+${NEW_PR_STATUS} is set to ${NEW_PR_STATUS}, and one at ${NEW_PR_STATUS} or later is left as it is. The
+title and body given are still checked in full, so a bad call fails the same way either way. More
+than one such pull request (the same head into two bases) is a runtime failure.
+
+If the pull request is created but the board write fails, cfwf exits 1, prints nothing on stdout
+and stderr ends with "cfwf: the pull request was already created: <url>"; a failure after an
+existing pull request was found ends with "cfwf: the pull request already exists: <url>". The
+board write is never read back.
+
+Exit codes: 0 created, or it already existed; 1 a runtime failure, such as a gh or network error,
+no Workflow board, or a head branch that is not found, prefixed "cfwf:"; 2 a usage error; ${BODY_REFUSED_EXIT} the
+body or the title was refused by the leak check.
 USAGE
 }
 
@@ -915,6 +975,7 @@ usage_for() {
         pr | "pr checks") usage_pr ;;
         "pr view") usage_pr_view ;;
         "pr list") usage_pr_list ;;
+        "pr create") usage_pr_create ;;
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
@@ -2458,12 +2519,18 @@ assign_list_option() {
             ;;
         --head)
             assign_once LIST_HEAD "${flag}"
-            if ! valid_branch_name "${value}" || holds_control_character "${value}"; then
-                usage_error "invalid value for ${flag}: it must be a branch name git allows, with no control character"
-            fi
+            validate_branch_option "${flag}" "${value}"
             LIST_HEAD="${value}"
             ;;
     esac
+}
+
+# Refuses (exit 2) the value $2 of the option $1 unless it is a branch name git allows that holds
+# no control character, never echoing it. The owner:branch form is refused by git's own rules.
+validate_branch_option() {
+    if ! valid_branch_name "$2" || holds_control_character "$2"; then
+        usage_error "invalid value for $1: it must be a branch name git allows, with no control character"
+    fi
 }
 
 # Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
@@ -2539,6 +2606,172 @@ pr_list() {
 
     read_open_pull_requests "${LIST_HEAD}"
     [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
+}
+
+PR_HEAD=""
+PR_BASE=""
+EXISTING_PR_NUMBER=""
+EXISTING_PR_BASE=""
+EXISTING_PR_URL=""
+# The shape of a Conventional Commits title: a lower-case type, an optional scope in brackets, an
+# optional ! and a colon, one space and a description that starts with a visible character.
+readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: [^[:space:]]'
+
+assign_pr_create_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --head)
+            assign_once PR_HEAD "${flag}"
+            validate_branch_option "${flag}" "${value}"
+            PR_HEAD="${value}"
+            ;;
+        --base)
+            assign_once PR_BASE "${flag}"
+            validate_branch_option "${flag}" "${value}"
+            PR_BASE="${value}"
+            ;;
+        *) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Refuses (exit 2) the title $1 of a pull request in the repository $2 unless it has the shape a
+# title must have there. This is the one place that knows the rule, which today is the same for
+# every repository.
+validate_pull_request_title() {
+    validate "$1" "${PR_TITLE_PATTERN}" --title "it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"
+}
+
+# Sets EXISTING_PR_NUMBER, EXISTING_PR_BASE and EXISTING_PR_URL to the one open pull request of
+# REPO whose head branch is PR_HEAD in REPO itself, leaving them empty when there is none. A fork's
+# pull request with a branch of the same name is anyone's to open, so it is never that one. The
+# base is not part of the match, so the same head into two bases is two, which dies: nothing says
+# which the caller means.
+find_open_pull_request() {
+    local row number base flags url found=0
+    EXISTING_PR_NUMBER=""
+    EXISTING_PR_BASE=""
+    EXISTING_PR_URL=""
+    read_open_pull_requests "${PR_HEAD}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        IFS=$'\t' read -r number _ base _ _ flags url _ <<< "${row}"
+        [[ ",${flags}," != *",fork,"* ]] || continue
+        found=$((found + 1))
+        [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/pull/${number}$ ]] \
+            || die "gh returned an unexpected result for the open pull requests of ${REPO}"
+        EXISTING_PR_NUMBER="${number}"
+        EXISTING_PR_BASE="${base}"
+        EXISTING_PR_URL="${url}"
+    done
+    [ "${found}" -le 1 ] || die "more than one open pull request has the --head as its head branch in ${REPO}"
+}
+
+# Prints the position of the workflow state $1 in WORKFLOW_STATES, the order of the board, and
+# fails when it is not one of them.
+workflow_state_index() {
+    local index
+    for index in "${!WORKFLOW_STATES[@]}"; do
+        if [ "${WORKFLOW_STATES[index]}" = "$1" ]; then
+            printf '%s' "${index}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Finishes a run that found the pull request find_open_pull_request set: puts it on the board at
+# STATUS unless it is already there at that state or a later one, since a status only moves
+# forward, then prints its URL. Its title, body and draft state are neither read nor changed, which
+# the note on stderr says, with its base, which may not be the one asked for. The status is read
+# before the write to decide whether to write; the write itself is never read back.
+use_existing_pull_request() {
+    local current wanted
+    CREATED_URL="${EXISTING_PR_URL}"
+    CREATED_NOTE="the pull request already exists"
+    TARGET_TYPE="PullRequest"
+    TARGET_NUMBER="${EXISTING_PR_NUMBER}"
+    read_target_status || die "could not read the status of ${REPO}#${TARGET_NUMBER}: both the direct query and the listing of project ${PROJECT_NUMBER} failed"
+    if [ -z "${ITEM_STATUS}" ] || [ "${ITEM_STATUS}" = "(unset)" ]; then
+        put_item_on_board "${EXISTING_PR_URL}"
+    else
+        current=$(workflow_state_index "${ITEM_STATUS}") \
+            || die "unexpected status of ${REPO}#${TARGET_NUMBER} on project ${PROJECT_NUMBER}"
+        wanted=$(workflow_state_index "${STATUS}")
+        [ "${current}" -ge "${wanted}" ] || put_item_on_board "${EXISTING_PR_URL}"
+    fi
+    printf 'cfwf: note: an open pull request already exists for the --head (base %s); its title and body were not changed\n' "${EXISTING_PR_BASE}" >&2
+    printf '%s\n' "${EXISTING_PR_URL}"
+}
+
+# Sets PR_BASE, when no --base was given, to the default branch of REPO, which must not be the head.
+resolve_pull_request_base() {
+    [ -z "${PR_BASE}" ] || return 0
+    api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' || repository_not_found "${REPO}"
+    PR_BASE="${GH_OUTPUT}"
+    valid_branch_name "${PR_BASE}" || die "gh returned an unexpected default branch for ${REPO}"
+    [ "${PR_BASE}" != "${PR_HEAD}" ] || die "the --head is the default branch of ${REPO}"
+}
+
+# Dies unless the branch PR_HEAD is in REPO, so a branch that was never pushed is refused here, in
+# words that say what to do, and not by the create. The branch is never named in a message.
+require_pushed_head() {
+    api_read "could not read the --head of ${REPO}" "repos/${REPO}/branches/$(branch_path "${PR_HEAD}")" '.name' \
+        || die "the --head was not found in ${REPO}: push the branch first"
+    [ "${GH_OUTPUT}" = "${PR_HEAD}" ] || die "gh returned an unexpected result for the --head of ${REPO}"
+}
+
+# Creates the draft pull request, puts it on the board and prints its URL. The create is run once
+# and never again: when it fails, for whatever reason, the open pull requests are read once more,
+# and one that is there now (opened in the meantime, or by this create whose answer was lost) is
+# used as an existing one, so no error text of gh's is ever matched. gh is given the head as the
+# branch name alone, which it reads as a branch of --repo itself: the owner:branch form names a
+# fork's owner, and gh does not support an organisation there.
+create_pull_request() {
+    local url failure
+    if ! gh_capture pr create --repo "${REPO}" --head "${PR_HEAD}" --base "${PR_BASE}" --draft \
+        --title "${TITLE}" --body-file "${BODY_FILE}"; then
+        failure=$(gh_failure_text)
+        find_open_pull_request
+        [ -n "${EXISTING_PR_URL}" ] || die "could not create the pull request in ${REPO}: ${failure}"
+        use_existing_pull_request
+        return 0
+    fi
+    url="${GH_OUTPUT##*$'\n'}"
+    # As for issue create, neither the host nor the repository in the URL is compared with anything.
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/pull/[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the new pull request, which may have been created"
+    CREATED_URL="${url}"
+    CREATED_NOTE="the pull request was already created"
+
+    put_item_on_board "${url}"
+    printf '%s\n' "${url}"
+}
+
+pr_create() {
+    parse_command_options assign_pr_create_option "--repo --head --base --title --body-file" "" "$@"
+    require REPO --repo
+    require PR_HEAD --head
+    require TITLE --title
+    require BODY_FILE --body-file
+    validate_pull_request_title "${TITLE}" "${REPO}"
+    [ "${PR_BASE}" != "${PR_HEAD}" ] || usage_error "--base and --head must be different branches"
+    require_gh
+    resolve_body
+    check_value_for_leaks "${TITLE}" "${REPO}" title
+
+    # The board is resolved before anything is written, so a repository with no Workflow board
+    # fails here and leaves no pull request behind.
+    STATUS="${NEW_PR_STATUS}"
+    resolve_project
+    resolve_status
+
+    find_open_pull_request
+    if [ -n "${EXISTING_PR_URL}" ]; then
+        use_existing_pull_request
+        return 0
+    fi
+    resolve_pull_request_base
+    require_pushed_head
+    create_pull_request
 }
 
 COMMENT_ID=""
@@ -2912,7 +3145,7 @@ pr_reply() {
 }
 
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks view pr_view list pr_list comments pr_comments reply pr_reply -- "$@"
+    dispatch_subcommand pr checks pr_checks view pr_view list pr_list comments pr_comments reply pr_reply create pr_create -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
