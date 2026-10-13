@@ -32,7 +32,7 @@ When more than one of the hook, Claude configuration and container scopes fits, 
 
 ## The rest of the title
 
-- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on), even in a combined form such as `fix(oneshot):`, or a `Security:` prefix, because the title says where the problem is and a label says what kind it is. Add the matching label when one fits: `Bug`, `Enhancement`, `Refactor`, `Tech Debt`, `Security` or `Performance`.
+- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on), even in a combined form such as `fix(oneshot):`, or a `Security:` prefix, because the title says where the problem is and a label says what kind it is. The scopes `docs`, `ci` and `tests` are chosen by the rules above and are allowed as the title's scope, even though `docs` and `ci` are also Conventional Commits type names, because what is banned is a type added on top of the scope or instead of it. Add the matching label when one fits: `Bug`, `Enhancement`, `Refactor`, `Tech Debt`, `Security` or `Performance`.
 - Do not add `Design:` or `Track:` as a prefix either, but keep the word in the text, for example `Track requests ...` or `... (design)`, because no label carries it.
 - Drop a leading tool name that the scope makes redundant.
 - Capitalise the first word after the scope, for example `tool(cfwf): List a repository's open issues with labels`, unless it is a code identifier, flag, file name or path, which keeps its own case.
