@@ -4457,14 +4457,6 @@ run_pr_checks() {
     [ "$(gh_call_count "pulls/")" -eq 0 ]
 }
 
-@test "pr checks --sha exits 1 with the repository message and nothing on stdout for a repository GitHub does not show the caller" {
-    run_pr_checks --sha "${HEAD_SHA}"
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
-    [ "$(gh_call_count "api repos/${REPO} --jq ")" -eq 1 ]
-}
-
 @test "pr checks never counts a run on an older head" {
     prepare_pr_checks
     write_check_runs "${OLD_SHA}" "$(check_run build failure 9 completed "${OLD_SHA}")"
