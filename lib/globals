@@ -81,7 +81,7 @@ CFWF_SCRIPT="${BASEDIR:?BASEDIR must be set by the script that sources lib/globa
 # shellcheck disable=SC2034  # read by lib/state after sourcing
 RATE_LIMIT_ISSUE_REPO="credfeto/credfeto-orchestrator"
 # shellcheck disable=SC2034  # read by lib/state after sourcing
-RATE_LIMIT_ISSUE_TITLE="Unparseable Claude rate-limit reset time"
+RATE_LIMIT_ISSUE_TITLE="oneshot: Unparseable Claude rate-limit reset time"
 
 # Title of the issue filed in an affected repo when the orchestrator cannot obtain a
 # usable "Workflow" project for it (see report_missing_workflow_project).  A bot account
