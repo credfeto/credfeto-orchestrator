@@ -2507,19 +2507,16 @@ take_counted_rows() {
     [ "${count}" -eq "${#COUNTED_ROWS[@]}" ] || die "${unexpected}"
 }
 
-# Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
-# read. Nothing is printed until the whole answer has been checked: the count gh gave must be the
-# number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each number
-# must be one; and with LIST_HEAD each head must be exactly it, whatever gh matched.
-pr_list() {
-    parse_command_options assign_list_option "--repo --issue --head" "" "$@"
-    require REPO --repo
-    require_gh
-
+# Sets COUNTED_ROWS to the rows of the open pull requests of REPO, those whose head branch is $1
+# when it is not empty, in one read, and dies unless the whole answer passes: the count gh gave must
+# be the number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each
+# number must be one; and with $1 each head must be exactly it, whatever gh matched.
+read_open_pull_requests() {
+    local wanted_head="$1"
     local -a listing=(pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))")
     local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
     local row number head
-    [ -z "${LIST_HEAD}" ] || listing+=(--head "${LIST_HEAD}")
+    [ -z "${wanted_head}" ] || listing+=(--head "${wanted_head}")
     listing+=(--json "number,title,author,headRefName,baseRefName,isDraft,isCrossRepository,url" --jq "$(pr_list_program)")
     gh_capture "${listing[@]}" || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
 
@@ -2529,8 +2526,18 @@ pr_list() {
         head="${row#*$'\t'}"
         head="${head%%$'\t'*}"
         [[ "${number}" =~ ^[0-9]+$ ]] || die "${unexpected}"
-        [ -z "${LIST_HEAD}" ] || [ "${head}" = "${LIST_HEAD}" ] || die "${unexpected}"
+        [ -z "${wanted_head}" ] || [ "${head}" = "${wanted_head}" ] || die "${unexpected}"
     done
+}
+
+# Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set. Nothing
+# is printed until read_open_pull_requests has checked the whole answer.
+pr_list() {
+    parse_command_options assign_list_option "--repo --issue --head" "" "$@"
+    require REPO --repo
+    require_gh
+
+    read_open_pull_requests "${LIST_HEAD}"
     [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
 }
 
