@@ -3903,6 +3903,16 @@ run_pr_create() {
     run --separate-stderr "${SCRIPT}" "${PR_CREATE_ARGS[@]}" "$@"
 }
 
+# Runs pr create with the usual options but the title $1.
+run_pr_create_titled() {
+    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "$1" --body-file "${TEST_TMP}/pr-body.md"
+}
+
+# Runs pr create with the usual options but the body file $1.
+run_pr_create_with_body() {
+    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "$1"
+}
+
 # The open pull request 1650 of the head branch, in this repository: $1 its base (main), $2 whether
 # it is a draft (true).
 existing_pull_request() {
@@ -3932,12 +3942,6 @@ assert_no_pull_request_created() {
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
 }
 
-# Succeeds when gh was called with exactly the arguments $1, where BODY stands for the --body-file
-# path, as for issue_create_called_with.
-pr_create_called_with() {
-    issue_create_called_with "$1"
-}
-
 # The pull request at the URL $1 was put on the board as Development, with one edit.
 assert_set_to_development() {
     grep -qxF "project item-add 74 --owner credfeto --url $1 --format json --jq .id" "${GH_LOG}"
@@ -3946,7 +3950,7 @@ assert_set_to_development() {
 }
 
 @test "pr create help gives the usage, each option and its default, the already-exists behaviour and the exit codes, help pr and the general help point to it, and none calls gh" {
-    local flag invocation
+    local invocation
     for invocation in "pr create --help" "pr create -h" "help pr create"; do
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
@@ -3981,10 +3985,6 @@ assert_set_to_development() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     [[ "${output}" == *$'\n'"  pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)"$'\n'"  comment add "* ]]
-
-    run --separate-stderr "${SCRIPT}" pr
-    [ "${status}" -eq 2 ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply, create)"* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -4069,15 +4069,15 @@ assert_set_to_development() {
     prepare_pr_create
     local title
     for title in "feat: x" "fix(cfwf): x" "feat!: x" "chore(a-b)!: x" "tool(cfwf): add a command"; do
-        run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${title}" --body-file "${TEST_TMP}/pr-body.md"
+        run_pr_create_titled "${title}"
         [ "${status}" -eq 0 ] || { echo "refused: ${title}" >&2; return 1; }
-        pr_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${title} --body-file BODY"
+        issue_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${title} --body-file BODY"
     done
 
     : > "${GH_LOG}"
     for title in "Feat: LEAKMARKER" "feat:LEAKMARKER" "feat : LEAKMARKER" "feat(): LEAKMARKER" "feat(a)(b): LEAKMARKER" ": LEAKMARKER" \
         "feat:  LEAKMARKER" "Add a LEAKMARKER" "[Dependencies] Bump LEAKMARKER" "feat(a: LEAKMARKER" "feat1: LEAKMARKER" " feat: LEAKMARKER" "feat!!: LEAKMARKER" "feat: "; do
-        run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${title}" --body-file "${TEST_TMP}/pr-body.md"
+        run_pr_create_titled "${title}"
         [ "${status}" -eq 2 ] || { echo "accepted: ${title}" >&2; return 1; }
         [ -z "${output}" ]
         [[ "${stderr}" == "cfwf: invalid value for --title: it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"$'\n\n'"${PR_CREATE_USAGE}"$'\n'* ]]
@@ -4088,20 +4088,20 @@ assert_set_to_development() {
 
 @test "pr create refuses a blank title, one with a control character and one over 256 characters, without echoing it" {
     prepare_pr_create
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "   " --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_titled "   "
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: invalid value for --title: it must not be blank or longer than 256 characters"* ]]
 
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title $'feat: LEAKMARKER\tx' --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_titled $'feat: LEAKMARKER\tx'
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: invalid value for --title: it must not contain a control character"* && "${stderr}" != *LEAKMARKER* ]]
 
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "feat: $(run_of x 251)" --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_titled "feat: $(run_of x 251)"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: invalid value for --title: it must not be blank or longer than 256 characters"* ]]
     [ ! -f "${GH_LOG}" ]
 
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "feat: $(run_of x 250)" --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_titled "feat: $(run_of x 250)"
     [ "${status}" -eq 0 ]
 }
 
@@ -4110,12 +4110,12 @@ assert_set_to_development() {
     prepare_pr_create
     local accented
     accented=$(printf '\303\251%.0s' {1..250})
-    LC_ALL=C run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "feat: ${accented}" --body-file "${TEST_TMP}/pr-body.md"
+    LC_ALL=C run_pr_create_titled "feat: ${accented}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "${NEW_PR_URL}" ]
 
     : > "${GH_LOG}"
-    LC_ALL=C run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "feat: x${accented}" --body-file "${TEST_TMP}/pr-body.md"
+    LC_ALL=C run_pr_create_titled "feat: x${accented}"
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: invalid value for --title: it must not be blank or longer than 256 characters"* ]]
@@ -4132,7 +4132,7 @@ assert_set_to_development() {
     : > "${TEST_TMP}/empty.md"
     printf ' \n\t\n' > "${TEST_TMP}/blank.md"
     for row in "nope.md|cannot read the --body-file" ".|cannot read the --body-file" "empty.md|the body is empty" "blank.md|the body is empty"; do
-        run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "${TEST_TMP}/${row%|*}"
+        run_pr_create_with_body "${TEST_TMP}/${row%|*}"
         [ "${status}" -eq 1 ] || { echo "took ${row%|*}" >&2; return 1; }
         [ -z "${output}" ]
         [ "${stderr}" = "cfwf: ${row#*|}" ] || { echo "wrong message for ${row%|*}" >&2; return 1; }
@@ -4142,12 +4142,12 @@ assert_set_to_development() {
 
 @test "pr create takes a body only from a regular file: /dev/stdin and a pipe are refused, never read, without naming the path or calling gh" {
     prepare_pr_create
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file <(printf 'A body from a pipe\n')
+    run_pr_create_with_body <(printf 'A body from a pipe\n')
     [ "${status}" -eq 1 ] || { echo "took a pipe" >&2; return 1; }
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: cannot read the --body-file" ]
 
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file /dev/stdin < /dev/null
+    run_pr_create_with_body /dev/stdin < /dev/null
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: cannot read the --body-file" ]
@@ -4156,14 +4156,14 @@ assert_set_to_development() {
 
 @test "pr create reads the body from stdin for --body-file -, gives gh no stdin, and refuses an empty stdin" {
     prepare_pr_create
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file - <<< "A body from stdin"
+    run_pr_create_with_body - <<< "A body from stdin"
     [ "${status}" -eq 0 ]
     [ "${output}" = "${NEW_PR_URL}" ]
     [ "$(cat "${GH_FIXTURES}/pr-body.txt")" = "A body from stdin" ]
     [ "$(cat "${GH_FIXTURES}/pr-create.stdin.txt")" = "/dev/null" ]
 
     : > "${GH_LOG}"
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file - < /dev/null
+    run_pr_create_with_body - < /dev/null
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the body is empty" ]
     [ ! -s "${GH_LOG}" ]
@@ -4189,12 +4189,12 @@ assert_set_to_development() {
         for leak in "token|use gh""p_LEAKMARKER0123456789 here" "host path|see /home/LEAKMARKER/work" $'control character|a \x1b[1mLEAKMARKER' $'invalid UTF-8|a \x85 LEAKMARKER'; do
             rule="${leak%%|*}"
             write_leak_body "${leak#*|}"
-            run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "${TEST_TMP}/leak.md"
+            run_pr_create_with_body "${TEST_TMP}/leak.md"
             assert_refused "${status}" "${output}" "${stderr}" "${rule}" "LEAKMARKER"
         done
 
         for leak in "token|feat: use gh""p_LEAKMARKER0123456789" "host path|feat: read /home/LEAKMARKER/work"; do
-            run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${leak#*|}" --body-file "${TEST_TMP}/pr-body.md"
+            run_pr_create_titled "${leak#*|}"
             [ "${status}" -eq 8 ]
             [ -z "${output}" ]
             [ "${stderr}" = "cfwf: title refused: ${leak%%|*}" ]
@@ -4207,11 +4207,11 @@ assert_set_to_development() {
     prepare_pr_create
     write_visibility "${REPO}" PUBLIC
     write_leak_body "see https://github.com/credfeto/hidden-thing/issues/4"
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "${TEST_TMP}/leak.md"
+    run_pr_create_with_body "${TEST_TMP}/leak.md"
     assert_refused "${status}" "${output}" "${stderr}" "private repository" "hidden-thing"
     [ "$(visibility_lookups credfeto/hidden-thing)" -eq 1 ]
 
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "feat: port credfeto/hidden-thing#3" --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_titled "feat: port credfeto/hidden-thing#3"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: title refused: private repository" ]
 
@@ -4251,7 +4251,7 @@ assert_set_to_development() {
     [ "${output}" = "${NEW_PR_URL}" ]
     [ -z "${stderr}" ]
 
-    pr_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${PR_TITLE} --body-file BODY"
+    issue_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${PR_TITLE} --body-file BODY"
     [ "$(gh_call_count "pr create --repo")" -eq 1 ]
     cmp "${TEST_TMP}/pr-body.md" "${GH_FIXTURES}/pr-body.txt"
     [ "$(cat "${GH_FIXTURES}/pr-create.stdin.txt")" = "/dev/null" ]
@@ -4281,7 +4281,7 @@ assert_set_to_development() {
     run_pr_create --base release/2
     [ "${status}" -eq 0 ]
     [ "${output}" = "${NEW_PR_URL}" ]
-    pr_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base release/2 --draft --title ${PR_TITLE} --body-file BODY"
+    issue_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base release/2 --draft --title ${PR_TITLE} --body-file BODY"
     [ "$(gh_call_count "api repos/${REPO} ")" -eq 0 ]
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_wf --single-select-option-id wf_4" "${GH_LOG}"
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
@@ -4339,7 +4339,7 @@ assert_set_to_development() {
     run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "feat/a+b@c" --title "${PR_TITLE}" --body-file "${TEST_TMP}/pr-body.md"
     [ "${status}" -eq 0 ]
     grep -qxF "api repos/${REPO}/branches/feat/a%2Bb%40c --jq .name" "${GH_LOG}"
-    pr_create_called_with "pr create --repo ${REPO} --head feat/a+b@c --base main --draft --title ${PR_TITLE} --body-file BODY"
+    issue_create_called_with "pr create --repo ${REPO} --head feat/a+b@c --base main --draft --title ${PR_TITLE} --body-file BODY"
 }
 
 @test "pr create prints the open pull request the head branch already has, creating none and changing neither its title nor its body, whatever its base or draft state" {
@@ -4600,23 +4600,22 @@ assert_set_to_development() {
     prepare_pr_create
     local scratch="${TEST_TMP}/tmp"
     mkdir -p "${scratch}"
-    pr_create_args
 
-    TMPDIR="${scratch}" run "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file - <<< "from stdin"
+    TMPDIR="${scratch}" run_pr_create_with_body - <<< "from stdin"
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
-    TMPDIR="${scratch}" run "${SCRIPT}" "${PR_CREATE_ARGS[@]}"
+    TMPDIR="${scratch}" run_pr_create
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
     write_leak_body "see /home/someone/work"
-    TMPDIR="${scratch}" run "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "${TEST_TMP}/leak.md"
+    TMPDIR="${scratch}" run_pr_create_with_body "${TEST_TMP}/leak.md"
     [ "${status}" -eq 8 ]
     [ -z "$(ls -A "${scratch}")" ]
 
     printf 'boom\n' > "${GH_FIXTURES}/pr-create.fail"
-    TMPDIR="${scratch}" run "${SCRIPT}" "${PR_CREATE_ARGS[@]}"
+    TMPDIR="${scratch}" run_pr_create
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
 }

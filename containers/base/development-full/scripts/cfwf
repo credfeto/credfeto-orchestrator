@@ -2772,20 +2772,19 @@ assign_list_option() {
             assign_option "${flag}" "${value}"
             [[ "${ISSUE}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
             ;;
-        --head)
-            assign_once LIST_HEAD "${flag}"
-            validate_branch_option "${flag}" "${value}"
-            LIST_HEAD="${value}"
-            ;;
+        --head) assign_branch_option LIST_HEAD "${flag}" "${value}" ;;
     esac
 }
 
-# Refuses (exit 2) the value $2 of the option $1 unless it is a branch name git allows that holds
-# no control character, never echoing it. The owner:branch form is refused by git's own rules.
-validate_branch_option() {
-    if ! valid_branch_name "$2" || holds_control_character "$2"; then
-        usage_error "invalid value for $1: it must be a branch name git allows, with no control character"
+# Sets the variable $1 to the value $3 of the option $2, which can be given once and must be a
+# branch name git allows that holds no control character (exit 2 otherwise), never echoing it. The
+# owner:branch form is refused by git's own rules.
+assign_branch_option() {
+    assign_once "$1" "$2"
+    if ! valid_branch_name "$3" || holds_control_character "$3"; then
+        usage_error "invalid value for $2: it must be a branch name git allows, with no control character"
     fi
+    printf -v "$1" '%s' "$3"
 }
 
 # Succeeds when $1 holds a control character of CONTROL_PATTERN, which leaves out a tab and a newline
@@ -2874,16 +2873,8 @@ readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: [^[:space:]]'
 assign_pr_create_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --head)
-            assign_once PR_HEAD "${flag}"
-            validate_branch_option "${flag}" "${value}"
-            PR_HEAD="${value}"
-            ;;
-        --base)
-            assign_once PR_BASE "${flag}"
-            validate_branch_option "${flag}" "${value}"
-            PR_BASE="${value}"
-            ;;
+        --head) assign_branch_option PR_HEAD "${flag}" "${value}" ;;
+        --base) assign_branch_option PR_BASE "${flag}" "${value}" ;;
         *) assign_issue_option "${flag}" "${value}" ;;
     esac
 }
