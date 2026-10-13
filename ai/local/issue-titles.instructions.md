@@ -20,7 +20,7 @@ This applies to issue titles only. Pull request titles keep the Conventional Com
 - **Scripts under `containers/base/development-full/scripts/`** use `tool(<name>)`, for example `tool(cfwf)`, `tool(pre-commit-check)` or `tool(querydb)`.
 - **Hooks** use `hook(<name>)` for one hook, and `hooks` for several hooks or the hook framework. A hook's data files under `containers/base/development-full/claude-hooks/` (`command-allowlist`, `command-blocklist`, `allowed-dirs`, `env-var-blocklist`) take the hook scope.
 - **Containers** use `container(<image>)` for one image, and `containers` for several.
-- **Claude configuration** uses `claude(settings)` for `claude-settings.json` and `claude-policy-limits.json`, including a change to `permissions.allow`, and `claude(permissions)` only for tracking denied commands.
+- **Claude configuration** uses `claude(settings)` for `claude-settings.json` and `claude-policy-limits.json`, including a change to `permissions.allow`, and `claude(permissions)` only for a standing tracker issue that collects denied commands over time. An issue that asks to allow, block or fix one specific command follows the tie-break below, because it is not a tracker.
 - **Task files** use `task(<name>)` for `tasks/<name>.md`.
 - **Agents** use `agents` for agent role and instruction behaviour, including the instruction files under `ai/`.
 - **Documentation** uses `docs` for `docs/` and the README.
@@ -28,7 +28,7 @@ This applies to issue titles only. Pull request titles keep the Conventional Com
 
 A new script, image, hook or task gets its scope under the same rules, without any change to this file.
 
-When more than one of the hook, Claude configuration and container scopes fits, as with a blocked command, use the scope of the file the fix will change, or the most likely one when that is not yet known, so one topic is not split across scopes. This does not apply to `lib/*`, which follows its own rule above and takes the scope where the problem shows.
+When more than one of the hook, Claude configuration and container scopes fits, as with an issue about one specific blocked command, use the scope of the file the fix will change, or the most likely one when that is not yet known, so one topic is not split across scopes. This does not apply to `lib/*`, which follows its own rule above and takes the scope where the problem shows.
 
 ## The rest of the title
 
