@@ -25,6 +25,7 @@ setup() {
         'jq_expr=""; prev=""' \
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
+        'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json"; exit ;; " api repos/"*"/collaborators?"*) f="${GH_FIXTURES}/collaborators.out"; [ -f "${f}" ] && { cat "${f}"; exit 0; } ;; esac' \
         'case "$1 $2" in' \
         '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; jq --arg hd "${hd}" --argjson lim "${lim}" "[.[] | select(\$hd == \"\" or .headRefName == \$hd)] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "release list") f="${GH_FIXTURES}/release-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; drafts=true; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; [ "${arg}" = "--exclude-drafts" ] && drafts=false; prev="${arg}"; done; [ -f "${f}.keep-drafts" ] && drafts=true; jq --argjson drafts "${drafts}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$drafts or .isDraft != true)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
@@ -41,6 +42,8 @@ setup() {
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
+        '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
+        '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -172,6 +175,9 @@ gh_line_of() {
         [[ "${output}" == *"issue create"* ]]
         [[ "${output}" == *"issue view"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"issue plan-status"* ]]
+        [[ "${output}" == *$'\n'"  repo view                Print a repository's default branch, visibility, merge methods and description"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  auth status              Print the authenticated login, the host and the gh version, never a token"$'\n'* ]]
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
         [[ "${output}" == *"pr view"*"(exit 9 when not found)"* ]]
@@ -5583,6 +5589,754 @@ assert_sign_off() {
     [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
     [[ "${output}" != *marker* && "${output}" != *"request body"* && "${output}" != *"deleted account"* ]]
     [ -z "${stderr}" ]
+}
+
+# --- repo view, repo collaborators and auth status ------------------------------
+
+REPO_VIEW_JSON_FIELDS="defaultBranchRef,description,visibility,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"
+REPO_MISSING="cfwf: the repository ${REPO} was not found, or the caller cannot see it"
+COLLABORATORS_ENDPOINT="repos/${REPO}/collaborators"
+PUSH_ACCESS_ERROR="gh: Must have push access to view repository collaborators. (HTTP 403)"
+# The resets of the rate limit fixture, as GitHub gives them and as auth status prints them.
+CORE_RESET=1767225600
+CORE_RESET_AT="2026-01-01T00:00:00Z"
+GRAPHQL_RESET=1767229200
+GRAPHQL_RESET_AT="2026-01-01T01:00:00Z"
+
+# The fixture path (without .json, .fail or .out) the gh stub reads for the repo view read of REPO.
+repository_fixture() {
+    printf '%s/repository-%s' "${GH_FIXTURES}" "${REPO//\//_}"
+}
+
+# Writes REPO as gh repo view --json answers it: its default branch main, public, with a
+# description, merge commits allowed and squash and rebase merges not, and two fields repo view
+# does not ask for. An optional jq filter $1 changes it.
+write_repository_metadata() {
+    jq -n '{defaultBranchRef: {name: "main"}, description: "Runs the agents", visibility: "PUBLIC",
+            mergeCommitAllowed: true, squashMergeAllowed: false, rebaseMergeAllowed: false,
+            name: "decoy-name", url: "https://example.com/decoy"}' \
+        | jq "${1:-.}" > "$(repository_fixture).json"
+}
+
+# Makes the repo view read of REPO fail with the error text $1.
+fail_repository() {
+    printf '%s\n' "$1" > "$(repository_fixture).fail"
+}
+
+# The six lines repo view prints for the repository write_repository_metadata writes, with the description
+# $1 in place of its own when one is given.
+repo_view_lines() {
+    printf 'default-branch\tmain\nvisibility\tPUBLIC\nallow-merge-commit\tyes\nallow-squash-merge\tno\nallow-rebase-merge\tno\ndescription\t%s' \
+        "${1-Runs the agents}"
+}
+
+run_repo() {
+    local subcommand="$1"
+    shift
+    run --separate-stderr "${SCRIPT}" repo "${subcommand}" --repo "${REPO}" "$@"
+}
+
+# One collaborator as the REST API lists it: login $1 and role name $2, left out when it is empty.
+collaborator() {
+    jq -n --arg login "$1" --arg role "${2:-}" \
+        '{login: $login, id: 1, type: "User", permissions: {admin: false, push: true, pull: true}}
+         + (if $role == "" then {} else {role_name: $role} end)'
+}
+
+# Writes the collaborators of REPO: each argument a collaborator object, in the order given, none
+# for an empty list.
+write_collaborators() {
+    printf '%s\n' "$@" | jq -s '.' | write_api "${COLLABORATORS_ENDPOINT}"
+}
+
+# Writes the answers auth status reads: the first lines of gh --version, the authenticated user
+# credfeto and the rate limits, each with fields auth status does not ask for.
+prepare_auth_status() {
+    printf '%s\n' "gh version 2.102.0 (2026-09-30)" "https://github.com/cli/cli/releases/tag/v2.102.0" > "${GH_FIXTURES}/gh-version.out"
+    jq -n '{login: "credfeto", id: 1, name: "decoy-name", email: "decoy@example.com"}' | write_api user
+    jq -n --argjson core "${CORE_RESET}" --argjson graphql "${GRAPHQL_RESET}" \
+        '{resources: {core: {limit: 5000, remaining: 4992, reset: $core, used: 8},
+                      search: {limit: 30, remaining: 29, reset: 1, used: 1},
+                      graphql: {limit: 6000, remaining: 5996, reset: $graphql, used: 4}},
+          rate: {limit: 1, remaining: 1, reset: 1, used: 0}}' | write_api rate_limit
+}
+
+# Runs auth status with no GH_HOST, whatever the host running the tests has set.
+run_auth_status() {
+    run --separate-stderr env -u GH_HOST "${SCRIPT}" auth status "$@"
+}
+
+# The three lines auth status always prints, for the host $1 (github.com when none is given).
+auth_status_lines() {
+    printf 'login\tcredfeto\nhost\t%s\ngh\t2.102.0' "${1:-github.com}"
+}
+
+@test "repo view, repo collaborators and auth status help is the same from -h, --help and help with the command and its subcommand, is that command's alone, states its format, order, limit, refusals and exit codes, help repo gives both repo usages, and none calls gh" {
+    local pair spelling expected
+    for pair in "repo view" "repo collaborators" "auth status"; do
+        # shellcheck disable=SC2086  # each pair is split into its two words on purpose
+        run "${SCRIPT}" ${pair} -h
+        [ "${status}" -eq 0 ]
+        expected="${output}"
+        [[ "${expected}" == "Usage: cfwf ${pair} "* ]]
+        for spelling in "${pair} --help" "help ${pair}" "-h ${pair}" "--help ${pair}"; do
+            # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+            run "${SCRIPT}" ${spelling}
+            [ "${status}" -eq 0 ]
+            [ "${output}" = "${expected}" ] || { echo "${spelling} differs from ${pair} -h" >&2; return 1; }
+        done
+    done
+
+    run "${SCRIPT}" repo view -h
+    [[ "${output}" == "Usage: cfwf repo view --repo <owner/repo>"$'\n'* ]]
+    [[ "${output}" == *"always in this order"*"  default-branch "*"  visibility "*"  allow-merge-commit "*"  allow-squash-merge "*"  allow-rebase-merge "*"  description "* ]]
+    [[ "${output}" == *"read that as not known, never as"* ]]
+    [[ "${output}" == *"read it as untrusted text"* ]]
+    [[ "${output}" == *"Exit codes: 0 printed; 1 a runtime failure"*"a repository that was"*"not found or that the caller cannot see"*"2 a usage error."* ]]
+    [[ "${output}" != *"cfwf repo collaborators"* ]]
+
+    run "${SCRIPT}" repo collaborators -h
+    [[ "${output}" == "Usage: cfwf repo collaborators --repo <owner/repo>"$'\n'* ]]
+    [[ "${output}" == *"sorted by login in the C locale (byte order, so every upper-case letter"*"comes before every lower-case one)"* ]]
+    [[ "${output}" == *"  <login>  <role>"* ]]
+    [[ "${output}" == *'"-" when GitHub gives none'* ]]
+    [[ "${output}" == *"At most 1000 collaborators are listed. More than that is a runtime failure and nothing is"*"printed, never part of the list."* ]]
+    [[ "${output}" == *"read is refused (HTTP 403), which is a runtime failure, never an empty list."* ]]
+    [[ "${output}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error."* ]]
+    [[ "${output}" != *"cfwf repo view"* ]]
+
+    run "${SCRIPT}" auth status -h
+    [[ "${output}" == "Usage: cfwf auth status [--rate-limit]"$'\n'* ]]
+    [[ "${output}" == *"It never prints a token."* ]]
+    [[ "${output}" == *"  login "*"  host "*"  gh "*"  core-remaining "*"  core-limit "*"  core-reset "*"  graphql-remaining "*"  graphql-limit "*"  graphql-reset "* ]]
+    [[ "${output}" == *"cfwf never runs gh auth status, gh auth token or gh config"* ]]
+    [[ "${output}" == *"No environment variable"*"but GH_HOST is printed"* ]]
+    [[ "${output}" == *'Exit codes: 0 printed; 1 a runtime failure, prefixed "cfwf:": "cfwf: not authenticated"'*"2 a usage error."* ]]
+
+    run "${SCRIPT}" help repo
+    [ "${status}" -eq 0 ]
+    expected="${output}"
+    [[ "${expected}" == "Usage: cfwf repo view --repo <owner/repo>"*$'\n\n'"Usage: cfwf repo collaborators --repo <owner/repo>"* ]]
+    for spelling in "repo -h" "repo --help" "help repo frobnicate"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling}
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${expected}" ]
+    done
+    run "${SCRIPT}" auth status -h
+    expected="${output}"
+    for spelling in "help auth" "auth -h" "auth --help"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling}
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${expected}" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo and auth with no subcommand name theirs, and a subcommand neither has is refused by its position and never echoed, each exit 2 with nothing on stdout and no gh call" {
+    run --separate-stderr "${SCRIPT}" repo
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: repo needs a subcommand (view, collaborators)"$'\n'* ]]
+
+    run --separate-stderr "${SCRIPT}" auth
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: auth needs a subcommand (status)"$'\n'* ]]
+
+    run --separate-stderr "${SCRIPT}" repo frobnicate --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: unknown repo subcommand (argument 2; its value is not shown)"$'\n'* && "${stderr}" != *frobnicate* ]]
+
+    # gh's own auth subcommands that print or change a credential are not cfwf's.
+    local subcommand
+    for subcommand in token login logout refresh setup-git switch; do
+        run --separate-stderr "${SCRIPT}" auth "${subcommand}"
+        [ "${status}" -eq 2 ] || { echo "accepted: auth ${subcommand}" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: unknown auth subcommand (argument 2; its value is not shown)"$'\n'* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo view and repo collaborators usage errors exit 2 with their own usage and nothing on stdout, never echoing a value, before any gh call" {
+    local token
+    token="gh""p_$(run_of a 36)"
+    local -a cases=(
+        ""
+        "--repo"
+        "--repo ${REPO} --repo ${REPO}"
+        "--repo not-a-repo"
+        "--repo a/b/c"
+        "--repo ./x"
+        "--repo x/.."
+        "--repo ../.."
+        "--repo ${token}/${token}/x"
+        "--repo ${REPO} --json name"
+        "--repo ${REPO} --jq ."
+        "--repo ${REPO} --template x"
+        "--repo ${REPO} --hostname example.com"
+        "--repo ${REPO} --affiliation direct"
+        "--repo ${REPO} --permission admin"
+        "--repo ${REPO} --paginate"
+        "--repo ${REPO} --limit 5"
+        "--repo ${REPO} --branch main"
+        "--repo ${REPO} --web"
+        "--repo ${REPO} --issue 7"
+        "--repo ${REPO} --rate-limit"
+        "--repo ${REPO} ${token}"
+    )
+    local subcommand other args
+    for subcommand in view collaborators; do
+        other=collaborators
+        [ "${subcommand}" = view ] || other=view
+        for args in "${cases[@]}"; do
+            # shellcheck disable=SC2086  # each case is split into its words on purpose
+            run --separate-stderr "${SCRIPT}" repo "${subcommand}" ${args}
+            [ "${status}" -eq 2 ] || { echo "accepted: ${subcommand} ${args} (${status})" >&2; return 1; }
+            [ -z "${output}" ]
+            [[ "${stderr}" == *"Usage: cfwf repo ${subcommand} --repo <owner/repo>"* ]]
+            [[ "${stderr}" != *"cfwf repo ${other}"* && "${stderr}" != *"${token}"* ]]
+        done
+
+        run --separate-stderr "${SCRIPT}" repo "${subcommand}"
+        [[ "${stderr%%$'\n'*}" == "cfwf: missing required option --repo" ]]
+        run_repo "${subcommand}" --repo "${REPO}"
+        [[ "${stderr%%$'\n'*}" == "cfwf: --repo can only be given once" ]]
+        run --separate-stderr "${SCRIPT}" repo "${subcommand}" --repo x/..
+        [[ "${stderr%%$'\n'*}" == "cfwf: invalid value for --repo: neither the owner nor the repository can be . or .." ]]
+        run_repo "${subcommand}" --json name
+        [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 5; its value is not shown)" ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "auth status usage errors, --repo and every way of naming a host or asking for a token among them, exit 2 with its usage and nothing on stdout, never echoing a value, before any gh call" {
+    local token args
+    token="gh""p_$(run_of a 36)"
+    local -a cases=(
+        "--repo ${REPO}"
+        "--hostname example.com"
+        "--show-token"
+        "--active"
+        "--json hosts"
+        "--jq ."
+        "--template x"
+        "--rate-limit=yes"
+        "--rate-limit ${token}"
+        "${token}"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_auth_status ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf auth status [--rate-limit]"* && "${stderr}" != *"${token}"* ]]
+    done
+    run_auth_status --repo "${REPO}"
+    [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 3; its value is not shown)" ]]
+    run_auth_status --rate-limit --hostname example.com
+    [[ "${stderr%%$'\n'*}" == "cfwf: unknown option (argument 4; its value is not shown)" ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "repo view prints the six fields in their fixed order, GitHub's own visibility and yes or no for each merge method, and nothing gh was not asked for, from one gh repo view call for exactly its six fields" {
+    write_repository_metadata
+    run_repo view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(repo_view_lines)" ]
+    [ -z "${stderr}" ]
+    [[ "${output}" != *decoy* ]]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "repo view ${REPO} --json ${REPO_VIEW_JSON_FIELDS} --jq ")" -eq 1 ]
+
+    # Each merge method is its own answer, and GitHub's visibility is printed as it is.
+    write_repository_metadata '.mergeCommitAllowed = false | .squashMergeAllowed = true | .visibility = "INTERNAL" | .defaultBranchRef.name = "release/1.x"'
+    run_repo view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'default-branch\trelease/1.x\nvisibility\tINTERNAL\nallow-merge-commit\tno\nallow-squash-merge\tyes\nallow-rebase-merge\tno\ndescription\tRuns the agents' ]
+
+    write_repository_metadata '.mergeCommitAllowed = false | .rebaseMergeAllowed = true | .visibility = "PRIVATE"'
+    run_repo view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'default-branch\tmain\nvisibility\tPRIVATE\nallow-merge-commit\tno\nallow-squash-merge\tno\nallow-rebase-merge\tyes\ndescription\tRuns the agents' ]
+}
+
+@test "repo view prints an empty value, keeping the tab, for the default branch of an empty repository, a description that is null and a merge method GitHub did not give" {
+    local branch
+    # Two paths through the program: no default branch at all, which is a null the program turns into
+    # an empty value, and a default branch whose name is already the empty string.
+    for branch in 'null' '{name: ""}'; do
+        write_repository_metadata ".defaultBranchRef = ${branch} | .description = null | .mergeCommitAllowed = null | del(.squashMergeAllowed) | .rebaseMergeAllowed = null"
+        "${SCRIPT}" repo view --repo "${REPO}" > "${TEST_TMP}/out" 2> "${TEST_TMP}/err" < /dev/null
+        printf 'default-branch\t\nvisibility\tPUBLIC\nallow-merge-commit\t\nallow-squash-merge\t\nallow-rebase-merge\t\ndescription\t\n' > "${TEST_TMP}/expected"
+        cmp "${TEST_TMP}/expected" "${TEST_TMP}/out" || { echo "default branch ${branch}" >&2; return 1; }
+        [ ! -s "${TEST_TMP}/err" ]
+    done
+}
+
+@test "repo view keeps a description or a default branch holding a tab, a newline, a carriage return, a C1 control or a whole forged line on one line of two fields" {
+    local forged=$'tidy\nallow-squash-merge\tyes\r\nvisibility\tPRIVATE\x1b[2J\xc2\x9b0m end'
+    jq -n --arg forged "${forged}" '{defaultBranchRef: {name: "ma\tin\nx"}, description: $forged, visibility: "PUBLIC",
+        mergeCommitAllowed: true, squashMergeAllowed: false, rebaseMergeAllowed: false}' > "$(repository_fixture).json"
+    run_repo view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'default-branch\tma in x\nvisibility\tPUBLIC\nallow-merge-commit\tyes\nallow-squash-merge\tno\nallow-rebase-merge\tno\ndescription\ttidy allow-squash-merge yes  visibility PRIVATE [2J 0m end' ]
+    [ "$(awk -F '\t' 'NF != 2' <<< "${output}" | wc -l)" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 6 ]
+}
+
+@test "repo view prints a description and a default branch holding an accented letter and an emoji unchanged, byte for byte, run in the C locale or a UTF-8 one" {
+    local locale
+    write_repository_metadata '.description = "café 🚀 ok" | .defaultBranchRef.name = "release/café"'
+    for locale in C C.UTF-8; do
+        LC_ALL="${locale}" run_repo view
+        [ "${status}" -eq 0 ] || { echo "refused in ${locale}: ${stderr}" >&2; return 1; }
+        [ "${output}" = $'default-branch\trelease/caf\xc3\xa9\nvisibility\tPUBLIC\nallow-merge-commit\tyes\nallow-squash-merge\tno\nallow-rebase-merge\tno\ndescription\tcaf\xc3\xa9 \xf0\x9f\x9a\x80 ok' ]
+        [ -z "${stderr}" ]
+    done
+}
+
+@test "repo view exits 1 with the repository message and nothing on stdout for a repository GitHub does not show the caller, whichever of its two answers gh gives" {
+    run_repo view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${REPO_MISSING}" ]
+
+    fail_repository "gh: Not Found (HTTP 404)"
+    run_repo view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${REPO_MISSING}" ]
+}
+
+@test "repo view exits 1 quoting only the first line of gh's error, and prints nothing, for any other failed read" {
+    write_repository_metadata
+    fail_repository $'gh: Bad Gateway (HTTP 502)\nsecond-line-marker'
+    run_repo view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+
+    fail_repository "gh: Resource protected by organization SAML enforcement (HTTP 403)"
+    run_repo view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}: gh: Resource protected by organization SAML enforcement (HTTP 403)" ]
+}
+
+@test "repo view prints nothing and exits 1 when gh's answer is not its six lines in order, each one field, with a visibility and yes, no or nothing for each merge method, and prints an answer that is" {
+    local answer good
+    good="$(repo_view_lines)"
+    local -a answers=(
+        ""
+        "${good%$'\n'*}"
+        "${good}"$'\n'"description"$'\t'"again"
+        "${good/visibility/visible}"
+        "${good/PUBLIC/}"
+        "${good/PUBLIC/public}"
+        "${good/yes/maybe}"
+        "${good/$'squash-merge\tno'/$'squash-merge\tnever'}"
+        "${good/$'rebase-merge\tno'/$'rebase-merge\ttrue'}"
+        "${good/$'\tmain'/$'\tma\tin'}"
+        "${good}"$'\t'"extra"
+        "$(printf '%s\n' "${good}" | tac)"
+    )
+    for answer in "${answers[@]}"; do
+        printf '%s\n' "${answer}" > "$(repository_fixture).out"
+        run_repo view
+        [ "${status}" -eq 1 ] || { echo "printed: ${answer}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}" ]
+    done
+
+    printf '%s\n' "${good}" > "$(repository_fixture).out"
+    run_repo view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${good}" ]
+}
+
+@test "a visibility lookup gh answers with HTTP 404 is the one gh repo view of the visibility alone, and counts as a repository the caller cannot see: refused when the text names it, exit 1 when it is the target" {
+    write_visibility "${REPO}" PUBLIC
+    fail_visibility credfeto/gone-thing "gh: Not Found (HTTP 404)"
+    write_leak_body "see credfeto/gone-thing#3"
+    run_body_check
+    assert_refused "${status}" "${output}" "${stderr}" "private repository" "gone-thing"
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    grep -qxF "repo view ${REPO} --json visibility --jq .visibility" "${GH_LOG}"
+    grep -qxF "repo view credfeto/gone-thing --json visibility --jq .visibility" "${GH_LOG}"
+
+    rm -f "${GH_FIXTURES}"/visibility-*
+    fail_visibility "${REPO}" "gh: Not Found (HTTP 404)"
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${REPO_MISSING}" ]
+}
+
+@test "a visibility lookup whose answer is not a visibility is a runtime failure (exit 1), never a pass or a refusal, for a repository the text names and for the target" {
+    write_visibility "${REPO}" PUBLIC
+    write_visibility credfeto/odd-thing SECRET
+    write_leak_body "see credfeto/odd-thing#3"
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the visibility of the repository named on line 3 of the body: gh gave an unexpected answer" ]
+
+    write_visibility "${REPO}" ""
+    run_body_check
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the visibility of ${REPO}: gh gave an unexpected answer" ]
+}
+
+@test "repo collaborators prints each login and role sorted by login in the C locale, - for a role GitHub left out or left empty, from one paged read of 100 a page" {
+    write_collaborators "$(collaborator zed admin)" "$(collaborator alice write)" "$(collaborator Bob maintain)" \
+        "$(collaborator 'dependabot[bot]' read)" "$(collaborator a-b triage)" "$(collaborator a_b "Release Manager")" \
+        "$(collaborator a)" "$(collaborator 9lives read | jq '.role_name = ""')" "$(collaborator Zed read | jq '.role_name = null')"
+    run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'9lives\t-\nBob\tmaintain\nZed\t-\na\t-\na-b\ttriage\na_b\tRelease Manager\nalice\twrite\ndependabot[bot]\tread\nzed\tadmin' ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "api ${COLLABORATORS_ENDPOINT}?per_page=100 --paginate --jq ")" -eq 1 ]
+}
+
+@test "repo collaborators prints nothing and exits 0 for a repository with no collaborators" {
+    write_collaborators
+    run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+}
+
+@test "repo collaborators prints exactly 1000 collaborators, and with 1001 prints none and exits 1" {
+    jq -n '[range(1000) | {login: "user-\(.)", role_name: "read"}]' | write_api "${COLLABORATORS_ENDPOINT}"
+    run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 1000 ]
+    [ "$(awk -F '\t' 'NF != 2 || $2 != "read"' <<< "${output}" | wc -l)" -eq 0 ]
+
+    jq -n '[range(1001) | {login: "user-\(.)", role_name: "read"}]' | write_api "${COLLABORATORS_ENDPOINT}"
+    run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 collaborators, so none is printed" ]
+}
+
+@test "repo collaborators keeps a role holding a tab, a newline or a whole forged row on one line of two fields" {
+    write_collaborators "$(collaborator alice $'write\nmallory\tadmin\r\x1fend')" "$(collaborator bob $'a\tb')"
+    run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'alice\twrite mallory admin  end\nbob\ta b' ]
+}
+
+@test "repo collaborators prints nothing and exits 1 for a login that is not a login or is missing, or a row that does not have exactly its fields, and prints a row that has them" {
+    local login
+    for login in "" "two words" $'tab\tbed' $'line\nfeed' "slash/login" "dot.ted" "bot[bot]x" "[bot]" $'unit\x1fend'; do
+        write_collaborators "$(collaborator alice write)" "$(collaborator "${login}" admin)"
+        run_repo collaborators
+        [ "${status}" -eq 1 ] || { echo "printed: ${login}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the collaborators of ${REPO}" ]
+    done
+
+    write_collaborators "$(collaborator alice write)" "$(collaborator bob admin | jq 'del(.login)')"
+    run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the collaborators of ${REPO}" ]
+
+    # A row with no closing field, with a field too many, or an empty line among the rows.
+    local row
+    for row in $'bob\x1fadmin' $'bob\x1fadmin\x1f' $'bob\x1fadmin\x1fextra\x1fend' $'bob\x1fadmin\x1fend\x1fend' $'\nbob\x1fadmin\x1fend'; do
+        printf 'alice\x1fwrite\x1fend\n%s\n' "${row}" > "${GH_FIXTURES}/collaborators.out"
+        run_repo collaborators
+        [ "${status}" -eq 1 ] || { echo "printed: ${row}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the collaborators of ${REPO}" ]
+    done
+
+    printf 'alice\x1fwrite\x1fend\nbob\x1f\x1fend\n' > "${GH_FIXTURES}/collaborators.out"
+    run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'alice\twrite\nbob\t-' ]
+}
+
+@test "repo collaborators exits 1 quoting GitHub's HTTP 403 for a caller without push access, never printing an empty list" {
+    fail_api "${COLLABORATORS_ENDPOINT}" "${PUSH_ACCESS_ERROR}"
+    run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the collaborators of ${REPO}: ${PUSH_ACCESS_ERROR}" ]
+}
+
+@test "repo collaborators exits 1 with the repository message for a 404, and quoting only the first line of gh's error for any other failed read, printing nothing" {
+    run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${REPO_MISSING}" ]
+
+    fail_api "${COLLABORATORS_ENDPOINT}" $'gh: Bad Gateway (HTTP 502)\nsecond-line-marker'
+    run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the collaborators of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+}
+
+@test "auth status prints the login, github.com for a GH_HOST that is unset or empty, and the gh version, and nothing else of gh's answers, calling only gh --version and gh api user" {
+    prepare_auth_status
+    run_auth_status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(auth_status_lines)" ]
+    [ -z "${stderr}" ]
+    [[ "${output}" != *decoy* ]]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [ "$(sed -n 1p "${GH_LOG}")" = "--version" ]
+    [ "$(sed -n 2p "${GH_LOG}")" = 'api user --jq .login // ""' ]
+
+    run --separate-stderr env GH_HOST="" "${SCRIPT}" auth status
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(auth_status_lines)" ]
+}
+
+@test "auth status prints a GH_HOST that is a host name, with or without a port, and exits 1 without echoing one that is not, before any gh call" {
+    local host
+    prepare_auth_status
+    for host in github-api.example.com localhost:8080 GHE.Example.com 10.0.0.1; do
+        run --separate-stderr env GH_HOST="${host}" "${SCRIPT}" auth status
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "$(auth_status_lines "${host}")" ]
+    done
+
+    rm -f "${GH_LOG}"
+    for host in "https://example.com" "example.com/path" "user@example.com" "example.com:port" "example.com:80:80" "two words" \
+        $'example.com\nlogin\tmallory' $'tab\tbed' "exa_mple.com" ":8080" "example.com:"; do
+        run --separate-stderr env GH_HOST="${host}" "${SCRIPT}" auth status
+        [ "${status}" -eq 1 ] || { echo "printed: ${host}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: GH_HOST is not a host name, with or without a port" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "auth status --rate-limit adds the remaining, limit and reset of the core and graphql limits, each reset as ISO 8601 in UTC, from one more call, gh api rate_limit" {
+    prepare_auth_status
+    run_auth_status --rate-limit
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(auth_status_lines)"$'\n'"core-remaining"$'\t'"4992"$'\n'"core-limit"$'\t'"5000"$'\n'"core-reset"$'\t'"${CORE_RESET_AT}"$'\n'"graphql-remaining"$'\t'"5996"$'\n'"graphql-limit"$'\t'"6000"$'\n'"graphql-reset"$'\t'"${GRAPHQL_RESET_AT}" ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 3 ]
+    [ "$(sed -n 1p "${GH_LOG}")" = "--version" ]
+    [ "$(sed -n 2p "${GH_LOG}")" = 'api user --jq .login // ""' ]
+    [[ "$(sed -n 3p "${GH_LOG}")" == "api rate_limit --jq "* ]]
+}
+
+@test "auth status takes --rate-limit given twice as given once, as pr checks takes --all: the same nine lines from the same three gh calls" {
+    local once
+    prepare_auth_status
+    run_auth_status --rate-limit
+    [ "${status}" -eq 0 ]
+    once="${output}"
+    [ "$(wc -l <<< "${once}")" -eq 9 ]
+
+    rm -f "${GH_LOG}"
+    run_auth_status --rate-limit --rate-limit
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${once}" ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 3 ]
+    [ "$(gh_call_count "api rate_limit")" -eq 1 ]
+}
+
+@test "auth status exits 1 with not authenticated, and prints nothing, for an HTTP 401 or gh's own prompt to log in, from the user read or the rate limit read, and never for the same words on the stdout of a read that failed otherwise" {
+    local error endpoint
+    for error in "gh: Bad credentials (HTTP 401)" "gh: Requires authentication (HTTP 401)" \
+        $'To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.'; do
+        for endpoint in user rate_limit; do
+            prepare_auth_status
+            fail_api "${endpoint}" "${error}"
+            run_auth_status --rate-limit
+            [ "${status}" -eq 1 ] || { echo "${endpoint}: ${error}" >&2; return 1; }
+            [ -z "${output}" ]
+            [ "${stderr}" = "cfwf: not authenticated" ]
+            rm -f "$(api_fixture "${endpoint}").fail"
+        done
+    done
+
+    # Only what gh wrote to stderr is read for it. gh can put an answer's body on stdout when a call
+    # fails, and the same words there are not it, whether stderr names another error or is empty.
+    local body='{"message":"HTTP 401: run gh auth login","status":"502"}' message
+    for endpoint in user rate_limit; do
+        message="could not read the authenticated user"
+        [ "${endpoint}" = user ] || message="could not read the rate limit"
+        prepare_auth_status
+        printf '%s\n' "${body}" > "$(api_fixture "${endpoint}").failout"
+        fail_api "${endpoint}"
+        run_auth_status --rate-limit
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${message}: gh: Bad Gateway (HTTP 502)" ]
+
+        : > "$(api_fixture "${endpoint}").fail"
+        run_auth_status --rate-limit
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: ${message}: ${body}" ]
+        rm -f "$(api_fixture "${endpoint}").fail" "$(api_fixture "${endpoint}").failout"
+    done
+}
+
+@test "auth status exits 1 with the failed read's own message, quoting only the first line of gh's error, and prints nothing, when gh --version, the user read or the rate limit read fails otherwise" {
+    prepare_auth_status
+    fail_api user $'gh: Bad Gateway (HTTP 502)\nsecond-line-marker'
+    run_auth_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the authenticated user: gh: Bad Gateway (HTTP 502)" ]
+
+    prepare_auth_status
+    rm -f "$(api_fixture user).fail"
+    fail_api rate_limit $'gh: Not Found (HTTP 404)\nsecond-line-marker'
+    run_auth_status --rate-limit
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rate limit: gh: Not Found (HTTP 404)" ]
+
+    printf '%s\n' "gh: cannot run" "second-line-marker" > "${GH_FIXTURES}/gh-version.fail"
+    run_auth_status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the version of gh: gh: cannot run" ]
+}
+
+@test "auth status prints nothing and exits 1 for a gh version, a login or a rate limit that is not what it expects, and takes a version of two or more parts, with a suffix or with nothing after it" {
+    local version login filter
+    for version in "" "gh version" "gh version DEV" "GitHub CLI 2.102.0" "gh version v2.102.0" "version 2.102.0" "gh version 2" $'\ngh version 2.102.0'; do
+        prepare_auth_status
+        printf '%s\n' "${version}" > "${GH_FIXTURES}/gh-version.out"
+        run_auth_status
+        [ "${status}" -eq 1 ] || { echo "printed: ${version}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected version" ]
+    done
+    for version in "2.102.0" "2.40" "2.103.0-pre.1" "2.102.0+build.5"; do
+        prepare_auth_status
+        printf '%s\n' "gh version ${version} (2026-09-30)" > "${GH_FIXTURES}/gh-version.out"
+        run_auth_status
+        [ "${status}" -eq 0 ]
+        [ "${output}" = $'login\tcredfeto\nhost\tgithub.com\ngh\t'"${version}" ]
+    done
+    printf '%s\n' "gh version 2.102.0" > "${GH_FIXTURES}/gh-version.out"
+    run_auth_status
+    [ "${output}" = "$(auth_status_lines)" ]
+
+    # An empty login and a null one are two paths: the null is what the program's own alternative
+    # turns into an empty value, and without it would print as the word null, which is a login's shape.
+    for login in '""' 'null' '"two words"' '"line\nlogin\tmallory"' '"a/b"' '"tab\tbed"'; do
+        prepare_auth_status
+        jq -n "{login: ${login}}" | write_api user
+        run_auth_status
+        [ "${status}" -eq 1 ] || { echo "printed: ${login}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the authenticated user" ]
+    done
+
+    for filter in '.resources.core.remaining = "many"' '.resources.core.limit = null' '.resources.core.reset = "soon"' \
+        '.resources.graphql.remaining = -1' '.resources.graphql.limit = 1.5' 'del(.resources.graphql.reset)' \
+        'del(.resources.graphql)' 'del(.resources)' '.resources.core.remaining = "1\u001f2"'; do
+        prepare_auth_status
+        jq "${filter}" "$(api_fixture rate_limit).json" > "${TEST_TMP}/rate.json"
+        write_api rate_limit < "${TEST_TMP}/rate.json"
+        run_auth_status --rate-limit
+        [ "${status}" -eq 1 ] || { echo "printed: ${filter}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the rate limit" ]
+    done
+}
+
+@test "auth status never prints a token from its environment or from GitHub's answer, on stdout or stderr, whether it works or fails, and never runs gh auth, gh config or gh with an option that shows headers or names a host" {
+    local token
+    token="gh""p_$(run_of Z 36)"
+    prepare_auth_status
+    jq -n --arg token "${token}" '{login: "credfeto", token: $token, authorization: ("Bearer " + $token)}' | write_api user
+    jq --arg token "${token}" '.token = $token | .resources.core.token = $token' "$(api_fixture rate_limit).json" > "${TEST_TMP}/rate.json"
+    write_api rate_limit < "${TEST_TMP}/rate.json"
+
+    run --separate-stderr env GH_TOKEN="${token}" GITHUB_TOKEN="${token}" GH_ENTERPRISE_TOKEN="${token}" GH_HOST=github-api.example.com \
+        "${SCRIPT}" auth status --rate-limit
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "$(auth_status_lines github-api.example.com)"$'\n'* ]]
+    [[ "${output}" != *"${token}"* && "${output}" != *Bearer* ]]
+    [ -z "${stderr}" ]
+    [ "$(wc -l <<< "${output}")" -eq 9 ]
+
+    # A GH_HOST whose only defect is the underscore a GitHub token holds is refused, never printed.
+    local calls
+    calls="$(wc -l < "${GH_LOG}")"
+    run --separate-stderr env GH_TOKEN="${token}" GITHUB_TOKEN="${token}" GH_HOST="${token}" "${SCRIPT}" auth status
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: GH_HOST is not a host name, with or without a port" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq "${calls}" ]
+
+    fail_api user "gh: Bad credentials (HTTP 401)"
+    run --separate-stderr env GH_TOKEN="${token}" GITHUB_TOKEN="${token}" GH_HOST=github-api.example.com "${SCRIPT}" auth status --rate-limit
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: not authenticated" ]
+
+    [ "$(grep -cE '^(--version|api user --jq |api rate_limit --jq )' "${GH_LOG}")" -eq "$(wc -l < "${GH_LOG}")" ]
+    [ "$(grep -cE '(^| )(auth|config|token|-i|--include|--verbose|--hostname)( |$)' "${GH_LOG}")" -eq 0 ]
+    [ "$(gh_call_count "${token}")" -eq 0 ]
+}
+
+@test "repo view, repo collaborators and auth status fail (exit 1) when gh is not installed, after their options are checked" {
+    local args
+    mkdir -p "${TEST_TMP}/empty-path"
+    for args in "repo view --repo ${REPO}" "repo collaborators --repo ${REPO}" "auth status" "auth status --rate-limit"; do
+        # shellcheck disable=SC2086  # each command is split into its words on purpose
+        run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" ${args}
+        [ "${status}" -eq 1 ] || { echo "${args}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+
+        # shellcheck disable=SC2086  # each command is split into its words on purpose
+        run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" ${args} --json x
+        [ "${status}" -eq 2 ]
+    done
+}
+
+@test "repo view, repo collaborators and auth status leave no temporary file behind, whether the read works or fails" {
+    local scratch="${TEST_TMP}/scratch"
+    mkdir -p "${scratch}"
+    write_repository_metadata
+    write_collaborators "$(collaborator alice write)"
+    prepare_auth_status
+    TMPDIR="${scratch}" run_repo view
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+    TMPDIR="${scratch}" run_repo collaborators
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+    TMPDIR="${scratch}" run_auth_status --rate-limit
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    fail_repository "gh: Bad Gateway (HTTP 502)"
+    fail_api "${COLLABORATORS_ENDPOINT}"
+    fail_api user
+    TMPDIR="${scratch}" run_repo view
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
+    TMPDIR="${scratch}" run_repo collaborators
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
+    TMPDIR="${scratch}" run_auth_status
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
 }
 
 # --- pr view --------------------------------------------------------------------
