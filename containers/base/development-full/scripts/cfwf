@@ -1049,6 +1049,14 @@ unknown_argument() {
     usage_error "unknown $1 (argument $((ARGUMENT_COUNT - $2 + 1)); its value is not shown)"
 }
 
+# Succeeds when $1 matches the extended regular expression $2, byte by byte in the C locale as the
+# leak rules are, so an answer from GitHub is judged the same whatever locale cfwf is run in. What
+# each group matched is left in BASH_REMATCH.
+matches_pattern() {
+    local LC_ALL=C
+    [[ "$1" =~ $2 ]]
+}
+
 # Refuses (exit 2) the value $1 of the option $3 unless it matches the pattern $2, naming the option
 # and the rule $4 it broke but never the value: a free-text value such as a title can hold a token,
 # and a usage error comes before the leak check, so echoing it would be the leak. The match is made
@@ -1056,8 +1064,7 @@ unknown_argument() {
 # whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule.
 validate() {
     local value="$1" pattern="$2" flag="$3" rule="$4"
-    local LC_ALL=C
-    [[ "${value}" =~ ${pattern} ]] || usage_error "invalid value for ${flag}: ${rule}"
+    matches_pattern "${value}" "${pattern}" || usage_error "invalid value for ${flag}: ${rule}"
 }
 
 # gh reads 0123 as 123 and answers with the URL of 123, so a number is kept without its leading
@@ -1236,12 +1243,7 @@ resolve_status() {
 
 # Runs gh with the given arguments and no stdin, keeping stdout in GH_OUTPUT and stderr in GH_ERROR
 # so that anything gh writes to stderr can never end up inside a value. Returns gh's exit status.
-# The board read, the visibility lookup, the issue read of issue view and issue plan-status, the repo
-# view read, the repo collaborators read, the reads of auth status, every pr checks read, the pr view
-# read, the pr list read, the pr comments read, the read and the post of pr reply, the release view
-# read, the release list read and the tag view reads go through here
-# (resolve_project, the field list, the board listing and the closing-issue labels still call gh
-# directly); each caller uses GH_OUTPUT and GH_ERROR before its next gh call.
+# Each caller uses GH_OUTPUT and GH_ERROR before its next gh call.
 gh_capture() {
     local status=0
     ensure_temp_file GH_ERR_FILE
@@ -1469,13 +1471,17 @@ assign_once() {
     [ -z "${!1}" ] || usage_error "$2 can only be given once${3:+: $3}"
 }
 
+# Assigns --repo, once: the --repo arm of an assign function, and the one option of repo view and
+# repo collaborators.
+assign_repository_option() {
+    assign_once REPO "$1"
+    assign_option "$1" "$2"
+}
+
 assign_issue_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr | --issue)
             [ -z "${PR}${ISSUE}" ] || usage_error "--pr or --issue can only be given once, and not both"
             assign_option "${flag}" "${value}"
@@ -1706,8 +1712,8 @@ repository_references() {
 # Reads the repository $1 with one gh repo view: the fields $2 (comma separated) through the jq
 # filter $3, whose output is left in GH_OUTPUT. Returns 1 when GitHub does not show the repository
 # to the caller (it is not there, or the caller cannot see it, which GitHub answers alike) and 2 on
-# any other failure, with gh's error in GH_ERROR, so each caller (look_up_visibility and repo_view)
-# says what a missing repository means to it and a transport error is never read as one.
+# any other failure, with gh's error in GH_ERROR, so each caller says what a missing repository
+# means to it and a transport error is never read as one.
 read_repository() {
     gh_capture repo view "$1" --json "$2" --jq "$3" && return 0
     [[ "${GH_ERROR}" != *"Could not resolve to a Repository"* && "${GH_ERROR}" != *"HTTP 404"* ]] || return 1
@@ -1721,12 +1727,15 @@ look_up_visibility() {
     local repository="$1" failure="$2" key="${1,,}" read_status=0
     [ -z "${REPOSITORY_VISIBILITY["${key}"]:-}" ] || return 0
     read_repository "${repository}" visibility .visibility || read_status=$?
-    case "${read_status}:${GH_OUTPUT,,}" in
-        0:public) REPOSITORY_VISIBILITY["${key}"]=public ;;
-        0:private | 0:internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
-        0:*) die "${failure}: gh gave an unexpected answer" ;;
-        1:*) REPOSITORY_VISIBILITY["${key}"]=missing ;;
-        *) die "${failure}" ;;
+    if [ "${read_status}" -eq 1 ]; then
+        REPOSITORY_VISIBILITY["${key}"]=missing
+        return 0
+    fi
+    [ "${read_status}" -eq 0 ] || die "${failure}"
+    case "${GH_OUTPUT,,}" in
+        public) REPOSITORY_VISIBILITY["${key}"]=public ;;
+        private | internal) REPOSITORY_VISIBILITY["${key}"]=private ;;
+        *) die "${failure}: gh gave an unexpected answer" ;;
     esac
 }
 
@@ -2030,23 +2039,9 @@ cmd_body() {
     dispatch_subcommand body check body_check -- "$@"
 }
 
-# Succeeds when $1 matches the extended regular expression $2, byte by byte in the C locale as the
-# leak rules are, so an answer from GitHub is judged the same whatever locale cfwf is run in. What
-# each group matched is left in BASH_REMATCH.
-matches_pattern() {
-    local LC_ALL=C
-    [[ "$1" =~ $2 ]]
-}
-
 # A login as the REST API gives it: letters, digits, - and _ (the login of a managed user holds
 # one), with [bot] after an app's. Nothing in it can add a field or a line to what is printed.
 readonly LOGIN_PATTERN='^[A-Za-z0-9_-]+(\[bot\])?$'
-
-# The one option of repo view and repo collaborators: --repo, once.
-assign_repository_option() {
-    assign_once REPO "$1"
-    assign_option "$1" "$2"
-}
 
 # What repo view reads: the gh repo view --json fields, and the jq program that prints a line for
 # each field, its name, a tab and its value made printable, with the description, the free text,
@@ -2071,7 +2066,7 @@ repo_view() {
     require REPO --repo
     require_gh
     read_repository "${REPO}" "${REPO_VIEW_FIELDS}" "${REPO_VIEW_PROGRAM}" || read_status=$?
-    [ "${read_status}" -ne 1 ] || die "the repository ${REPO} was not found, or the caller cannot see it"
+    [ "${read_status}" -ne 1 ] || repository_not_found "${REPO}"
     [ "${read_status}" -eq 0 ] || die "could not read ${REPO}: $(gh_failure_text)"
     matches_pattern "${GH_OUTPUT}" "${REPO_VIEW_PATTERN}" || die "gh returned an unexpected result for ${REPO}"
     printf '%s\n' "${GH_OUTPUT}"
@@ -2089,15 +2084,14 @@ readonly COLLABORATOR_LIMIT=1000
 # access with HTTP 403, which api_read dies on, so no access is never read as an empty list; a 404
 # is the repository not being there or not being shown to the caller.
 repo_collaborators() {
-    local unexpected row login role end
+    local row login role end
     local -a rows=() lines=()
     parse_command_options assign_repository_option "--repo" "" "$@"
     require REPO --repo
     require_gh
-    unexpected="gh returned an unexpected result for the collaborators of ${REPO}"
     api_read "could not list the collaborators of ${REPO}" "repos/${REPO}/collaborators?per_page=${API_PAGE_SIZE}" \
         "${FIELDS_ROW_DEF} .[] | [.login, .role_name, \"end\"] | fields_row" --paginate \
-        || die "the repository ${REPO} was not found, or the caller cannot see it"
+        || repository_not_found "${REPO}"
     [ -n "${GH_OUTPUT}" ] || return 0
 
     mapfile -t rows <<< "${GH_OUTPUT}"
@@ -2106,7 +2100,7 @@ repo_collaborators() {
     for row in "${rows[@]}"; do
         IFS="${ROW_SEPARATOR}" read -r login role end <<< "${row}"
         if ! matches_pattern "${login}" "${LOGIN_PATTERN}" || [ "${end}" != end ]; then
-            die "${unexpected}"
+            die "gh returned an unexpected result for the collaborators of ${REPO}"
         fi
         lines+=("${login}"$'\t'"${role:--}")
     done
@@ -2226,10 +2220,7 @@ branch_path() {
 assign_checks_option() {
     local flag="$1" value="${2:-}"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
@@ -2598,10 +2589,7 @@ VIEW_JSON_FIELDS=""
 assign_view_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
@@ -2713,10 +2701,7 @@ LIST_HEAD=""
 assign_list_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --issue)
             assign_once ISSUE "${flag}"
             assign_option "${flag}" "${value}"
@@ -2738,8 +2723,7 @@ assign_list_option() {
 # answer has one made printable, a space, before it is compared (the head in pr list, the ref in
 # resolve_tag), so a --head or a --tag holding one could never equal what it is compared with.
 holds_control_character() {
-    local LC_ALL=C
-    [[ "$1" =~ ${CONTROL_PATTERN} ]]
+    matches_pattern "$1" "${CONTROL_PATTERN}"
 }
 
 # Prints the jq program of pr list: the number of pull requests on its first line, then a row for
@@ -2877,10 +2861,7 @@ def list_state: .totalCount, (.nodes | length), .pageInfo.hasNextPage, .pageInfo
 assign_pr_comment_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --pr)
             assign_once PR "${flag}"
             assign_option "${flag}" "${value}"
