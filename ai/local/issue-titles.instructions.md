@@ -2,7 +2,7 @@
 
 [Back to Local Instructions Index](index.md)
 
-> Load when: creating or renaming an issue in this repository.
+> Load when: creating or renaming an issue in this repository, or opening a pull request for one.
 
 ## Format (MANDATORY)
 
@@ -10,17 +10,17 @@ Every issue title in this repository has the form `<scope>: <rest>`, where `<sco
 
 This rule overrides an issue title format given in any other instruction, because local rules take precedence over global ones.
 
-An issue title that the code itself files and finds again by exact title match is exempt from this format and must never be renamed by hand, because a rename makes the lookup miss and a duplicate gets filed; change the constant in the code instead. The current cases are `RATE_LIMIT_ISSUE_TITLE` and `WF_SETUP_ISSUE_TITLE` in `lib/globals`.
+An issue title that code, a workflow or an action files and finds again by exact title match is exempt from this format and must never be renamed by hand, because a rename makes the lookup miss and a duplicate gets filed. Change the title where it is defined instead, and leave it alone when that definition is maintained in another repository, because the next sync would overwrite the change. Examples are `RATE_LIMIT_ISSUE_TITLE` and `WF_SETUP_ISSUE_TITLE` in `lib/globals`.
 
 This applies to issue titles only. Pull request titles keep the Conventional Commits format, and a pull request's Conventional Commits type comes from the change itself, never from the issue's scope, because a scope is not a Conventional Commits type.
 
 ## Choosing the scope
 
-- **Top-level scripts** use their bare name: `oneshot`, `loop`, `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure`. `lib/*` and its prompt text count as `oneshot`, unless the problem only shows through another script, in which case use that script's scope, because several scripts source the shared modules.
+- **Top-level scripts**, meaning each executable script at the repository root, use their bare name, for example `oneshot`, `loop` or `create-project`. `lib/*` and its prompt text count as `oneshot`, unless the problem only shows through another script, in which case use that script's scope, because several scripts source the shared modules.
 - **Scripts under `containers/base/development-full/scripts/`** use `tool(<name>)`, for example `tool(cfwf)`, `tool(pre-commit-check)` or `tool(querydb)`.
-- **Hooks** use `hook(<name>)` for one hook, and `hooks` for several hooks or the hook framework.
+- **Hooks** use `hook(<name>)` for one hook, and `hooks` for several hooks or the hook framework. A hook's data files under `containers/base/development-full/claude-hooks/` (`command-allowlist`, `command-blocklist`, `allowed-dirs`, `env-var-blocklist`) take the hook scope.
 - **Containers** use `container(<image>)` for one image, and `containers` for several.
-- **Claude configuration** uses `claude(settings)` for `claude-settings.json`, and `claude(permissions)` only for tracking denied commands.
+- **Claude configuration** uses `claude(settings)` for `claude-settings.json` and `claude-policy-limits.json`, including a change to `permissions.allow`, and `claude(permissions)` only for tracking denied commands.
 - **Task files** use `task(<name>)` for `tasks/<name>.md`.
 - **Agents** use `agents` for agent role and instruction behaviour, including the instruction files under `ai/`.
 - **Documentation** uses `docs` for `docs/` and the README.
@@ -28,11 +28,11 @@ This applies to issue titles only. Pull request titles keep the Conventional Com
 
 A new script, image, hook or task gets its scope under the same rules, without any change to this file.
 
-When more than one scope fits, as with a blocked command that could be a hook, Claude configuration or container matter, use the scope of the file the fix will change, so one topic is not split across scopes.
+When more than one of the hook, Claude configuration and container scopes fits, as with a blocked command, use the scope of the file the fix will change, or the most likely one when that is not yet known, so one topic is not split across scopes. This does not apply to `lib/*`, which follows its own rule above and takes the scope where the problem shows.
 
 ## The rest of the title
 
-- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on), even in a combined form such as `fix(oneshot):`, or a `Security:` prefix, because labels already carry them.
+- Do not add a Conventional Commits type (`fix:`, `feat:`, `test:`, `chore:` and so on), even in a combined form such as `fix(oneshot):`, or a `Security:` prefix, because the title says where the problem is and a label says what kind it is. Add the matching label when one fits: `Bug`, `Enhancement`, `Refactor`, `Tech Debt`, `Security` or `Performance`.
 - Do not add `Design:` or `Track:` as a prefix either, but keep the word in the text, for example `Track requests ...` or `... (design)`, because no label carries it.
 - Drop a leading tool name that the scope makes redundant.
 - Capitalise the first word after the scope, for example `tool(cfwf): List a repository's open issues with labels`, unless it is a code identifier, flag, file name or path, which keeps its own case.
