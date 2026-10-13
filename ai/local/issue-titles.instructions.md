@@ -10,7 +10,7 @@ Every issue title in this repository has the form `<scope>: <rest>`, where `<sco
 
 This rule overrides an issue title format given in any other instruction, because local rules take precedence over global ones.
 
-An issue title that code, a workflow or an action files and finds again by exact title match is exempt from this format and must never be renamed by hand, because a rename makes the lookup miss and a duplicate gets filed. Change the title where it is defined instead, and leave it alone when that definition is maintained in another repository, because the next sync would overwrite the change. Examples are `RATE_LIMIT_ISSUE_TITLE` and `WF_SETUP_ISSUE_TITLE` in `lib/globals`.
+An issue title that code, a workflow or an action files and finds again by exact title match is exempt from this format and must never be renamed by hand, because a rename makes the lookup miss and a duplicate gets filed. Change the title where it is defined instead, and leave it alone when that definition is maintained in another repository, because the next sync would overwrite the change. Examples are `RATE_LIMIT_ISSUE_TITLE` and `WF_SETUP_ISSUE_TITLE` in `lib/globals`, and `chore: update GitHub Actions version pins`, which is set as `issueTitle` in `.github/actions/check-composite-action-versions/action.yml` and is left alone, because that action is maintained in `cs-template` and synced from there.
 
 This applies to issue titles only. Pull request titles keep the Conventional Commits format, and a pull request's Conventional Commits type comes from the change itself, never from the issue's scope, because a scope is not a Conventional Commits type.
 
