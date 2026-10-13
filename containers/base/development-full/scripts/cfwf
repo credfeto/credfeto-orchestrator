@@ -1277,6 +1277,10 @@ readonly PRINTABLE_DEF='def printable: gsub("[\\x{0}-\\x{1f}\\x{7f}-\\x{9f}]"; "
 # value it is given as a printable string, or - when there is none. No field is ever empty, because
 # a reader that splits a row on tabs with read collapses consecutive tabs.
 readonly ROW_FIELD_DEF="${PRINTABLE_DEF}"' def field: (. // "") | tostring | printable | if . == "" then "-" else . end;'
+# A jq definition, put before a filter that uses it: line is one line of a command that prints a
+# field a line, the name it is given, a tab and the value as a printable string, nothing when there
+# is none, so every line has exactly one tab.
+readonly LINE_DEF="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'
 
 # fall_back_to_listing warns about the failed direct read, quoting the given error text, then
 # sets ITEM_STATUS from listing the board with the given jq filter. Returns non-zero when the
@@ -2047,8 +2051,7 @@ readonly LOGIN_PATTERN='^[A-Za-z0-9_-]+(\[bot\])?$'
 # each field, its name, a tab and its value made printable, with the description, the free text,
 # last. A merge method is yes or no, and empty when GitHub gave neither.
 readonly REPO_VIEW_FIELDS="defaultBranchRef,description,visibility,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"
-readonly REPO_VIEW_PROGRAM="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'\
-' def allowed: if . == true then "yes" elif . == false then "no" else "" end;'\
+readonly REPO_VIEW_PROGRAM="${LINE_DEF}"' def allowed: if . == true then "yes" elif . == false then "no" else "" end;'\
 ' line("default-branch"; .defaultBranchRef.name), line("visibility"; .visibility),'\
 ' line("allow-merge-commit"; .mergeCommitAllowed | allowed), line("allow-squash-merge"; .squashMergeAllowed | allowed),'\
 ' line("allow-rebase-merge"; .rebaseMergeAllowed | allowed), line("description"; .description)'
@@ -3195,10 +3198,7 @@ cmd_comment() {
 assign_release_option() {
     local flag="$1" value="$2"
     case "${flag}" in
-        --repo)
-            assign_once REPO "${flag}"
-            assign_option "${flag}" "${value}"
-            ;;
+        --repo) assign_repository_option "${flag}" "${value}" ;;
         --tag)
             assign_once TAG "${flag}"
             if ! valid_tag_name "${value}" || holds_control_character "${value}"; then
@@ -3222,8 +3222,7 @@ not_found_in_repository() {
 
 # The jq program of release view: a line for each field, its name, a tab and its value made
 # printable, with the name, the free text, last. The release's notes are never read.
-readonly RELEASE_VIEW_PROGRAM="${PRINTABLE_DEF}"' def line(key; value): key + "\t" + (value // "" | tostring | printable);'\
-' line("tag"; .tag_name), line("published-at"; .published_at), line("url"; .html_url), line("name"; .name)'
+readonly RELEASE_VIEW_PROGRAM="${LINE_DEF}"' line("tag"; .tag_name), line("published-at"; .published_at), line("url"; .html_url), line("name"; .name)'
 
 # Prints the latest release of REPO, the one GitHub marks as latest, from one read. The tag is what
 # a caller goes on to look up, so a release with none is refused.
