@@ -2981,7 +2981,7 @@ create_pull_request() {
         return 0
     fi
     url="${GH_OUTPUT##*$'\n'}"
-    # As for issue create, neither the host nor the repository in the URL is compared with anything.
+    # As for a new issue, neither the host nor the repository in the URL is compared with anything.
     [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/pull/[0-9]+$ ]] \
         || die "gh returned an unexpected result for the new pull request, which may have been created"
     CREATED_URL="${url}"
