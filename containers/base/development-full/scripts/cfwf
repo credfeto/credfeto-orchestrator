@@ -2151,9 +2151,9 @@ issue_list_program() {
 }
 
 # Lists the open issues of REPO in one read. Nothing is printed until the whole answer has been
-# checked: the count and the rows (take_counted_rows), and the shape of each row.
+# checked: the count, the rows and the shape of each row (take_checked_rows).
 issue_list() {
-    local unexpected row
+    local unexpected
     parse_command_options assign_repository_option "--repo" "" "$@"
     require REPO --repo
     require_gh
@@ -2162,10 +2162,8 @@ issue_list() {
         --json number,title,labels,assignees --jq "$(issue_list_program)" \
         || die "could not list the open issues of ${REPO}: $(gh_failure_text)"
 
-    take_counted_rows "${ISSUE_LIST_LIMIT}" "${unexpected}" "${REPO} has more than ${ISSUE_LIST_LIMIT} open issues, so none is printed"
-    for row in "${COUNTED_ROWS[@]}"; do
-        matches_pattern "${row}" "${ISSUE_LIST_ROW_PATTERN}" || die "${unexpected}"
-    done
+    take_checked_rows "${ISSUE_LIST_LIMIT}" "${ISSUE_LIST_ROW_PATTERN}" "${unexpected}" \
+        "${REPO} has more than ${ISSUE_LIST_LIMIT} open issues, so none is printed"
     [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
 }
 
@@ -2223,9 +2221,9 @@ assign_issue_search_option() {
 # Searches the issues of REPO for SEARCH_TEXT in one read, one more than SEARCH_LIMIT asked for, so a
 # search that matches more is seen to and is cut, with a warning, rather than refused: a ranked
 # search returning more than was asked for is normal. Nothing is printed until the whole answer has
-# been checked: the count and the rows (take_counted_rows), and the shape of each row.
+# been checked: the count, the rows and the shape of each row (take_checked_rows).
 issue_search() {
-    local query unexpected row
+    local query unexpected
     parse_command_options assign_issue_search_option "--repo --text --state --limit" "" "$@"
     require REPO --repo
     require SEARCH_TEXT --text
@@ -2243,10 +2241,7 @@ issue_search() {
         --json number,state,title,labels --jq "${ISSUE_SEARCH_PROGRAM}" \
         || die "could not search the issues of ${REPO}: $(gh_failure_text)"
 
-    take_counted_rows "$((SEARCH_LIMIT + 1))" "${unexpected}" "${unexpected}"
-    for row in "${COUNTED_ROWS[@]}"; do
-        matches_pattern "${row}" "${ISSUE_SEARCH_ROW_PATTERN}" || die "${unexpected}"
-    done
+    take_checked_rows "$((SEARCH_LIMIT + 1))" "${ISSUE_SEARCH_ROW_PATTERN}" "${unexpected}" "${unexpected}"
     [ "${#COUNTED_ROWS[@]}" -le "${SEARCH_LIMIT}" ] \
         || printf 'cfwf: warning: more than %s issues match; only the first %s are printed\n' "${SEARCH_LIMIT}" "${SEARCH_LIMIT}" >&2
     [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]:0:SEARCH_LIMIT}"
@@ -2986,6 +2981,16 @@ take_counted_rows() {
     [ "${count}" -eq "${#COUNTED_ROWS[@]}" ] || die "${unexpected}"
 }
 
+# take_counted_rows with the limit $1, then each row must match the pattern $2 (in the C locale,
+# with matches_pattern), or the run dies with $3; more than $1 rows dies with $4.
+take_checked_rows() {
+    local limit="$1" pattern="$2" unexpected="$3" too_many="$4" row
+    take_counted_rows "${limit}" "${unexpected}" "${too_many}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        matches_pattern "${row}" "${pattern}" || die "${unexpected}"
+    done
+}
+
 # Lists the open pull requests of REPO, those whose head branch is LIST_HEAD when it is set, in one
 # read. Nothing is printed until the whole answer has been checked: the count gh gave must be the
 # number of rows, so a row a value managed to add is refused, and at most PR_LIST_LIMIT; each number
@@ -3479,9 +3484,9 @@ readonly RELEASE_LIST_PROGRAM="${ROW_FIELD_DEF}"' map(select(.isDraft != true)) 
 readonly RELEASE_ROW_PATTERN=$'^[^\t]+\t[^\t]+\t(-|latest|prerelease|latest,prerelease)\t[^\t]+$'
 
 # Lists the releases of REPO in one read. Nothing is printed until the whole answer has been
-# checked: the count and the rows (take_counted_rows), and the shape of each row.
+# checked: the count, the rows and the shape of each row (take_checked_rows).
 release_list() {
-    local unexpected row
+    local unexpected
     parse_command_options assign_release_option "--repo" "" "$@"
     require REPO --repo
     require_gh
@@ -3490,10 +3495,8 @@ release_list() {
         --json "tagName,name,isDraft,isPrerelease,isLatest,publishedAt" --jq "${RELEASE_LIST_PROGRAM}" \
         || die "could not list the releases of ${REPO}: $(gh_failure_text)"
 
-    take_counted_rows "${RELEASE_LIST_LIMIT}" "${unexpected}" "${REPO} has more than ${RELEASE_LIST_LIMIT} releases, so none is printed"
-    for row in "${COUNTED_ROWS[@]}"; do
-        [[ "${row}" =~ ${RELEASE_ROW_PATTERN} ]] || die "${unexpected}"
-    done
+    take_checked_rows "${RELEASE_LIST_LIMIT}" "${RELEASE_ROW_PATTERN}" "${unexpected}" \
+        "${REPO} has more than ${RELEASE_LIST_LIMIT} releases, so none is printed"
     [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
 }
 
