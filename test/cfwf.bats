@@ -3903,14 +3903,26 @@ run_pr_create() {
     run --separate-stderr "${SCRIPT}" "${PR_CREATE_ARGS[@]}" "$@"
 }
 
+# Runs pr create with the usual options, but the value $2 for the option $1.
+run_pr_create_replacing() {
+    local index
+    pr_create_args
+    for index in "${!PR_CREATE_ARGS[@]}"; do
+        if [ "${PR_CREATE_ARGS[index]}" = "$1" ]; then
+            PR_CREATE_ARGS[index + 1]="$2"
+        fi
+    done
+    run --separate-stderr "${SCRIPT}" "${PR_CREATE_ARGS[@]}"
+}
+
 # Runs pr create with the usual options but the title $1.
 run_pr_create_titled() {
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "$1" --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_replacing --title "$1"
 }
 
 # Runs pr create with the usual options but the body file $1.
 run_pr_create_with_body() {
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "$1"
+    run_pr_create_replacing --body-file "$1"
 }
 
 # The open pull request 1650 of the head branch, in this repository: $1 its base (main), $2 whether
@@ -4056,7 +4068,7 @@ assert_set_to_development() {
     local row
     for row in "LEAKMARKER|it must be <owner>/<repo>" "LEAKMARKER/a/b|it must be <owner>/<repo>" "LEAKMARKER/a b|it must be <owner>/<repo>" "|it must be <owner>/<repo>" \
         "./LEAKMARKER|neither the owner nor the repository can be . or .." "LEAKMARKER/..|neither the owner nor the repository can be . or .."; do
-        run --separate-stderr "${SCRIPT}" pr create --repo "${row%|*}" --head "${PR_HEAD_BRANCH}" --title "${PR_TITLE}" --body-file "${TEST_TMP}/pr-body.md"
+        run_pr_create_replacing --repo "${row%|*}"
         [ "${status}" -eq 2 ] || { echo "accepted: ${row%|*}" >&2; return 1; }
         [ -z "${output}" ]
         [[ "${stderr}" == "cfwf: invalid value for --repo: ${row#*|}"$'\n\n'"${PR_CREATE_USAGE}"$'\n'* ]]
@@ -4336,7 +4348,7 @@ assert_set_to_development() {
 @test "pr create percent-encodes a head branch an API path cannot hold as it is, and hands gh the name itself" {
     prepare_pr_create
     write_head_branch "feat/a%2Bb%40c" "feat/a+b@c"
-    run --separate-stderr "${SCRIPT}" pr create --repo "${REPO}" --head "feat/a+b@c" --title "${PR_TITLE}" --body-file "${TEST_TMP}/pr-body.md"
+    run_pr_create_replacing --head "feat/a+b@c"
     [ "${status}" -eq 0 ]
     grep -qxF "api repos/${REPO}/branches/feat/a%2Bb%40c --jq .name" "${GH_LOG}"
     issue_create_called_with "pr create --repo ${REPO} --head feat/a+b@c --base main --draft --title ${PR_TITLE} --body-file BODY"
