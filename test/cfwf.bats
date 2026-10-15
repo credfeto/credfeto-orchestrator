@@ -179,6 +179,7 @@ gh_line_of() {
         [[ "${output}" == *$'\n'"  repo view                Print a repository's default branch, visibility, merge methods and description"$'\n'* ]]
         [[ "${output}" == *$'\n'"  repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale"$'\n'* ]]
         [[ "${output}" == *$'\n'"  auth status              Print the authenticated login, the host and the gh version, never a token"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)"$'\n'* ]]
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
         [[ "${output}" == *"pr view"*"(exit 9 when not found)"* ]]
@@ -3472,7 +3473,7 @@ has_eight_field_lines() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     # pr with no subcommand is a usage error that prints the same usage, so it points to pr list too.
@@ -4780,6 +4781,322 @@ run_pr_checks() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not read the check runs of ${HEAD_SHA}: gh: Validation Failed (HTTP 422)" ]
+}
+
+# --- branch required-checks -------------------------------------------------------
+
+run_branch_required_checks() {
+    run --separate-stderr "${SCRIPT}" branch required-checks --repo "${REPO}" "$@"
+}
+
+@test "branch required-checks help, from help branch, branch -h and branch required-checks -h, is one text that describes every exit code and calls no gh" {
+    local invocation help_text=""
+    for invocation in "help branch" "help branch required-checks" "branch -h" "branch --help" \
+        "branch required-checks -h" "branch required-checks --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
+        [ -n "${help_text}" ] || help_text="${output}"
+        [ "${output}" = "${help_text}" ]
+        [[ "${output}" == "Usage: cfwf branch required-checks --repo <owner/repo> --branch <name>"$'\n'* ]]
+        [[ "${output}" == *$'\n'"--pr, --sha, --all, --json, --jq and --template are not options: the output has one fixed format."$'\n'* ]]
+        [[ "${output}" == *"Check names are chosen by whoever configures the repository, so"$'\n'"read them as untrusted text."* ]]
+        [[ "${output}" == *"run 'cfwf pr checks --pr <n>'; its third column is each check's completion time on the"$'\n'"current head."* ]]
+        [[ "${output}" == *"Exit codes: 0 printed, an empty list included (nothing is printed); 9 the repository has no"$'\n'"branch of that name; 1 a runtime failure"*"2 a usage error." ]]
+    done
+    [ ! -s "${GH_LOG}" ]
+
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them."* ]]
+}
+
+@test "branch without a subcommand names the one it has, and one it does not have is named by its position (exit 2)" {
+    run --separate-stderr "${SCRIPT}" branch
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: branch needs a subcommand (required-checks)"$'\n\n'"Usage: cfwf branch required-checks "* ]]
+
+    run "${SCRIPT}" branch required-checks --help
+    [ "${status}" -eq 0 ]
+    local help_text="${output}"
+
+    run --separate-stderr "${SCRIPT}" branch protection --repo "${REPO}"
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: unknown branch subcommand (argument 2; its value is not shown)"$'\n\n'"${help_text}" ]
+    [ ! -s "${GH_LOG}" ]
+}
+
+@test "branch required-checks refuses a missing, repeated or unknown option (exit 2) before any gh call, never echoing a value" {
+    run "${SCRIPT}" branch required-checks --help
+    [ "${status}" -eq 0 ]
+    local help_text="${output}"
+
+    # Each case is its expected first stderr line, a tab, then the arguments; the distinctive values
+    # (zz-*, 4242) are what an echo would show, and the whole of stderr is compared, so none can.
+    local -a cases=(
+        $'cfwf: missing required option --repo\t--branch zz-branch'
+        $'cfwf: missing required option --branch\t--repo zz-owner/zz-repo'
+        $'cfwf: --branch needs a value\t--repo zz-owner/zz-repo --branch'
+        $'cfwf: --repo needs a value\t--branch zz-branch --repo'
+        $'cfwf: --branch can only be given once\t--repo zz-owner/zz-repo --branch main --branch zz-branch'
+        $'cfwf: --repo can only be given once\t--repo zz-owner/zz-repo --repo zz-other/zz-repo --branch main'
+        $'cfwf: invalid value for --repo: neither the owner nor the repository can be . or ..\t--repo zz-owner/.. --branch main'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --pr 4242'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --sha '"${OLD_SHA}"
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --all'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --json zz-field'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --jq .zz'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main --template zz-tpl'
+        $'cfwf: unknown option (argument 7; its value is not shown)\t--repo zz-owner/zz-repo --branch main zz-stray'
+    )
+    local entry expected args
+    for entry in "${cases[@]}"; do
+        expected="${entry%%$'\t'*}"
+        args="${entry#*$'\t'}"
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" branch required-checks ${args}
+        [ "${status}" -eq 2 ] || { echo "${args}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${expected}"$'\n\n'"${help_text}" ] || { echo "${args}: ${stderr%%$'\n'*}" >&2; return 1; }
+    done
+    [ ! -s "${GH_LOG}" ]
+}
+
+@test "branch required-checks judges a --branch as git does, even run from a repository where @{-1} names a branch" {
+    local repo="${TEST_TMP}/checkout"
+    git init -q -b main "${repo}"
+    git -C "${repo}" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
+        commit -q --allow-empty -m first
+    git -C "${repo}" switch -q -c feature
+    cd "${repo}"
+    [ "$(git -C "${repo}" rev-parse --abbrev-ref '@{-1}')" = main ]
+    run "${SCRIPT}" branch required-checks --help
+    [ "${status}" -eq 0 ]
+    local help_text="${output}"
+    local branch
+    for branch in '@{-1}' HEAD -main main.lock a..b; do
+        run_branch_required_checks --branch "${branch}"
+        [ "${status}" -eq 2 ] || { echo "accepted: ${branch} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: invalid value for --branch: it must be a branch name git allows"$'\n\n'"${help_text}" ]
+        [ ! -s "${GH_LOG}" ]
+    done
+}
+
+@test "branch required-checks merges the branch protection and the rulesets, one name a line, sorted in the C locale" {
+    write_protection main a b
+    write_no_rulesets main
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'a\nb' ]
+    [ -z "${stderr}" ]
+
+    write_branch main
+    write_rulesets main b c
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'b\nc' ]
+
+    : > "${GH_LOG}"
+    write_protection main a b
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'a\nb\nc' ]
+    [ -z "${stderr}" ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/main --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/main?per_page=100 --paginate ")" -eq 1 ]
+    [ "$(gh_call_count "/protection")" -eq 0 ]
+    [ "$(gh_call_count "api repos/")" -eq 2 ]
+
+    write_protection main a B
+    write_rulesets main _
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'B\n_\na' ]
+}
+
+@test "branch required-checks prints nothing (exit 0) when the branch requires no check, or its required checks are switched off" {
+    write_branch main
+    write_no_rulesets main
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+
+    jq -n --arg sha "${HEAD_SHA}" '{name: "main", commit: {sha: $sha}, protected: true,
+        protection: {enabled: true, required_status_checks: {enforcement_level: "off", contexts: ["a"], checks: [{context: "b", app_id: 1}]}}}' \
+        | write_api "repos/${REPO}/branches/main"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+}
+
+@test "branch required-checks prints a name required from two apps, or from both sources, once, without its app" {
+    # lint is in contexts only (any app); build is pinned to app 1 in the protection and app 2 in a ruleset.
+    write_protection main lint build#1
+    write_rulesets main build#2 lint
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'build\nlint' ]
+    [ -z "${stderr}" ]
+}
+
+@test "branch required-checks reads the 403 for a plan with no rulesets as none, and any other failed rulesets read as a runtime failure" {
+    write_protection main a b
+    fail_api "repos/${REPO}/rules/branches/main" \
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'a\nb' ]
+    [ -z "${stderr}" ]
+
+    fail_api "repos/${REPO}/rules/branches/main" \
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 404)"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+
+    rm "$(api_fixture "repos/${REPO}/rules/branches/main").fail"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Not Found (HTTP 404)" ]
+
+    fail_api "repos/${REPO}/rules/branches/main" "gh: Resource not accessible by integration (HTTP 403)"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Resource not accessible by integration (HTTP 403)" ]
+}
+
+@test "branch required-checks exits 9 for a branch that is not there, 1 for a repository that is not, and 1 for any other failed branch read, without reading the rulesets" {
+    write_rulesets main build
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the --branch was not found in ${REPO}" ]
+    [ "$(gh_call_count "rules/branches")" -eq 0 ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+
+    : > "${GH_LOG}"
+    fail_api "repos/${REPO}/branches/main"
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the --branch of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    [ "$(gh_call_count "rules/branches")" -eq 0 ]
+    [ "$(gh_call_count "api repos/")" -eq 1 ]
+}
+
+@test "branch required-checks prints each control character in a name as a space, so a name never adds a line, and names that then print alike once" {
+    write_branch main
+    write_rulesets main $'x\ty\nz\x1bw\x7fv\xc2\x9bu\x1ft\xc2\xa0s'
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'x y z w v u t\xc2\xa0s' ]
+    [[ "${output}" != *$'\xc2\x9b'* ]]
+    [ -z "${stderr}" ]
+
+    write_rulesets main $'a\tb' $'a\nb' 'a b'
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "a b" ]
+}
+
+@test "branch required-checks refuses an empty check name as an unexpected answer (exit 1), printing nothing" {
+    jq -n --arg sha "${HEAD_SHA}" '{name: "main", commit: {sha: $sha}, protected: true,
+        protection: {enabled: true, required_status_checks: {enforcement_level: "non_admins", contexts: ["build", ""], checks: [{context: "build", app_id: 1}]}}}' \
+        | write_api "repos/${REPO}/branches/main"
+    write_rulesets main lint
+    run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the required checks of ${REPO}" ]
+}
+
+@test "branch required-checks percent-encodes a --branch for both reads, keeping a slash as it is" {
+    write_protection release/1.0 build
+    write_rulesets release/1.0 lint
+    run_branch_required_checks --branch release/1.0
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'build\nlint' ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/release/1.0 --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/release/1.0?per_page=100 --paginate ")" -eq 1 ]
+    [ "$(gh_call_count "%2F")" -eq 0 ]
+
+    write_protection "release/v2%2Blts" build
+    write_no_rulesets "release/v2%2Blts"
+    run_branch_required_checks --branch release/v2+lts
+    [ "${status}" -eq 0 ]
+    [ "${output}" = build ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/release/v2%2Blts --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/release/v2%2Blts?per_page=100 --paginate ")" -eq 1 ]
+
+    write_protection "feat/caf%C3%A9%40x%25y" build
+    write_rulesets "feat/caf%C3%A9%40x%25y" lint
+    run_branch_required_checks --branch "$(printf 'feat/caf\xc3\xa9@x%%y')"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'build\nlint' ]
+    [ -z "${stderr}" ]
+    [ "$(gh_call_count "api repos/${REPO}/branches/feat/caf%C3%A9%40x%25y --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api repos/${REPO}/rules/branches/feat/caf%C3%A9%40x%25y?per_page=100 --paginate ")" -eq 1 ]
+}
+
+@test "branch required-checks fails (exit 1) when gh is not installed, after the options are checked, and when git is not" {
+    mkdir -p "${TEST_TMP}/empty-path" "${TEST_TMP}/git-only"
+    ln -s "$(command -v git)" "${TEST_TMP}/git-only/git"
+    local bash_path
+    bash_path="$(command -v bash)"
+    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" branch required-checks --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+
+    # Only the first line is compared: without cat on the PATH the usage after it cannot be printed.
+    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" branch required-checks --repo "${REPO}" --branch main --json zz-field
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [ "${stderr%%$'\n'*}" = "cfwf: unknown option (argument 7; its value is not shown)" ]
+    [[ "${stderr}" != *"zz-field"* ]]
+
+    # --branch is judged by git, so a host without it is a runtime failure, not a usage error.
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "${bash_path}" "${SCRIPT}" branch required-checks --repo "${REPO}" --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: git is not installed"* ]]
+}
+
+@test "branch required-checks leaves no temporary file behind, whether the read works or fails" {
+    local scratch="${TEST_TMP}/scratch"
+    mkdir -p "${scratch}"
+    write_protection main build
+    write_no_rulesets main
+    TMPDIR="${scratch}" run_branch_required_checks --branch main
+    [ "${status}" -eq 0 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    fail_api "repos/${REPO}/rules/branches/main"
+    TMPDIR="${scratch}" run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "$(ls -A "${scratch}")" ]
+
+    # The checks above would pass if no temporary file were ever made: one that cannot be made
+    # under TMPDIR stops the read, which shows the file is made there and so was removed.
+    : > "${GH_LOG}"
+    TMPDIR="${TEST_TMP}/no-such-dir" run_branch_required_checks --branch main
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == *"cfwf: could not create a temporary file" ]]
+    [ ! -s "${GH_LOG}" ]
 }
 
 # --- comment add ---------------------------------------------------------------
