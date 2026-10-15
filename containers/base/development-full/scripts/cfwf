@@ -2287,7 +2287,6 @@ assign_issue_search_option() {
 # been checked: the count and the rows (take_counted_rows), and the shape of each row.
 issue_search() {
     local query unexpected row
-    local -a rows
     parse_command_options assign_issue_search_option "--repo --text --state --limit" "" "$@"
     require REPO --repo
     require SEARCH_TEXT --text
@@ -2309,10 +2308,9 @@ issue_search() {
     for row in "${COUNTED_ROWS[@]}"; do
         matches_pattern "${row}" "${ISSUE_SEARCH_ROW_PATTERN}" || die "${unexpected}"
     done
-    rows=("${COUNTED_ROWS[@]:0:SEARCH_LIMIT}")
     [ "${#COUNTED_ROWS[@]}" -le "${SEARCH_LIMIT}" ] \
         || printf 'cfwf: warning: more than %s issues match; only the first %s are printed\n' "${SEARCH_LIMIT}" "${SEARCH_LIMIT}" >&2
-    [ "${#rows[@]}" -eq 0 ] || printf '%s\n' "${rows[@]}"
+    [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]:0:SEARCH_LIMIT}"
 }
 
 cmd_issue() {
