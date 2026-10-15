@@ -41,6 +41,7 @@ setup() {
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
         '  "pr create") f="${GH_FIXTURES}/pr-create"; prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/pr-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${f}.stdin.txt"; [ -f "${f}.fail" ] && { [ -f "${f}.then-list.json" ] && cp "${f}.then-list.json" "${GH_FIXTURES}/pr-list.json"; [ -f "${f}.then-list.fail" ] && cp "${f}.then-list.fail" "${GH_FIXTURES}/pr-list.fail"; cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
+        '  "issue list") f="${GH_FIXTURES}/issue-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; st=open; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--state" ] && st="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg st "${st}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$st == \"all\" or (.state | ascii_downcase) == \$st)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
@@ -177,6 +178,8 @@ gh_line_of() {
         [[ "${output}" == *"issue create"* ]]
         [[ "${output}" == *"issue view"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"issue plan-status"* ]]
+        [[ "${output}" == *$'\n'"  issue list               List a repository's open issues, highest priority first, one line each"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  issue search             Search one repository's issues by words in their title or body, one line each"$'\n'* ]]
         [[ "${output}" == *$'\n'"  repo view                Print a repository's default branch, visibility, merge methods and description"$'\n'* ]]
         [[ "${output}" == *$'\n'"  repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale"$'\n'* ]]
         [[ "${output}" == *$'\n'"  auth status              Print the authenticated login, the host and the gh version, never a token"$'\n'* ]]
@@ -1952,7 +1955,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, view, plan-status)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, view, plan-status, list, search)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -3438,6 +3441,12 @@ has_field_lines() {
         NF != fields { bad = 1 }
         { for (i = 1; i <= NF; i++) if ($i == "") bad = 1 }
         END { exit (bad || NR != expected) ? 1 : 0 }' <<< "$1"
+}
+
+# Prints one expected row of a tab-separated listing: the fields given, joined with tabs.
+tab_row() {
+    local IFS=$'\t'
+    printf '%s\n' "$*"
 }
 
 # Succeeds when the text $1 has $2 lines, each of exactly eight tab-separated fields, none empty.
@@ -5997,7 +6006,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "body check" "pr checks" "comment add" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "body check" "pr checks" "comment add" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -6372,6 +6381,565 @@ assert_sign_off() {
     [ "${output}" = "$(plan_status_head yes no)"$'\n'"$(plan_lines 1 planner-bot NONE)"$'\n'"$(comment_line 2 credfeto OWNER yes)"$'\n'"$(comment_line 3 "" NONE no)" ]
     [[ "${output}" != *marker* && "${output}" != *"request body"* && "${output}" != *"deleted account"* ]]
     [ -z "${stderr}" ]
+}
+
+# --- issue list and issue search ------------------------------------------------
+
+ISSUE_LIST_USAGE="Usage: cfwf issue list --repo <owner/repo>"
+ISSUE_SEARCH_USAGE="Usage: cfwf issue search --repo <owner/repo> --text <words> [--state open|closed|all] [--limit <n>]"
+ISSUE_LIST_UNEXPECTED="cfwf: gh returned an unexpected result for the open issues of ${REPO}"
+ISSUE_SEARCH_UNEXPECTED="cfwf: gh returned an unexpected result for the search of the issues of ${REPO}"
+SEARCH_PREFIX="repo:${REPO} in:title,body"
+SEARCH_WARNING_OF_2="cfwf: warning: more than 2 issues match; only the first 2 are printed"
+
+# One issue as gh issue list --json gives it: its number $1 (JSON, so a test can give one that is
+# not a number), state $2 and title $3, then its label names, then -- and its assignee logins.
+issue_entry() {
+    local number="$1" state="$2" title="$3"
+    shift 3
+    local -a labels=()
+    while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+        labels+=("$1")
+        shift
+    done
+    [ "$#" -eq 0 ] || shift
+    jq -n --argjson number "${number}" --arg state "${state}" --arg title "${title}" \
+        --arg labels "$(printf '%s\037' "${labels[@]}")" --arg repo "${REPO}" --args \
+        '{number: $number, state: $state, title: $title, url: "https://github.com/\($repo)/issues/\($number)",
+          labels: ($labels | split("\u001f") | map(select(. != "") | {id: "LA_x", name: ., color: "ffffff", description: ""})),
+          assignees: ($ARGS.positional | map({id: "U_x", login: ., name: ""}))}' "$@"
+}
+
+# Writes the issues of the repository, in the order given: each argument an issue_entry object.
+# With no argument the repository has none.
+write_issue_list() {
+    printf '%s\n' "$@" | jq -s '.' > "${GH_FIXTURES}/issue-list.json"
+}
+
+# Writes $1 open issues, numbered from 1, with no label and no assignee.
+write_numbered_issue_list() {
+    jq -n --argjson count "$1" --arg repo "${REPO}" '[range(1; $count + 1) | {number: ., state: "OPEN",
+        title: "issue \(.)", url: "https://github.com/\($repo)/issues/\(.)", labels: [], assignees: []}]' \
+        > "${GH_FIXTURES}/issue-list.json"
+}
+
+run_issue_list() {
+    run --separate-stderr "${SCRIPT}" issue list --repo "${REPO}" "$@"
+}
+
+run_issue_search() {
+    run --separate-stderr "${SCRIPT}" issue search --repo "${REPO}" "$@"
+}
+
+@test "issue list and issue search help, from each -h, --help and help, gives the usage, the output, the limits and the exit codes, help issue gives both, and none calls gh" {
+    local invocation
+    for invocation in "issue list -h" "issue list --help" "issue list --repo ${REPO} --help" "help issue list"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${ISSUE_LIST_USAGE}"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  <number>  <priority>  <flags>  <assignees>  <title>  <labels>"$'\n'* ]]
+        [[ "${output}" == *"exactly six tab-separated fields and none is empty"* ]]
+        [[ "${output}" == *"--state, --label, --search, --limit, --assignee, --author, --json, --jq and --web are not"$'\n'"options"* ]]
+        [[ "${output}" == *"  blocked  the issue has a label named Blocked, in any case"$'\n'"  on-hold  the issue has a label named On Hold or On-Hold, in any case"* ]]
+        [[ "${output}" == *"At most 1000 issues are listed. More than that is a runtime failure and nothing is printed,"$'\n'"never part of the list."* ]]
+        [[ "${output}" == *"Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure"*"2 a usage error." ]]
+        [[ "${output}" != *"cfwf issue search"* && "${output}" != *"cfwf issue view"* ]]
+    done
+    for invocation in "issue search -h" "issue search --help" "issue search --text x --help" "help issue search"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${ISSUE_SEARCH_USAGE}"$'\n'* ]]
+        [[ "${output}" == *$'\n'"  <number>  <OPEN|CLOSED>  <title>  <labels>"$'\n'* ]]
+        [[ "${output}" == *"exactly four tab-separated fields and none is empty"* ]]
+        [[ "${output}" == *"letters, digits, spaces and"$'\n'"         - _ . # ' only"* ]]
+        [[ "${output}" == *"AND, OR and NOT"$'\n'"         are refused as whole words"* ]]
+        [[ "${output}" == *"open, closed or all. The default is open."* ]]
+        [[ "${output}" == *"from 1 to 100. The default is 30."* ]]
+        [[ "${output}" == *"cfwf adds \"repo:<owner/repo> in:title,body\" before the words itself, so the search never"$'\n'"leaves the repository"* ]]
+        [[ "${output}" == *"at most 256 characters"* ]]
+        [[ "${output}" == *"in the order the search returned them, never re-sorted"* ]]
+        [[ "${output}" == *"\"cfwf: warning: more than <n> issues match; only the first <n> are printed\", and the exit code is"$'\n'"still 0."* ]]
+        [[ "${output}" == *"Search is eventually consistent"* ]]
+        [[ "${output}" == *"a title tag such as tool(cfwf): is not matched by"$'\n'"the word cfwf"* ]]
+        [[ "${output}" == *"Exit codes: 0 searched, no match included (nothing is printed); 8 the --text holds a token"*"2 a usage error, which names the rule --text"$'\n'"broke but never its value." ]]
+        [[ "${output}" != *"Usage: cfwf issue list"* && "${output}" != *"Usage: cfwf issue view"* ]]
+    done
+
+    for invocation in "help issue" "issue -h" "issue --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"Usage: cfwf issue view ${ISSUE_READ_USAGE}"* ]]
+        [[ "${output}" == *"Usage: cfwf issue plan-status ${ISSUE_READ_USAGE}"*$'\n\n'"${ISSUE_LIST_USAGE}"$'\n'*$'\n\n'"${ISSUE_SEARCH_USAGE}"$'\n'* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+# Given a run's status, stdout and stderr: it was a usage error of cfwf issue $4 with nothing on
+# stdout and stderr exactly "cfwf: $5", a blank line and that subcommand's usage. The whole of
+# stderr is compared, so a value echoed on any line of it fails.
+assert_issue_usage_error() {
+    local run_status="$1" run_output="$2" run_stderr="$3" subcommand="$4" rule="$5" usage
+    usage="$("${SCRIPT}" help issue "${subcommand}")"
+    [ "${run_status}" -eq 2 ] || { echo "exit ${run_status}, not 2" >&2; return 1; }
+    [ -z "${run_output}" ]
+    [ "${run_stderr}" = "cfwf: ${rule}"$'\n\n'"${usage}" ] || { printf 'expected the rule %s, got:\n%s\n' "${rule}" "${run_stderr}" >&2; return 1; }
+}
+
+@test "issue list usage errors exit 2 before any gh call, each with the issue list usage, never echoing a value" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local unknown="unknown option (argument 5; its value is not shown)"
+    # Each case is the arguments after --repo, a |, and the rule stderr gives.
+    local -a cases=(
+        "--repo ${REPO}|--repo can only be given once"
+        "--state all|${unknown}"
+        "--search ghp_secretvalue|${unknown}"
+        "--limit 5|${unknown}"
+        "--json number|${unknown}"
+        "--jq .|${unknown}"
+        "--label Bug|${unknown}"
+        "--assignee someone|${unknown}"
+        "--author someone|${unknown}"
+        "--web|${unknown}"
+        "--issue 1|${unknown}"
+        "--text x|${unknown}"
+        "extra|${unknown}"
+    )
+    local entry
+    for entry in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_issue_list ${entry%%|*}
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" list "${entry#*|}" || { echo "case: ${entry%%|*}" >&2; return 1; }
+    done
+
+    run --separate-stderr "${SCRIPT}" issue list
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" list "missing required option --repo"
+
+    local bad
+    for bad in "./x" "x/.." "../.."; do
+        run --separate-stderr "${SCRIPT}" issue list --repo "${bad}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" list "invalid value for --repo: neither the owner nor the repository can be . or .."
+    done
+    run --separate-stderr "${SCRIPT}" issue list --repo "not-a-repo"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" list "invalid value for --repo: it must be <owner>/<repo>"
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue list prints each open issue as six tab-separated fields, highest priority first and then by number, from one read of the open ones with no search" {
+    write_issue_list "$(issue_entry 40 OPEN "no priority" Bug)" \
+        "$(issue_entry 12 OPEN "low" Low -- someone)" \
+        "$(issue_entry 3 OPEN "medium, in lower case" medium Enhancement -- credfeto someone)" \
+        "$(issue_entry 30 OPEN "security" SECURITY)" \
+        "$(issue_entry 7 OPEN "high and low, so high" Low High)" \
+        "$(issue_entry 2 OPEN "no labels at all")" \
+        "$(issue_entry 25 OPEN "urgent" Urgent)" \
+        "$(issue_entry 8 OPEN "high" high)" \
+        "$(issue_entry 9 CLOSED "a closed one" Security)"
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    local expected
+    expected="$(tab_row 30 Security - - "security" SECURITY)"$'\n'
+    expected+="$(tab_row 25 Urgent - - "urgent" Urgent)"$'\n'
+    expected+="$(tab_row 7 High - - "high and low, so high" Low,High)"$'\n'
+    expected+="$(tab_row 8 High - - "high" high)"$'\n'
+    expected+="$(tab_row 3 Medium - credfeto,someone "medium, in lower case" medium,Enhancement)"$'\n'
+    expected+="$(tab_row 12 Low - someone "low" Low)"$'\n'
+    expected+="$(tab_row 2 - - - "no labels at all" -)"$'\n'
+    expected+="$(tab_row 40 - - - "no priority" Bug)"
+    [ "${output}" = "${expected}" ]
+    has_field_lines "${output}" 8 6
+
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "issue list --repo ${REPO} --state open --limit 1001 --json number,title,labels,assignees --jq ")" -eq 1 ]
+    [ "$(gh_call_count "--search")" -eq 0 ]
+}
+
+@test "issue list flags blocked and on-hold, in that order, from labels in any case and either spelling of On Hold, and lists those issues" {
+    write_issue_list "$(issue_entry 1 OPEN "blocked" Blocked)" \
+        "$(issue_entry 2 OPEN "on hold" "On Hold")" \
+        "$(issue_entry 3 OPEN "on-hold" ON-HOLD)" \
+        "$(issue_entry 4 OPEN "both" "on hold" BLOCKED)" \
+        "$(issue_entry 5 OPEN "neither" Blocked-by-upstream "On Holding" "Hold")" \
+        "$(issue_entry 6 OPEN "both spellings" "On Hold" "on-hold" blocked)"
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    local expected=$'1\tblocked\n2\ton-hold\n3\ton-hold\n4\tblocked,on-hold\n5\t-\n6\tblocked,on-hold'
+    [ "$(cut -f 1,3 <<< "${output}")" = "${expected}" ]
+    has_field_lines "${output}" 6 6
+}
+
+@test "issue list prints nothing and exits 0 when there is no open issue" {
+    write_issue_list "$(issue_entry 9 CLOSED "a closed one" High)"
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+    # run drops trailing newlines, so the bytes are counted: an empty list is no output at all.
+    [ "$("${SCRIPT}" issue list --repo "${REPO}" | wc -c)" -eq 0 ]
+}
+
+@test "issue list keeps a title or a label with a tab, a newline, a carriage return, a control character or a whole forged row on one line of six fields" {
+    local forged=$'99\tSecurity\t-\tcredfeto\tforged\tSecurity'
+    write_issue_list "$(issue_entry 1 OPEN $'a\ttitle\nwith\r\nbreaks' $'Lab\tel' $'line\nbreak')" \
+        "$(issue_entry 2 OPEN "real"$'\n'"${forged}" "real"$'\n'"${forged}")" \
+        "$(issue_entry 3 OPEN $'\t\n\x1b')" \
+        "$(issue_entry 4 OPEN "")" \
+        "$(issue_entry 5 OPEN $'a\x1b[1mb\xc2\x9b31mc\xc2\x85d\x7fe\xc2\xa0f' $'x\xc2\x9by' $'High\x7f')"
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    has_field_lines "${output}" 5 6
+    local expected
+    expected="$(tab_row 1 - - - "a title with  breaks" "Lab el,line break")"$'\n'
+    expected+="$(tab_row 2 - - - "real ${forged//$'\t'/ }" "real ${forged//$'\t'/ }")"$'\n'
+    expected+="$(tab_row 3 - - - "   " -)"$'\n'
+    expected+="$(tab_row 4 - - - - -)"$'\n'
+    expected+="$(tab_row 5 - - - "a [1mb 31mc d e"$'\xc2\xa0'"f" "x y,High ")"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "issue list prints exactly 1000 issues, and with more open prints none and exits 1" {
+    write_numbered_issue_list 1000
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    has_field_lines "${output}" 1000 6
+    [ "${output%%$'\n'*}" = "$(tab_row 1 - - - "issue 1" -)" ]
+    [ "${output##*$'\n'}" = "$(tab_row 1000 - - - "issue 1000" -)" ]
+
+    write_numbered_issue_list 1001
+    run_issue_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 open issues, so none is printed" ]
+}
+
+@test "issue list prints nothing and exits 1 when gh's answer is not a count and that many rows of six fields" {
+    local row
+    row="$(tab_row 5 High - - "a title" High)"
+    local -a answers=(
+        ""
+        "x"
+        "one"$'\n'"${row}"
+        "-1"$'\n'"${row}"
+        "99999999999999999999"$'\n'"${row}"
+        "${row}"
+        "2"$'\n'"${row}"
+        "0"$'\n'"${row}"
+        "1"$'\n'"${row}"$'\n'"${row}"
+        "1"
+        "1"$'\n'"x${row}"
+        "1"$'\n'"${row#5}"
+        "1"$'\n'"$(tab_row 5 high - - "a title" High)"
+        "1"$'\n'"$(tab_row 5 High stale - "a title" High)"
+        "1"$'\n'"$(tab_row 5 High on-hold,blocked - "a title" High)"
+        "1"$'\n'"$(tab_row 5 High - - "" High)"
+        "1"$'\n'"$(tab_row 5 High - - "a title")"
+        "1"$'\n'"$(tab_row 5 High - - "a title" High extra)"
+        "2"$'\n\n'"${row}"
+    )
+    local answer
+    for answer in "${answers[@]}"; do
+        printf '%s\n' "${answer}" > "${GH_FIXTURES}/issue-list.out"
+        run_issue_list
+        [ "${status}" -eq 1 ] || { printf 'accepted: %q (%s)\n' "${answer}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${ISSUE_LIST_UNEXPECTED}" ]
+    done
+
+    printf '1\n%s\n' "${row}" > "${GH_FIXTURES}/issue-list.out"
+    run_issue_list
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${row}" ]
+
+    # A number that is not one, as the filter itself prints it.
+    rm -f "${GH_FIXTURES}/issue-list.out"
+    write_issue_list "$(issue_entry 5 OPEN "a title")" "$(issue_entry '"6x"' OPEN "a title")"
+    run_issue_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${ISSUE_LIST_UNEXPECTED}" ]
+}
+
+@test "issue list treats a failed read, or a repository that is not found, as a runtime failure (exit 1), never as an empty list" {
+    write_issue_list
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/issue-list.fail"
+    run_issue_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the open issues of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+
+    printf '%s\n' "GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" > "${GH_FIXTURES}/issue-list.fail"
+    run_issue_list
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the open issues of ${REPO}: GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" ]
+}
+
+@test "issue list and issue search fail (exit 1) when gh is not installed, after the options are checked" {
+    mkdir -p "${TEST_TMP}/empty-path"
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" issue list --repo "${REPO}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" issue list --repo "${REPO}" --state all
+    [ "${status}" -eq 2 ]
+
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" issue search --repo "${REPO}" --text words
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" issue search --repo "${REPO}" --text "a OR b"
+    [ "${status}" -eq 2 ]
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" issue search --repo "${REPO}" --text "ghp_abc123"
+    [ "${status}" -eq 8 ]
+}
+
+@test "issue search usage errors exit 2 before any gh call, each with the issue search usage" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local unknown="unknown option (argument 7; its value is not shown)"
+    # Each case is the arguments after --repo, a |, and the rule stderr gives.
+    local -a cases=(
+        "|missing required option --text"
+        "--repo ${REPO} --text x|--repo can only be given once"
+        "--text x --text y|--text can only be given once"
+        "--text x --state open --state all|--state can only be given once"
+        "--text x --limit 5 --limit 6|--limit can only be given once"
+        "--text x --state|--state needs a value"
+        "--text|--text needs a value"
+        "--text x --json number|${unknown}"
+        "--text x --jq .|${unknown}"
+        "--text x --search ghp_secretvalue|${unknown}"
+        "--text x --label Bug|${unknown}"
+        "--text x --author someone|${unknown}"
+        "--text x --assignee someone|${unknown}"
+        "--text x --web|${unknown}"
+        "--text x --issue 1|${unknown}"
+        "--text x extra|${unknown}"
+    )
+    local entry
+    for entry in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_issue_search ${entry%%|*}
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${entry#*|}" || { echo "case: ${entry%%|*}" >&2; return 1; }
+    done
+
+    run --separate-stderr "${SCRIPT}" issue search --text x
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "missing required option --repo"
+    # --repo is required before --text, so with neither it is --repo that is named.
+    run --separate-stderr "${SCRIPT}" issue search
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "missing required option --repo"
+    local bad
+    for bad in OPEN merged "" "open closed"; do
+        run_issue_search --text x --state "${bad}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --state: it must be open, closed or all" || { echo "--state ${bad}" >&2; return 1; }
+    done
+    for bad in 0 000 101 0101 99999999999999999999999 x -1 1.5 ""; do
+        run_issue_search --text x --limit "${bad}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --limit: it must be a number from 1 to 100" || { echo "--limit ${bad}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue search refuses a --text that could add a qualifier, a phrase, a group or an operator, naming the rule and never the value, before any gh call" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local charset="invalid value for --text: it must be letters, digits, spaces and - _ . # ' only"
+    local text
+    for text in "repo:x" "is:pr" "org:other" "a:b" '"a phrase"' "(a" "a)" "a*" "a/b" "a@b" "a=b" "a<b" "a>b" "a,b" "a+b" \
+        "a;b" "a|b" "a\\b" "a~b" "a!b" "a\$b" "a%b" "a&b" "a?b" "\`a\`" "[a]" "{a}" $'a\tb' $'a\nb' $'a\rb' $'a\x1bb' $'caf\xc3\xa9' \
+        $'a\xc2\xa0b' "" ; do
+        run_issue_search --text "${text}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${charset}" || { printf 'text: %q\n' "${text}" >&2; return 1; }
+    done
+    # The character set is checked first: a text that also has no letter, or holds an operator, or
+    # is too long, or holds a token, is refused under it.
+    for text in ":" "a:or" "OR:x" "ghp_abc123:x" "$(head -c 300 < /dev/zero | tr '\0' a):"; do
+        run_issue_search --text "${text}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${charset}" || { printf 'text: %q\n' "${text}" >&2; return 1; }
+    done
+    for text in " " "   " "-" "." "#" "'" "_" "- . # ' _"; do
+        run_issue_search --text "${text}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must hold a letter or a digit" || { printf 'text: %q\n' "${text}" >&2; return 1; }
+    done
+    # The operator check comes before the length and token checks.
+    for text in "OR" "a OR b" "a and b" "Not a" "x -not" "a.or.b" "it's or" "AND" "nOt" "x-and-y" "a OR repo-marker" \
+        "ghp_abc123 or x" "$(head -c 300 < /dev/zero | tr '\0' a) or"; do
+        run_issue_search --text "${text}"
+        assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must not hold AND, OR or NOT, which are search operators" || { printf 'text: %q\n' "${text}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue search takes words that only hold and, or or not inside them, a leading -, a # and an apostrophe, and passes each as it is" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local text
+    for text in notable order cannot "don't" "-foo" "#123" "a_b.c" "Android oregano" "and_or" "1535"; do
+        run_issue_search --text "${text}"
+        [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${text}" "${status}" "${stderr}" >&2; return 1; }
+        [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
+        [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${text} --limit")" -eq 1 ]
+    done
+}
+
+@test "issue search refuses a --text that is too long once the repository qualifier is added, at exactly one character over" {
+    write_issue_list
+    local fits
+    # The query is the qualifier, a space and the text, at most 256 characters.
+    fits="$(head -c "$((256 - ${#SEARCH_PREFIX} - 1))" < /dev/zero | tr '\0' a)"
+    run_issue_search --text "${fits}"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${fits} --limit")" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    run_issue_search --text "${fits}b"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: with the repository qualifier the search must be at most 256 characters"
+    # The length is checked before the token: a text that is both is a usage error, not exit 8.
+    run_issue_search --text "ghp_${fits}"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: with the repository qualifier the search must be at most 256 characters"
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue search refuses a --text holding a token (exit 8), never echoing it, before any gh call" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local text
+    for text in "ghp_abc123" "find ghp_abc123 here" "github_pat_x" "glpat-abc" "Bearer abcdefghij0123456789xyz"; do
+        run_issue_search --text "${text}"
+        [ "${status}" -eq 8 ] || { printf 'accepted: %q (%s)\n' "${text}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: text refused: token" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue search asks gh for the repository's issues matching its own qualifier and the words, open by default, one more than --limit (30 by default)" {
+    write_issue_list "$(issue_entry 5 OPEN "an open one" Bug)" "$(issue_entry 6 CLOSED "a closed one")"
+    run_issue_search --text "widget fails"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_row 5 OPEN "an open one" Bug)" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "issue list --repo ${REPO} --state open --search ${SEARCH_PREFIX} widget fails --limit 31 --json number,state,title,labels --jq ")" -eq 1 ]
+
+    run_issue_search --text "widget" --state closed --limit 007
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row 6 CLOSED "a closed one" -)" ]
+    [ "$(gh_call_count "issue list --repo ${REPO} --state closed --search ${SEARCH_PREFIX} widget --limit 8 --json ")" -eq 1 ]
+
+    run_issue_search --limit 100 --state all --text "widget"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row 5 OPEN "an open one" Bug)"$'\n'"$(tab_row 6 CLOSED "a closed one" -)" ]
+    [ "$(gh_call_count "issue list --repo ${REPO} --state all --search ${SEARCH_PREFIX} widget --limit 101 --json ")" -eq 1 ]
+    has_field_lines "${output}" 2 4
+}
+
+@test "issue search prints the issues in the order the search returned them, never re-sorted" {
+    write_issue_list "$(issue_entry 9 OPEN "nine" Low)" "$(issue_entry 3 CLOSED "three" Security Bug)" \
+        "$(issue_entry 12 OPEN "twelve" -- someone)"
+    run_issue_search --text words --state all
+    [ "${status}" -eq 0 ]
+    local expected
+    expected="$(tab_row 9 OPEN "nine" Low)"$'\n'
+    expected+="$(tab_row 3 CLOSED "three" Security,Bug)"$'\n'
+    expected+="$(tab_row 12 OPEN "twelve" -)"
+    [ "${output}" = "${expected}" ]
+    has_field_lines "${output}" 3 4
+}
+
+@test "issue search prints the first --limit of more matches with a warning and exit 0, exactly --limit without one, and nothing for no match" {
+    write_issue_list "$(issue_entry 1 OPEN "one")" "$(issue_entry 2 OPEN "two")" "$(issue_entry 3 OPEN "three")" "$(issue_entry 4 OPEN "four")"
+    run_issue_search --text words --limit 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row 1 OPEN one -)"$'\n'"$(tab_row 2 OPEN two -)" ]
+    [ "${stderr}" = "${SEARCH_WARNING_OF_2}" ]
+
+    write_issue_list "$(issue_entry 1 OPEN "one")" "$(issue_entry 2 OPEN "two")" "$(issue_entry 3 OPEN "three")"
+    run_issue_search --text words --limit 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row 1 OPEN one -)"$'\n'"$(tab_row 2 OPEN two -)" ]
+    [ "${stderr}" = "${SEARCH_WARNING_OF_2}" ]
+
+    write_issue_list "$(issue_entry 1 OPEN "one")" "$(issue_entry 2 OPEN "two")"
+    run_issue_search --text words --limit 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_row 1 OPEN one -)"$'\n'"$(tab_row 2 OPEN two -)" ]
+    [ -z "${stderr}" ]
+
+    write_issue_list
+    run_issue_search --text words
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+    [ "$("${SCRIPT}" issue search --repo "${REPO}" --text words | wc -c)" -eq 0 ]
+}
+
+@test "issue search keeps a title or a label with a tab, a newline, a control character or a whole forged row on one line of four fields" {
+    local forged=$'99\tOPEN\tforged\tSecurity'
+    write_issue_list "$(issue_entry 1 OPEN $'a\ttitle\nwith\r\nbreaks' $'Lab\tel' $'line\nbreak')" \
+        "$(issue_entry 2 CLOSED "real"$'\n'"${forged}" "real"$'\n'"${forged}")" \
+        "$(issue_entry 3 OPEN "")" \
+        "$(issue_entry 4 OPEN $'a\x1b[1mb\xc2\x9b31mc\xc2\x85d\x7fe\xc2\xa0f' $'x\xc2\x9by')"
+    run_issue_search --text words --state all
+    [ "${status}" -eq 0 ]
+    has_field_lines "${output}" 4 4
+    local expected
+    expected="$(tab_row 1 OPEN "a title with  breaks" "Lab el,line break")"$'\n'
+    expected+="$(tab_row 2 CLOSED "real ${forged//$'\t'/ }" "real ${forged//$'\t'/ }")"$'\n'
+    expected+="$(tab_row 3 OPEN - -)"$'\n'
+    expected+="$(tab_row 4 OPEN "a [1mb 31mc d e"$'\xc2\xa0'"f" "x y")"
+    [ "${output}" = "${expected}" ]
+}
+
+@test "issue search prints nothing and exits 1 when gh's answer is not a count and that many rows of four fields, the second a state" {
+    local row
+    row="$(tab_row 5 OPEN "a title" Bug)"
+    local -a answers=(
+        ""
+        "x"
+        "-1"$'\n'"${row}"
+        "${row}"
+        "2"$'\n'"${row}"
+        "0"$'\n'"${row}"
+        "1"$'\n'"${row}"$'\n'"${row}"
+        "1"
+        "1"$'\n'"x${row}"
+        "1"$'\n'"$(tab_row 5 MERGED "a title" Bug)"
+        "1"$'\n'"$(tab_row 5 open "a title" Bug)"
+        "1"$'\n'"$(tab_row 5 OPEN "" Bug)"
+        "1"$'\n'"$(tab_row 5 OPEN "a title")"
+        "1"$'\n'"$(tab_row 5 OPEN "a title" Bug extra)"
+        "4"$'\n'"${row}"$'\n'"${row}"$'\n'"${row}"$'\n'"${row}"
+    )
+    local answer
+    for answer in "${answers[@]}"; do
+        printf '%s\n' "${answer}" > "${GH_FIXTURES}/issue-list.out"
+        run_issue_search --text words --limit 2
+        [ "${status}" -eq 1 ] || { printf 'accepted: %q (%s)\n' "${answer}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${ISSUE_SEARCH_UNEXPECTED}" ]
+    done
+
+    printf '3\n%s\n%s\n%s\n' "${row}" "${row}" "${row}" > "${GH_FIXTURES}/issue-list.out"
+    run_issue_search --text words --limit 2
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${row}"$'\n'"${row}" ]
+    [ "${stderr}" = "${SEARCH_WARNING_OF_2}" ]
+}
+
+@test "issue search treats a failed read, or a repository that is not found, as a runtime failure (exit 1), never as no match" {
+    write_issue_list
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/issue-list.fail"
+    run_issue_search --text words
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not search the issues of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+
+    printf '%s\n' "GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" > "${GH_FIXTURES}/issue-list.fail"
+    run_issue_search --text words
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not search the issues of ${REPO}: GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" ]
 }
 
 # --- repo view, repo collaborators and auth status ------------------------------
@@ -7718,12 +8286,6 @@ run_release_list() {
     run --separate-stderr "${SCRIPT}" release list --repo "${LOOKUP_REPO}" "$@"
 }
 
-# Prints one line of release list: tag, publication time, flags and name.
-release_line() {
-    local IFS=$'\t'
-    printf '%s\n' "$*"
-}
-
 # Writes the answer to the read of the tag $1: a ref naming an object of the type $2 (commit for a
 # lightweight tag, tag for an annotated one) with the SHA $3. $4 is the tag as it goes in the API
 # path, when that is not its name, and $5 the ref answered with, when that is not the tag's own.
@@ -8179,12 +8741,12 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     local expected
-    expected="$(release_line v3.0.0-beta 2026-05-01T09:30:00Z latest,prerelease "both flags")"$'\n'
-    expected+="$(release_line v2.0.0 2026-04-01T00:00:00Z latest -)"$'\n'
-    expected+="$(release_line v2.0.0-rc.1 2026-03-01T00:00:00Z prerelease "a candidate")"$'\n'
-    expected+="$(release_line v1.0.1 2026-02-01T00:00:00Z - "a fix")"$'\n'
-    expected+="$(release_line a-tag 2026-02-01T00:00:00Z - "the same time as v1.0.1")"$'\n'
-    expected+="$(release_line v1.0.0 2026-01-01T00:00:00Z - "the first")"
+    expected="$(tab_row v3.0.0-beta 2026-05-01T09:30:00Z latest,prerelease "both flags")"$'\n'
+    expected+="$(tab_row v2.0.0 2026-04-01T00:00:00Z latest -)"$'\n'
+    expected+="$(tab_row v2.0.0-rc.1 2026-03-01T00:00:00Z prerelease "a candidate")"$'\n'
+    expected+="$(tab_row v1.0.1 2026-02-01T00:00:00Z - "a fix")"$'\n'
+    expected+="$(tab_row a-tag 2026-02-01T00:00:00Z - "the same time as v1.0.1")"$'\n'
+    expected+="$(tab_row v1.0.0 2026-01-01T00:00:00Z - "the first")"
     [ "${output}" = "${expected}" ]
     has_field_lines "${output}" 6 4
 
@@ -8200,9 +8762,9 @@ run_tag_view() {
     run_release_list
     [ "${status}" -eq 0 ]
     local expected
-    expected="$(release_line v2.8.0 2026-07-20T15:43:41Z - v2.8.0)"$'\n'
-    expected+="$(release_line v3.7.0 2026-07-20T15:40:05Z - v3.7.0)"$'\n'
-    expected+="$(release_line v7.0.1 2026-07-20T15:10:05Z latest v7.0.1)"
+    expected="$(tab_row v2.8.0 2026-07-20T15:43:41Z - v2.8.0)"$'\n'
+    expected+="$(tab_row v3.7.0 2026-07-20T15:40:05Z - v3.7.0)"$'\n'
+    expected+="$(tab_row v7.0.1 2026-07-20T15:10:05Z latest v7.0.1)"
     [ "${output}" = "${expected}" ]
 }
 
@@ -8211,7 +8773,7 @@ run_tag_view() {
         "$(release v3.0.0 2026-06-01T00:00:00Z "not published yet" draft)" \
         "$(release untagged-1 "" "a draft with no time" "draft prerelease")"
     local expected
-    expected="$(release_line v2.0.0 2026-04-01T00:00:00Z latest "published")"
+    expected="$(tab_row v2.0.0 2026-04-01T00:00:00Z latest "published")"
     run_release_list
     [ "${status}" -eq 0 ]
     [ "${output}" = "${expected}" ]
@@ -8226,7 +8788,7 @@ run_tag_view() {
 
 @test "release list keeps a name or a tag with a tab, a newline, a control character or a whole forged row on one line of four fields" {
     local forged
-    forged="$(release_line v99.0.0 2026-12-31T00:00:00Z latest "forged")"
+    forged="$(tab_row v99.0.0 2026-12-31T00:00:00Z latest "forged")"
     # ESC, U+009B (CSI), U+0085 (NEL) and DEL are controls; U+00A0, just past C1, is not.
     write_release_list "$(release v1 2026-01-04T00:00:00Z $'a\tname\nwith\r\nbreaks')" \
         "$(release v2 2026-01-03T00:00:00Z "real"$'\n'"${forged}")" \
@@ -8236,10 +8798,10 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     has_field_lines "${output}" 4 4
     local expected
-    expected="$(release_line v1 2026-01-04T00:00:00Z - "a name with  breaks")"$'\n'
-    expected+="$(release_line v2 2026-01-03T00:00:00Z - "real ${forged//$'\t'/ }")"$'\n'
-    expected+="$(release_line "v3 x y" 2026-01-02T00:00:00Z - "a [1mb 31mc d e"$'\xc2\xa0'"f")"$'\n'
-    expected+="$(release_line v4 2026-01-01T00:00:00Z - "   ")"
+    expected="$(tab_row v1 2026-01-04T00:00:00Z - "a name with  breaks")"$'\n'
+    expected+="$(tab_row v2 2026-01-03T00:00:00Z - "real ${forged//$'\t'/ }")"$'\n'
+    expected+="$(tab_row "v3 x y" 2026-01-02T00:00:00Z - "a [1mb 31mc d e"$'\xc2\xa0'"f")"$'\n'
+    expected+="$(tab_row v4 2026-01-01T00:00:00Z - "   ")"
     [ "${output}" = "${expected}" ]
 }
 
@@ -8252,9 +8814,9 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     local expected
-    expected="$(release_line - 2026-02-01T00:00:00Z prerelease "no tag")"$'\n'
-    expected+="$(release_line v1 2026-01-01T00:00:00Z latest -)"$'\n'
-    expected+="$(release_line - - - -)"
+    expected="$(tab_row - 2026-02-01T00:00:00Z prerelease "no tag")"$'\n'
+    expected+="$(tab_row v1 2026-01-01T00:00:00Z latest -)"$'\n'
+    expected+="$(tab_row - - - -)"
     [ "${output}" = "${expected}" ]
     has_field_lines "${output}" 3 4
 }
@@ -8265,8 +8827,8 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     has_field_lines "${output}" 1000 4
-    [ "${output%%$'\n'*}" = "$(release_line v1000 2026-01-01T00:00:00Z - "release 1000")" ]
-    [ "${output##*$'\n'}" = "$(release_line v0001 2026-01-01T00:00:00Z - "release 1")" ]
+    [ "${output%%$'\n'*}" = "$(tab_row v1000 2026-01-01T00:00:00Z - "release 1000")" ]
+    [ "${output##*$'\n'}" = "$(tab_row v0001 2026-01-01T00:00:00Z - "release 1")" ]
 
     write_numbered_release_list 1001
     run_release_list
@@ -8277,7 +8839,7 @@ run_tag_view() {
 
 @test "release list prints nothing and exits 1 when gh's answer is not a count and that many rows of four fields, the third a known flags value" {
     local row
-    row="$(release_line v1 2026-01-01T00:00:00Z - "a name")"
+    row="$(tab_row v1 2026-01-01T00:00:00Z - "a name")"
     local -a answers=(
         ""
         "x"
@@ -8289,12 +8851,12 @@ run_tag_view() {
         "0"$'\n'"${row}"
         "1"$'\n'"${row}"$'\n'"${row}"
         "1"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z -)"
+        "1"$'\n'"$(tab_row v1 2026-01-01T00:00:00Z -)"
         "1"$'\n'"${row}"$'\t'"a fifth field"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z - "")"
-        "1"$'\n'"$(release_line "" 2026-01-01T00:00:00Z - "a name")"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z draft "a name")"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z prerelease,latest "a name")"
+        "1"$'\n'"$(tab_row v1 2026-01-01T00:00:00Z - "")"
+        "1"$'\n'"$(tab_row "" 2026-01-01T00:00:00Z - "a name")"
+        "1"$'\n'"$(tab_row v1 2026-01-01T00:00:00Z draft "a name")"
+        "1"$'\n'"$(tab_row v1 2026-01-01T00:00:00Z prerelease,latest "a name")"
         "2"$'\n\n'"${row}"
     )
     local answer
