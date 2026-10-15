@@ -2297,10 +2297,10 @@ PROTECTION_ROWS=""
 # and PROTECTION_ROWS to the checks its classic branch protection requires, one row (name, app id)
 # each. checks lists each with its app; contexts, which GitHub keeps for older clients, repeats
 # those names, so a name in contexts is taken as needing no particular app only when checks does
-# not have it. A failed read dies with $3 and gh's error, and a branch that is not there dies with
-# $4.
+# not have it. A failed read dies with $3 and gh's error. Returns 1 when the branch is not there,
+# leaving the caller to say what that means, as api_read does.
 read_branch() {
-    local repo="$1" branch="$2" failure="$3" missing="$4"
+    local repo="$1" branch="$2" failure="$3"
     [ "${BRANCH_READ}" != "${repo}${ROW_SEPARATOR}${branch}" ] || return 0
     BRANCH_PATH="$(branch_path "${branch}")"
     api_read "${failure}" "repos/${repo}/branches/${BRANCH_PATH}" \
@@ -2308,7 +2308,7 @@ read_branch() {
             | ((\$checks[] | [(.context | name_fields), app_of(.app_id)]),
                (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [name_fields, \"\"]))
             | join(\"\\u001f\"))" \
-        || die "${missing}"
+        || return 1
     BRANCH_TIP="${GH_OUTPUT%%$'\n'*}"
     PROTECTION_ROWS=""
     [[ "${GH_OUTPUT}" != *$'\n'* ]] || PROTECTION_ROWS="${GH_OUTPUT#*$'\n'}"
@@ -2324,7 +2324,8 @@ resolve_checks_head() {
             || die "${REPO}#${PR} was not found"
         IFS="${ROW_SEPARATOR}" read -r HEAD_SHA RULES_BRANCH <<< "${GH_OUTPUT}"
     elif [ -n "${BRANCH}" ]; then
-        read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" "the --branch was not found in ${REPO}"
+        read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" \
+            || die "the --branch was not found in ${REPO}"
         HEAD_SHA="${BRANCH_TIP}"
         RULES_BRANCH="${BRANCH}"
     else
@@ -2356,7 +2357,7 @@ readonly RULESETS_NOT_IN_PLAN='Upgrade to GitHub Pro or make this repository pub
 read_required_checks() {
     local repo="$1" branch="$2" names name printed app
     read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
-        "the branch whose required checks apply was not found in ${repo}"
+        || die "the branch whose required checks apply was not found in ${repo}"
     names="${PROTECTION_ROWS}"
     if ! gh_capture api "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" --paginate \
         --jq "${APP_OF_DEF} ${NAME_FIELDS_DEF} .[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
