@@ -41,7 +41,7 @@ setup() {
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
-        '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
+        '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.pages" ] && { jq -c ".[]" "${f}.pages" | while IFS= read -r page; do printf "%s\n" "${page}" > "${f}.page.json"; emit "${f}.page.json" || exit 1; done; exit; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
@@ -1951,7 +1951,7 @@ assert_nothing_created() {
 @test "issue needs a subcommand, and an unknown one is refused" {
     run "${SCRIPT}" issue
     [ "${status}" -eq 2 ]
-    [[ "${output}" == *"issue needs a subcommand (create, view, plan-status)"* ]]
+    [[ "${output}" == *"issue needs a subcommand (create, view, plan-status, label-history)"* ]]
 
     run "${SCRIPT}" issue frobnicate
     [ "${status}" -eq 2 ]
@@ -5215,7 +5215,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "body check" "pr checks" "comment add" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue label-history" "body check" "pr checks" "pr ready-at" "comment add" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -6772,7 +6772,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply, ready-at)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -6936,8 +6936,8 @@ run_release_list() {
     run --separate-stderr "${SCRIPT}" release list --repo "${LOOKUP_REPO}" "$@"
 }
 
-# Prints one line of release list: tag, publication time, flags and name.
-release_line() {
+# Prints one expected line, its arguments joined by tabs.
+tab_line() {
     local IFS=$'\t'
     printf '%s\n' "$*"
 }
@@ -7397,12 +7397,12 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     local expected
-    expected="$(release_line v3.0.0-beta 2026-05-01T09:30:00Z latest,prerelease "both flags")"$'\n'
-    expected+="$(release_line v2.0.0 2026-04-01T00:00:00Z latest -)"$'\n'
-    expected+="$(release_line v2.0.0-rc.1 2026-03-01T00:00:00Z prerelease "a candidate")"$'\n'
-    expected+="$(release_line v1.0.1 2026-02-01T00:00:00Z - "a fix")"$'\n'
-    expected+="$(release_line a-tag 2026-02-01T00:00:00Z - "the same time as v1.0.1")"$'\n'
-    expected+="$(release_line v1.0.0 2026-01-01T00:00:00Z - "the first")"
+    expected="$(tab_line v3.0.0-beta 2026-05-01T09:30:00Z latest,prerelease "both flags")"$'\n'
+    expected+="$(tab_line v2.0.0 2026-04-01T00:00:00Z latest -)"$'\n'
+    expected+="$(tab_line v2.0.0-rc.1 2026-03-01T00:00:00Z prerelease "a candidate")"$'\n'
+    expected+="$(tab_line v1.0.1 2026-02-01T00:00:00Z - "a fix")"$'\n'
+    expected+="$(tab_line a-tag 2026-02-01T00:00:00Z - "the same time as v1.0.1")"$'\n'
+    expected+="$(tab_line v1.0.0 2026-01-01T00:00:00Z - "the first")"
     [ "${output}" = "${expected}" ]
     has_field_lines "${output}" 6 4
 
@@ -7418,9 +7418,9 @@ run_tag_view() {
     run_release_list
     [ "${status}" -eq 0 ]
     local expected
-    expected="$(release_line v2.8.0 2026-07-20T15:43:41Z - v2.8.0)"$'\n'
-    expected+="$(release_line v3.7.0 2026-07-20T15:40:05Z - v3.7.0)"$'\n'
-    expected+="$(release_line v7.0.1 2026-07-20T15:10:05Z latest v7.0.1)"
+    expected="$(tab_line v2.8.0 2026-07-20T15:43:41Z - v2.8.0)"$'\n'
+    expected+="$(tab_line v3.7.0 2026-07-20T15:40:05Z - v3.7.0)"$'\n'
+    expected+="$(tab_line v7.0.1 2026-07-20T15:10:05Z latest v7.0.1)"
     [ "${output}" = "${expected}" ]
 }
 
@@ -7429,7 +7429,7 @@ run_tag_view() {
         "$(release v3.0.0 2026-06-01T00:00:00Z "not published yet" draft)" \
         "$(release untagged-1 "" "a draft with no time" "draft prerelease")"
     local expected
-    expected="$(release_line v2.0.0 2026-04-01T00:00:00Z latest "published")"
+    expected="$(tab_line v2.0.0 2026-04-01T00:00:00Z latest "published")"
     run_release_list
     [ "${status}" -eq 0 ]
     [ "${output}" = "${expected}" ]
@@ -7444,7 +7444,7 @@ run_tag_view() {
 
 @test "release list keeps a name or a tag with a tab, a newline, a control character or a whole forged row on one line of four fields" {
     local forged
-    forged="$(release_line v99.0.0 2026-12-31T00:00:00Z latest "forged")"
+    forged="$(tab_line v99.0.0 2026-12-31T00:00:00Z latest "forged")"
     # ESC, U+009B (CSI), U+0085 (NEL) and DEL are controls; U+00A0, just past C1, is not.
     write_release_list "$(release v1 2026-01-04T00:00:00Z $'a\tname\nwith\r\nbreaks')" \
         "$(release v2 2026-01-03T00:00:00Z "real"$'\n'"${forged}")" \
@@ -7454,10 +7454,10 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     has_field_lines "${output}" 4 4
     local expected
-    expected="$(release_line v1 2026-01-04T00:00:00Z - "a name with  breaks")"$'\n'
-    expected+="$(release_line v2 2026-01-03T00:00:00Z - "real ${forged//$'\t'/ }")"$'\n'
-    expected+="$(release_line "v3 x y" 2026-01-02T00:00:00Z - "a [1mb 31mc d e"$'\xc2\xa0'"f")"$'\n'
-    expected+="$(release_line v4 2026-01-01T00:00:00Z - "   ")"
+    expected="$(tab_line v1 2026-01-04T00:00:00Z - "a name with  breaks")"$'\n'
+    expected+="$(tab_line v2 2026-01-03T00:00:00Z - "real ${forged//$'\t'/ }")"$'\n'
+    expected+="$(tab_line "v3 x y" 2026-01-02T00:00:00Z - "a [1mb 31mc d e"$'\xc2\xa0'"f")"$'\n'
+    expected+="$(tab_line v4 2026-01-01T00:00:00Z - "   ")"
     [ "${output}" = "${expected}" ]
 }
 
@@ -7470,9 +7470,9 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     local expected
-    expected="$(release_line - 2026-02-01T00:00:00Z prerelease "no tag")"$'\n'
-    expected+="$(release_line v1 2026-01-01T00:00:00Z latest -)"$'\n'
-    expected+="$(release_line - - - -)"
+    expected="$(tab_line - 2026-02-01T00:00:00Z prerelease "no tag")"$'\n'
+    expected+="$(tab_line v1 2026-01-01T00:00:00Z latest -)"$'\n'
+    expected+="$(tab_line - - - -)"
     [ "${output}" = "${expected}" ]
     has_field_lines "${output}" 3 4
 }
@@ -7483,8 +7483,8 @@ run_tag_view() {
     [ "${status}" -eq 0 ]
     [ -z "${stderr}" ]
     has_field_lines "${output}" 1000 4
-    [ "${output%%$'\n'*}" = "$(release_line v1000 2026-01-01T00:00:00Z - "release 1000")" ]
-    [ "${output##*$'\n'}" = "$(release_line v0001 2026-01-01T00:00:00Z - "release 1")" ]
+    [ "${output%%$'\n'*}" = "$(tab_line v1000 2026-01-01T00:00:00Z - "release 1000")" ]
+    [ "${output##*$'\n'}" = "$(tab_line v0001 2026-01-01T00:00:00Z - "release 1")" ]
 
     write_numbered_release_list 1001
     run_release_list
@@ -7495,7 +7495,7 @@ run_tag_view() {
 
 @test "release list prints nothing and exits 1 when gh's answer is not a count and that many rows of four fields, the third a known flags value" {
     local row
-    row="$(release_line v1 2026-01-01T00:00:00Z - "a name")"
+    row="$(tab_line v1 2026-01-01T00:00:00Z - "a name")"
     local -a answers=(
         ""
         "x"
@@ -7507,12 +7507,12 @@ run_tag_view() {
         "0"$'\n'"${row}"
         "1"$'\n'"${row}"$'\n'"${row}"
         "1"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z -)"
+        "1"$'\n'"$(tab_line v1 2026-01-01T00:00:00Z -)"
         "1"$'\n'"${row}"$'\t'"a fifth field"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z - "")"
-        "1"$'\n'"$(release_line "" 2026-01-01T00:00:00Z - "a name")"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z draft "a name")"
-        "1"$'\n'"$(release_line v1 2026-01-01T00:00:00Z prerelease,latest "a name")"
+        "1"$'\n'"$(tab_line v1 2026-01-01T00:00:00Z - "")"
+        "1"$'\n'"$(tab_line "" 2026-01-01T00:00:00Z - "a name")"
+        "1"$'\n'"$(tab_line v1 2026-01-01T00:00:00Z draft "a name")"
+        "1"$'\n'"$(tab_line v1 2026-01-01T00:00:00Z prerelease,latest "a name")"
         "2"$'\n\n'"${row}"
     )
     local answer
@@ -7578,4 +7578,516 @@ run_tag_view() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: git is not installed"* ]]
+}
+
+# --- issue label-history and pr ready-at ----------------------------------------
+
+CREATED_AT="2026-10-01T09:00:00Z"
+LABEL_HISTORY_USAGE="Usage: cfwf issue label-history --repo <owner/repo> (--issue <n> | --pr <n>) [--label <name>]"
+READY_AT_USAGE="Usage: cfwf pr ready-at --repo <owner/repo> --pr <n>"
+TIMELINE_UNEXPECTED="cfwf: gh returned an unexpected result for the timeline of ${REPO}#"
+
+# Writes the answer to the read of REPO itself, which is how it is seen to be there.
+write_this_repository() {
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main"}' | write_api "repos/${REPO}"
+}
+
+# Writes the number $1 as the issues endpoint gives it: an issue or a pull request ($2, issue or
+# pull), created at $3 (CREATED_AT by default), with fields the commands never ask for.
+write_issue_kind() {
+    jq -n --argjson n "$1" --arg kind "$2" --arg at "${3:-${CREATED_AT}}" \
+        '{number: $n, title: "a title", state: "open", created_at: $at, updated_at: "2026-10-09T00:00:00Z"}
+         + (if $kind == "pull" then {pull_request: {url: "https://api.github.com/repos/x/y/pulls/\($n)", merged_at: null}} else {} end)' \
+        | write_api "repos/${REPO}/issues/$1"
+}
+
+# One timeline event as the REST API gives it: the event $1, the actor's login $2 (none for a null
+# actor), the label's name $3 (empty for an event with no label) and its time $4.
+timeline_event() {
+    jq -n --arg event "$1" --arg login "$2" --arg label "$3" --arg at "$4" \
+        '{id: 1, event: $event, created_at: $at, commit_id: null,
+          actor: (if $login == "none" then null else {login: $login, type: "User"} end)}
+         + (if $label == "" then {} else {label: {name: $label, color: "ff0000"}} end)'
+}
+
+# Writes the timeline of the number $1 as one page: each further argument an event, in the order
+# given, none for an empty timeline.
+write_timeline() {
+    local number="$1"
+    shift
+    printf '%s\n' "$@" | jq -s '.' | write_api "repos/${REPO}/issues/${number}/timeline"
+}
+
+# One page of a timeline: each argument an event, in the order given.
+timeline_page() {
+    printf '%s\n' "$@" | jq -c -s '.'
+}
+
+# Writes the timeline of the number $1 as several pages, which the gh stub hands to the jq program
+# one at a time, as gh --paginate does: each further argument a page (timeline_page).
+write_timeline_pages() {
+    local number="$1"
+    shift
+    printf '%s\n' "$@" | jq -s '.' > "$(api_fixture "repos/${REPO}/issues/${number}/timeline").pages"
+}
+
+run_label_history() {
+    run --separate-stderr "${SCRIPT}" issue label-history --repo "${REPO}" "$@"
+}
+
+run_ready_at() {
+    run --separate-stderr "${SCRIPT}" pr ready-at --repo "${REPO}" "$@"
+}
+
+# Writes what gh prints for the API endpoint $1 as each further argument a line, its fields joined
+# by | standing for ROW_SEPARATOR. The stub prints it without running the call's --jq program, so a
+# row the program could never give, such as one with a field more or less, can be answered.
+write_raw_rows() {
+    local endpoint="$1" row
+    shift
+    for row in "$@"; do
+        printf '%s\n' "${row//|/$'\x1f'}"
+    done > "$(api_fixture "${endpoint}").out"
+}
+
+@test "issue label-history and pr ready-at help, from each -h and from help, gives the usage, the output and the exit codes, help issue and help pr include them, the general help lists both, and none calls gh" {
+    local invocation
+    for invocation in "issue label-history -h" "issue label-history --help" "help issue label-history" "issue label-history --repo ${REPO} --help --bogus"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${LABEL_HISTORY_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"--json, --jq, --paginate and --limit are not options: every page of the timeline is read"* ]]
+        [[ "${output}" == *"  <added|removed>  <time>  <actor>  <label>"* ]]
+        [[ "${output}" == *"oldest first (changes made in the same second keep GitHub's order)"* ]]
+        [[ "${output}" == *"exactly four tab-separated fields and none is empty"* ]]
+        [[ "${output}" == *"ends in [bot], ghost is GitHub's placeholder for an account that was deleted (never a person to"$'\n'"trust), and \"-\" is printed when GitHub names no one"* ]]
+        [[ "${output}" == *"label is the name GitHub records on the"$'\n'"change"* ]]
+        [[ "${output}" == *"matched without regard to ASCII"$'\n'"         case"*"longer than 50 characters"* ]]
+        [[ "${output}" == *"At most 1000 label changes are read, counted before --label is applied. More than that is a"$'\n'"runtime failure and nothing is printed, never part of the list."* ]]
+        [[ "${output}" == *"Exit codes: 0 printed, nothing to print included; 9 the issue or pull request does not exist"*"1 a runtime failure"*"2 a usage error." ]]
+        [[ "${output}" != *"Usage: cfwf issue view"* && "${output}" != *"Usage: cfwf issue create"* ]]
+    done
+
+    for invocation in "pr ready-at -h" "pr ready-at --help" "help pr ready-at"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "${READY_AT_USAGE}"$'\n'* ]]
+        [[ "${output}" == *"  ready-at  the time, ISO 8601 in UTC"$'\n'"  source    ready-for-review when ready-at is the time of the last ready_for_review event"* ]]
+        [[ "${output}" == *"created when it has none, and ready-at is when the"$'\n'"            pull request was created"* ]]
+        [[ "${output}" == *"one opened as a draft and never marked ready: check whether it is a draft now with"$'\n'"'cfwf pr view --field draft'"* ]]
+        [[ "${output}" == *"A conversion back to draft after the last ready event is not looked"$'\n'"at."* ]]
+        [[ "${output}" == *"Exit codes: 0 printed; 9 the pull request does not exist (the number of an issue included); 1 a"*"2 a usage error." ]]
+        [[ "${output}" != *"Usage: cfwf pr checks"* ]]
+    done
+
+    run "${SCRIPT}" help issue
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Usage: cfwf issue plan-status"*$'\n\n'"${LABEL_HISTORY_USAGE}"$'\n'* ]]
+
+    run "${SCRIPT}" help pr
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"Run 'cfwf pr ready-at --help' for pr ready-at, which prints when a pull request was last marked"$'\n'"ready for review."$'\n'* ]]
+
+    run "${SCRIPT}" help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *$'\n'"  issue label-history      Print when each label was added to or removed from an issue or PR, and by whom (exit 9 when not found)"$'\n'* ]]
+    [[ "${output}" == *$'\n'"  pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue label-history prints each label change as added or removed with its time, actor and label, leaves out every other event, and reads the item and then every page of its timeline" {
+    write_issue_kind 7 issue
+    write_timeline 7 \
+        "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)" \
+        "$(timeline_event commented credfeto "" 2026-10-01T10:01:00Z)" \
+        "$(timeline_event unlabeled octocat Medium 2026-10-01T10:02:00Z)" \
+        "$(timeline_event ready_for_review credfeto "" 2026-10-01T10:03:00Z)" \
+        "$(timeline_event cross-referenced credfeto "" 2026-10-01T10:04:00Z)" \
+        "$(timeline_event labeled credfeto Blocked 2026-10-01T10:05:00Z)"
+    run_label_history --issue 007
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto Medium)
+$(tab_line removed 2026-10-01T10:02:00Z octocat Medium)
+$(tab_line added 2026-10-01T10:05:00Z credfeto Blocked)" ]
+    has_field_lines "${output}" 3 4
+
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [[ "$(sed -n 1p "${GH_LOG}")" == "api repos/${REPO}/issues/7 --jq "* ]]
+    [[ "$(sed -n 2p "${GH_LOG}")" == "api repos/${REPO}/issues/7/timeline?per_page=100 --paginate --jq "* ]]
+}
+
+@test "issue label-history keeps the timeline's order, changes made in the same second included, and reads a pull request's with --pr" {
+    write_issue_kind 8 pull
+    write_timeline 8 \
+        "$(timeline_event labeled credfeto zeta 2026-10-01T10:00:00Z)" \
+        "$(timeline_event labeled credfeto alpha 2026-10-01T10:00:00Z)" \
+        "$(timeline_event unlabeled credfeto zeta 2026-10-01T09:59:59Z)"
+    run_label_history --pr 8
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto zeta)
+$(tab_line added 2026-10-01T10:00:00Z credfeto alpha)
+$(tab_line removed 2026-10-01T09:59:59Z credfeto zeta)" ]
+}
+
+@test "issue label-history prints - for an actor GitHub gives as null, ghost and an app's login as GitHub gives them, and - for an event with no label" {
+    write_issue_kind 7 issue
+    write_timeline 7 \
+        "$(timeline_event labeled none Medium 2026-10-01T10:00:00Z)" \
+        "$(timeline_event labeled ghost Medium 2026-10-01T10:01:00Z)" \
+        "$(timeline_event unlabeled 'github-actions[bot]' Medium 2026-10-01T10:02:00Z)" \
+        "$(timeline_event labeled credfeto "" 2026-10-01T10:03:00Z)"
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:00:00Z - Medium)
+$(tab_line added 2026-10-01T10:01:00Z ghost Medium)
+$(tab_line removed 2026-10-01T10:02:00Z 'github-actions[bot]' Medium)
+$(tab_line added 2026-10-01T10:03:00Z credfeto -)" ]
+    has_field_lines "${output}" 4 4
+}
+
+@test "issue label-history keeps a label holding a tab, a newline or a C1 control on one line of four fields" {
+    write_issue_kind 7 issue
+    write_timeline 7 "$(timeline_event labeled credfeto $'a\tb\nc\xc2\x9bd' 2026-10-01T10:00:00Z)"
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto 'a b c d')" ]
+    has_field_lines "${output}" 1 4
+}
+
+@test "issue label-history prints nothing and exits 1 for an actor that is not a login or a time that is not GitHub's, even after rows that are" {
+    local bad
+    write_issue_kind 7 issue
+    for bad in "$(timeline_event labeled 'cred feto' Medium 2026-10-01T10:01:00Z)" \
+        "$(timeline_event labeled credfeto Medium '2026-10-01 10:01:00')" \
+        "$(timeline_event labeled credfeto Medium 2026-10-01T10:01:00+01:00)"; do
+        write_timeline 7 "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)" "${bad}"
+        run_label_history --issue 7
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "${TIMELINE_UNEXPECTED}7" ]
+    done
+}
+
+@test "issue label-history prints nothing and exits 0 for a timeline with no label change" {
+    write_issue_kind 7 issue
+    write_timeline 7
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+    [ -z "${stderr}" ]
+
+    write_timeline 7 "$(timeline_event commented credfeto "" 2026-10-01T10:00:00Z)"
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ -z "${output}" ]
+}
+
+@test "issue label-history --label keeps only the changes of that label, matched without regard to case, and prints nothing for a label that never changed" {
+    write_issue_kind 7 issue
+    write_timeline 7 \
+        "$(timeline_event labeled credfeto Blocked 2026-10-01T10:00:00Z)" \
+        "$(timeline_event labeled credfeto Medium 2026-10-01T10:01:00Z)" \
+        "$(timeline_event unlabeled octocat Blocked 2026-10-01T10:02:00Z)" \
+        "$(timeline_event labeled credfeto 'a,b' 2026-10-01T10:03:00Z)"
+    local expected
+    expected="$(tab_line added 2026-10-01T10:00:00Z credfeto Blocked)
+$(tab_line removed 2026-10-01T10:02:00Z octocat Blocked)"
+    run_label_history --issue 7 --label Blocked
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    run_label_history --label bLOCKED --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${expected}" ]
+
+    run_label_history --issue 7 --label 'a,b'
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:03:00Z credfeto 'a,b')" ]
+
+    run_label_history --issue 7 --label Block
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "issue label-history prints exactly 1000 label changes, and with 1001 prints none and exits 1, whatever --label keeps" {
+    write_issue_kind 7 issue
+    jq -n '[range(1000) | {event: "labeled", created_at: "2026-10-01T10:00:00Z", actor: {login: "credfeto"}, label: {name: "label \(.)"}}]
+        + [range(5) | {event: "commented", created_at: "2026-10-01T10:00:00Z", actor: {login: "credfeto"}}]' \
+        | write_api "repos/${REPO}/issues/7/timeline"
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    has_field_lines "${output}" 1000 4
+    [ "${output%%$'\n'*}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto 'label 0')" ]
+    [ "${output##*$'\n'}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto 'label 999')" ]
+    [ "${output}" = "$(jq -n -r 'range(1000) | "added\t2026-10-01T10:00:00Z\tcredfeto\tlabel \(.)"')" ]
+
+    jq -n '[range(1001) | {event: "unlabeled", created_at: "2026-10-01T10:00:00Z", actor: {login: "credfeto"}, label: {name: "label \(.)"}}]' \
+        | write_api "repos/${REPO}/issues/7/timeline"
+    run_label_history --issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 has more than 1000 label events, so none is printed" ]
+
+    run_label_history --issue 7 --label none
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 has more than 1000 label events, so none is printed" ]
+}
+
+@test "issue label-history prints the label changes of every page, in page order" {
+    write_issue_kind 7 issue
+    write_timeline_pages 7 \
+        "$(timeline_page "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)" "$(timeline_event commented credfeto "" 2026-10-01T10:01:00Z)")" \
+        "$(timeline_page "$(timeline_event commented credfeto "" 2026-10-01T10:02:00Z)")" \
+        "$(timeline_page "$(timeline_event unlabeled credfeto Medium 2026-10-01T10:03:00Z)" "$(timeline_event labeled octocat Blocked 2026-10-01T10:04:00Z)")"
+    run_label_history --issue 7
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line added 2026-10-01T10:00:00Z credfeto Medium)
+$(tab_line removed 2026-10-01T10:03:00Z credfeto Medium)
+$(tab_line added 2026-10-01T10:04:00Z octocat Blocked)" ]
+}
+
+@test "pr ready-at prints the last ready_for_review event of every page, and ignores a conversion to draft after it" {
+    write_issue_kind 8 pull
+    write_timeline_pages 8 \
+        "$(timeline_page "$(timeline_event ready_for_review credfeto "" 2026-10-02T10:00:00Z)" "$(timeline_event convert_to_draft credfeto "" 2026-10-02T11:00:00Z)")" \
+        "$(timeline_page "$(timeline_event ready_for_review octocat "" 2026-10-03T10:00:00Z)" "$(timeline_event labeled credfeto Medium 2026-10-03T10:30:00Z)")" \
+        "$(timeline_page "$(timeline_event convert_to_draft credfeto "" 2026-10-04T10:00:00Z)")"
+    run_ready_at --pr 0008
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = $'ready-at\t2026-10-03T10:00:00Z\nsource\tready-for-review' ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [[ "$(sed -n 1p "${GH_LOG}")" == "api repos/${REPO}/issues/8 --jq "* ]]
+    [[ "$(sed -n 2p "${GH_LOG}")" == "api repos/${REPO}/issues/8/timeline?per_page=100 --paginate --jq "* ]]
+}
+
+@test "pr ready-at falls back to when the pull request was created when its timeline has no ready_for_review event" {
+    write_issue_kind 8 pull 2026-09-30T08:07:06Z
+    write_timeline 8 "$(timeline_event labeled credfeto Medium 2026-10-01T10:00:00Z)" "$(timeline_event convert_to_draft credfeto "" 2026-10-01T11:00:00Z)"
+    run_ready_at --pr 8
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = $'ready-at\t2026-09-30T08:07:06Z\nsource\tcreated' ]
+}
+
+@test "issue label-history and pr ready-at print nothing and exit 1 for a time that is not GitHub's, on the item or on the last ready_for_review event" {
+    write_issue_kind 8 pull 'yesterday'
+    write_timeline 8
+    run_ready_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#8" ]
+    run_label_history --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#8" ]
+
+    write_issue_kind 8 pull
+    write_timeline 8 "$(timeline_event ready_for_review credfeto "" 2026-10-01T10:00:00Z)" "$(timeline_event ready_for_review credfeto "" 'soon')"
+    run_ready_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+}
+
+@test "issue label-history and pr ready-at exit 9 for a number that is not there or is of the other kind, and 1 when the repository is not there" {
+    write_this_repository
+    run_label_history --issue 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 was not found" ]
+    run_ready_at --pr 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#7 was not found" ]
+
+    write_issue_kind 8 pull
+    write_timeline 8
+    run_label_history --issue 8
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#8 is a pull request, not an issue" ]
+
+    write_issue_kind 7 issue
+    write_timeline 7
+    run_label_history --pr 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#7 was not found" ]
+    run_ready_at --pr 7
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#7 was not found" ]
+    [ "$(gh_call_count "/timeline")" -eq 0 ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_label_history --issue 9
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    run_ready_at --pr 9
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+}
+
+@test "issue label-history and pr ready-at exit 1 quoting gh's error for a failed read of the item or the timeline, and for a timeline that is not there after the item was" {
+    fail_api "repos/${REPO}/issues/7"
+    run_label_history --issue 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#7: gh: Bad Gateway (HTTP 502)" ]
+    run_ready_at --pr 7
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#7: gh: Bad Gateway (HTTP 502)" ]
+    [ "$(gh_call_count "/timeline")" -eq 0 ]
+
+    write_issue_kind 8 pull
+    fail_api "repos/${REPO}/issues/8/timeline"
+    run_ready_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the timeline of ${REPO}#8: gh: Bad Gateway (HTTP 502)" ]
+    run_label_history --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the timeline of ${REPO}#8: gh: Bad Gateway (HTTP 502)" ]
+
+    rm "$(api_fixture "repos/${REPO}/issues/8/timeline").fail"
+    run_ready_at --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+    run_label_history --pr 8
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+}
+
+@test "issue label-history and pr ready-at usage errors exit 2 with their own usage before any gh call, never echoing a value" {
+    local secret="never-echoed-value"
+    local long
+    long=$(printf 'x%.0s' {1..51})
+    local -a label_cases=(
+        "--issue 7"
+        "--repo ${REPO}"
+        "--repo ${REPO} --issue 7 --pr 8"
+        "--repo ${REPO} --pr 8 --pr 9"
+        "--repo ${REPO} --issue 7 --issue 7"
+        "--repo ${REPO} --repo ${REPO} --issue 7"
+        "--repo ${REPO} --issue 0"
+        "--repo ${REPO} --issue 000"
+        "--repo ${REPO} --pr 0"
+        "--repo ${REPO} --issue 7x"
+        "--repo ${REPO} --issue"
+        "--repo ${REPO} --issue 7 --label a --label b"
+        "--repo ${REPO} --issue 7 --label ${long}"
+        "--repo ${REPO} --issue 7 --json labels"
+        "--repo ${REPO} --issue 7 --jq ."
+        "--repo ${REPO} --issue 7 --paginate"
+        "--repo ${REPO} --issue 7 --limit 5"
+        "--repo x/.. --issue 7"
+        "--repo ${REPO} 7"
+    )
+    local args
+    for args in "${label_cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" issue label-history ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${LABEL_HISTORY_USAGE}"$'\n'* ]]
+    done
+
+    run_label_history
+    [[ "${stderr}" == "cfwf: missing required option --pr or --issue"$'\n'* ]]
+    run_label_history --issue 7 --pr 8
+    [[ "${stderr}" == "cfwf: --pr or --issue can only be given once, and not both"$'\n'* ]]
+    run_label_history --issue 000
+    [[ "${stderr}" == "cfwf: invalid value for --issue: it must be a number above 0"$'\n'* ]]
+    run_label_history --pr 0
+    [[ "${stderr}" == "cfwf: invalid value for --pr: it must be a number above 0"$'\n'* ]]
+    run_label_history --issue 7 --label Blocked --label Medium
+    [[ "${stderr}" == "cfwf: --label can only be given once"$'\n'* ]]
+
+    local bad
+    for bad in $'a\t'"${secret}" $'a\n'"${secret}" $'a\xc2\x9b'"${secret}" $'a\x7f'"${secret}" "   " "${secret}${long}"; do
+        run_label_history --issue 7 --label "${bad}"
+        [ "${status}" -eq 2 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: invalid value for --label: it must "* && "${stderr}" != *"${secret}"* ]]
+    done
+    run_label_history --issue 7 --label "   "
+    [[ "${stderr}" == "cfwf: invalid value for --label: it must not be blank or longer than 50 characters"$'\n'* ]]
+    run_label_history --issue 7 --label $'a\tb'
+    [[ "${stderr}" == "cfwf: invalid value for --label: it must not contain a control character"$'\n'* ]]
+    run_label_history --issue 7 --label $'a\xc2\x9bb'
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --label: it must not contain a control character"$'\n'* ]]
+
+    local -a ready_cases=(
+        "--pr 8"
+        "--repo ${REPO}"
+        "--repo ${REPO} --pr 0"
+        "--repo ${REPO} --pr 8 --pr 9"
+        "--repo ${REPO} --issue 8"
+        "--repo ${REPO} --pr 8 --label Blocked"
+        "--repo ${REPO} --pr 8 --field draft"
+        "--repo ${REPO} --pr 8 --json createdAt"
+        "--repo ${REPO} --pr 8 --jq ."
+        "--repo ${REPO} --pr 8 --paginate"
+        "--repo ${REPO} 8"
+    )
+    for args in "${ready_cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr ready-at ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${READY_AT_USAGE}"$'\n'* ]]
+    done
+    run_ready_at
+    [[ "${stderr}" == "cfwf: missing required option --pr"$'\n'* ]]
+    run_ready_at --pr 000
+    [[ "${stderr}" == "cfwf: invalid value for --pr: it must be a number above 0"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue label-history and pr ready-at print nothing and exit 1 for a row gh prints that is not of the kind, change or field count the program gives" {
+    local row
+    for row in "thing|${CREATED_AT}|end" "issue|${CREATED_AT}" "issue|${CREATED_AT}|x|end" "pull|${CREATED_AT}|end|x"; do
+        write_raw_rows "repos/${REPO}/issues/7" "${row}"
+        run_label_history --issue 7
+        [ "${status}" -eq 1 ] || { echo "accepted: ${row} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#7" ]
+        run_ready_at --pr 7
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#7" ]
+    done
+
+    rm "$(api_fixture "repos/${REPO}/issues/7").out"
+    write_issue_kind 7 issue
+    for row in "labeled|2026-10-01T10:00:00Z|credfeto|Medium|end" "added|2026-10-01T10:00:00Z|credfeto|Medium" \
+        "removed|2026-10-01T10:00:00Z|credfeto|Medium|x|end"; do
+        write_raw_rows "repos/${REPO}/issues/7/timeline" "added|2026-10-01T09:00:00Z|credfeto|Medium|end" "${row}"
+        run_label_history --issue 7
+        [ "${status}" -eq 1 ] || { echo "accepted: ${row} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${TIMELINE_UNEXPECTED}7" ]
+    done
+
+    write_issue_kind 8 pull
+    for row in "2026-10-01T10:00:00Z" "2026-10-01T10:00:00Z|x|end"; do
+        write_raw_rows "repos/${REPO}/issues/8/timeline" "2026-10-01T09:00:00Z|end" "${row}"
+        run_ready_at --pr 8
+        [ "${status}" -eq 1 ] || { echo "accepted: ${row} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "${TIMELINE_UNEXPECTED}8" ]
+    done
 }
