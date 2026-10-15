@@ -26,7 +26,7 @@ setup() {
         'for arg in "$@"; do [ "${prev}" = "--jq" ] && jq_expr="${arg}"; prev="${arg}"; done' \
         'emit() { if [ -n "${jq_expr}" ]; then jq -r "${jq_expr}" < "$1"; else cat "$1"; fi; }' \
         'emit_asked() { f="$1"; shift; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg asked "${asked}" "with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key)))" < "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json"; }' \
-        'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit_asked "${f}" "$@"; exit ;; " api repos/"*"/collaborators?"*) f="${GH_FIXTURES}/collaborators.out"; [ -f "${f}" ] && { cat "${f}"; exit 0; } ;; esac' \
+        'case " $* " in " repo view "*" --json defaultBranchRef,"*) v="${3,,}"; f="${GH_FIXTURES}/repository-${v//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to a Repository with the name ${3}. (repository)" >&2; exit 1; }; emit_asked "${f}" "$@"; exit ;; esac' \
         'case "$1 $2" in' \
         '  "pr list") f="${GH_FIXTURES}/pr-list"; [ -f "${f}.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${f}.rewrite")"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; hd=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--head" ] && hd="${arg}"; prev="${arg}"; done; [ -f "${f}.ignore-head" ] && hd=""; jq --arg hd "${hd}" --argjson lim "${lim}" "[.[] | select(\$hd == \"\" or .headRefName == \$hd)] | .[:\$lim]" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "release list") f="${GH_FIXTURES}/release-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; drafts=true; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; [ "${arg}" = "--exclude-drafts" ] && drafts=false; prev="${arg}"; done; [ -f "${f}.keep-drafts" ] && drafts=true; jq --argjson drafts "${drafts}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$drafts or .isDraft != true)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
@@ -8189,14 +8189,14 @@ rate_limit_lines() {
     # A row with no closing field, with a field too many, or an empty line among the rows.
     local row
     for row in $'bob\x1fadmin' $'bob\x1fadmin\x1f' $'bob\x1fadmin\x1fextra\x1fend' $'bob\x1fadmin\x1fend\x1fend' $'\nbob\x1fadmin\x1fend'; do
-        printf 'alice\x1fwrite\x1fend\n%s\n' "${row}" > "${GH_FIXTURES}/collaborators.out"
+        printf 'alice\x1fwrite\x1fend\n%s\n' "${row}" > "$(api_fixture "${COLLABORATORS_ENDPOINT}").out"
         run_repo collaborators
         [ "${status}" -eq 1 ] || { echo "printed: ${row}" >&2; return 1; }
         [ -z "${output}" ]
         [ "${stderr}" = "cfwf: gh returned an unexpected result for the collaborators of ${REPO}" ]
     done
 
-    printf 'alice\x1fwrite\x1fend\nbob\x1f\x1fend\n' > "${GH_FIXTURES}/collaborators.out"
+    printf 'alice\x1fwrite\x1fend\nbob\x1f\x1fend\n' > "$(api_fixture "${COLLABORATORS_ENDPOINT}").out"
     run_repo collaborators
     [ "${status}" -eq 0 ]
     [ "${output}" = $'alice\twrite\nbob\t-' ]
@@ -9732,7 +9732,7 @@ timeline_event() {
 write_timeline() {
     local number="$1"
     shift
-    printf '%s\n' "$@" | jq -s '.' | write_api "repos/${REPO}/issues/${number}/timeline"
+    timeline_page "$@" | write_api "repos/${REPO}/issues/${number}/timeline"
 }
 
 # One page of a timeline: each argument an event, in the order given.
