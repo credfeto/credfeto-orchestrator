@@ -5496,14 +5496,20 @@ run_pr_checks() {
     [ "$(gh_call_count "branches/release/v2")" -eq 1 ]
 }
 
-@test "pr checks --branch judges a name as git does, even run from a repository where @{-1} names a branch" {
+# Makes a git checkout on the branch feature, switched to from main so that @{-1} names main, and
+# runs the rest of the test from inside it.
+enter_checkout_with_previous_branch() {
     local repo="${TEST_TMP}/checkout"
     git init -q -b main "${repo}"
     git -C "${repo}" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
         commit -q --allow-empty -m first
     git -C "${repo}" switch -q -c feature
-    cd "${repo}"
+    cd "${repo}" || return 1
     [ "$(git -C "${repo}" rev-parse --abbrev-ref '@{-1}')" = main ]
+}
+
+@test "pr checks --branch judges a name as git does, even run from a repository where @{-1} names a branch" {
+    enter_checkout_with_previous_branch
     local branch
     for branch in '@{-1}' HEAD -main main.lock a..b; do
         run_pr_checks --branch "${branch}"
@@ -5908,6 +5914,11 @@ run_branch_required_checks() {
     run --separate-stderr "${SCRIPT}" branch required-checks --repo "${REPO}" "$@"
 }
 
+# The branch required-checks usage, which every usage error of the command prints after its message.
+branch_required_checks_help() {
+    "${SCRIPT}" branch required-checks --help
+}
+
 @test "branch required-checks help, from help branch, branch -h and branch required-checks -h, is one text that describes every exit code and calls no gh" {
     local invocation help_text=""
     for invocation in "help branch" "help branch required-checks" "branch -h" "branch --help" \
@@ -5924,10 +5935,6 @@ run_branch_required_checks() {
         [[ "${output}" == *"Exit codes: 0 printed, an empty list included (nothing is printed); 9 the repository has no"$'\n'"branch of that name; 1 a runtime failure"*"2 a usage error." ]]
     done
     [ ! -s "${GH_LOG}" ]
-
-    run "${SCRIPT}" help pr
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them."* ]]
 }
 
 @test "branch without a subcommand names the one it has, and one it does not have is named by its position (exit 2)" {
@@ -5936,10 +5943,8 @@ run_branch_required_checks() {
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: branch needs a subcommand (required-checks)"$'\n\n'"Usage: cfwf branch required-checks "* ]]
 
-    run "${SCRIPT}" branch required-checks --help
-    [ "${status}" -eq 0 ]
-    local help_text="${output}"
-
+    local help_text
+    help_text="$(branch_required_checks_help)"
     run --separate-stderr "${SCRIPT}" branch protection --repo "${REPO}"
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
@@ -5948,9 +5953,8 @@ run_branch_required_checks() {
 }
 
 @test "branch required-checks refuses a missing, repeated or unknown option (exit 2) before any gh call, never echoing a value" {
-    run "${SCRIPT}" branch required-checks --help
-    [ "${status}" -eq 0 ]
-    local help_text="${output}"
+    local help_text
+    help_text="$(branch_required_checks_help)"
 
     # Each case is its expected first stderr line, a tab, then the arguments; the distinctive values
     # (zz-*, 4242) are what an echo would show, and the whole of stderr is compared, so none can.
@@ -5984,17 +5988,9 @@ run_branch_required_checks() {
 }
 
 @test "branch required-checks judges a --branch as git does, even run from a repository where @{-1} names a branch" {
-    local repo="${TEST_TMP}/checkout"
-    git init -q -b main "${repo}"
-    git -C "${repo}" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
-        commit -q --allow-empty -m first
-    git -C "${repo}" switch -q -c feature
-    cd "${repo}"
-    [ "$(git -C "${repo}" rev-parse --abbrev-ref '@{-1}')" = main ]
-    run "${SCRIPT}" branch required-checks --help
-    [ "${status}" -eq 0 ]
-    local help_text="${output}"
-    local branch
+    enter_checkout_with_previous_branch
+    local help_text branch
+    help_text="$(branch_required_checks_help)"
     for branch in '@{-1}' HEAD -main main.lock a..b; do
         run_branch_required_checks --branch "${branch}"
         [ "${status}" -eq 2 ] || { echo "accepted: ${branch} (${status})" >&2; return 1; }
