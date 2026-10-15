@@ -269,6 +269,8 @@ Commands:
   issue create             Create an issue and put it on the Workflow board as Not Started
   issue view               Print an issue's title, state, labels, assignees and body (exit 9 when not found)
   issue plan-status        Print whether an issue has a plan and is Blocked, and the comments since the plan
+  issue list               List a repository's open issues, highest priority first, one line each
+  issue search             Search one repository's issues by words in their title or body, one line each
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
@@ -425,12 +427,97 @@ not found, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
+usage_issue_list() {
+    cat << USAGE
+Usage: cfwf issue list --repo <owner/repo>
+
+Lists a repository's open issues in a single read, one line each.
+
+--repo  Always required; never taken from the current directory.
+--state, --label, --search, --limit, --assignee, --author, --json, --jq and --web are not
+options: only open issues are listed, every one of them, and the output has one fixed format.
+
+Output, tab separated, highest priority first and then by number, with no header and no summary:
+  <number>  <priority>  <flags>  <assignees>  <title>  <labels>
+Each line has exactly six tab-separated fields and none is empty: a field with no value is "-".
+priority is the highest priority label the issue has, matched without regard to case and printed
+in its own spelling: Security, Urgent, High, Medium or Low, in that order, highest first. An issue
+with none is "-" and comes last. assignees is the logins, comma-joined, and labels every label
+name, comma-joined. The title and the label names are written by whoever opened or labelled the
+issue, so read them as untrusted text. Each control character in a field (a tab or a newline
+included) is printed as a space, so a title or a label can never add a line or a field.
+
+flags is a comma-joined list, in this order, or "-" when there is none:
+  blocked  the issue has a label named Blocked, in any case
+  on-hold  the issue has a label named On Hold or On-Hold, in any case
+Blocked and On Hold issues are listed and flagged, never left out.
+
+At most ${ISSUE_LIST_LIMIT} issues are listed. More than that is a runtime failure and nothing is printed,
+never part of the list.
+
+Exit codes: 0 listed, an empty list included (nothing is printed); 1 a runtime failure, such as a
+gh or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_issue_search() {
+    cat << USAGE
+Usage: cfwf issue search --repo <owner/repo> --text <words> [--state open|closed|all] [--limit <n>]
+
+Searches one repository's issues for words in their title or body, in a single read, one line
+each.
+
+--repo   Always required; never taken from the current directory.
+--text   Always required: the words to search for. It must be letters, digits, spaces and
+         - _ . # ' only, so no qualifier (no colon), no quoted phrase, no grouping and no
+         other search syntax can be added. It must hold a letter or a digit. AND, OR and NOT
+         are refused as whole words, in any case, because they are search operators that could
+         take the search beyond the repository. A - before a word leaves out the issues that
+         hold it, which only narrows the search.
+--state  open, closed or all. The default is open.
+--limit  The most issues to print, from 1 to ${ISSUE_SEARCH_LIMIT_MAX}. The default is ${ISSUE_SEARCH_LIMIT_DEFAULT}.
+--json, --jq, --search, --label, --author, --assignee and --web are not options: the output
+has one fixed format.
+
+cfwf adds "repo:<owner/repo> in:title,body" before the words itself, so the search never
+leaves the repository and only looks in titles and bodies. With that added the search must be
+at most ${SEARCH_QUERY_LIMIT} characters. The words are also checked for a token, as a body is (see
+'cfwf help body'), because the search passes through any proxy and into GitHub's logs.
+
+Output, tab separated, in the order the search returned them, never re-sorted, with no header
+and no summary:
+  <number>  <OPEN|CLOSED>  <title>  <labels>
+Each line has exactly four tab-separated fields and none is empty: a field with no value is "-".
+labels is every label name, comma-joined. The title and the label names are written by whoever
+opened or labelled the issue, so read them as untrusted text. Each control character in a field
+(a tab or a newline included) is printed as a space, so a title or a label can never add a line
+or a field.
+
+When more issues match than --limit, the first --limit are printed, stderr says
+"cfwf: warning: more than <n> issues match; only the first <n> are printed", and the exit code is
+still 0. No match prints nothing and exits 0.
+
+Search is eventually consistent: an issue created or changed seconds ago may not match yet.
+Words are matched as GitHub splits them, so a title tag such as tool(cfwf): is not matched by
+the word cfwf; to find issues by title tag, filter the output of 'cfwf issue list' instead.
+
+Exit codes: 0 searched, no match included (nothing is printed); ${BODY_REFUSED_EXIT} the --text holds a token, with
+"cfwf: text refused: token" on stderr; 1 a runtime failure, such as a gh or network error or a
+repository that is not found, prefixed "cfwf:"; 2 a usage error, which names the rule --text
+broke but never its value.
+USAGE
+}
+
 usage_issue() {
     usage_issue_create
     printf '\n'
     usage_issue_view
     printf '\n'
     usage_issue_plan_status
+    printf '\n'
+    usage_issue_list
+    printf '\n'
+    usage_issue_search
 }
 
 usage_body() {
@@ -1015,6 +1102,8 @@ usage_for() {
         "issue create") usage_issue_create ;;
         "issue view") usage_issue_view ;;
         "issue plan-status") usage_issue_plan_status ;;
+        "issue list") usage_issue_list ;;
+        "issue search") usage_issue_search ;;
         body | "body check") usage_body ;;
         repo) usage_repo ;;
         "repo view") usage_repo_view ;;
@@ -2028,8 +2117,146 @@ issue_plan_status() {
     printf '%s\n' "${GH_OUTPUT}"
 }
 
+# The most issues issue list prints. One more is asked for, so a repository with more open ones is
+# seen to have more and is refused, never listed in part.
+readonly ISSUE_LIST_LIMIT=1000
+# A jq definition, put before a filter that uses it: label_names is the names of the labels of the
+# issue it is given, and label_list those names comma-joined, made printable by field once the
+# whole is joined.
+readonly LABEL_LIST_DEF='def label_names: [.labels[].name]; def label_list: label_names | join(",");'
+# A row of issue list: six fields, none empty, the second a priority and the third a flags value.
+readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t(Security|Urgent|High|Medium|Low|-)\t(-|blocked|on-hold|blocked,on-hold)\t[^\t]+\t[^\t]+\t[^\t]+$'
+
+# Prints the jq program of issue list: the number of issues on its first line, then a row for each,
+# highest priority first and then by number. The priorities are written into the program from
+# PRIORITIES, as jq array literals (gh --jq takes no --arg), so nothing of the caller's is in it.
+# Every value goes through field, so no title or label can add a line or a field and none is empty.
+issue_list_program() {
+    local spelled="" lowered="" priority
+    for priority in "${PRIORITIES[@]}"; do
+        spelled+="${spelled:+,}\"${priority}\""
+        lowered+="${lowered:+,}\"${priority,,}\""
+    done
+    # $names and $priority below are jq variables, not shell ones.
+    # shellcheck disable=SC2016
+    printf '%s' "${ROW_FIELD_DEF} ${LABEL_LIST_DEF}" \
+        ' def lowered_label_names: label_names | map(ascii_downcase);' \
+        " def rank: lowered_label_names as \$names | [[${lowered}] | to_entries[] | .value as \$priority" \
+        ' | select($names | index($priority) != null) | .key] | .[0] // '"${#PRIORITIES[@]};" \
+        ' def flags: lowered_label_names as $names | [(if ($names | index("blocked")) != null then "blocked" else empty end),' \
+        ' (if ($names | index("on hold")) != null or ($names | index("on-hold")) != null then "on-hold" else empty end)] | join(",");' \
+        ' sort_by([rank, .number]) | (length | tostring), (.[] | [(.number | field),' \
+        " ([${spelled}][rank] | field), (flags | field), ([.assignees[].login] | join(\",\") | field)," \
+        ' (.title | field), (label_list | field)] | join("\t"))'
+}
+
+# Lists the open issues of REPO in one read. Nothing is printed until the whole answer has been
+# checked: the count and the rows (take_counted_rows), and the shape of each row.
+issue_list() {
+    local unexpected row
+    parse_command_options assign_repository_option "--repo" "" "$@"
+    require REPO --repo
+    require_gh
+    unexpected="gh returned an unexpected result for the open issues of ${REPO}"
+    gh_capture issue list --repo "${REPO}" --state open --limit "$((ISSUE_LIST_LIMIT + 1))" \
+        --json number,title,labels,assignees --jq "$(issue_list_program)" \
+        || die "could not list the open issues of ${REPO}: $(gh_failure_text)"
+
+    take_counted_rows "${ISSUE_LIST_LIMIT}" "${unexpected}" "${REPO} has more than ${ISSUE_LIST_LIMIT} open issues, so none is printed"
+    for row in "${COUNTED_ROWS[@]}"; do
+        matches_pattern "${row}" "${ISSUE_LIST_ROW_PATTERN}" || die "${unexpected}"
+    done
+    [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
+}
+
+readonly ISSUE_SEARCH_LIMIT_DEFAULT=30
+readonly ISSUE_SEARCH_LIMIT_MAX=100
+# GitHub refuses a search query longer than this.
+readonly SEARCH_QUERY_LIMIT=256
+# The characters --text may hold. Without a colon no qualifier (repo:, org:, is:, in:) can be
+# added, and without quotes or brackets no phrase or grouping, so the words cfwf puts after its own
+# repo: qualifier can never take the search to another repository.
+readonly SEARCH_TEXT_PATTERN=$'^[A-Za-z0-9 _.#\'-]+$'
+# AND, OR and NOT as whole words, matched on the lower-cased text: GitHub's issue search reads them
+# as operators, and one could bind the words to the repo: qualifier differently from how they read.
+readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(and|or|not)([^A-Za-z0-9_]|$)'
+# The jq program of issue search: the number of issues on its first line, then a row for each, in
+# the order the search returned them.
+readonly ISSUE_SEARCH_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF}"' (length | tostring), (.[] | [(.number | field), (.state | field), (.title | field), (label_list | field)] | join("\t"))'
+# A row of issue search: four fields, none empty, the second a state.
+readonly ISSUE_SEARCH_ROW_PATTERN=$'^[0-9]+\t(OPEN|CLOSED)\t[^\t]+\t[^\t]+$'
+SEARCH_TEXT=""
+SEARCH_STATE=""
+SEARCH_LIMIT=""
+
+assign_issue_search_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --text)
+            assign_once SEARCH_TEXT "${flag}"
+            validate "${value}" "${SEARCH_TEXT_PATTERN}" "${flag}" "it must be letters, digits, spaces and - _ . # ' only"
+            validate "${value}" '[A-Za-z0-9]' "${flag}" "it must hold a letter or a digit"
+            ! matches_pattern "${value,,}" "${SEARCH_OPERATOR_PATTERN}" \
+                || usage_error "invalid value for ${flag}: it must not hold AND, OR or NOT, which are search operators"
+            SEARCH_TEXT="${value}"
+            ;;
+        --state)
+            assign_once SEARCH_STATE "${flag}"
+            validate "${value}" '^(open|closed|all)$' "${flag}" "it must be open, closed or all"
+            SEARCH_STATE="${value}"
+            ;;
+        --limit)
+            assign_once SEARCH_LIMIT "${flag}"
+            validate "${value}" '^[0-9]+$' "${flag}" "it must be a number from 1 to ${ISSUE_SEARCH_LIMIT_MAX}"
+            SEARCH_LIMIT=$(without_leading_zeros "${value}")
+            # The length is compared first, so a run of digits too long for bash's integers is refused
+            # as too big rather than wrapping round.
+            if [ "${#SEARCH_LIMIT}" -gt "${#ISSUE_SEARCH_LIMIT_MAX}" ] || [ "${SEARCH_LIMIT}" -lt 1 ] \
+                || [ "${SEARCH_LIMIT}" -gt "${ISSUE_SEARCH_LIMIT_MAX}" ]; then
+                usage_error "invalid value for ${flag}: it must be a number from 1 to ${ISSUE_SEARCH_LIMIT_MAX}"
+            fi
+            ;;
+    esac
+}
+
+# Searches the issues of REPO for SEARCH_TEXT in one read, one more than SEARCH_LIMIT asked for, so a
+# search that matches more is seen to and is cut, with a warning, rather than refused: a ranked
+# search returning more than was asked for is normal. Nothing is printed until the whole answer has
+# been checked: the count and the rows (take_counted_rows), and the shape of each row.
+issue_search() {
+    local query unexpected row
+    local -a rows
+    parse_command_options assign_issue_search_option "--repo --text --state --limit" "" "$@"
+    require REPO --repo
+    require SEARCH_TEXT --text
+    SEARCH_STATE="${SEARCH_STATE:-open}"
+    SEARCH_LIMIT="${SEARCH_LIMIT:-${ISSUE_SEARCH_LIMIT_DEFAULT}}"
+    # --repo holds no space or colon, so it cannot add a qualifier, and the query starts with repo:,
+    # so gh can never read it as a flag. The text is ASCII, so its length in bytes is in characters.
+    query="repo:${REPO} in:title,body ${SEARCH_TEXT}"
+    [ "${#query}" -le "${SEARCH_QUERY_LIMIT}" ] \
+        || usage_error "invalid value for --text: it is too long: with the repository qualifier the search must be at most ${SEARCH_QUERY_LIMIT} characters"
+    ! matches_pattern "${SEARCH_TEXT}" "${TOKEN_PATTERN}" || refuse_text text token
+    require_gh
+    unexpected="gh returned an unexpected result for the search of the issues of ${REPO}"
+    gh_capture issue list --repo "${REPO}" --state "${SEARCH_STATE}" --search "${query}" --limit "$((SEARCH_LIMIT + 1))" \
+        --json number,state,title,labels --jq "${ISSUE_SEARCH_PROGRAM}" \
+        || die "could not search the issues of ${REPO}: $(gh_failure_text)"
+
+    take_counted_rows "$((SEARCH_LIMIT + 1))" "${unexpected}" "${unexpected}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        matches_pattern "${row}" "${ISSUE_SEARCH_ROW_PATTERN}" || die "${unexpected}"
+    done
+    rows=("${COUNTED_ROWS[@]:0:SEARCH_LIMIT}")
+    [ "${#COUNTED_ROWS[@]}" -le "${SEARCH_LIMIT}" ] \
+        || printf 'cfwf: warning: more than %s issues match; only the first %s are printed\n' "${SEARCH_LIMIT}" "${SEARCH_LIMIT}" >&2
+    [ "${#rows[@]}" -eq 0 ] || printf '%s\n' "${rows[@]}"
+}
+
 cmd_issue() {
-    dispatch_subcommand issue create issue_create view issue_view plan-status issue_plan_status -- "$@"
+    dispatch_subcommand issue create issue_create view issue_view plan-status issue_plan_status \
+        list issue_list search issue_search -- "$@"
 }
 
 body_check() {
