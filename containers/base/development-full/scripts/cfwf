@@ -21,6 +21,16 @@ readonly TAG_NOT_FOUND_EXIT=9
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
+# The same code as ISSUE_NOT_FOUND_EXIT, so a missing run reads like any other missing item.
+readonly RUN_NOT_FOUND_EXIT=9
+# A run that has not finished is pending, as a check that has not finished is, so a caller that
+# already retries on pending can run the command again later.
+readonly RUN_PENDING_EXIT="${CHECKS_PENDING_EXIT}"
+# A refusal by a rule is the same code as a refused body: the call must change, and nothing was
+# written.
+readonly POLICY_REFUSED_EXIT="${BODY_REFUSED_EXIT}"
+# The run attempt at or past which a rerun is refused, so a flaky check cannot be rerun for ever.
+readonly RUN_ATTEMPT_LIMIT=3
 readonly API_PAGE_SIZE=100
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
@@ -282,6 +292,7 @@ Commands:
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
+  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
@@ -1005,6 +1016,52 @@ or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage 
 USAGE
 }
 
+usage_run_rerun() {
+    cat << USAGE
+Usage: cfwf run rerun --repo <owner/repo> --run <id>
+
+Reruns only the failed jobs of one GitHub Actions run of an open pull request's head, within
+limits. It never reruns a whole run.
+
+--repo  Always required; never taken from the current directory.
+--run   Always required: the run's id, digits only, above 0.
+gh's --failed is always passed and there is no option for a full rerun: --failed, --job, --debug,
+--all, --json, --jq, --template and --web are not options.
+
+Each rule is checked in this order, before anything is written. A run that breaks one is refused
+with "cfwf: rerun refused: <rule>" on stderr, which names only the rule:
+  attempt limit                  the run is on attempt ${RUN_ATTEMPT_LIMIT} or later. The limit is per run, not
+                                 per check: a new push starts a new run.
+  default branch                 the run's head branch has the name of the repository's default
+                                 branch, whichever repository the branch is in.
+  not an open pull request head  the run's head commit is not the head of an open pull request in
+                                 the repository whose head branch has the run's branch name (one
+                                 from a fork included): the branch has no open pull request, its
+                                 pull request was closed or merged, its head has moved since the
+                                 run, or the run has no head branch.
+At most ${PR_LIST_LIMIT} open pull requests on the branch are looked at; more is a runtime failure.
+
+Only a run that passes every rule is looked at for its status: one that has not completed
+(queued, in progress or waiting) exits ${RUN_PENDING_EXIT}, and its failed jobs can be rerun once it has.
+So a run that is refused is never reported as pending.
+
+Output, one line:
+  Rerunning failed jobs of run <id> (attempt <n>)
+where <n> is the attempt the rerun starts: one more than the run's attempt when it was read. It is
+not read back, because GitHub can lag behind a write.
+
+A failed rerun request is a runtime failure, and the request may still have reached GitHub. Running
+the command again is safe: a rerun that did start leaves the run in progress (exit ${RUN_PENDING_EXIT}), and the
+attempt limit still applies. A run that already succeeded has no failed jobs, so GitHub refuses
+it and that is a runtime failure too.
+
+Exit codes: 0 the rerun was requested; ${POLICY_REFUSED_EXIT} refused by a rule (naming the rule; nothing was
+written); ${RUN_PENDING_EXIT} the run is still in progress; ${RUN_NOT_FOUND_EXIT} the run was not found in the repository; 1 a runtime
+failure, such as a gh or network error or a repository that is not found, prefixed "cfwf:"; 2 a
+usage error.
+USAGE
+}
+
 # Prints the usage of $1: a command, or a command and its subcommand as one word pair. A pair it
 # does not know prints the usage of its command, so help for a mistyped subcommand still helps.
 usage_for() {
@@ -1030,6 +1087,7 @@ usage_for() {
         "release view") usage_release_view ;;
         "release list") usage_release_list ;;
         tag | "tag view") usage_tag_view ;;
+        run | "run rerun") usage_run_rerun ;;
         *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
     esac
@@ -1072,6 +1130,11 @@ validate() {
 without_leading_zeros() {
     local number="${1#"${1%%[!0]*}"}"
     printf '%s\n' "${number:-0}"
+}
+
+# Refuses (exit 2) the option $1 when its number $2, already digits only, is 0.
+require_number_above_zero() {
+    [[ "$2" == *[1-9]* ]] || usage_error "invalid value for $1: it must be a number above 0"
 }
 
 assign_option() {
@@ -2599,7 +2662,7 @@ assign_view_option() {
             assign_option "${flag}" "${value}"
             # gh does not take 0 as a pull request's number: it looks for a branch of that name
             # instead, so the answer would be a failed read, or another pull request.
-            [[ "${PR}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
+            require_number_above_zero "${flag}" "${PR}"
             ;;
         --field)
             is_one_of "${value}" "${PR_VIEW_FIELD_NAMES[@]}" \
@@ -2709,7 +2772,7 @@ assign_list_option() {
         --issue)
             assign_once ISSUE "${flag}"
             assign_option "${flag}" "${value}"
-            [[ "${ISSUE}" == *[1-9]* ]] || usage_error "invalid value for ${flag}: it must be a number above 0"
+            require_number_above_zero "${flag}" "${ISSUE}"
             ;;
         --head)
             assign_once LIST_HEAD "${flag}"
@@ -3321,6 +3384,110 @@ cmd_tag() {
     dispatch_subcommand tag view tag_view -- "$@"
 }
 
+RUN_ID=""
+RUN_STATUS=""
+RUN_HEAD_SHA=""
+RUN_HEAD_BRANCH=""
+RUN_ATTEMPT=""
+
+assign_run_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_repository_option "${flag}" "${value}" ;;
+        --run)
+            assign_once RUN_ID "${flag}"
+            validate "${value}" '^[0-9]{1,19}$' "${flag}" "it must be a number of at most 19 digits"
+            RUN_ID=$(without_leading_zeros "${value}")
+            require_number_above_zero "${flag}" "${RUN_ID}"
+            ;;
+    esac
+}
+
+# Refuses (exit POLICY_REFUSED_EXIT) the action $1 under the rule $2, before anything is written. It
+# names only the rule, never a branch or any other text GitHub gave, as refuse_text names no matched
+# text.
+refuse_policy() {
+    printf 'cfwf: %s refused: %s\n' "$1" "$2" >&2
+    exit "${POLICY_REFUSED_EXIT}"
+}
+
+# Sets RUN_STATUS, RUN_HEAD_SHA, RUN_HEAD_BRANCH and RUN_ATTEMPT from one read of the run RUN_ID of
+# REPO. RUN_HEAD_BRANCH is empty when GitHub gives none; any other must be a branch name git allows,
+# because it is handed to gh pr list --head and compared with the default branch. fields_row has
+# already turned any control character, a C1 one included, into a space, which git refuses.
+read_run() {
+    local id end unexpected="gh returned an unexpected result for the run ${RUN_ID} of ${REPO}"
+    api_read "could not read the run ${RUN_ID} of ${REPO}" "repos/${REPO}/actions/runs/${RUN_ID}" \
+        "${FIELDS_ROW_DEF} [.id, .status, .conclusion, .head_sha, .head_branch, .run_attempt, \"end\"] | fields_row" \
+        || not_found_in_repository "${RUN_NOT_FOUND_EXIT}" "the run ${RUN_ID} was not found in ${REPO}"
+    IFS="${ROW_SEPARATOR}" read -r id RUN_STATUS _ RUN_HEAD_SHA RUN_HEAD_BRANCH RUN_ATTEMPT end <<< "${GH_OUTPUT}"
+    [[ "${id}" = "${RUN_ID}" && "${RUN_STATUS}" =~ ^[a-z_]+$ && "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ &&
+        "${RUN_ATTEMPT}" =~ ^[1-9][0-9]{0,8}$ && "${end}" = end ]] || die "${unexpected}"
+    [ -z "${RUN_HEAD_BRANCH}" ] || valid_branch_name "${RUN_HEAD_BRANCH}" || die "${unexpected}"
+}
+
+# Refuses a run whose head branch has the name of the default branch of REPO, read from the
+# repository itself. Only the names are compared, so a fork's branch of that name is refused too.
+refuse_default_branch_run() {
+    api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' || repository_not_found "${REPO}"
+    valid_branch_name "${GH_OUTPUT}" || die "gh returned an unexpected default branch for ${REPO}"
+    [ "${RUN_HEAD_BRANCH}" != "${GH_OUTPUT}" ] || refuse_policy rerun "default branch"
+}
+
+# The jq program of the open pull requests on a run's head branch: their number on the first line,
+# then a row for each, sorted by number: number, head branch and head commit. isCrossRepository is
+# read but not used, so a fork's pull request counts as one of this repository's.
+readonly RUN_PR_HEADS_PROGRAM="${ROW_FIELD_DEF}"' sort_by(.number) | (length | tostring), (.[] | [(.number | field), (.headRefName | field), (.headRefOid | field)] | join("\t"))'
+readonly NOT_PR_HEAD_RULE="not an open pull request head"
+
+# Refuses a run whose head commit is not the head of an open pull request of REPO whose head branch
+# is the run's: none on the branch, or one whose head has moved since the run. Every row is checked
+# before the answer is used, so a row gh matched on anything but the exact branch, or one cut short,
+# is a runtime failure, and so is a branch with more open pull requests than PR_LIST_LIMIT, which
+# are never judged in part.
+refuse_run_not_open_pull_request_head() {
+    local row number head sha matched=""
+    local unexpected="gh returned an unexpected result for the open pull requests of ${REPO}"
+    [ -n "${RUN_HEAD_BRANCH}" ] || refuse_policy rerun "${NOT_PR_HEAD_RULE}"
+    gh_capture pr list --repo "${REPO}" --state open --limit "$((PR_LIST_LIMIT + 1))" --head "${RUN_HEAD_BRANCH}" \
+        --json number,headRefName,headRefOid,isCrossRepository --jq "${RUN_PR_HEADS_PROGRAM}" \
+        || die "could not list the open pull requests of ${REPO}: $(gh_failure_text)"
+    take_counted_rows "${PR_LIST_LIMIT}" "${unexpected}" \
+        "${REPO} has more than ${PR_LIST_LIMIT} open pull requests on the head branch of the run ${RUN_ID}"
+    for row in "${COUNTED_ROWS[@]}"; do
+        IFS=$'\t' read -r number head sha <<< "${row}"
+        [[ "${number}" =~ ^[0-9]+$ && "${head}" = "${RUN_HEAD_BRANCH}" && "${sha}" =~ ^[0-9a-f]{40}$ ]] || die "${unexpected}"
+        [ "${sha}" != "${RUN_HEAD_SHA}" ] || matched=1
+    done
+    [ -n "${matched}" ] || refuse_policy rerun "${NOT_PR_HEAD_RULE}"
+}
+
+# Reruns the failed jobs of the run RUN_ID of REPO, at most once, and only after every rule has
+# passed. The rules come before the pending check: a refusal is final, while pending invites the
+# caller to try again, which a refused run must never be told to do.
+run_rerun() {
+    parse_command_options assign_run_option "--repo --run" "" "$@"
+    require REPO --repo
+    require RUN_ID --run
+    require_gh
+    read_run
+    [ "${RUN_ATTEMPT}" -lt "${RUN_ATTEMPT_LIMIT}" ] || refuse_policy rerun "attempt limit"
+    refuse_default_branch_run
+    refuse_run_not_open_pull_request_head
+    if [ "${RUN_STATUS}" != completed ]; then
+        printf 'cfwf: the run %s of %s is %s; its failed jobs can be rerun once it is complete\n' "${RUN_ID}" "${REPO}" "${RUN_STATUS}" >&2
+        exit "${RUN_PENDING_EXIT}"
+    fi
+    gh_capture run rerun "${RUN_ID}" --failed --repo "${REPO}" \
+        || die "could not rerun the failed jobs of the run ${RUN_ID} of ${REPO}: $(gh_failure_text)"
+    # GitHub lags behind a write, so the attempt printed is the one the rerun starts, never read back.
+    printf 'Rerunning failed jobs of run %s (attempt %s)\n' "${RUN_ID}" "$((RUN_ATTEMPT + 1))"
+}
+
+cmd_run() {
+    dispatch_subcommand run rerun run_rerun -- "$@"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -3344,6 +3511,7 @@ main() {
         comment) cmd_comment "$@" ;;
         release) cmd_release "$@" ;;
         tag) cmd_tag "$@" ;;
+        run) cmd_run "$@" ;;
         *) unknown_argument command "$(($# + 1))" ;;
     esac
 }
