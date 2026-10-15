@@ -47,6 +47,7 @@ setup() {
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
+        '  "run rerun") [ -f "${GH_FIXTURES}/run-rerun.fail" ] && { cat "${GH_FIXTURES}/run-rerun.fail" >&2; exit 1; }; echo "stub: requested a rerun"; exit 0 ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -190,6 +191,7 @@ gh_line_of() {
         [[ "${output}" == *"release view"*"(exit 9 when it has none)"* ]]
         [[ "${output}" == *"release list"* ]]
         [[ "${output}" == *"tag view"*"(exit 9 when not found)"* ]]
+        [[ "${output}" == *"run rerun"*"(exit 4 while it runs, 8 when refused)"* ]]
     done
 }
 
@@ -3698,13 +3700,14 @@ PR_LIST_UNEXPECTED="cfwf: gh returned an unexpected result for the open pull req
 
 # One open pull request as gh pr list --json gives it: number, head branch, base branch, author
 # login ("" for an author with no login), draft (true or false), cross-repository (true or false)
-# and title. The number is JSON, so a test can give one that is not a number.
+# and title, then optionally its head commit, left out when not given. The number is JSON, so a
+# test can give one that is not a number.
 pull_request() {
     jq -n --argjson number "$1" --arg head "$2" --arg base "$3" --arg author "$4" --argjson draft "$5" \
-        --argjson fork "$6" --arg title "$7" --arg repo "${REPO}" \
+        --argjson fork "$6" --arg title "$7" --arg oid "${8:-}" --arg repo "${REPO}" \
         '{number: $number, title: $title, headRefName: $head, baseRefName: $base, isDraft: $draft, isCrossRepository: $fork,
           author: (if $author == "" then {} else {login: $author, is_bot: ($author | startswith("app/"))} end),
-          url: "https://github.com/\($repo)/pull/\($number)"}'
+          url: "https://github.com/\($repo)/pull/\($number)"} + (if $oid == "" then {} else {headRefOid: $oid} end)'
 }
 
 # Writes the open pull requests of the repository, in the order given: each argument a pull_request
@@ -8819,6 +8822,7 @@ run_tag_view() {
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
+    listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
     [[ "${output}" == *"${listed}"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -9380,4 +9384,487 @@ run_tag_view() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: git is not installed"* ]]
+}
+
+# --- run rerun -------------------------------------------------------------------
+
+RUN_SHA="5555555555555555555555555555555555555555"
+MOVED_SHA="6666666666666666666666666666666666666666"
+RUN_RERUN_USAGE="Usage: cfwf run rerun --repo <owner/repo> --run <id>"
+RUN_RERUN_CALL="run rerun 123 --failed --repo ${REPO}"
+RUN_UNEXPECTED="cfwf: gh returned an unexpected result for the run 123 of ${REPO}"
+RUN_PRS_UNEXPECTED="cfwf: gh returned an unexpected result for the open pull requests of ${REPO}"
+
+# Writes the run $1 as the REST API gives it, with fields the run read does not ask for: its status, its
+# conclusion ("" for none, which GitHub gives as null), its head commit, its head branch ("" for
+# none, null too) and its attempt, which is JSON so a test can give one that is not a number. $7 is
+# the id answered with, when that is not $1.
+write_run() {
+    jq -n --argjson id "${7:-$1}" --arg status "$2" --arg conclusion "$3" --arg sha "$4" --arg branch "$5" --argjson attempt "$6" \
+        '{id: $id, name: "build", event: "pull_request", status: $status,
+          conclusion: (if $conclusion == "" then null else $conclusion end), head_sha: $sha,
+          head_branch: (if $branch == "" then null else $branch end), run_attempt: $attempt}' \
+        | write_api "repos/${REPO}/actions/runs/$1"
+}
+
+# Writes the answer to the read of the repository itself, with the default branch $1 (main).
+write_run_repository() {
+    jq -n --arg repo "${REPO}" --arg branch "${1:-main}" '{id: 1, full_name: $repo, default_branch: $branch}' | write_api "repos/${REPO}"
+}
+
+# The run 123 with the attempt $1 (1) and the status $2 (completed, with a failure), whose head is
+# RUN_SHA on feat/x: the head of the open pull request 7, beside the pull request 8 on another branch
+# with the same head. main is the default branch.
+prepare_run_rerun() {
+    local status="${2:-completed}" conclusion=failure
+    [ "${status}" = completed ] || conclusion=""
+    write_run 123 "${status}" "${conclusion}" "${RUN_SHA}" feat/x "${1:-1}"
+    write_run_repository
+    write_pr_list "$(pull_request 7 feat/x main someone false false "the change" "${RUN_SHA}")" \
+        "$(pull_request 8 feat/y main someone false false "another change" "${RUN_SHA}")"
+}
+
+# Writes $1 open pull requests numbered from 1, all on feat/x and from forks, where only the one
+# numbered $2 has RUN_SHA as its head.
+write_branch_pr_list() {
+    jq -n --argjson count "$1" --argjson match "$2" --arg sha "${RUN_SHA}" --arg moved "${MOVED_SHA}" --arg repo "${REPO}" \
+        '[range(1; $count + 1) | {number: ., title: "change \(.)", headRefName: "feat/x", baseRefName: "main", isDraft: false,
+          isCrossRepository: true, author: {login: "someone", is_bot: false}, url: "https://github.com/\($repo)/pull/\(.)",
+          headRefOid: (if . == $match then $sha else $moved end)}]' > "${GH_FIXTURES}/pr-list.json"
+}
+
+run_run_rerun() {
+    run --separate-stderr "${SCRIPT}" run rerun --repo "${REPO}" "$@"
+}
+
+# Succeeds when gh was never asked to rerun anything.
+assert_no_rerun() {
+    [ "$(gh_call_count "run rerun ")" -eq 0 ]
+}
+
+# Succeeds when a run was refused under the rule $1 and nothing was written: exit 8, nothing on
+# stdout and the rule alone on stderr, given as the run's status, stdout and stderr ($2 to $4) so the
+# helper never reads bats' run globals.
+assert_rerun_refused() {
+    [ "$2" -eq 8 ] || { echo "status $2 for $1" >&2; return 1; }
+    [ -z "$3" ]
+    [ "$4" = "cfwf: rerun refused: $1" ]
+    assert_no_rerun
+}
+
+# Succeeds when a run answer was refused as unexpected: exit 1, nothing on stdout, the message on
+# stderr and nothing written, given as the run's status, stdout and stderr ($2 to $4); $1 names the
+# case for the failure message.
+assert_unexpected_run() {
+    [ "$2" -eq 1 ] || { echo "accepted: $1 ($2)" >&2; return 1; }
+    [ -z "$3" ]
+    [ "$4" = "${RUN_UNEXPECTED}" ] || { echo "$1: $4" >&2; return 1; }
+    assert_no_rerun
+}
+
+@test "run rerun help, from -h, --help and help, gives the usage, the rules in their order, the output and the exit codes, and none calls gh" {
+    local invocation
+    for invocation in "run rerun -h" "run rerun --help" "help run rerun" "help run" "run -h" "run --help" "run rerun --repo ${REPO} --help --bogus"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
+        [[ "${output}" == "${RUN_RERUN_USAGE}"$'\n'* ]]
+        [[ "${output}" == *$'\n'"--run   Always required: the run's id, digits only, above 0."$'\n'* ]]
+        [[ "${output}" == *"gh's --failed is always passed and there is no option for a full rerun: --failed, --job, --debug,"$'\n'"--all, --json, --jq, --template and --web are not options."* ]]
+        [[ "${output}" == *"with \"cfwf: rerun refused: <rule>\" on stderr, which names only the rule:"$'\n'"  attempt limit                  the run is on attempt 3 or later."*$'\n'"  default branch                 "*$'\n'"  not an open pull request head  the run's head commit is not the head of an open pull request"* ]]
+        [[ "${output}" == *"At most 1000 open pull requests on the branch are looked at; more is a runtime failure."* ]]
+        [[ "${output}" == *"(queued, in progress or waiting) exits 4"*"So a run that is refused is never reported as pending."* ]]
+        [[ "${output}" == *$'\n'"  Rerunning failed jobs of run <id> (attempt <n>)"$'\n'"where <n> is the attempt the rerun starts: one more than the run's attempt when it was read."* ]]
+        [[ "${output}" == *"the request may still have reached GitHub."* ]]
+        [[ "${output}" == *"Exit codes: 0 the rerun was requested; 8 refused by a rule (naming the rule; nothing was"$'\n'"written); 4 the run is still in progress; 9 the run was not found in the repository; 1 a runtime"*"2 a"$'\n'"usage error." ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "run with no subcommand names its one, and a subcommand it does not have is named by its position, each exit 2 with no gh call" {
+    run --separate-stderr "${SCRIPT}" run
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: run needs a subcommand (rerun)"$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+
+    run --separate-stderr "${SCRIPT}" run cancel --repo "${REPO}" --run 123
+    [ "${status}" -eq 2 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: unknown run subcommand (argument 2; its value is not shown)"$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "run rerun usage errors exit 2 with its usage and nothing on stdout, never echoing a value, before any gh call" {
+    prepare_run_rerun
+    local repo="--repo ${REPO}" args
+    local -a cases=(
+        ""
+        "${repo}"
+        "--run 123"
+        "${repo} --run"
+        "--repo"
+        "${repo} --run 0"
+        "${repo} --run 000"
+        "${repo} --run abc"
+        "${repo} --run -1"
+        "${repo} --run 12a"
+        "${repo} --run 12345678901234567890"
+        "${repo} --run 123 --run 124"
+        "${repo} ${repo} --run 123"
+        "${repo} --run 123 --failed"
+        "${repo} --run 123 --job 1"
+        "${repo} --run 123 --debug"
+        "${repo} --run 123 --all"
+        "${repo} --run 123 --json x"
+        "${repo} --run 123 --jq x"
+        "${repo} --run 123 --template x"
+        "${repo} --run 123 --web"
+        "${repo} 123"
+        "--repo x/.. --run 123"
+        "--repo checkout --run 123"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" run rerun ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: "*$'\n\n'"${RUN_RERUN_USAGE}"$'\n'* ]]
+    done
+
+    run_run_rerun
+    [[ "${stderr}" == "cfwf: missing required option --run"$'\n'* ]]
+    run --separate-stderr "${SCRIPT}" run rerun --run 123
+    [[ "${stderr}" == "cfwf: missing required option --repo"$'\n'* ]]
+    run_run_rerun --run
+    [[ "${stderr}" == "cfwf: --run needs a value"$'\n'* ]]
+    run_run_rerun --run 0
+    [[ "${stderr}" == "cfwf: invalid value for --run: it must be a number above 0"$'\n'* ]]
+    run_run_rerun --run 000
+    [[ "${stderr}" == "cfwf: invalid value for --run: it must be a number above 0"$'\n'* ]]
+    run_run_rerun --run 12345678901234567890
+    [[ "${stderr}" == "cfwf: invalid value for --run: it must be a number of at most 19 digits"$'\n'* ]]
+    run_run_rerun --run -1
+    [[ "${stderr}" == "cfwf: invalid value for --run: it must be a number of at most 19 digits"$'\n'* ]]
+    run_run_rerun --run 123 --run 124
+    [[ "${stderr}" == "cfwf: --run can only be given once"$'\n'* ]]
+    run_run_rerun --repo "${REPO}" --run 123
+    [[ "${stderr}" == "cfwf: --repo can only be given once"$'\n'* ]]
+    run_run_rerun --run 123 --failed
+    [[ "${stderr}" == "cfwf: unknown option (argument 7; its value is not shown)"$'\n'* ]]
+
+    # A token-shaped value, as a stray argument or as the run, is never echoed.
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_run_rerun --run 123 "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: unknown option (argument 7; its value is not shown)"$'\n'* && "${stderr}" != *"${secret}"* ]]
+    run_run_rerun --run "${secret}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --run: it must be a number of at most 19 digits"$'\n'* && "${stderr}" != *"${secret}"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "run rerun reruns only the failed jobs, once, of a run that is an open pull request's head, after reading the run, the repository and the branch's open pull requests, and prints the attempt it starts" {
+    prepare_run_rerun
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 4 ]
+    [[ "$(sed -n 1p "${GH_LOG}")" == "api repos/${REPO}/actions/runs/123 --jq "* ]]
+    [ "$(sed -n 2p "${GH_LOG}")" = "api repos/${REPO} --jq .default_branch" ]
+    [[ "$(sed -n 3p "${GH_LOG}")" == "pr list --repo ${REPO} --state open --limit 1001 --head feat/x --json number,headRefName,headRefOid,isCrossRepository --jq "* ]]
+    [ "$(sed -n 4p "${GH_LOG}")" = "${RUN_RERUN_CALL}" ]
+}
+
+@test "run rerun prints the attempt one more than the run's, and reads and reruns a run given with leading zeros as that number, without them" {
+    prepare_run_rerun 2
+    run_run_rerun --run 00123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 3)" ]
+    [ "$(gh_call_count "api repos/${REPO}/actions/runs/123 ")" -eq 1 ]
+    [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "00123")" -eq 0 ]
+}
+
+@test "run rerun accepts a fork's open pull request whose head is the run's, beside one on the branch whose head has moved" {
+    prepare_run_rerun
+    write_pr_list "$(pull_request 5 feat/x main stranger false true "from a fork" "${MOVED_SHA}")" \
+        "$(pull_request 9 feat/x main stranger false true "from another fork" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
+}
+
+@test "run rerun refuses a run on its third attempt or later (exit 8) from the run read alone, writing nothing" {
+    local attempt
+    for attempt in 3 4 10; do
+        prepare_run_rerun "${attempt}"
+        rm -f "${GH_LOG}"
+        run_run_rerun --run 123
+        assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    done
+}
+
+@test "run rerun refuses a run whose head branch is the default branch (exit 8), naming only the rule, before listing pull requests" {
+    write_run 123 completed failure "${RUN_SHA}" trunk 1
+    write_run_repository trunk
+    write_pr_list "$(pull_request 7 trunk main someone false false "a change" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "default branch" "${status}" "${output}" "${stderr}"
+    [ "$(gh_call_count "pr list ")" -eq 0 ]
+
+    # A branch whose name only starts with the default branch's is another branch.
+    write_run 123 completed failure "${RUN_SHA}" trunk-fix 1
+    write_pr_list "$(pull_request 7 trunk-fix main someone false false "a change" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+}
+
+@test "run rerun refuses a run that is not the head of an open pull request on its branch (exit 8): none open there, a head that has moved, or no head branch" {
+    prepare_run_rerun
+    write_pr_list "$(pull_request 8 feat/y main someone false false "another change" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+
+    write_pr_list "$(pull_request 7 feat/x main someone false false "the change" "${MOVED_SHA}")"
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+
+    write_pr_list
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+    [ "$(gh_call_count "pr list --repo ${REPO} --state open --limit 1001 --head feat/x ")" -eq 3 ]
+
+    # A run with no head branch has no pull request to look for.
+    write_run 123 completed failure "${RUN_SHA}" "" 1
+    rm -f "${GH_LOG}"
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+    [ "$(gh_call_count "pr list ")" -eq 0 ]
+}
+
+@test "run rerun refuses a run that has not completed but breaks a rule (exit 8), never reporting it as pending" {
+    prepare_run_rerun 3 in_progress
+    run_run_rerun --run 123
+    assert_rerun_refused "attempt limit" "${status}" "${output}" "${stderr}"
+
+    write_run 123 queued "" "${RUN_SHA}" main 1
+    run_run_rerun --run 123
+    assert_rerun_refused "default branch" "${status}" "${output}" "${stderr}"
+
+    write_run 123 waiting "" "${MOVED_SHA}" feat/x 1
+    run_run_rerun --run 123
+    assert_rerun_refused "not an open pull request head" "${status}" "${output}" "${stderr}"
+}
+
+@test "run rerun exits 4 for a run that passes every rule but has not completed, naming its status, writing nothing" {
+    local state
+    for state in queued in_progress waiting pending requested; do
+        prepare_run_rerun 1 "${state}"
+        run_run_rerun --run 123
+        [ "${status}" -eq 4 ] || { echo "${state}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the run 123 of ${REPO} is ${state}; its failed jobs can be rerun once it is complete" ]
+        assert_no_rerun
+    done
+}
+
+@test "run rerun exits 9 for a run that is not in the repository, and 1 with the repository message when the repository is not there" {
+    write_run_repository
+    run_run_rerun --run 123
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the run 123 was not found in ${REPO}" ]
+    assert_no_rerun
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+
+    # A run whose repository is then not found when its default branch is read.
+    prepare_run_rerun
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+    [ "$(gh_call_count "pr list ")" -eq 0 ]
+    assert_no_rerun
+}
+
+@test "run rerun exits 1 quoting only the first line of gh's error when a read fails, and writes nothing" {
+    prepare_run_rerun
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "$(api_fixture "repos/${REPO}/actions/runs/123").fail"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "repos/${REPO}/actions/runs/123").fail"
+
+    fail_api "repos/${REPO}"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "repos/${REPO}").fail"
+
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/pr-list.fail"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the open pull requests of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    assert_no_rerun
+}
+
+@test "run rerun exits 1 and writes nothing for a run answer that is not what it expects" {
+    write_run_repository
+    write_pr_list "$(pull_request 7 feat/x main someone false false "the change" "${RUN_SHA}")"
+
+    write_run 123 completed failure "${RUN_SHA}" feat/x 1 124
+    run_run_rerun --run 123
+    assert_unexpected_run "another id" "${status}" "${output}" "${stderr}"
+
+    write_run 123 completed failure "${RUN_SHA:1}" feat/x 1
+    run_run_rerun --run 123
+    assert_unexpected_run "a short head commit" "${status}" "${output}" "${stderr}"
+
+    write_run 123 completed failure "${RUN_SHA:1}g" feat/x 1
+    run_run_rerun --run 123
+    assert_unexpected_run "a head commit that is not hexadecimal" "${status}" "${output}" "${stderr}"
+
+    write_run 123 "In Progress" "" "${RUN_SHA}" feat/x 1
+    run_run_rerun --run 123
+    assert_unexpected_run "a status that is not one of GitHub's" "${status}" "${output}" "${stderr}"
+
+    write_run 123 "" "" "${RUN_SHA}" feat/x 1
+    run_run_rerun --run 123
+    assert_unexpected_run "no status" "${status}" "${output}" "${stderr}"
+
+    local attempt
+    for attempt in 0 -1 1.5 null 1234567890 '"01"'; do
+        write_run 123 completed failure "${RUN_SHA}" feat/x "${attempt}"
+        run_run_rerun --run 123
+        assert_unexpected_run "attempt ${attempt}" "${status}" "${output}" "${stderr}"
+    done
+
+    # A head branch git would not allow, or one holding a C1 control (which git allows), is never
+    # handed to gh pr list or compared with the default branch.
+    local branch
+    for branch in "a..b" "feat x" $'feat\tx' $'feat/\xc2\x9bx' "-x" "HEAD"; do
+        write_run 123 completed failure "${RUN_SHA}" "${branch}" 1
+        rm -f "${GH_LOG}"
+        run_run_rerun --run 123
+        assert_unexpected_run "branch ${branch}" "${status}" "${output}" "${stderr}"
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    done
+}
+
+@test "run rerun exits 1 and writes nothing for a run row cut short before its end, or with a field after it" {
+    # The stand-in that can print an answer as it is, so a row need not come from the jq program.
+    prepare_pr_comments
+    local answer
+    for answer in "123"$'\x1f'"completed"$'\x1f'"failure"$'\x1f'"${RUN_SHA}"$'\x1f'"feat/x"$'\x1f'"1" \
+        "123"$'\x1f'"completed"$'\x1f'"failure"$'\x1f'"${RUN_SHA}"$'\x1f'"feat/x"$'\x1f'"1"$'\x1f'"end"$'\x1f'"more"; do
+        printf '%s\n' "${answer}" > "$(api_fixture "repos/${REPO}/actions/runs/123").raw"
+        rm -f "${GH_LOG}"
+        run_run_rerun --run 123
+        assert_unexpected_run "row ${answer}" "${status}" "${output}" "${stderr}"
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    done
+}
+
+@test "run rerun exits 1 and writes nothing for a default branch git would not allow" {
+    prepare_run_rerun
+    write_run_repository "a..b"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected default branch for ${REPO}" ]
+    [ "$(gh_call_count "pr list ")" -eq 0 ]
+    assert_no_rerun
+}
+
+@test "run rerun exits 1 and writes nothing when the open pull requests read is not what it expects" {
+    prepare_run_rerun
+
+    # A pull request gh matched on anything but the exact branch name.
+    touch "${GH_FIXTURES}/pr-list.ignore-head"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${RUN_PRS_UNEXPECTED}" ]
+    rm "${GH_FIXTURES}/pr-list.ignore-head"
+
+    # A pull request with no head commit, or whose number is not a number.
+    write_pr_list "$(pull_request 7 feat/x main someone false false "the change")"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "${RUN_PRS_UNEXPECTED}" ]
+    write_pr_list "$(pull_request '"x7"' feat/x main someone false false "the change" "${RUN_SHA}")"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "${RUN_PRS_UNEXPECTED}" ]
+
+    # A count that is not the number of rows that follow.
+    printf '2\n7\tfeat/x\t%s\n' "${RUN_SHA}" > "${GH_FIXTURES}/pr-list.out"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "${RUN_PRS_UNEXPECTED}" ]
+    assert_no_rerun
+}
+
+@test "run rerun judges up to 1000 open pull requests on the branch, and with more judges none and exits 1" {
+    prepare_run_rerun
+    write_branch_pr_list 1000 1000
+    run_run_rerun --run 123
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "Rerunning failed jobs of run 123 (attempt 2)" ]
+
+    rm -f "${GH_LOG}"
+    write_branch_pr_list 1001 1
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO} has more than 1000 open pull requests on the head branch of the run 123" ]
+    assert_no_rerun
+}
+
+@test "run rerun exits 1 with nothing on stdout when the rerun request fails, having asked once, a run that already succeeded included" {
+    prepare_run_rerun
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "${GH_FIXTURES}/run-rerun.fail"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
+
+    # A run that succeeded is not refused by cfwf: GitHub's refusal is a runtime failure.
+    rm -f "${GH_LOG}"
+    write_run 123 completed success "${RUN_SHA}" feat/x 1
+    printf '%s\n' "HTTP 403: This workflow run cannot be retried" > "${GH_FIXTURES}/run-rerun.fail"
+    run_run_rerun --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: HTTP 403: This workflow run cannot be retried" ]
+    [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
+}
+
+@test "run rerun fails (exit 1) when gh is not installed, after the options are checked" {
+    mkdir -p "${TEST_TMP}/git-only"
+    ln -s "$(command -v git)" "${TEST_TMP}/git-only/git"
+    local bash_path
+    bash_path="$(command -v bash)"
+    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" run rerun --repo "${REPO}" --run 123
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+
+    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" run rerun --repo "${REPO}" --run 0
+    [ "${status}" -eq 2 ]
 }
