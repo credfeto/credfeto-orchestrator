@@ -4769,6 +4769,7 @@ enter_checkout_with_previous_branch() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: the branch whose required checks apply was not found in ${REPO}" ]
+    [ "$(gh_call_count "rules/branches")" -eq 0 ]
 
     # GitHub answers a --sha that is not in the repository with 422, not 404.
     rm -f "${GH_FIXTURES}"/api-*
@@ -4954,6 +4955,7 @@ branch_required_checks_help() {
     run_branch_required_checks --branch main
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the rulesets of ${REPO}: gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 404)" ]
 
     rm "$(api_fixture "repos/${REPO}/rules/branches/main").fail"
     run_branch_required_checks --branch main
