@@ -2388,10 +2388,10 @@ resolve_checks_head() {
 # read, leaving the caller to say what that means. Any failed read of the rulesets, a 404 included,
 # is a runtime failure: GitHub answers a branch no ruleset applies to (whether or not it exists)
 # with an empty list, so a 404 means the rules could not be read, and taking it as none would judge
-# too few checks. The one
-# exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no rulesets (a private one on
-# GitHub Free) can have none, so that refusal is read as no rulesets. Each name
-# read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its key.
+# too few checks. The one exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no
+# rulesets (a private one on GitHub Free) can have none, so that refusal is read as no rulesets.
+# Each name read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its
+# key.
 declare -gA REQUIRED_CHECKS=() PRINTED_NAME=()
 # The start of the HTTP 403 GitHub answers the rulesets read with when the repository's plan has
 # no rulesets, as seen in practice (the REST reference lists only 200 for it).
