@@ -9362,12 +9362,12 @@ run_tag_view() {
     [ "${stderr}" = "cfwf: could not list the releases of ${LOOKUP_REPO}: GraphQL: Could not resolve to a Repository with the name '${LOOKUP_REPO}'. (repository)" ]
 }
 
-@test "release view, release list and tag view fail (exit 1) when gh is not installed, after the options are checked, and tag view when git is not" {
+@test "release view, release list, tag view and run rerun fail (exit 1) when gh is not installed, after the options are checked, and tag view when git is not" {
     mkdir -p "${TEST_TMP}/empty-path" "${TEST_TMP}/git-only"
     ln -s "$(command -v git)" "${TEST_TMP}/git-only/git"
     local bash_path command
     bash_path="$(command -v bash)"
-    for command in "release view" "release list" "tag view --tag v4"; do
+    for command in "release view" "release list" "tag view --tag v4" "run rerun --run 123"; do
         # shellcheck disable=SC2086  # each command is split into its words on purpose
         run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" ${command} --repo "${LOOKUP_REPO}"
         [ "${status}" -eq 1 ] || { echo "${command}: ${status}" >&2; return 1; }
@@ -9699,7 +9699,7 @@ assert_unexpected_run() {
 
 @test "run rerun exits 1 quoting only the first line of gh's error when a read fails, and writes nothing" {
     prepare_run_rerun
-    printf '%s\n' "gh: Bad Gateway (HTTP 502)" "a second line" > "$(api_fixture "repos/${REPO}/actions/runs/123").fail"
+    fail_api "repos/${REPO}/actions/runs/123" "gh: Bad Gateway (HTTP 502)"$'\n'"a second line"
     run_run_rerun --run 123
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
@@ -9853,18 +9853,4 @@ assert_unexpected_run() {
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: HTTP 403: This workflow run cannot be retried" ]
     [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
-}
-
-@test "run rerun fails (exit 1) when gh is not installed, after the options are checked" {
-    mkdir -p "${TEST_TMP}/git-only"
-    ln -s "$(command -v git)" "${TEST_TMP}/git-only/git"
-    local bash_path
-    bash_path="$(command -v bash)"
-    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" run rerun --repo "${REPO}" --run 123
-    [ "${status}" -eq 1 ]
-    [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
-
-    run --separate-stderr env PATH="${TEST_TMP}/git-only" "${bash_path}" "${SCRIPT}" run rerun --repo "${REPO}" --run 0
-    [ "${status}" -eq 2 ]
 }
