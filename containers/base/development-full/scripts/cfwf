@@ -1827,14 +1827,20 @@ require_body_has_visible_text() {
     has_visible_text "${text}" || die "the body is empty"
 }
 
+# Refuses (exit POLICY_REFUSED_EXIT) the subject $1 under the rule $2, before anything is written.
+# It names only the subject and the rule, never any text GitHub or the caller gave.
+refuse_policy() {
+    printf 'cfwf: %s refused: %s\n' "$1" "$2" >&2
+    exit "${POLICY_REFUSED_EXIT}"
+}
+
 # Refuses the text $1 names (body, title or label) under the rule $2. It names only the subject,
 # the rule and, for a body, the line $3, never the matched text: echoing a token into a transcript
 # would itself be the leak. A title or a label is a single line, so it has no line number.
 refuse_text() {
     local subject="$1" rule="$2" line="${3:-}"
     [ "${subject}" = body ] || line=""
-    printf 'cfwf: %s refused: %s%s\n' "${subject}" "${rule}" "${line:+ (line ${line})}" >&2
-    exit "${BODY_REFUSED_EXIT}"
+    refuse_policy "${subject}" "${rule}${line:+ (line ${line})}"
 }
 
 # Refuses the text $1 names under the rule $2 when the extended regular expression $3 matches a
@@ -2763,6 +2769,12 @@ api_read() {
     die "${failure}: $(gh_failure_text)"
 }
 
+# Reads REPO itself through api_read with the jq filter $1, so its answer is in GH_OUTPUT, dying
+# when the repository is not there or the caller cannot see it.
+api_read_repository() {
+    api_read "could not read ${REPO}" "repos/${REPO}" "$1" || repository_not_found "${REPO}"
+}
+
 # A jq definition, put before a filter that uses it: name_fields is two fields of a row for the check
 # name it is given. The first, the name as JSON, is its key: every name keeps its own key, byte for
 # byte, and no key holds a newline or ROW_SEPARATOR, which JSON writes as escapes. The second, the
@@ -2821,7 +2833,7 @@ resolve_checks_head() {
         HEAD_SHA="${BRANCH_TIP}"
         RULES_BRANCH="${BRANCH}"
     else
-        api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' || repository_not_found "${REPO}"
+        api_read_repository .default_branch
         HEAD_SHA="${SHA}"
         RULES_BRANCH="${GH_OUTPUT}"
     fi
@@ -3903,7 +3915,7 @@ assign_release_option() {
 # the message $2.
 not_found_in_repository() {
     local code="$1" message="$2"
-    api_read "could not read ${REPO}" "repos/${REPO}" '.id' || repository_not_found "${REPO}"
+    api_read_repository .id
     printf 'cfwf: %s\n' "${message}" >&2
     exit "${code}"
 }
@@ -4025,14 +4037,6 @@ assign_run_option() {
     esac
 }
 
-# Refuses (exit POLICY_REFUSED_EXIT) the action $1 under the rule $2, before anything is written. It
-# names only the rule, never a branch or any other text GitHub gave, as refuse_text names no matched
-# text.
-refuse_policy() {
-    printf 'cfwf: %s refused: %s\n' "$1" "$2" >&2
-    exit "${POLICY_REFUSED_EXIT}"
-}
-
 # Sets RUN_STATUS, RUN_HEAD_SHA, RUN_HEAD_BRANCH and RUN_ATTEMPT from one read of the run RUN_ID of
 # REPO. RUN_HEAD_BRANCH is empty when GitHub gives none; any other must be a branch name git allows,
 # because it is handed to gh pr list --head and compared with the default branch. fields_row has
@@ -4051,7 +4055,7 @@ read_run() {
 # Refuses a run whose head branch has the name of the default branch of REPO, read from the
 # repository itself. Only the names are compared, so a fork's branch of that name is refused too.
 refuse_default_branch_run() {
-    api_read "could not read ${REPO}" "repos/${REPO}" '.default_branch' || repository_not_found "${REPO}"
+    api_read_repository .default_branch
     valid_branch_name "${GH_OUTPUT}" || die "gh returned an unexpected default branch for ${REPO}"
     [ "${RUN_HEAD_BRANCH}" != "${GH_OUTPUT}" ] || refuse_policy rerun "default branch"
 }
