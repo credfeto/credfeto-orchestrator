@@ -4143,7 +4143,11 @@ read_timeline_target() {
 read_timeline() {
     api_read "could not read the timeline of ${REPO}#${TARGET_NUMBER}" \
         "repos/${REPO}/issues/${TARGET_NUMBER}/timeline?per_page=${API_PAGE_SIZE}" "${FIELDS_ROW_DEF} .[] | $1" --paginate \
-        || die "gh returned an unexpected result for the timeline of ${REPO}#${TARGET_NUMBER}"
+        || unexpected_timeline_result
+}
+
+unexpected_timeline_result() {
+    die "gh returned an unexpected result for the timeline of ${REPO}#${TARGET_NUMBER}"
 }
 
 # Succeeds when the fields of a label row are what GitHub gives: a change, its time, and a login or
@@ -4184,8 +4188,7 @@ issue_label_history() {
         || die "${REPO}#${TARGET_NUMBER} has more than ${LABEL_EVENT_LIMIT} label events, so none is printed"
     for row in "${rows[@]}"; do
         IFS="${ROW_SEPARATOR}" read -r change at actor label end <<< "${row}"
-        is_label_row "${change}" "${at}" "${actor}" "${end}" \
-            || die "gh returned an unexpected result for the timeline of ${REPO}#${TARGET_NUMBER}"
+        is_label_row "${change}" "${at}" "${actor}" "${end}" || unexpected_timeline_result
         is_filtered_label "${label}" || continue
         lines+=("${change}"$'\t'"${at}"$'\t'"${actor:--}"$'\t'"${label:--}")
     done
@@ -4209,8 +4212,7 @@ pr_ready_at() {
         origin=created
     else
         IFS="${ROW_SEPARATOR}" read -r at end <<< "${GH_OUTPUT##*$'\n'}"
-        is_timed_row "${at}" "${end}" \
-            || die "gh returned an unexpected result for the timeline of ${REPO}#${TARGET_NUMBER}"
+        is_timed_row "${at}" "${end}" || unexpected_timeline_result
     fi
     printf 'ready-at\t%s\nsource\t%s\n' "${at}" "${origin}"
 }
