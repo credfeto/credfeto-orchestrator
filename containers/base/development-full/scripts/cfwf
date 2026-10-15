@@ -2813,10 +2813,12 @@ resolve_checks_head() {
 # duplicates. The protection is read from the branch itself (read_branch, so a branch
 # resolve_checks_head has already read is not read again, and the rulesets are read at the
 # BRANCH_PATH it worked out), which needs only read access (its protection endpoint needs admin
-# rights), and an enforcement level of off requires nothing whatever it lists. A branch that is not
-# there is a runtime failure, and so is any failed read of the rulesets, a 404 included: GitHub
-# answers a branch no ruleset applies to (whether or not it exists) with an empty list, so a 404
-# means the rules could not be read, and taking it as none would judge too few checks. The one
+# rights), and an enforcement level of off requires nothing whatever it lists. A failed read of the
+# branch dies with $3 and gh's error; a branch that is not there returns 1 before the rulesets are
+# read, leaving the caller to say what that means. Any failed read of the rulesets, a 404 included,
+# is a runtime failure: GitHub answers a branch no ruleset applies to (whether or not it exists)
+# with an empty list, so a 404 means the rules could not be read, and taking it as none would judge
+# too few checks. The one
 # exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no rulesets (a private one on
 # GitHub Free) can have none, so that refusal is read as no rulesets. Each name
 # read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its key.
@@ -2825,9 +2827,8 @@ declare -gA REQUIRED_CHECKS=() PRINTED_NAME=()
 # no rulesets, as seen in practice (the REST reference lists only 200 for it).
 readonly RULESETS_NOT_IN_PLAN='Upgrade to GitHub Pro or make this repository public'
 read_required_checks() {
-    local repo="$1" branch="$2" names name printed app
-    read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
-        || die "the branch whose required checks apply was not found in ${repo}"
+    local repo="$1" branch="$2" failure="$3" names name printed app
+    read_branch "${repo}" "${branch}" "${failure}" || return 1
     names="${PROTECTION_ROWS}"
     if ! gh_capture api "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" --paginate \
         --jq "${APP_OF_DEF} ${NAME_FIELDS_DEF} .[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
@@ -3022,7 +3023,8 @@ pr_checks() {
     require_one_checks_target
     require_gh
     resolve_checks_head
-    read_required_checks "${REPO}" "${RULES_BRANCH}"
+    read_required_checks "${REPO}" "${RULES_BRANCH}" "could not read the branch protection of ${REPO}" \
+        || die "the branch whose required checks apply was not found in ${REPO}"
     read_check_results
     report_checks
 }
@@ -3985,19 +3987,17 @@ cmd_tag() {
 }
 
 # Prints each check the branch BRANCH of REPO requires once, by its printed name, sorted in the C
-# locale. The branch is read here first, so a branch that is not there reaches
-# not_found_in_repository and exits BRANCH_NOT_FOUND_EXIT, where read_required_checks alone would
-# die with a runtime failure; read_required_checks then reuses that read. An empty printed name is
-# refused: GitHub accepts no empty check name, and an empty line would read as one.
+# locale. A branch that is not there reaches not_found_in_repository and exits
+# BRANCH_NOT_FOUND_EXIT. An empty printed name is refused: GitHub accepts no empty check name, and
+# an empty line would read as one.
 branch_required_checks() {
     local key printed names=()
     parse_command_options assign_checks_option "--repo --branch" "" "$@"
     require REPO --repo
     require BRANCH --branch
     require_gh
-    read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" \
+    read_required_checks "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" \
         || not_found_in_repository "${BRANCH_NOT_FOUND_EXIT}" "the --branch was not found in ${REPO}"
-    read_required_checks "${REPO}" "${BRANCH}"
     for key in "${!REQUIRED_CHECKS[@]}"; do
         printed="${PRINTED_NAME["${key%%"${ROW_SEPARATOR}"*}"]}"
         [ -n "${printed}" ] || die "gh returned an unexpected result for the required checks of ${REPO}"
