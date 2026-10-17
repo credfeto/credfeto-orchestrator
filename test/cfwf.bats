@@ -1941,7 +1941,7 @@ prepare_issue_create() {
 }
 
 create_args() {
-    CREATE_ARGS=(issue create --repo "${REPO}" --priority "${1:-High}" --title "A new issue" --body-file "${TEST_TMP}/body.md")
+    CREATE_ARGS=(issue create --repo "${REPO}" --priority "${1:-High}" --title "repo: A new issue" --body-file "${TEST_TMP}/body.md")
 }
 
 # Nothing was written: no label, no issue and no board item.
@@ -1976,11 +1976,11 @@ assert_nothing_created() {
 
 @test "issue create needs --repo, --priority, --title and --body-file, and never calls gh without them" {
     prepare_issue_create
-    run "${SCRIPT}" issue create --priority High --title T --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --repo"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --title T --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"--priority is required (Security, Urgent, High, Medium or Low)"* ]]
 
@@ -1988,7 +1988,7 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --title"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --body-file"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -2000,7 +2000,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label -wip
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- -wip" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label -wip"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label -wip"
 }
 
 @test "issue create refuses --title given twice, like --priority and --body-file" {
@@ -2019,8 +2019,9 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"invalid value for --title: it must not be blank or longer than 256 characters"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..257})" --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf 'x%.0s' {1..251})" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --title: it must not be blank or longer than 256 characters"* ]]
 
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label " "
     [ "${status}" -eq 2 ]
@@ -2030,7 +2031,7 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [ ! -f "${GH_LOG}" ]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..256})" --body-file "${TEST_TMP}/body.md" --label "$(printf 'y%.0s' {1..50})"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf 'x%.0s' {1..250})" --body-file "${TEST_TMP}/body.md" --label "$(printf 'y%.0s' {1..50})"
     [ "${status}" -eq 0 ]
 }
 
@@ -2039,8 +2040,117 @@ assert_nothing_created() {
     local accented
     accented=$(printf '\303\251%.0s' {1..200})
     LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); [ "${#v}" -eq 1 ]' || skip "no C.UTF-8 locale on this host"
-    LC_ALL=C run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${accented}" --body-file "${TEST_TMP}/body.md" --label "$(printf '\303\251%.0s' {1..50})"
+    LC_ALL=C run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: ${accented}" --body-file "${TEST_TMP}/body.md" --label "$(printf '\303\251%.0s' {1..50})"
     [ "${status}" -eq 0 ]
+}
+
+# --- issue create: the title shape ---------------------------------------------
+
+TITLE_SHAPE_ERROR='cfwf: invalid value for --title: it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
+
+# Runs issue create for the repository $1 with the title $2 and any further arguments.
+run_titled_create() {
+    local repository="$1" title="$2"
+    shift 2
+    run --separate-stderr "${SCRIPT}" issue create --repo "${repository}" --priority High --title "${title}" --body-file "${TEST_TMP}/body.md" "$@"
+}
+
+# Given a run's status, stdout and stderr: it was refused for the title's shape, with exit 2, the
+# rule and the usage on stderr, nothing on stdout and no gh call.
+assert_title_shape_refused() {
+    [ "$1" -eq 2 ]
+    [ -z "$2" ]
+    [[ "$3" == "${TITLE_SHAPE_ERROR}"$'\n\n'"Usage: cfwf issue create"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create accepts a title of the shape prefix: text or prefix(name): text with a lower-case prefix" {
+    prepare_issue_create
+    local title
+    for title in "oneshot: X" "create-project: X" "tool(cfwf): X" "hook(enforce-curl-host): X" "fix: x" "fix(oneshot): x" \
+        "learning: x" "audit: x" "py3: x" "tool(Some Name): x" "tool(a b): x" "repo: lower case text" "repo: --flag first" \
+        "repo: $(printf '\303\251') first" "repo:   three spaces"; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
+@test "issue create refuses, with exit 2 and before any gh call, a title without a lower-case prefix, a colon and a space" {
+    prepare_issue_create
+    local title
+    for title in "Add a thing" "Audit: x" "fIx: x" "3d: x" "-fix: x" "fix_it: x" "fix.it: x" "fix:x" "fix:" "fix:   " \
+        "tool(): x" "tool( a): x" "tool(a(b)): x" "tool(a: x" "tool(a)(b): x" "fix (a): x" "fix : x" " fix: x" \
+        "Fix the thing: now" "feat!: x" ": x"; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+    done
+}
+
+@test "a title refused for its shape is never echoed, wherever --repo is given, since a usage error comes before the leak check" {
+    prepare_issue_create
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_titled_create "${REPO}" "Rotate ${secret} now"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+    [[ "${stderr}" != *"${secret}"* ]]
+
+    run --separate-stderr "${SCRIPT}" issue create --priority High --title "Add a thing" --body-file "${TEST_TMP}/body.md" --repo "${REPO}"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+}
+
+@test "issue create checks the title's shape before the body's leak check, and a prefixed title still goes to the leak check" {
+    prepare_issue_create
+    printf 'a path /tmp/out\n' > "${TEST_TMP}/body.md"
+    run_titled_create "${REPO}" "Add a thing"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+
+    prepare_issue_create
+    run_titled_create "${REPO}" "repo: see /tmp/x"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: title refused: host path" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "the title shape applies to every repository of credfeto and funfair-tech, in any case, and to no other owner" {
+    prepare_issue_create
+    local repository
+    for repository in credfeto/x funfair-tech/x Credfeto/x FUNFAIR-TECH/x; do
+        run_titled_create "${repository}" "Add a thing"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "the title was not refused for ${repository}" >&2; return 1; }
+    done
+
+    for repository in someone-else/x credfeto-other/x notcredfeto/x funfair/x; do
+        run_titled_create "${repository}" "Add a thing"
+        [ "${status}" -eq 0 ] || { echo "the title was refused for ${repository}: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+        issue_create_called_with "issue create --repo ${repository} --title Add a thing --body-file BODY --label High"
+    done
+}
+
+@test "the title shape check has no way round it: no option skips it and the owner list is not read from the environment" {
+    prepare_issue_create
+    local flag
+    for flag in --no-title-check --force; do
+        run_titled_create "${REPO}" "Add a thing" "${flag}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: unknown option (argument 11; its value is not shown)"* ]]
+    done
+
+    TITLE_CHECK_OWNERS=someone-else run_titled_create "${REPO}" "Add a thing"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+}
+
+@test "issue create help states the title shape, the lower-case prefix, the owners and that it cannot be skipped, and calls no gh" {
+    local args
+    for args in "issue create --help" "help issue"; do
+        # shellcheck disable=SC2086  # each row is the words of one command line
+        run "${SCRIPT}" ${args}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *'"prefix: text" or "prefix(name): text" with a lower-case prefix'* ]]
+        [[ "${output}" == *"credfeto or funfair-tech"* ]]
+        [[ "${output}" == *"usage error (exit 2), and there is no option to skip it"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
 }
 
 @test "issue create refuses to count a title, a label or a body when the C.UTF-8 locale is not installed" {
@@ -2077,13 +2187,13 @@ assert_nothing_created() {
 @test "issue create refuses a body over GitHub's 65536 characters with exit 8 before calling gh, and accepts exactly that many" {
     prepare_issue_create
     head -c 65537 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/long.md"
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/long.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/long.md"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: body refused: too long" ]
     [ ! -f "${GH_LOG}" ]
 
     head -c 65536 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/limit.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/limit.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/limit.md"
     [ "${status}" -eq 0 ]
 }
 
@@ -2117,7 +2227,7 @@ assert_nothing_created() {
     prepare_issue_create
     local bad
     for bad in "no-slash" "a/b/c" "a b/c" 'a/b;rm' "" "../.." "./x" "x/." "x/.." "../repo"; do
-        run "${SCRIPT}" issue create --repo "${bad}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+        run "${SCRIPT}" issue create --repo "${bad}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 2 ] || { echo "--repo '${bad}' was accepted" >&2; return 1; }
         [[ "${output}" == *"invalid value for --repo"* ]]
     done
@@ -2163,7 +2273,7 @@ assert_nothing_created() {
         create_args "${given}"
         run "${SCRIPT}" "${CREATE_ARGS[@]}"
         [ "${status}" -eq 0 ]
-        issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label ${canonical}"
+        issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label ${canonical}"
     done
 }
 
@@ -2221,7 +2331,7 @@ assert_nothing_created() {
         [[ "${stderr}" != *"${secret}"* ]]
     done
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority "${secret}" --title T --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority "${secret}" --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: unknown --priority "* && "${stderr}" != *"${secret}"* ]]
 
@@ -2251,7 +2361,7 @@ assert_nothing_created() {
 
 @test "issue create refuses one argument that holds two of its flags as an unknown option" {
     prepare_issue_create
-    run --separate-stderr "${SCRIPT}" issue create "--title --body-file" x --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create "--title --body-file" x --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == *"unknown option (argument 3; its value is not shown)"* && "${stderr}" != *"--title --body-file"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -2289,34 +2399,34 @@ assert_nothing_created() {
 @test "issue create refuses a missing, unreadable, empty or blank body, without calling gh" {
     prepare_issue_create
     create_args
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/nope.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/nope.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"cfwf: cannot read the --body-file"* && "${output}" != *"${TEST_TMP}"* ]]
 
     : > "${TEST_TMP}/empty.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/empty.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/empty.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
 
     printf ' \n\t\n' > "${TEST_TMP}/blank.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/blank.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/blank.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}"
     [ "${status}" -eq 1 ]
     [ ! -f "${GH_LOG}" ]
 }
 
 @test "issue create reads the body from stdin for --body-file -, and an empty stdin is refused" {
     prepare_issue_create
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - <<< "A body from stdin"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: A new issue" --body-file - <<< "A body from stdin"
     [ "${status}" -eq 0 ]
     [ "${output}" = "${NEW_ISSUE_URL}" ]
     [ "$(cat "${GH_FIXTURES}/issue-body.txt")" = "A body from stdin" ]
 
     : > "${GH_LOG}"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - < /dev/null
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: A new issue" --body-file - < /dev/null
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
     assert_nothing_created
@@ -2372,7 +2482,7 @@ assert_nothing_created() {
     [ "${output}" = "${NEW_ISSUE_URL}" ]
     [ -z "${stderr}" ]
 
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High"
     grep -qxF "project item-add 74 --owner credfeto --url ${NEW_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_1" "${GH_LOG}"
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
@@ -2413,7 +2523,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label cfwf --label CFWF
     [ "${status}" -eq 0 ]
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label cfwf"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label cfwf"
     [ "$(gh_call_count "label create")" -eq 0 ]
 }
 
@@ -2424,7 +2534,7 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} --color ffa500 --description Work for an AI Agent -- AI-Work" "${GH_LOG}"
     grep -qxF "label create --repo ${REPO} --color ff0000 --description Do not work on this -- On Hold" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label AI-Work --label On Hold"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label AI-Work --label On Hold"
 }
 
 @test "issue create creates any other missing label with the colour gh picks, passing no colour or description" {
@@ -2433,7 +2543,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- brand new" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label brand new"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label brand new"
 }
 
 @test "issue create creates a missing priority label with its standard colour and description" {
@@ -2577,20 +2687,20 @@ assert_nothing_created() {
     local scratch="${TEST_TMP}/tmp"
     mkdir -p "${scratch}"
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "from stdin"
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
     touch "${GH_FIXTURES}/issue-create.fail"
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "from stdin"
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - < /dev/null
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - < /dev/null
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
 }
@@ -2630,7 +2740,7 @@ run_body_check() {
 }
 
 run_issue_create_leak() {
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/leak.md"
 }
 
 # Given a run's status, stdout and stderr: it exited 8 naming the rule $4 and line 3, printed
@@ -2870,11 +2980,11 @@ harmless_credential_shapes() {
         assert_refused "${status}" "${output}" "${stderr}" "invalid UTF-8" "secret"
         [ ! -f "${GH_LOG}" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf "a%bb" "${bytes}")" --body-file "${TEST_TMP}/body.md"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf "a%bb" "${bytes}")" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 8 ]
         [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "$(printf "a%bb" "${bytes}")"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "$(printf "a%bb" "${bytes}")"
         [ "${status}" -eq 8 ]
         [ "${stderr}" = "cfwf: label refused: invalid UTF-8" ]
         [ ! -f "${GH_LOG}" ]
@@ -3103,7 +3213,7 @@ BODIES
 
     prepare_issue_create
     rm -f "${GH_LOG}"
-    run --separate-stderr "${SCRIPT}" issue create --repo credfeto/no-such-repo --priority High --title "see credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo credfeto/no-such-repo --priority High --title "repo: see credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the repository credfeto/no-such-repo was not found, or the caller cannot see it" ]
     assert_nothing_created
@@ -3282,13 +3392,13 @@ BODIES
     prepare_issue_create
     local leak
     for leak in "fix gh""p_LEAKMARKER0123456789 now" "see /home/someone/work" "set MY_SEC""RET=LEAKMARKER" "clone $(url_with_password https user LEAKMARKER)"; do
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${leak}" --body-file "${TEST_TMP}/body.md"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: ${leak}" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 8 ]
         [[ "${stderr}" == "cfwf: title refused: "@(token|host path) ]]
         [[ "${stderr}" != *LEAKMARKER* && "${stderr}" != *someone* ]]
         [ -z "${output}" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label ok --label "${leak}"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label ok --label "${leak}"
         [ "${status}" -eq 8 ]
         [[ "${stderr}" == "cfwf: label refused: "@(token|host path) ]]
         [[ "${stderr}" != *LEAKMARKER* && "${stderr}" != *someone* ]]
@@ -3296,9 +3406,9 @@ BODIES
     done
     [ ! -f "${GH_LOG}" ]
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "see /tmp/x" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: see /tmp/x" --body-file "${TEST_TMP}/body.md"
     [ "${stderr}" = "cfwf: title refused: host path" ]
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "see /tmp/x"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "see /tmp/x"
     [ "${stderr}" = "cfwf: label refused: host path" ]
 }
 
@@ -3306,19 +3416,19 @@ BODIES
     prepare_issue_create
     write_visibility "${REPO}" PUBLIC
     write_visibility credfeto/hidden-thing PRIVATE
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "port credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: port credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: title refused: private repository" ]
     assert_nothing_created
     [ "$(gh_call_count "label list")" -eq 0 ]
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "credfeto/hidden-thing#3"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "credfeto/hidden-thing#3"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: label refused: private repository" ]
     assert_nothing_created
 
     fail_visibility credfeto/flaky-thing
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "see credfeto/flaky-thing#1" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: see credfeto/flaky-thing#1" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: could not read the visibility of the repository named in the title" ]
     assert_nothing_created
@@ -3326,7 +3436,7 @@ BODIES
 
 @test "issue create checks the stdin copy it hands to gh, and refuses a leak there before any write" {
     prepare_issue_create
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "a path /tmp/out"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "a path /tmp/out"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: body refused: host path (line 1)" ]
     [ ! -f "${GH_LOG}" ]
