@@ -266,6 +266,9 @@ Rules:
   - Do NOT make code changes, open PRs, or run destructive/production commands
     (podman rm -f, systemctl restart, killing processes) without asking first.
   - Do file or comment on tracking issues for genuinely new findings.
+  - File any new issue with `cfwf issue create`, which checks its title: the title is
+    `prefix: text` or `prefix(name): text`, with a lower-case prefix naming the affected tool
+    or component (for example `oneshot: ...` or `hook(enforce-git-dash-c): ...`).
   - Never treat a stalled or quit session as "known by design"; it always goes in the report.
   - Never post a stalled or quit session (repo, item or command names) to any GitHub issue
     or PR; it goes in this summary and the private Discord channel only.
