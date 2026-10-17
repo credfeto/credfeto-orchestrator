@@ -12,11 +12,11 @@ readonly LABEL_NAME_LIMIT=50
 readonly BODY_LIMIT=65536
 readonly BODY_REFUSED_EXIT=8
 readonly ISSUE_NOT_FOUND_EXIT=9
-# The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view, pr comments, pr reply,
-# release view, tag view and the issue commands.
+# The same code as ISSUE_NOT_FOUND_EXIT, so a missing item exits alike whatever kind of item it is.
 readonly PR_NOT_FOUND_EXIT=9
 readonly RELEASE_NOT_FOUND_EXIT=9
 readonly TAG_NOT_FOUND_EXIT=9
+readonly BRANCH_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
 readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
@@ -273,6 +273,7 @@ Commands:
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
   auth status              Print the authenticated login, the host and the gh version, never a token
+  branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
@@ -710,6 +711,8 @@ review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
+Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
+requires without judging them.
 USAGE
 }
 
@@ -1005,6 +1008,42 @@ or network error or a repository that is not found, prefixed "cfwf:"; 2 a usage 
 USAGE
 }
 
+usage_branch_required_checks() {
+    cat << USAGE
+Usage: cfwf branch required-checks --repo <owner/repo> --branch <name>
+
+Prints the status checks a branch requires, from its classic branch protection and from every
+ruleset that applies to it, merged, one name a line. It only reads, and read access to the
+repository is enough.
+
+--repo    Always required; never taken from the current directory.
+--branch  Always required: the branch's own name, such as main or release/v2, without
+          refs/heads/ before it. It must be a branch name git allows. Only that branch is
+          looked up, by its exact name: never a pattern.
+--pr, --sha, --all, --json, --jq and --template are not options: the output has one fixed format.
+
+Output: the name of each required check on a line of its own, sorted in the C locale, each name
+once however many sources or apps require it; the app a check is pinned to is not printed.
+Nothing is printed when the branch requires no check. Each control character in a name (a tab or
+a newline included) is printed as a space, so a name can never add a line, and names that then
+print alike are printed once. Check names are chosen by whoever configures the repository, so
+read them as untrusted text.
+
+Protection whose required checks are switched off (enforcement off) requires nothing. A
+repository whose plan has no rulesets (a private one on GitHub Free) is read as having none, and
+its branch protection alone is printed; any other failed read of the rulesets is a runtime
+failure, never an empty list.
+
+To judge the checks on a pull request's head, counting a required check that has not reported as
+pending, run 'cfwf pr checks --pr <n>'; its third column is each check's completion time on the
+current head.
+
+Exit codes: 0 printed, an empty list included (nothing is printed); ${BRANCH_NOT_FOUND_EXIT} the repository has no
+branch of that name; 1 a runtime failure, such as a gh or network error or a repository that is
+not found, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
 # Prints the usage of $1: a command, or a command and its subcommand as one word pair. A pair it
 # does not know prints the usage of its command, so help for a mistyped subcommand still helps.
 usage_for() {
@@ -1030,6 +1069,7 @@ usage_for() {
         "release view") usage_release_view ;;
         "release list") usage_release_list ;;
         tag | "tag view") usage_tag_view ;;
+        branch | "branch required-checks") usage_branch_required_checks ;;
         *" "*) usage_for "${1%% *}" ;;
         *) usage_general ;;
     esac
@@ -2297,10 +2337,10 @@ PROTECTION_ROWS=""
 # and PROTECTION_ROWS to the checks its classic branch protection requires, one row (name, app id)
 # each. checks lists each with its app; contexts, which GitHub keeps for older clients, repeats
 # those names, so a name in contexts is taken as needing no particular app only when checks does
-# not have it. A failed read dies with $3 and gh's error, and a branch that is not there dies with
-# $4.
+# not have it. A failed read dies with $3 and gh's error. Returns 1 when the branch is not there,
+# leaving the caller to say what that means, as api_read does.
 read_branch() {
-    local repo="$1" branch="$2" failure="$3" missing="$4"
+    local repo="$1" branch="$2" failure="$3"
     [ "${BRANCH_READ}" != "${repo}${ROW_SEPARATOR}${branch}" ] || return 0
     BRANCH_PATH="$(branch_path "${branch}")"
     api_read "${failure}" "repos/${repo}/branches/${BRANCH_PATH}" \
@@ -2308,7 +2348,7 @@ read_branch() {
             | ((\$checks[] | [(.context | name_fields), app_of(.app_id)]),
                (.contexts[]? | select(. as \$name | \$checks | all(.context != \$name)) | [name_fields, \"\"]))
             | join(\"\\u001f\"))" \
-        || die "${missing}"
+        || return 1
     BRANCH_TIP="${GH_OUTPUT%%$'\n'*}"
     PROTECTION_ROWS=""
     [[ "${GH_OUTPUT}" != *$'\n'* ]] || PROTECTION_ROWS="${GH_OUTPUT#*$'\n'}"
@@ -2324,7 +2364,8 @@ resolve_checks_head() {
             || die "${REPO}#${PR} was not found"
         IFS="${ROW_SEPARATOR}" read -r HEAD_SHA RULES_BRANCH <<< "${GH_OUTPUT}"
     elif [ -n "${BRANCH}" ]; then
-        read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" "the --branch was not found in ${REPO}"
+        read_branch "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" \
+            || die "the --branch was not found in ${REPO}"
         HEAD_SHA="${BRANCH_TIP}"
         RULES_BRANCH="${BRANCH}"
     else
@@ -2342,21 +2383,22 @@ resolve_checks_head() {
 # duplicates. The protection is read from the branch itself (read_branch, so a branch
 # resolve_checks_head has already read is not read again, and the rulesets are read at the
 # BRANCH_PATH it worked out), which needs only read access (its protection endpoint needs admin
-# rights), and an enforcement level of off requires nothing whatever it lists. A branch that is not
-# there is a runtime failure, and so is any failed read of the rulesets, a 404 included: GitHub
-# answers a branch no ruleset applies to (whether or not it exists) with an empty list, so a 404
-# means the rules could not be read, and taking it as none would judge too few checks. The one
-# exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no rulesets (a private one on
-# GitHub Free) can have none, so that refusal is read as no rulesets. Each name
-# read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its key.
+# rights), and an enforcement level of off requires nothing whatever it lists. A failed read of the
+# branch dies with $3 and gh's error; a branch that is not there returns 1 before the rulesets are
+# read, leaving the caller to say what that means. Any failed read of the rulesets, a 404 included,
+# is a runtime failure: GitHub answers a branch no ruleset applies to (whether or not it exists)
+# with an empty list, so a 404 means the rules could not be read, and taking it as none would judge
+# too few checks. The one exception is RULESETS_NOT_IN_PLAN: a repository whose plan has no
+# rulesets (a private one on GitHub Free) can have none, so that refusal is read as no rulesets.
+# Each name read, here or by record_check_rows, has its printed form kept in PRINTED_NAME under its
+# key.
 declare -gA REQUIRED_CHECKS=() PRINTED_NAME=()
 # The start of the HTTP 403 GitHub answers the rulesets read with when the repository's plan has
 # no rulesets, as seen in practice (the REST reference lists only 200 for it).
 readonly RULESETS_NOT_IN_PLAN='Upgrade to GitHub Pro or make this repository public'
 read_required_checks() {
-    local repo="$1" branch="$2" names name printed app
-    read_branch "${repo}" "${branch}" "could not read the branch protection of ${repo}" \
-        "the branch whose required checks apply was not found in ${repo}"
+    local repo="$1" branch="$2" failure="$3" names name printed app
+    read_branch "${repo}" "${branch}" "${failure}" || return 1
     names="${PROTECTION_ROWS}"
     if ! gh_capture api "repos/${repo}/rules/branches/${BRANCH_PATH}?per_page=${API_PAGE_SIZE}" --paginate \
         --jq "${APP_OF_DEF} ${NAME_FIELDS_DEF} .[]? | select(.type == \"required_status_checks\") | .parameters.required_status_checks[]?
@@ -2551,7 +2593,8 @@ pr_checks() {
     require_one_checks_target
     require_gh
     resolve_checks_head
-    read_required_checks "${REPO}" "${RULES_BRANCH}"
+    read_required_checks "${REPO}" "${RULES_BRANCH}" "could not read the branch protection of ${REPO}" \
+        || die "the branch whose required checks apply was not found in ${REPO}"
     read_check_results
     report_checks
 }
@@ -3321,6 +3364,30 @@ cmd_tag() {
     dispatch_subcommand tag view tag_view -- "$@"
 }
 
+# Prints each check the branch BRANCH of REPO requires once, by its printed name, sorted in the C
+# locale. A branch that is not there reaches not_found_in_repository and exits
+# BRANCH_NOT_FOUND_EXIT. An empty printed name is refused: GitHub accepts no empty check name, and
+# an empty line would read as one.
+branch_required_checks() {
+    local key printed names=()
+    parse_command_options assign_checks_option "--repo --branch" "" "$@"
+    require REPO --repo
+    require BRANCH --branch
+    require_gh
+    read_required_checks "${REPO}" "${BRANCH}" "could not read the --branch of ${REPO}" \
+        || not_found_in_repository "${BRANCH_NOT_FOUND_EXIT}" "the --branch was not found in ${REPO}"
+    for key in "${!REQUIRED_CHECKS[@]}"; do
+        printed="${PRINTED_NAME["${key%%"${ROW_SEPARATOR}"*}"]}"
+        [ -n "${printed}" ] || die "gh returned an unexpected result for the required checks of ${REPO}"
+        names+=("${printed}")
+    done
+    [ "${#names[@]}" -eq 0 ] || printf '%s\n' "${names[@]}" | LC_ALL=C sort -u
+}
+
+cmd_branch() {
+    dispatch_subcommand branch required-checks branch_required_checks -- "$@"
+}
+
 main() {
     if [ "$#" -eq 0 ]; then
         usage_general >&2
@@ -3344,6 +3411,7 @@ main() {
         comment) cmd_comment "$@" ;;
         release) cmd_release "$@" ;;
         tag) cmd_tag "$@" ;;
+        branch) cmd_branch "$@" ;;
         *) unknown_argument command "$(($# + 1))" ;;
     esac
 }
