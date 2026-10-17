@@ -15,6 +15,8 @@ readonly ISSUE_NOT_FOUND_EXIT=9
 # The same code as ISSUE_NOT_FOUND_EXIT, so not found reads alike from pr view, pr comments, pr reply,
 # release view, tag view and the issue commands.
 readonly PR_NOT_FOUND_EXIT=9
+# How GitHub answers a read of a pull request number it does not have, the number of an issue included.
+readonly PR_NOT_FOUND_TEXT='Could not resolve to a PullRequest with the number'
 readonly RELEASE_NOT_FOUND_EXIT=9
 readonly TAG_NOT_FOUND_EXIT=9
 # The verdict codes of pr checks, which every cfwf command that judges checks shares.
@@ -1373,7 +1375,7 @@ read_target_status() {
         return 0
     fi
     case "${GH_ERROR}${GH_OUTPUT}" in
-        *"Could not resolve to an Issue with the number"* | *"Could not resolve to a PullRequest with the number"*) return 0 ;;
+        *"Could not resolve to an Issue with the number"* | *"${PR_NOT_FOUND_TEXT}"*) return 0 ;;
     esac
 
     # The listing names a field by its lower-cased first word, so Workflow Status is "workflow Status".
@@ -2691,6 +2693,13 @@ resolve_view_fields() {
     done
 }
 
+# Exits PR_NOT_FOUND_EXIT with the message $1: what was asked for is not there, which a caller must
+# be able to tell from a read that failed.
+pr_not_found() {
+    printf 'cfwf: %s\n' "$1" >&2
+    exit "${PR_NOT_FOUND_EXIT}"
+}
+
 # Reads the pull request in the one gh call pr view makes, with the jq program $1, leaving its
 # output in GH_OUTPUT. A pull request GitHub does not have (the number of an issue is answered the
 # same way) exits PR_NOT_FOUND_EXIT; any other failure, a repository that is not there included,
@@ -2698,10 +2707,7 @@ resolve_view_fields() {
 read_pull_request() {
     gh_capture pr view "${PR}" --repo "${REPO}" --json "${VIEW_JSON_FIELDS}" --jq "$1" && return 0
     case "${GH_ERROR}${GH_OUTPUT}" in
-        *"Could not resolve to a PullRequest with the number"*)
-            printf 'cfwf: the pull request %s#%s was not found\n' "${REPO}" "${PR}" >&2
-            exit "${PR_NOT_FOUND_EXIT}"
-            ;;
+        *"${PR_NOT_FOUND_TEXT}"*) pr_not_found "the pull request ${REPO}#${PR} was not found" ;;
     esac
     die "could not read ${REPO}#${PR}: $(gh_failure_text)"
 }
@@ -2874,8 +2880,8 @@ byte_length() {
 print_pull_request_diff() {
     local size
     if ! gh_capture pr diff "${PR}" --repo "${REPO}" --color never; then
-        [[ "${GH_ERROR}" != *"Could not resolve to a PullRequest with the number"* ]] \
-            || discussion_not_found "the pull request ${REPO}#${PR} was not found"
+        [[ "${GH_ERROR}" != *"${PR_NOT_FOUND_TEXT}"* ]] \
+            || pr_not_found "the pull request ${REPO}#${PR} was not found"
         die "could not read the diff of ${REPO}#${PR}: $(gh_failure_text)"
     fi
     [ -n "${GH_OUTPUT}" ] || return 0
@@ -3051,13 +3057,6 @@ assign_pr_comment_option() {
     esac
 }
 
-# Exits PR_NOT_FOUND_EXIT with the message $1: what was asked for is not there, which a caller must
-# be able to tell from a read that failed.
-discussion_not_found() {
-    printf 'cfwf: %s\n' "$1" >&2
-    exit "${PR_NOT_FOUND_EXIT}"
-}
-
 discussion_incomplete() {
     die "the comments of ${REPO}#${PR} changed or were cut short while they were read; nothing is printed"
 }
@@ -3212,8 +3211,8 @@ read_discussion_page() {
         LIST_CURSOR["${list}"]=""
     done
     if ! gh_capture "${arguments[@]}" --jq "${PRINTABLE_DEF} ${PR_DISCUSSION_FILTER}"; then
-        [[ "${GH_ERROR}" != *"Could not resolve to a PullRequest with the number"* ]] \
-            || discussion_not_found "the pull request ${REPO}#${PR} was not found"
+        [[ "${GH_ERROR}" != *"${PR_NOT_FOUND_TEXT}"* ]] \
+            || pr_not_found "the pull request ${REPO}#${PR} was not found"
         die "could not read the comments of ${REPO}#${PR}: $(gh_failure_text)"
     fi
     record_discussion_page
@@ -3275,11 +3274,11 @@ resolve_reply_root() {
     local missing="the comment ${COMMENT_ID} is not an inline review comment of ${REPO}#${PR}"
     api_read "could not read the comment ${COMMENT_ID} of ${REPO}" "repos/${REPO}/pulls/comments/${COMMENT_ID}" \
         "${FIELDS_ROW_DEF} [.id, .in_reply_to_id, .pull_request_url, \"end\"] | fields_row" \
-        || discussion_not_found "${missing}"
+        || pr_not_found "${missing}"
     IFS="${ROW_SEPARATOR}" read -r id parent pull end <<< "${GH_OUTPUT}"
     [[ "${id}" = "${COMMENT_ID}" && "${parent}" =~ ^[0-9]*$ && "${end}" = end ]] \
         || die "gh returned an unexpected answer for the comment ${COMMENT_ID} of ${REPO}"
-    [[ "${pull}" =~ /pulls/0*([0-9]+)$ && "${BASH_REMATCH[1]}" = "${PR}" ]] || discussion_not_found "${missing}"
+    [[ "${pull}" =~ /pulls/0*([0-9]+)$ && "${BASH_REMATCH[1]}" = "${PR}" ]] || pr_not_found "${missing}"
     REPLY_ROOT="${parent:-${COMMENT_ID}}"
 }
 
