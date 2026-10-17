@@ -202,29 +202,37 @@ RUN mkdir -p /home/developer/.claude/agents \
     && chmod 0444 /opt/.claude-agent-count
 
 # ---- Bake in Claude Code settings, policy-limits, and hooks -----------------
-# Copied from the operator's ~/.claude/{settings.json,policy-limits.json,hooks/}
-# into source control here so they are version-controlled and reproducible.
-# root:root so the developer user cannot tamper with them at runtime; oneshot
-# does not (and must not) bind-mount over these paths — see containers/agent/Dockerfile.
-COPY --chown=root:root --chmod=0444 claude-settings.json /home/developer/.claude/settings.json
+# Version-controlled here so they are reproducible. Everything that governs
+# what the agent may do (the managed settings, the hook scripts and their data
+# files) lives root-owned under /etc/claude-code: Claude Code reads
+# /etc/claude-code/managed-settings.json ahead of every user and project
+# settings file, and its allowManaged*Only locks stop a repo's
+# .claude/settings*.json adding permissions, hooks or MCP servers. Only the
+# preferences half stays in ~/.claude/settings.json. All root:root so the
+# developer user cannot tamper with them at runtime; oneshot does not (and must
+# not) bind-mount over these paths - see containers/agent/Dockerfile.
+COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /home/developer/.claude/hooks/enforce-git-dash-c
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /home/developer/.claude/hooks/enforce-git-identity
-COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /home/developer/.claude/hooks/reject-obfuscated-commands
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /home/developer/.claude/hooks/enforce-allowed-dirs
-COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /home/developer/.claude/hooks/block-git-worktree
-COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /home/developer/.claude/hooks/block-dotnet-tool-install
-COPY --chown=root:root --chmod=0755 claude-hooks/block-github-mcp-write-tools /home/developer/.claude/hooks/block-github-mcp-write-tools
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /home/developer/.claude/hooks/enforce-ssh-host-and-key
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-curl-host /home/developer/.claude/hooks/enforce-curl-host
-COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /home/developer/.claude/hooks/enforce-background-for-long-running-commands
-COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /home/developer/.claude/hooks/cache-gh-lookups
-COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /home/developer/.claude/hooks/command-allowlist
-COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /home/developer/.claude/hooks/command-blocklist
-COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /home/developer/.claude/hooks/env-var-blocklist
-COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /home/developer/.claude/hooks/allowed-dirs
-RUN chown root:root /home/developer/.claude/hooks \
-    && chmod 0755 /home/developer/.claude/hooks
+COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-code/hooks/enforce-git-dash-c
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
+COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /etc/claude-code/hooks/enforce-allowed-dirs
+COPY --chown=root:root --chmod=0755 claude-hooks/block-claude-config-writes /etc/claude-code/hooks/block-claude-config-writes
+COPY --chown=root:root --chmod=0755 claude-hooks/block-config-skills /etc/claude-code/hooks/block-config-skills
+COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /etc/claude-code/hooks/block-git-worktree
+COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /etc/claude-code/hooks/block-dotnet-tool-install
+COPY --chown=root:root --chmod=0755 claude-hooks/block-github-mcp-write-tools /etc/claude-code/hooks/block-github-mcp-write-tools
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-ssh-host-and-key /etc/claude-code/hooks/enforce-ssh-host-and-key
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-curl-host /etc/claude-code/hooks/enforce-curl-host
+COPY --chown=root:root --chmod=0755 claude-hooks/enforce-background-for-long-running-commands /etc/claude-code/hooks/enforce-background-for-long-running-commands
+COPY --chown=root:root --chmod=0755 claude-hooks/cache-gh-lookups /etc/claude-code/hooks/cache-gh-lookups
+COPY --chown=root:root --chmod=0444 claude-hooks/command-allowlist /etc/claude-code/hooks/command-allowlist
+COPY --chown=root:root --chmod=0444 claude-hooks/command-blocklist /etc/claude-code/hooks/command-blocklist
+COPY --chown=root:root --chmod=0444 claude-hooks/env-var-blocklist /etc/claude-code/hooks/env-var-blocklist
+COPY --chown=root:root --chmod=0444 claude-hooks/allowed-dirs /etc/claude-code/hooks/allowed-dirs
+RUN chown root:root /etc/claude-code /etc/claude-code/hooks \
+    && chmod 0755 /etc/claude-code /etc/claude-code/hooks
 
 # ---- /opt/pre-commit (global pre-commit config) + hook shims ----------------
 # Clone the upstream config repo, record provenance in .env, strip git
@@ -266,7 +274,7 @@ ENV PATH="/opt/pre-commit/src/scripts:${PATH}"
 # per the Lock-Down Requirements. None of these scripts supports a --version
 # probe, so the Stage 1 sanity check below verifies presence + executable bit
 # instead. Every name is on this image's command-allowlist, and cfwf also has
-# a matching Bash(cfwf *) entry in claude-settings.json.
+# a matching Bash(cfwf *) entry in claude-managed-settings.json.
 COPY --chown=root:root --chmod=0755 scripts/pre-commit-check /usr/local/bin/pre-commit-check
 COPY --chown=root:root --chmod=0755 scripts/querydb /usr/local/bin/querydb
 COPY --chown=root:root --chmod=0755 scripts/cfwf /usr/local/bin/cfwf
@@ -393,26 +401,34 @@ RUN set -e; \
             || { echo "FATAL sanity: $wrapper not on PATH — /opt/pre-commit/src/scripts/ missing from PATH?" >&2; exit 1; }; \
     done; \
     echo "== Claude Code settings/policy-limits/hooks wiring =="; \
-    for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json; do \
+    for f in /home/developer/.claude/settings.json /home/developer/.claude/policy-limits.json /etc/claude-code/managed-settings.json; do \
         [ "$(stat -c '%U:%G %a' "$f")" = "root:root 444" ] \
             || { echo "FATAL sanity: $f has wrong owner/perms" >&2; exit 1; }; \
     done; \
-    ! jq -r '.hooks.PreToolUse[].hooks[].command' /home/developer/.claude/settings.json | grep -q '/home/developer' \
-        || { echo "FATAL sanity: settings.json hook commands contain a hardcoded /home/developer path instead of the portable \$HOME token" >&2; exit 1; }; \
-    for h in reject-obfuscated-commands enforce-allowed-dirs enforce-git-identity enforce-git-dash-c \
+    for d in /etc/claude-code /etc/claude-code/hooks; do \
+        [ "$(stat -c '%U:%G %a' "$d")" = "root:root 755" ] \
+            || { echo "FATAL sanity: $d missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
+    done; \
+    jq -e '.allowManagedPermissionRulesOnly == true and .allowManagedHooksOnly == true and .allowManagedMcpServersOnly == true and .permissions.disableBypassPermissionsMode == "disable"' /etc/claude-code/managed-settings.json >/dev/null \
+        || { echo "FATAL sanity: managed-settings.json does not lock out user/project permissions, hooks and MCP servers and disable bypass mode" >&2; exit 1; }; \
+    jq -e 'has("permissions") or has("hooks") or has("sandbox") or has("enabledMcpjsonServers") or has("mcpServers") | not' /home/developer/.claude/settings.json >/dev/null \
+        || { echo "FATAL sanity: ~/.claude/settings.json must hold preferences only - permissions, hooks, sandbox and MCP config belong in /etc/claude-code/managed-settings.json" >&2; exit 1; }; \
+    ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE 'block-no-verify|/etc/claude-code/hooks/[A-Za-z0-9-]+' \
+        || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
+    for h in reject-obfuscated-commands enforce-allowed-dirs block-claude-config-writes block-config-skills enforce-git-identity enforce-git-dash-c \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \
              enforce-background-for-long-running-commands cache-gh-lookups; do \
-        [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$h)" = "root:root 755" ] \
+        [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
             || { echo "FATAL sanity: $h hook missing or wrong owner/perms (want root:root 755)" >&2; exit 1; }; \
     done; \
-    [ ! -e /home/developer/.claude/hooks/allowed-dirs.local ] \
+    [ ! -e /etc/claude-code/hooks/allowed-dirs.local ] \
         || { echo "FATAL sanity: an allowed-dirs.local override must never be baked into the image" >&2; exit 1; }; \
     for d in /workspace/repo /workspace/rules /workspace/tmp; do \
-        grep -qxF "$d" /home/developer/.claude/hooks/allowed-dirs \
+        grep -qxF "$d" /etc/claude-code/hooks/allowed-dirs \
             || { echo "FATAL sanity: allowed-dirs does not list the agent mount $d" >&2; exit 1; }; \
     done; \
     for f in command-allowlist command-blocklist env-var-blocklist allowed-dirs; do \
-        [ "$(stat -c '%U:%G %a' /home/developer/.claude/hooks/$f)" = "root:root 444" ] \
+        [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$f)" = "root:root 444" ] \
             || { echo "FATAL sanity: hook policy file $f missing or wrong owner/perms" >&2; exit 1; }; \
     done; \
     echo "== Claude Code skills wiring =="; \

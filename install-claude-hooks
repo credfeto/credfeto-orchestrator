@@ -1,21 +1,40 @@
 #!/bin/bash
 
-# Installs the development-full container's baked-in Claude Code settings and
-# hooks into the current host user's ~/.claude, so the hooks can be exercised
-# outside the container. Hook/data files are symlinked straight back into this
-# repo (edit here, re-run nothing, the symlink already points at the change);
-# settings.json is copied verbatim from the container's copy - its hook
-# command strings use the literal "$HOME" token (shell-expanded by whichever
-# shell Claude Code invokes the hook through, both in the container as
-# developer and here as the host user), so no path rewriting is needed.
+# Installs the development-full container's Claude Code guardrails onto the
+# current host, so the hooks can be exercised outside the container.
+#
+# Everything that governs what the agent may do (the managed settings, the
+# hook scripts and their data files) is installed root-owned under
+# /etc/claude-code, the same layout the container uses: Claude Code reads
+# /etc/claude-code/managed-settings.json ahead of every user and project
+# settings file, and its allowManaged*Only locks stop those files adding
+# permissions, hooks or MCP servers. Root ownership is the point: a copy the
+# user (and so the agent running as that user) could write would let the agent
+# rewrite its own guardrails. So those files are always installed with
+# `sudo install -o root -g root`, never with a plain install, and an edit to a
+# hook in this checkout takes effect only once this script is run again. If
+# sudo is unavailable or declined, the exact commands are printed and the rest
+# of the install carries on, except that an existing ~/.claude/settings.json and
+# the old ~/.claude/hooks symlinks are then left as they were rather than
+# removed with nothing in their place.
+#
+# The preferences half of the settings (model, theme, environment variables
+# and so on) is copied to ~/.claude/settings.json, keeping the previous file
+# as settings.json.bak.
+#
+# The first argument, when given, is a file of allowed directory roots for
+# this host; it is installed as the root-owned allowed-dirs.local next to the
+# hooks, because the shipped allowed-dirs lists the container's mounts.
 #
 # It also installs the cfwf workflow helper into a shared bin directory
 # (/usr/local/bin by default, override with CFWF_BIN_DIR) with `install`, so
-# anyone on the host can run it. Unlike the hooks that is a copy, not a symlink,
-# so re-run this after cfwf changes to refresh it. If the plain install fails (typically because the
-# directory is not writable) it falls back to sudo; if that is unavailable or
-# declined the step prints the exact command to run and the rest of the install
-# carries on.
+# anyone on the host can run it. If the plain install fails (typically because
+# the directory is not writable) it falls back to sudo, printing the command
+# when that is unavailable or declined.
+#
+# CLAUDE_MANAGED_DIR overrides /etc/claude-code so tests never touch /etc. The
+# managed settings name their hooks by absolute /etc/claude-code paths, so a
+# real install must leave it unset.
 #
 # Every tool the hooks shell out to must already be present: a hook whose tool
 # is missing fails closed and blocks every command, so this refuses to install
@@ -45,16 +64,18 @@ case "${REPO_DIR}" in
 esac
 
 SOURCE_DIR="${REPO_DIR}/containers/base/development-full"
-SOURCE_SETTINGS="${SOURCE_DIR}/claude-settings.json"
+SOURCE_MANAGED_SETTINGS="${SOURCE_DIR}/claude-managed-settings.json"
+SOURCE_USER_SETTINGS="${SOURCE_DIR}/claude-user-settings.json"
 SOURCE_HOOKS_DIR="${SOURCE_DIR}/claude-hooks"
 SOURCE_CFWF="${SOURCE_DIR}/scripts/cfwf"
 CFWF_BIN_DIR="${CFWF_BIN_DIR:-/usr/local/bin}"
+CLAUDE_MANAGED_DIR="${CLAUDE_MANAGED_DIR:-/etc/claude-code}"
 
 # Every external tool the hooks in claude-hooks/ call: jq and shfmt (payload and
 # command parsing, used by nearly every hook), base64 (word transport), realpath
-# (enforce-allowed-dirs), git and gpg (enforce-git-dash-c, enforce-git-identity),
-# ssh-add (enforce-ssh-host-and-key), and sed/grep (enforce-git-identity,
-# reject-obfuscated-commands).
+# (enforce-allowed-dirs, block-claude-config-writes), git and gpg
+# (enforce-git-dash-c, enforce-git-identity), ssh-add (enforce-ssh-host-and-key),
+# and sed/grep (enforce-git-identity, reject-obfuscated-commands).
 REQUIRED_TOOLS=(jq shfmt base64 realpath git gpg ssh-add sed grep)
 
 check_required_tools() {
@@ -91,35 +112,100 @@ install_cfwf() {
     info "Could not install cfwf to ${target} (${plain_error}). To make it available to every user, run: sudo ${root_install[*]}"
 }
 
-# Symlinks every file directly under SOURCE_HOOKS_DIR into TARGET_HOOKS_DIR,
-# discovered via find rather than a hardcoded name list -- matches the same
-# convention already used for skill-symlinking in this image's Dockerfile, so
-# a newly added hook/data file is picked up automatically on the next run.
-install_hook_symlinks() {
-    local target_hooks_dir="$1"
-    local src name
-    mkdir -p "${target_hooks_dir}" || die "Failed to create ${target_hooks_dir}"
-    while IFS= read -r src; do
-        name=$(basename "${src}")
-        ln -sf "${src}" "${target_hooks_dir}/${name}" \
-            || die "Failed to symlink ${name}"
-        info "Symlinked hooks/${name}"
-    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f | sort)
+# Root-owned install commands that could not be run (sudo missing, or declined
+# once, after which it is not asked again), printed together at the end.
+PENDING_ROOT_COMMANDS=()
+SUDO_UNAVAILABLE=0
+
+# Runs `install <args>` as root:root via sudo, or records it for printing.
+root_install() {
+    local args=(install -o root -g root "$@")
+    if [ "${SUDO_UNAVAILABLE}" -eq 0 ] && command -v sudo >/dev/null 2>&1 && sudo "${args[@]}"; then
+        return 0
+    fi
+    SUDO_UNAVAILABLE=1
+    PENDING_ROOT_COMMANDS+=("sudo ${args[*]}")
 }
 
-# Copies SOURCE_SETTINGS to target_settings verbatim - its hook command
-# strings use the literal "$HOME" token, which the shell Claude Code invokes
-# hooks through expands at execution time, so no rewriting is needed here.
-# Validates the copy is well-formed JSON before it is written into place.
-# Backs up any pre-existing settings.json first (single fixed name,
-# overwritten each run).
-install_settings() {
+# Copies every file directly under SOURCE_HOOKS_DIR into the root-owned hooks
+# directory (scripts 0755, data files 0444), discovered via find rather than a
+# hardcoded name list so a newly added hook or data file is picked up
+# automatically, then the managed settings and any allowed-dirs.local.
+# An allowed-dirs.local sitting in the checkout is never copied: the agent can
+# write there, and enforce-allowed-dirs prefers that file to the shipped list,
+# so copying it would let the agent widen its own directory roots without a
+# reviewed change. It is installed only from the path given as the argument.
+install_managed_files() {
+    local allowed_dirs_file="$1"
+    local hooks_dir="${CLAUDE_MANAGED_DIR}/hooks"
+    local src mode
+
+    info "Installing managed settings and hooks into ${CLAUDE_MANAGED_DIR} as root (sudo may prompt)..."
+    root_install -d -m 0755 "${CLAUDE_MANAGED_DIR}" "${hooks_dir}"
+    while IFS= read -r src; do
+        mode=0444
+        [ -x "${src}" ] && mode=0755
+        root_install -m "${mode}" "${src}" "${hooks_dir}/$(basename "${src}")"
+    done < <(find "${SOURCE_HOOKS_DIR}" -mindepth 1 -maxdepth 1 -type f ! -name allowed-dirs.local | sort)
+    root_install -m 0444 "${SOURCE_MANAGED_SETTINGS}" "${CLAUDE_MANAGED_DIR}/managed-settings.json"
+    [ -n "${allowed_dirs_file}" ] && root_install -m 0444 "${allowed_dirs_file}" "${hooks_dir}/allowed-dirs.local"
+
+    if [ "${#PENDING_ROOT_COMMANDS[@]}" -eq 0 ]; then
+        info "Installed managed settings and hooks into ${CLAUDE_MANAGED_DIR}"
+        return 0
+    fi
+    info "Could not install the managed settings and hooks as root - no guardrails are active until you run:$(printf '\n  %s' "${PENDING_ROOT_COMMANDS[@]}")"
+    return 1
+}
+
+# Replaces the previous per-user setup (hook symlinks into this checkout and a
+# settings.json that may still carry permissions and hooks) only once the
+# managed settings that take over from it are installed, so a declined sudo
+# never leaves a host with its old guardrails removed and nothing in their
+# place. A host with no settings.json yet still gets the preferences.
+install_user_files() {
+    local target_claude_dir="$1" managed_installed="$2"
+    if [ "${managed_installed}" -eq 1 ]; then
+        remove_stale_hook_symlinks "${target_claude_dir}/hooks"
+        install_user_settings "${target_claude_dir}"
+        return 0
+    fi
+    if [ -f "${target_claude_dir}/settings.json" ]; then
+        info "Left ${target_claude_dir}/settings.json and ${target_claude_dir}/hooks as they were, because the managed settings that replace them were not installed"
+        return 0
+    fi
+    install_user_settings "${target_claude_dir}"
+}
+
+# Removes ~/.claude/hooks entries that are symlinks into this checkout's
+# claude-hooks directory, left by earlier versions of this script that linked
+# the hooks instead of copying them. Anything else there (a hand-written file,
+# a link elsewhere) is left alone.
+remove_stale_hook_symlinks() {
+    local legacy_hooks_dir="$1"
+    local source_root entry
+    [ -d "${legacy_hooks_dir}" ] || return 0
+    source_root=$(realpath -m -- "${SOURCE_HOOKS_DIR}") || die "Failed to resolve ${SOURCE_HOOKS_DIR}"
+    while IFS= read -r entry; do
+        case "$(realpath -m -- "${entry}")" in
+            "${source_root}"/*)
+                rm -f -- "${entry}" || die "Failed to remove stale symlink ${entry}"
+                info "Removed stale symlink ${entry}"
+                ;;
+        esac
+    done < <(find "${legacy_hooks_dir}" -mindepth 1 -maxdepth 1 -type l | sort)
+}
+
+# Copies SOURCE_USER_SETTINGS to ~/.claude/settings.json, validating it is
+# well-formed JSON before it is written into place. Backs up any pre-existing
+# settings.json first (single fixed name, overwritten each run).
+install_user_settings() {
     local target_claude_dir="$1"
     local target_settings="${target_claude_dir}/settings.json"
     local tmp_settings
     tmp_settings=$(mktemp) || die "Failed to create a temp file for settings.json"
 
-    cp -f "${SOURCE_SETTINGS}" "${tmp_settings}" || die "Failed to copy settings.json"
+    cp -f "${SOURCE_USER_SETTINGS}" "${tmp_settings}" || die "Failed to copy settings.json"
     jq empty "${tmp_settings}" 2>/dev/null || die "settings.json is not valid JSON"
 
     if [ -f "${target_settings}" ]; then
@@ -132,37 +218,50 @@ install_settings() {
     info "Installed settings.json"
 }
 
-# The symlinked allowed-dirs lists the agent container's /workspace mounts,
-# which do not exist on a host - so without a hand-written
-# allowed-dirs.local next to it, enforce-allowed-dirs fails closed on every
-# cd/git -C/npm --prefix/find/rm/mv/cp here. Point it out rather than
-# guessing a host layout (a real file, never a symlink into the repo).
+# The shipped allowed-dirs lists the agent container's /workspace mounts, which
+# do not exist on a host - so without an allowed-dirs.local next to it,
+# enforce-allowed-dirs fails closed on every cd/git -C/npm --prefix/find/rm/mv/cp
+# here. Point it out rather than guessing a host layout.
 warn_if_no_allowed_dirs_override() {
-    local target_hooks_dir="$1"
-    [ -f "${target_hooks_dir}/allowed-dirs.local" ] && return 0
-    info "No ${target_hooks_dir}/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Create it with one allowed root per line, e.g. '~/work' and '\$TMPDIR'."
+    local allowed_dirs_file="$1"
+    [ -n "${allowed_dirs_file}" ] && return 0
+    [ -f "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local" ] && return 0
+    info "No ${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs.local found - enforce-allowed-dirs will block every directory-taking command on this host until one exists. Write a file with one allowed root per line (e.g. '~/work' and '\$TMPDIR') and re-run: ${BASH_SOURCE[0]} <file>"
 }
 
 main() {
     is_ai_agent && die "install-claude-hooks must not be run inside a Claude Code session"
 
-    [ -f "${SOURCE_SETTINGS}" ] || die "Source settings not found: ${SOURCE_SETTINGS}"
+    local allowed_dirs_file="${1:-}"
+
+    [ -f "${SOURCE_MANAGED_SETTINGS}" ] || die "Source managed settings not found: ${SOURCE_MANAGED_SETTINGS}"
+    [ -f "${SOURCE_USER_SETTINGS}" ] || die "Source user settings not found: ${SOURCE_USER_SETTINGS}"
     [ -d "${SOURCE_HOOKS_DIR}" ] || die "Source hooks directory not found: ${SOURCE_HOOKS_DIR}"
     [ -f "${SOURCE_CFWF}" ] || die "Source cfwf script not found: ${SOURCE_CFWF}"
+    if [ -n "${allowed_dirs_file}" ] && { [ ! -f "${allowed_dirs_file}" ] || [ ! -r "${allowed_dirs_file}" ]; }; then
+        die "Allowed directories file not found or not readable: ${allowed_dirs_file}"
+    fi
 
     check_required_tools
 
+    # Absolute, so a printed fallback command still works from another directory.
+    if [ -n "${allowed_dirs_file}" ]; then
+        allowed_dirs_file=$(realpath -- "${allowed_dirs_file}") || die "Failed to resolve ${allowed_dirs_file}"
+    fi
+
+    jq empty "${SOURCE_MANAGED_SETTINGS}" 2>/dev/null || die "Managed settings are not valid JSON: ${SOURCE_MANAGED_SETTINGS}"
+
     [ -n "${HOME}" ] || die "\$HOME is not set"
     local target_claude_dir="${HOME}/.claude"
-    local target_hooks_dir="${target_claude_dir}/hooks"
 
-    info "Installing Claude Code settings/hooks into ${target_claude_dir} from ${REPO_DIR}..."
+    info "Installing Claude Code settings/hooks from ${REPO_DIR}..."
 
     mkdir -p "${target_claude_dir}" || die "Failed to create ${target_claude_dir}"
-    install_hook_symlinks "${target_hooks_dir}"
-    install_settings "${target_claude_dir}"
+    local managed_installed=1
+    install_managed_files "${allowed_dirs_file}" || managed_installed=0
+    install_user_files "${target_claude_dir}" "${managed_installed}"
     install_cfwf
-    warn_if_no_allowed_dirs_override "${target_hooks_dir}"
+    warn_if_no_allowed_dirs_override "${allowed_dirs_file}"
 
     success "Claude Code settings/hooks installed for local testing outside the container"
 }
