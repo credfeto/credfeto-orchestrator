@@ -22,6 +22,12 @@ readonly CHECKS_FAILED_EXIT=3
 readonly CHECKS_PENDING_EXIT=4
 readonly NO_CHECKS_EXIT=5
 readonly API_PAGE_SIZE=100
+# The most files GitHub lists for a pull request ("Responses include a maximum of 3000 files", in
+# the REST reference for "List pull requests files"), so one that changes more cannot be listed whole.
+readonly PR_FILES_LIMIT=3000
+# The largest diff pr diff prints, in bytes (1 MiB). A bigger one would not fit an agent's context,
+# and GitHub states no limit of its own, so it is refused whole rather than flooding the caller.
+readonly DIFF_BYTE_LIMIT=1048576
 # The body leak rules, as extended regular expressions matched byte by byte in the C locale.
 # NAME=value, where NAME is upper case and TOKEN, SECRET, KEY or PASSWORD is the whole of it or
 # follows an underscore (so MONKEY=banana passes), and the value, after an optional opening quote,
@@ -290,6 +296,7 @@ Commands:
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)
+  pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
   comment add              Post a comment on a PR or an issue and print its URL
@@ -859,6 +866,7 @@ Run 'cfwf pr ready-at --help' for pr ready-at, which prints when a pull request 
 ready for review.
 Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
+Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts.
 Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board.
 Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
 requires without judging them.
@@ -997,6 +1005,53 @@ at.
 Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
 runtime failure, such as a gh or network error or a repository that was not found, prefixed
 "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_pr_diff() {
+    cat << USAGE
+Usage: cfwf pr diff --repo <owner/repo> --pr <n> [--name-only | --stat]
+
+Prints a pull request's unified diff, its changed files with their status, or each changed file's
+added and deleted line counts, for reviewing a pull request that is not checked out locally.
+
+--repo       Always required; never taken from the current directory.
+--pr         The pull request's number, above 0.
+--name-only  Print each changed file's status letter and path instead of the diff.
+--stat       Print each changed file's path and its added and deleted line counts instead of the
+             diff.
+--name-only and --stat are mutually exclusive. --json, --jq, --patch, --exclude, --color, --web and
+a path are not options: each mode has one fixed format, and the whole pull request is always read.
+
+Output:
+  (default)    the unified diff from gh pr diff, with colour off and terminal escape sequences
+               neutralised
+  --name-only  <letter><TAB><path>, one line a file, in the order of the diff
+  --stat       <path><TAB><additions><TAB><deletions>, one line a file, in the order of the diff
+Each control character in a path (a tab or a newline included) is printed as a space, so a line is
+always one file. A renamed or copied file shows its new path only. A binary file counts 0 and 0.
+
+Status letters:
+  A  added
+  M  modified, or changed in another way (such as its mode only)
+  D  removed
+  R  renamed
+  C  copied
+  -  unchanged
+Any other status GitHub gives is a runtime failure, never printed as a letter.
+
+A diff of more than ${DIFF_BYTE_LIMIT} bytes (1 MiB) is refused (exit 1) and none of it is printed, never
+part of it: use --stat or --name-only, or git diff on a local checkout. GitHub lists at most ${PR_FILES_LIMIT} files
+of a pull request, so --name-only and --stat refuse one that changes more, and a list that changed
+while it was read, printing none of it.
+
+When the branch is checked out locally, git -C <repo> diff origin/<base>...HEAD (or --name-status,
+--numstat) is better: it needs no network and has no cap.
+
+Exit codes: 0 printed (an empty diff or file list prints nothing); ${PR_NOT_FOUND_EXIT} the pull request does not
+exist (the number of an issue included); 1 a runtime failure, such as a gh or network error, a
+repository that is not found, a cap or a list that changed while it was read, prefixed "cfwf:"; 2 a
+usage error.
 USAGE
 }
 
@@ -1294,6 +1349,7 @@ usage_for() {
         pr | "pr checks") usage_pr ;;
         "pr view") usage_pr_view ;;
         "pr ready-at") usage_pr_ready_at ;;
+        "pr diff") usage_pr_diff ;;
         "pr list") usage_pr_list ;;
         "pr create") usage_pr_create ;;
         "pr comments") usage_pr_comments ;;
@@ -3531,6 +3587,118 @@ pr_create() {
     create_pull_request
 }
 
+# --name-only, --stat, or empty for the diff itself.
+DIFF_MODE=""
+
+assign_diff_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --repo | --pr) assign_view_option "${flag}" "${value}" ;;
+        --name-only | --stat)
+            [ -z "${DIFF_MODE}" ] || [ "${DIFF_MODE}" = "${flag}" ] \
+                || usage_error "--name-only and --stat are mutually exclusive"
+            assign_once DIFF_MODE "${flag}"
+            DIFF_MODE="${flag}"
+            ;;
+    esac
+}
+
+# Sets the variable named $2 to the length of $1 in bytes, which is what bash counts in the C locale.
+byte_length() {
+    local LC_ALL=C
+    printf -v "$2" '%s' "${#1}"
+}
+
+# Prints the diff of the pull request PR as gh pr diff gives it. --color never keeps colour codes
+# out whatever the environment says, and --allow-escape-sequences is never passed, so gh neutralises
+# any terminal escape sequence in it; the diff cannot be made printable otherwise, because its tabs
+# and carriage returns are content. A diff over DIFF_BYTE_LIMIT is refused whole, never cut. Only
+# stderr is read for not found: the same words can be part of a diff.
+print_pull_request_diff() {
+    local size
+    if ! gh_capture pr diff "${PR}" --repo "${REPO}" --color never; then
+        [[ "${GH_ERROR}" != *"Could not resolve to a PullRequest with the number"* ]] \
+            || discussion_not_found "the pull request ${REPO}#${PR} was not found"
+        die "could not read the diff of ${REPO}#${PR}: $(gh_failure_text)"
+    fi
+    [ -n "${GH_OUTPUT}" ] || return 0
+    # The final newline, which the command substitution in gh_capture dropped, is not counted, and
+    # is put back when the diff is printed.
+    byte_length "${GH_OUTPUT}" size
+    [ "${size}" -le "${DIFF_BYTE_LIMIT}" ] \
+        || die "the diff of ${REPO}#${PR} is ${size} bytes, more than the ${DIFF_BYTE_LIMIT} cfwf prints, so none is printed; use --stat or --name-only, or git diff on a local checkout"
+    printf '%s\n' "${GH_OUTPUT}"
+}
+
+# Sets the variable named $2 to the letter of the GitHub file status $1, and fails for a status it
+# does not know, so one GitHub adds later is never printed as a letter. changed (GitHub defines it
+# no further) is M, as git prints for a change of mode only; unchanged is -, the no-value marker.
+status_letter() {
+    case "$1" in
+        added) printf -v "$2" A ;;
+        modified | changed) printf -v "$2" M ;;
+        removed) printf -v "$2" D ;;
+        renamed) printf -v "$2" R ;;
+        copied) printf -v "$2" C ;;
+        unchanged) printf -v "$2" '%s' - ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the files of the pull request PR, one line each in the format of DIFF_MODE (--name-only or
+# --stat), once every file has been checked. The number it changes is read first: over
+# PR_FILES_LIMIT, which GitHub never lists past, it is refused before any page is read, and
+# otherwise it is what the paged list must add up to, since --paginate runs the jq program on each
+# page and so gives no count of its own. A push between the two reads, or a page cut short, is
+# never printed as the whole list.
+print_pull_request_files() {
+    local number changed end row status path additions deletions letter line
+    local unexpected="gh returned an unexpected result for the files of ${REPO}#${PR}"
+    local -a rows=() lines=()
+    api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
+        "${FIELDS_ROW_DEF} [.number, .changed_files, \"end\"] | fields_row" \
+        || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
+    IFS="${ROW_SEPARATOR}" read -r number changed end <<< "${GH_OUTPUT}"
+    [[ "${number}" = "${PR}" && "${changed}" =~ ^[0-9]{1,9}$ && "${end}" = end ]] \
+        || die "gh returned an unexpected result for ${REPO}#${PR}"
+    [ "${changed}" -le "${PR_FILES_LIMIT}" ] \
+        || die "${REPO}#${PR} changes ${changed} files and GitHub lists at most ${PR_FILES_LIMIT}, so none is printed; use git diff --name-status or --numstat on a local checkout"
+
+    # The pull request was there a moment ago, so a 404 now is not a pull request that is not there.
+    api_read "could not list the files of ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}/files?per_page=${API_PAGE_SIZE}" \
+        "${FIELDS_ROW_DEF} .[] | [.status, .filename, .additions, .deletions, \"end\"] | fields_row" --paginate \
+        || die "${unexpected}"
+    [ -z "${GH_OUTPUT}" ] || mapfile -t rows <<< "${GH_OUTPUT}"
+    [ "${#rows[@]}" -eq "${changed}" ] \
+        || die "the files of ${REPO}#${PR} changed while they were read; nothing is printed"
+
+    for row in "${rows[@]}"; do
+        IFS="${ROW_SEPARATOR}" read -r status path additions deletions end <<< "${row}"
+        [[ -n "${path}" && "${additions}" =~ ^[0-9]{1,9}$ && "${deletions}" =~ ^[0-9]{1,9}$ && "${end}" = end ]] \
+            || die "${unexpected}"
+        status_letter "${status}" letter || die "${unexpected}"
+        if [ "${DIFF_MODE}" = --name-only ]; then
+            printf -v line '%s\t%s' "${letter}" "${path}"
+        else
+            printf -v line '%s\t%s\t%s' "${path}" "${additions}" "${deletions}"
+        fi
+        lines+=("${line}")
+    done
+    [ "${#lines[@]}" -eq 0 ] || printf '%s\n' "${lines[@]}"
+}
+
+pr_diff() {
+    parse_command_options assign_diff_option "--repo --pr" "--name-only --stat" "$@"
+    require REPO --repo
+    require PR --pr
+    require_gh
+    if [ -n "${DIFF_MODE}" ]; then
+        print_pull_request_files
+    else
+        print_pull_request_diff
+    fi
+}
+
 COMMENT_ID=""
 REPLY_ROOT=""
 REVIEW_DECISION=""
@@ -3900,7 +4068,7 @@ pr_reply() {
 
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
-        ready-at pr_ready_at -- "$@"
+        ready-at pr_ready_at diff pr_diff -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole

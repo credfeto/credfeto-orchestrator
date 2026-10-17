@@ -37,6 +37,7 @@ setup() {
         '  "project item-list") [ -f "${GH_FIXTURES}/item-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/item-list.json" ;;' \
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.fail" ] && { cat "${GH_FIXTURES}/pr-view.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit_asked "${GH_FIXTURES}/pr-view" "$@" ;;' \
+        '  "pr diff") f="${GH_FIXTURES}/pr-diff"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] || { echo "GraphQL: Could not resolve to a PullRequest with the number of $3. (repository.pullRequest)" >&2; exit 1; }; cat "${f}.out" ;;' \
         '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
@@ -187,6 +188,7 @@ gh_line_of() {
         [[ "${output}" == *"body check"*"exit 8 when refused"* ]]
         [[ "${output}" == *"pr checks"*"(exit 0, 3, 4 or 5)"* ]]
         [[ "${output}" == *"pr view"*"(exit 9 when not found)"* ]]
+        [[ "${output}" == *"pr diff"*"(exit 9 when not found)"* ]]
         [[ "${output}" == *"comment add"* ]]
         [[ "${output}" == *"release view"*"(exit 9 when it has none)"* ]]
         [[ "${output}" == *"release list"* ]]
@@ -1118,6 +1120,7 @@ reply_posts() {
     [[ "${output}" == "Usage: cfwf pr checks "* ]]
     [[ "${output}" == *"Run 'cfwf pr comments --help' for pr comments, which prints a pull request's comments, reviews and"* ]]
     [[ "${output}" == *"Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment."* ]]
+    [[ "${output}" == *"Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts."* ]]
 
     run "${SCRIPT}" help pr comments
     [ "${status}" -eq 0 ]
@@ -3780,7 +3783,7 @@ has_eight_field_lines() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."$'\n'"Run 'cfwf pr create --help' for pr create, "*$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*"for pr view, which prints a pull request's state and metadata."$'\n'"Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests."$'\n'"Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts."$'\n'"Run 'cfwf pr create --help' for pr create, "*$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     # pr with no subcommand is a usage error that prints the same usage, so it points to pr list too.
@@ -6667,7 +6670,7 @@ assert_sign_off() {
 
 @test "help for a command and its subcommand prints what that subcommand's -h prints, and the command's usage for a subcommand it does not know" {
     local pair spelling expected
-    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "body check" "pr checks" "pr ready-at" "comment add" "release view" "release list" "tag view"; do
+    for pair in "issue create" "issue view" "issue plan-status" "issue list" "issue search" "issue label-history" "body check" "pr checks" "pr ready-at" "pr diff" "comment add" "release view" "release list" "tag view"; do
         # shellcheck disable=SC2086  # each pair is split into its two words on purpose
         run "${SCRIPT}" ${pair} -h
         [ "${status}" -eq 0 ]
@@ -8895,7 +8898,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply, create, ready-at)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply, create, ready-at, diff)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -9004,6 +9007,469 @@ read_once_asking_for() {
     [ "${output}" = "Medium" ]
 }
 
+# --- pr diff --------------------------------------------------------------------
+
+DIFF_USAGE="Usage: cfwf pr diff --repo <owner/repo> --pr <n> [--name-only | --stat]"
+DIFF_CALL="pr diff 42 --repo ${REPO} --color never"
+PULL_ENDPOINT="repos/${REPO}/pulls/42"
+FILES_ENDPOINT="repos/${REPO}/pulls/42/files"
+DIFF_BYTE_LIMIT=1048576
+# A diff with a tab, a carriage return and a file with no newline at its end, all of which are content.
+SAMPLE_DIFF=$'diff --git a/a.txt b/a.txt\nindex 1111111..2222222 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n-old\tline\n+new\tline\r\n context\n\\ No newline at end of file\n'
+
+# Writes the answer to the read of REPO itself, which is how it is seen to be there.
+write_this_repository() {
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main"}' | write_api "repos/${REPO}"
+}
+
+# Writes the diff gh pr diff prints for PR 42: $1, byte for byte.
+write_diff() {
+    printf '%s' "$1" > "${GH_FIXTURES}/pr-diff.out"
+}
+
+# Writes a diff of one line, the character $2 (a by default) repeated $1 times, and its newline.
+# The line is built with a pipeline, not run_of: at 1 MiB a bash pattern substitution takes minutes.
+write_sized_diff() {
+    local character="${2:-a}"
+    { head -c "$1" /dev/zero | tr '\0' a | sed "s/a/${character}/g"; printf '\n'; } > "${GH_FIXTURES}/pr-diff.out"
+}
+
+# Makes gh pr diff fail with the error text $1.
+fail_diff() {
+    printf '%s\n' "$1" > "${GH_FIXTURES}/pr-diff.fail"
+}
+
+# Writes PR 42 as the pulls endpoint gives it, changing $1 files, with fields pr diff never asks for.
+write_pr_changed_files() {
+    jq -n --argjson changed "$1" '{number: 42, state: "open", title: "a title", changed_files: $changed, additions: 10, deletions: 2}' \
+        | write_api "${PULL_ENDPOINT}"
+}
+
+# One file of a pull request as the files endpoint gives it: its status $1, path $2, and additions
+# $3 and deletions $4, each as JSON, so a test can give a value that is not a number.
+diff_file() {
+    jq -n -c --arg status "$1" --arg path "$2" --argjson additions "$3" --argjson deletions "$4" \
+        '{sha: "abc", filename: $path, status: $status, additions: $additions, deletions: $deletions, changes: 0, patch: "@@ -1 +1 @@"}'
+}
+
+# One page of the files list: each argument a file (diff_file), in the order given.
+files_page() {
+    printf '%s\n' "$@" | jq -c -s '.'
+}
+
+# Writes the files of PR 42 as one page, each argument a file, none for an empty list.
+write_files() {
+    files_page "$@" | write_api "${FILES_ENDPOINT}"
+}
+
+# Writes the files of PR 42 as several pages, which the gh stub hands to the jq program one at a
+# time, as gh --paginate does: each argument a page (files_page).
+write_files_pages() {
+    printf '%s\n' "$@" | jq -s '.' > "$(api_fixture "${FILES_ENDPOINT}").pages"
+}
+
+# Prints a page of the files $1 to $2, each modified, named file-<n>.txt, with n additions and 1
+# deletion.
+numbered_files_page() {
+    jq -n -c --argjson from "$1" --argjson to "$2" \
+        '[range($from; $to + 1) | {filename: "file-\(.).txt", status: "modified", additions: ., deletions: 1}]'
+}
+
+run_pr_diff() {
+    run --separate-stderr "${SCRIPT}" pr diff --repo "${REPO}" --pr 42 "$@"
+}
+
+# Succeeds when pr diff, with any further arguments, exits 0 and prints exactly the bytes in the
+# fixture. The script is not run through bats' run, which drops the trailing newlines.
+diff_prints_fixture() {
+    "${SCRIPT}" pr diff --repo "${REPO}" "$@" > "${TEST_TMP}/printed-diff" || return 1
+    cmp "${GH_FIXTURES}/pr-diff.out" "${TEST_TMP}/printed-diff"
+}
+
+# Runs pr diff with the arguments after $1 and succeeds when it is a usage error (exit 2) with
+# nothing on stdout, the message $1 on the first line of stderr and the pr diff usage after it. It
+# runs the script itself rather than through bats' run, so it never reads run's globals; stderr is
+# left in TEST_TMP/diff-usage-error.
+diff_usage_error() {
+    local expected="$1" code=0 printed errors
+    shift
+    printed=$("${SCRIPT}" pr diff "$@" 2> "${TEST_TMP}/diff-usage-error") || code=$?
+    errors=$(< "${TEST_TMP}/diff-usage-error")
+    [ "${code}" -eq 2 ] || { echo "exit ${code} for: $*" >&2; return 1; }
+    [ -z "${printed}" ]
+    [ "${errors%%$'\n'*}" = "cfwf: ${expected}" ] || { echo "for $*: ${errors%%$'\n'*}" >&2; return 1; }
+    [[ "${errors}" == *$'\n'"${DIFF_USAGE}"$'\n'* ]]
+}
+
+@test "pr diff help, from help pr diff, pr diff --help and pr diff -h, gives the usage, the formats, the status letters, both caps, the local alternative and the exit codes, and calls no gh" {
+    local invocation
+    for invocation in "pr diff --help" "pr diff -h" "help pr diff"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [ -z "${stderr}" ]
+        [[ "${output}" == "${DIFF_USAGE}"$'\n'* ]]
+        [[ "${output}" != *"cfwf pr checks"* ]]
+        [[ "${output}" == *"  --name-only  <letter><TAB><path>, one line a file, in the order of the diff"* ]]
+        [[ "${output}" == *"  --stat       <path><TAB><additions><TAB><deletions>, one line a file, in the order of the diff"* ]]
+        [[ "${output}" == *$'\n'"  A  added"$'\n'"  M  modified, or changed in another way (such as its mode only)"$'\n'"  D  removed"$'\n'"  R  renamed"$'\n'"  C  copied"$'\n'"  -  unchanged"$'\n'* ]]
+        [[ "${output}" == *"--name-only and --stat are mutually exclusive. --json, --jq, --patch, --exclude, --color, --web and"$'\n'"a path are not options"* ]]
+        [[ "${output}" == *"A diff of more than ${DIFF_BYTE_LIMIT} bytes (1 MiB) is refused (exit 1) and none of it is printed"* ]]
+        [[ "${output}" == *"GitHub lists at most 3000 files"* ]]
+        [[ "${output}" == *"terminal escape sequences"$'\n'"               neutralised"* ]]
+        [[ "${output}" == *"When the branch is checked out locally, git -C <repo> diff origin/<base>...HEAD (or --name-status,"$'\n'"--numstat) is better: it needs no network and has no cap."* ]]
+        [[ "${output}" == *"Exit codes: 0 printed (an empty diff or file list prints nothing); 9 the pull request does not"$'\n'"exist (the number of an issue included); 1 a runtime failure"*"2 a"$'\n'"usage error." ]]
+    done
+
+    # Help comes before any other option is looked at.
+    run "${SCRIPT}" pr diff --help --json x
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "${DIFF_USAGE}"* ]]
+
+    for invocation in "help pr" "pr -h" "pr --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr checks"*"Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts."* ]]
+    done
+
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr diff usage errors exit 2 with the pr diff usage on stderr and nothing on stdout, never echoing a value, before any gh call" {
+    diff_usage_error "missing required option --repo" --pr 42
+    diff_usage_error "missing required option --pr" --repo "${REPO}"
+    diff_usage_error "missing required option --repo" --name-only
+    diff_usage_error "--repo needs a value" --pr 42 --repo
+    diff_usage_error "--pr needs a value" --repo "${REPO}" --pr
+
+    local value
+    for value in 0 000; do
+        diff_usage_error "invalid value for --pr: it must be a number above 0" --repo "${REPO}" --pr "${value}"
+    done
+    for value in abc -1 4x2 ""; do
+        diff_usage_error "invalid value for --pr: it must be a number" --repo "${REPO}" --pr "${value}"
+    done
+    diff_usage_error "invalid value for --repo: it must be <owner>/<repo>" --repo "credfeto" --pr 42
+
+    diff_usage_error "--pr can only be given once" --repo "${REPO}" --pr 42 --pr 42
+    diff_usage_error "--repo can only be given once" --repo "${REPO}" --repo "${REPO}" --pr 42
+    diff_usage_error "--name-only can only be given once" --repo "${REPO}" --pr 42 --name-only --name-only
+    diff_usage_error "--stat can only be given once" --repo "${REPO}" --pr 42 --stat --stat
+    diff_usage_error "--name-only and --stat are mutually exclusive" --repo "${REPO}" --pr 42 --name-only --stat
+    diff_usage_error "--name-only and --stat are mutually exclusive" --repo "${REPO}" --pr 42 --stat --name-only
+
+    # No passthrough to gh, no path filter and no other output format: each is an unknown option,
+    # named by its position.
+    local flag
+    for flag in --json --jq --patch --exclude -e --color --web --allow-escape-sequences --name-status --field README.md 42 --; do
+        diff_usage_error "unknown option (argument 7; its value is not shown)" --repo "${REPO}" --pr 42 "${flag}" value
+    done
+
+    # A stray value that could hold a token is never echoed.
+    local token
+    token="ghp_$(run_of a 36)"
+    diff_usage_error "unknown option (argument 7; its value is not shown)" --repo "${REPO}" --pr 42 "${token}"
+    [[ "$(< "${TEST_TMP}/diff-usage-error")" != *"${token}"* ]]
+    diff_usage_error "invalid value for --pr: it must be a number" --repo "${REPO}" --pr "${token}"
+    [[ "$(< "${TEST_TMP}/diff-usage-error")" != *"${token}"* ]]
+
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr diff prints the diff byte for byte, from one gh pr diff call with colour off and terminal escape sequences left to gh to neutralise" {
+    write_diff "${SAMPLE_DIFF}"
+    diff_prints_fixture --pr 42
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(cat "${GH_LOG}")" = "${DIFF_CALL}" ]
+    [ "$(gh_call_count "--allow-escape-sequences")" -eq 0 ]
+
+    # A number given with leading zeros is that number, without them.
+    rm "${GH_LOG}"
+    diff_prints_fixture --pr 042
+    [ "$(cat "${GH_LOG}")" = "${DIFF_CALL}" ]
+
+    # A diff holding the words gh answers a missing pull request with is still a diff.
+    write_diff $'diff --git a/x b/x\n+GraphQL: Could not resolve to a PullRequest with the number of 42.\n'
+    diff_prints_fixture --pr 42
+}
+
+@test "pr diff prints nothing and exits 0 for a pull request with an empty diff" {
+    write_diff ""
+    diff_prints_fixture --pr 42
+    [ ! -s "${TEST_TMP}/printed-diff" ]
+    run_pr_diff
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+}
+
+@test "pr diff prints a diff of exactly 1 MiB, and refuses one a byte longer, counted in bytes, whole, printing none of it" {
+    write_sized_diff "${DIFF_BYTE_LIMIT}"
+    diff_prints_fixture --pr 42
+
+    write_sized_diff "$((DIFF_BYTE_LIMIT + 1))"
+    run_pr_diff
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the diff of ${REPO}#42 is $((DIFF_BYTE_LIMIT + 1)) bytes, more than the ${DIFF_BYTE_LIMIT} cfwf prints, so none is printed; use --stat or --name-only, or git diff on a local checkout" ]
+
+    # Bytes, not characters, whatever the locale: half as many two-byte characters plus one is over.
+    LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); [ "${#v}" -eq 1 ]' || skip "no C.UTF-8 locale on this host"
+    write_sized_diff "$((DIFF_BYTE_LIMIT / 2 + 1))" $'\xc3\xa9'
+    run --separate-stderr env LC_ALL=C.UTF-8 "${SCRIPT}" pr diff --repo "${REPO}" --pr 42
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: the diff of ${REPO}#42 is $((DIFF_BYTE_LIMIT + 2)) bytes, more than"* ]]
+}
+
+@test "pr diff exits 9 for a pull request that does not exist, the number of an issue included, and 1 for any other failed read, printing nothing" {
+    run_pr_diff
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+
+    fail_diff "GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)"
+    run_pr_diff
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the diff of ${REPO}#42: GraphQL: Could not resolve to a Repository with the name '${REPO}'. (repository)" ]
+
+    fail_diff "HTTP 502: Bad Gateway (https://api.github.com/graphql)"
+    run_pr_diff
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the diff of ${REPO}#42: HTTP 502: Bad Gateway (https://api.github.com/graphql)" ]
+
+    # GitHub can refuse to produce a very large diff itself.
+    fail_diff $'could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)\nsecond line'
+    run_pr_diff
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the diff of ${REPO}#42: could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)" ]
+}
+
+@test "pr diff --name-only prints each file's status letter and path in GitHub's order, the new path of a rename, from the pull request and one paged files read" {
+    write_pr_changed_files 7
+    write_files "$(diff_file added a.txt 3 0)" "$(diff_file modified b.txt 2 1)" "$(diff_file removed c.txt 0 4)" \
+        "$(diff_file renamed d-new.txt 0 0 | jq -c '.previous_filename = "d-old.txt"')" \
+        "$(diff_file copied e.txt 5 0 | jq -c '.previous_filename = "a.txt"')" "$(diff_file changed f.sh 0 0)" \
+        "$(diff_file unchanged g.txt 0 0)"
+    run_pr_diff --name-only
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_line A a.txt)
+$(tab_line M b.txt)
+$(tab_line D c.txt)
+$(tab_line R d-new.txt)
+$(tab_line C e.txt)
+$(tab_line M f.sh)
+$(tab_line - g.txt)" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 2 ]
+    [ "$(gh_call_count "api ${PULL_ENDPOINT} --jq ")" -eq 1 ]
+    [ "$(gh_call_count "api ${FILES_ENDPOINT}?per_page=100 --paginate --jq ")" -eq 1 ]
+    [ "$(gh_call_count "pr diff")" -eq 0 ]
+}
+
+@test "pr diff --stat prints each file's path, additions and deletions in GitHub's order, a binary file as 0 and 0" {
+    write_pr_changed_files 3
+    write_files "$(diff_file modified src/a.sh 12 3)" "$(diff_file added image.png 0 0)" "$(diff_file removed old.txt 0 40)"
+    run_pr_diff --stat
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "$(tab_line src/a.sh 12 3)
+$(tab_line image.png 0 0)
+$(tab_line old.txt 0 40)" ]
+    has_field_lines "${output}" 3 3
+}
+
+@test "pr diff --name-only and --stat print a tab, a newline or a C1 control in a path as a space, so each file stays one line" {
+    write_pr_changed_files 3
+    write_files "$(diff_file modified $'a\tb.txt' 1 1)" "$(diff_file added $'c\nM\td.txt' 1 0)" "$(diff_file added $'e\xc2\x85f\x1b[31m' 2 0)"
+    run_pr_diff --name-only
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line M "a b.txt")
+$(tab_line A "c M d.txt")
+$(tab_line A "e f [31m")" ]
+    has_field_lines "${output}" 3 2
+
+    run_pr_diff --stat
+    [ "${status}" -eq 0 ]
+    has_field_lines "${output}" 3 3
+}
+
+@test "pr diff --name-only and --stat print nothing and exit 0 for a pull request that changes no files" {
+    write_pr_changed_files 0
+    write_files
+    local mode
+    for mode in --name-only --stat; do
+        run_pr_diff "${mode}"
+        [ "${status}" -eq 0 ]
+        [ -z "${output}" ]
+        [ -z "${stderr}" ]
+    done
+}
+
+@test "pr diff --name-only and --stat read every page of the files list, 100 a page, and print every file in order" {
+    write_pr_changed_files 205
+    write_files_pages "$(numbered_files_page 1 100)" "$(numbered_files_page 101 200)" "$(numbered_files_page 201 205)"
+    run_pr_diff --stat
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 205 ]
+    [ "${output%%$'\n'*}" = "$(tab_line file-1.txt 1 1)" ]
+    [ "$(sed -n 101p <<< "${output}")" = "$(tab_line file-101.txt 101 1)" ]
+    [ "${output##*$'\n'}" = "$(tab_line file-205.txt 205 1)" ]
+    [ "$(gh_call_count "api ${FILES_ENDPOINT}?per_page=100 --paginate --jq ")" -eq 1 ]
+
+    run_pr_diff --name-only
+    [ "${status}" -eq 0 ]
+    [ "$(grep -c $'^M\tfile-[0-9]*\\.txt$' <<< "${output}")" -eq 205 ]
+}
+
+@test "pr diff --name-only and --stat refuse a files list shorter or longer than the pull request's count, printing nothing" {
+    local changed
+    for changed in 2 4; do
+        write_pr_changed_files "${changed}"
+        write_files "$(diff_file added a.txt 1 0)" "$(diff_file added b.txt 1 0)" "$(diff_file added c.txt 1 0)"
+        run_pr_diff --name-only
+        [ "${status}" -eq 1 ] || { echo "changed_files ${changed}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the files of ${REPO}#42 changed while they were read; nothing is printed" ]
+    done
+
+    # A page lost on the way is a list that does not add up.
+    write_pr_changed_files 205
+    write_files_pages "$(numbered_files_page 1 100)" "$(numbered_files_page 201 205)"
+    run_pr_diff --stat
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the files of ${REPO}#42 changed while they were read; nothing is printed" ]
+}
+
+@test "pr diff --name-only and --stat list exactly 3000 files, and refuse a pull request of 3001 before reading any page" {
+    write_pr_changed_files 3001
+    run_pr_diff --stat
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: ${REPO}#42 changes 3001 files and GitHub lists at most 3000, so none is printed; use git diff --name-status or --numstat on a local checkout" ]
+    [ "$(gh_call_count "${FILES_ENDPOINT}")" -eq 0 ]
+
+    write_pr_changed_files 3000
+    local -a pages=()
+    local first
+    for first in {1..2901..100}; do
+        pages+=("$(numbered_files_page "${first}" "$((first + 99))")")
+    done
+    write_files_pages "${pages[@]}"
+    run_pr_diff --name-only
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 3000 ]
+    [ "${output##*$'\n'}" = "$(tab_line M file-3000.txt)" ]
+}
+
+@test "pr diff --name-only and --stat print nothing and exit 1 for a status GitHub has no letter for, or a file whose row is not its fields" {
+    write_pr_changed_files 2
+    write_files "$(diff_file added a.txt 1 0)" "$(diff_file moved b.txt 1 0)"
+    local mode
+    for mode in --name-only --stat; do
+        run_pr_diff "${mode}"
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the files of ${REPO}#42" ]
+    done
+
+    local file
+    for file in "$(diff_file modified b.txt '"x"' 0)" "$(diff_file modified b.txt 1 null)" "$(diff_file modified b.txt -1 0)" \
+        "$(diff_file modified b.txt 1.5 0)" "$(diff_file modified "" 1 0)" "$(diff_file modified b.txt 1 0 | jq -c 'del(.filename)')"; do
+        write_files "$(diff_file added a.txt 1 0)" "${file}"
+        run_pr_diff --stat
+        [ "${status}" -eq 1 ] || { echo "printed: ${file}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the files of ${REPO}#42" ]
+    done
+
+    # A row with no closing field, or a field too many, from an answer the program could not give.
+    rm "$(api_fixture "${FILES_ENDPOINT}").json"
+    local row
+    for row in $'modified\x1fb.txt\x1f1\x1f0' $'modified\x1fb.txt\x1f1\x1f0\x1fextra\x1fend'; do
+        printf 'added\x1fa.txt\x1f1\x1f0\x1fend\n%s\n' "${row}" > "$(api_fixture "${FILES_ENDPOINT}").out"
+        run_pr_diff --stat
+        [ "${status}" -eq 1 ] || { echo "printed: ${row}" >&2; return 1; }
+        [ -z "${output}" ]
+    done
+    printf 'added\x1fa.txt\x1f1\x1f0\x1fend\nmodified\x1fb.txt\x1f2\x1f3\x1fend\n' > "$(api_fixture "${FILES_ENDPOINT}").out"
+    run_pr_diff --stat
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "$(tab_line a.txt 1 0)
+$(tab_line b.txt 2 3)" ]
+}
+
+@test "pr diff --name-only and --stat exit 9 for a pull request that does not exist, and 1 when the repository is not there either" {
+    write_this_repository
+    run_pr_diff --name-only
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    [ "$(gh_call_count "${FILES_ENDPOINT}")" -eq 0 ]
+
+    rm "$(api_fixture "repos/${REPO}").json"
+    run_pr_diff --stat
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+}
+
+@test "pr diff --name-only and --stat treat a failed read, a files list that is not there and a pull request of another number as a runtime failure (exit 1), printing nothing" {
+    fail_api "${PULL_ENDPOINT}"
+    run_pr_diff --name-only
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#42: gh: Bad Gateway (HTTP 502)" ]
+    rm "$(api_fixture "${PULL_ENDPOINT}").fail"
+
+    write_pr_changed_files 1
+    fail_api "${FILES_ENDPOINT}"
+    run_pr_diff --stat
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not list the files of ${REPO}#42: gh: Bad Gateway (HTTP 502)" ]
+
+    # The pull request was there a moment ago, so a 404 for its files is not a missing pull request.
+    rm "$(api_fixture "${FILES_ENDPOINT}").fail"
+    write_this_repository
+    run_pr_diff --stat
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for the files of ${REPO}#42" ]
+
+    local filter
+    for filter in '.number = 43' '.changed_files = "x"' '.changed_files = null' '.changed_files = 1234567890'; do
+        jq -n '{number: 42, changed_files: 1}' | jq "${filter}" | write_api "${PULL_ENDPOINT}"
+        write_files "$(diff_file added a.txt 1 0)"
+        run_pr_diff --stat
+        [ "${status}" -eq 1 ] || { echo "printed for ${filter}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#42" ]
+    done
+}
+
+@test "pr diff fails (exit 1) when gh is not installed, after the options are checked" {
+    mkdir -p "${TEST_TMP}/empty-path"
+    write_diff "${SAMPLE_DIFF}"
+    local mode
+    for mode in "" --name-only --stat; do
+        run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr diff --repo "${REPO}" --pr 42 ${mode:+"${mode}"}
+        [ "${status}" -eq 1 ]
+        [ -z "${output}" ]
+        [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+    done
+
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr diff --repo "${REPO}" --pr 0
+    [ "${status}" -eq 2 ]
+}
+
 # --- release view, release list and tag view --------------------------------------
 
 # The three commands only read, and are for a repository the caller does not work in, such as that
@@ -9057,6 +9523,12 @@ write_numbered_release_list() {
 
 run_release_list() {
     run --separate-stderr "${SCRIPT}" release list --repo "${LOOKUP_REPO}" "$@"
+}
+
+# Prints one expected line, its arguments joined by tabs.
+tab_line() {
+    local IFS=$'\t'
+    printf '%s\n' "$*"
 }
 
 # Writes the answer to the read of the tag $1: a ref naming an object of the type $2 (commit for a
