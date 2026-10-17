@@ -633,6 +633,14 @@ gh_line_of() {
     [ "$(gh_call_count "project item-list")" -eq 0 ]
 }
 
+@test "--check treats GitHub's no-such-pull-request answer as not on the board, without a fallback or a warning" {
+    use_fallback "GraphQL: Could not resolve to a PullRequest with the number of 1481."
+    run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 1481
+    [ "${status}" -eq 1 ]
+    [ "${output}" = "cfwf: ${REPO}#1481 is not on project 74" ]
+    [ "$(gh_call_count "project item-list")" -eq 0 ]
+}
+
 @test "--check exits non-zero when the item is on no Workflow project item" {
     jq -n '{data: {repository: {pullRequest: {projectItems: {nodes: [{project: {id: "PVT_other"}, fieldValueByName: {name: "Human Review"}}]}}}}}' > "${GH_FIXTURES}/graphql-target.json"
     run "${SCRIPT}" workflow-status --check --repo "${REPO}" --pr 99999
@@ -6894,11 +6902,6 @@ DIFF_BYTE_LIMIT=1048576
 # A diff with a tab, a carriage return and a file with no newline at its end, all of which are content.
 SAMPLE_DIFF=$'diff --git a/a.txt b/a.txt\nindex 1111111..2222222 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n-old\tline\n+new\tline\r\n context\n\\ No newline at end of file\n'
 
-# Writes the answer to the read of REPO itself, which is how it is seen to be there.
-write_this_repository() {
-    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main"}' | write_api "repos/${REPO}"
-}
-
 # Writes the diff gh pr diff prints for PR 42: $1, byte for byte.
 write_diff() {
     printf '%s' "$1" > "${GH_FIXTURES}/pr-diff.out"
@@ -7284,7 +7287,7 @@ $(tab_line b.txt 2 3)" ]
 }
 
 @test "pr diff --name-only and --stat exit 9 for a pull request that does not exist, and 1 when the repository is not there either" {
-    write_this_repository
+    write_repository "${REPO}"
     run_pr_diff --name-only
     [ "${status}" -eq 9 ]
     [ -z "${output}" ]
@@ -7315,7 +7318,7 @@ $(tab_line b.txt 2 3)" ]
 
     # The pull request was there a moment ago, so a 404 for its files is not a missing pull request.
     rm "$(api_fixture "${FILES_ENDPOINT}").fail"
-    write_this_repository
+    write_repository "${REPO}"
     run_pr_diff --stat
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
@@ -7361,9 +7364,11 @@ RELEASE_LIST_UNEXPECTED="cfwf: gh returned an unexpected result for the releases
 TAG_UNEXPECTED="cfwf: gh returned an unexpected result for the --tag of ${LOOKUP_REPO}"
 REPOSITORY_MISSING="cfwf: the repository ${LOOKUP_REPO} was not found, or the caller cannot see it"
 
-# Writes the answer to the read of the repository itself, which is how it is seen to be there.
+# Writes the answer to the read of the repository $1 (LOOKUP_REPO by default) itself, which is how it
+# is seen to be there.
 write_repository() {
-    jq -n --arg repo "${LOOKUP_REPO}" '{id: 197814629, full_name: $repo, default_branch: "main"}' | write_api "repos/${LOOKUP_REPO}"
+    local repo="${1:-${LOOKUP_REPO}}"
+    jq -n --arg repo "${repo}" '{id: 197814629, full_name: $repo, default_branch: "main"}' | write_api "repos/${repo}"
 }
 
 # Writes the latest release as the REST API gives it: v4.2.2, with notes that hold a forged line.
