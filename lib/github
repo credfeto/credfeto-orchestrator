@@ -83,23 +83,32 @@ require_trusted_logins() {
 # actionable work items found" success report, masking a priorities-API outage as a healthy idle
 # run (#1089). Returns 2 when the API answered but the response body failed to parse (a distinct
 # condition from unreachability — the caller must not report this as a connectivity outage).
+# When the current GitHub login resolves (resolve_gh_me), it is URL-encoded and sent as the
+# optional `user` query parameter so the feed can leave out items assigned to other users; when
+# it cannot be resolved the feed is fetched without it, so an identity-lookup blip never fails
+# the fetch. This runs inside the caller's command substitution, so the caller should resolve
+# the login first to keep _GH_ME cached for the rest of the run.
 fetch_all_priorities() {
-    local priorities_json attempt=1
+    local priorities_json attempt=1 url="${PRIORITIES_URL}" encoded_user
+
+    if resolve_gh_me && encoded_user=$(jq -rn --arg u "${_GH_ME}" '$u|@uri') && [ -n "${encoded_user}" ]; then
+        url="${PRIORITIES_URL}?user=${encoded_user}"
+    fi
 
     while [ "${attempt}" -le "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ]; do
-        if priorities_json=$(curl --silent --fail --connect-timeout 10 --max-time 60 "${PRIORITIES_URL}" 2>/dev/null); then
+        if priorities_json=$(curl --silent --fail --connect-timeout 10 --max-time 60 "${url}" 2>/dev/null); then
             printf '%s' "${priorities_json}" | jq -c '[
                 .priorities[]
                     | select((.status == "Open" or .status == "Draft") and .isOnHold == false)
             ]' && return 0
-            warn "Failed to parse priorities JSON from ${PRIORITIES_URL}"
+            warn "Failed to parse priorities JSON from ${url}"
             return 2
         fi
         [ "${attempt}" -lt "${PRIORITIES_FETCH_RETRY_ATTEMPTS}" ] && [ "${PRIORITIES_FETCH_RETRY_DELAY_SECS}" -gt 0 ] \
             && sleep "${PRIORITIES_FETCH_RETRY_DELAY_SECS}"
         attempt=$((attempt + 1))
     done
-    warn "Failed to fetch priorities from ${PRIORITIES_URL} after ${PRIORITIES_FETCH_RETRY_ATTEMPTS} attempt(s)"
+    warn "Failed to fetch priorities from ${url} after ${PRIORITIES_FETCH_RETRY_ATTEMPTS} attempt(s)"
     return 1
 }
 
