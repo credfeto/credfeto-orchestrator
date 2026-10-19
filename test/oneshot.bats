@@ -559,6 +559,28 @@ teardown() {
     [[ "${output}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
 }
 
+@test "build_pr_claude_md PHASE H marks the PR ready before enabling auto-merge (#1651)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
+    [ "${status}" -eq 0 ]
+    local phase_h="${output#*PHASE H: Finalize}"
+    phase_h="${phase_h%%Otherwise, if auto-merge is already enabled*}"
+    [[ "${phase_h}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
+    local before_merge="${phase_h%%gh pr merge --auto --merge 7*}"
+    [[ "${before_merge}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+    [[ "${phase_h}" == *"leave the PR ready without auto-merge"* ]]
+}
+
+@test "build_pr_claude_md dependency PR marks the PR ready before enabling auto-merge (#1651)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
+    [ "${status}" -eq 0 ]
+    local step="${output#*Else if ALL required checks have passed}"
+    step="${step%%Else (checks are still PENDING)*}"
+    [[ "${step}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
+    local before_merge="${step%%gh pr merge --auto --merge 7*}"
+    [[ "${before_merge}" == *"gh pr ready 7 --repo ${REPO_FULL}"* ]]
+    [[ "${step}" == *"leave the PR ready without auto-merge"* ]]
+}
+
 @test "build_pr_claude_md for dependency PR generates compact instructions without code-work steps" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true"
     [ "${status}" -eq 0 ]

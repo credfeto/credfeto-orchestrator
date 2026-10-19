@@ -514,10 +514,10 @@ Steps:
    - If any required check has FAILED: post a comment on the PR explaining which check failed and why, then add the Blocked label and stop:
      gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
    - Else if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO_FULL} --json autoMergeRequest --jq '.autoMergeRequest != null' returns true): $(_build_placeholder_disarm_note "${item_id}") Otherwise stop — nothing more to do.
-   - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise enable auto-merge and stop:
-     gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-     If that command fails (auto-merge not supported), mark the PR as ready instead:
+   - Else if ALL required checks have passed: $(_build_placeholder_guard_note "${item_id}") Otherwise mark the PR ready if it is still a draft (GitHub refuses auto-merge on a draft PR), then enable auto-merge, and stop:
      gh pr ready ${item_id} --repo ${REPO_FULL}
+     gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+     If the auto-merge command fails because the repo does not support auto-merge, leave the PR ready without auto-merge.
    - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
 4. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues.
 5. $(_build_permission_denial_rule pr "${item_id}")
@@ -606,9 +606,10 @@ $(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - $(_build_placeholder_guard_note "${item_id}" remove)
-  - Otherwise enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
-    If that fails (auto-merge not supported): gh pr ready ${item_id} --repo ${REPO_FULL}
-  - Post a one-line status comment confirming the PR is ready, then STOP.
+  - Otherwise first mark the PR ready if it is still a draft (GitHub refuses auto-merge on a draft PR): gh pr ready ${item_id} --repo ${REPO_FULL}
+    Then enable auto-merge: gh pr merge --auto --merge ${item_id} --repo ${REPO_FULL}
+    If that fails because the repo does not support auto-merge: leave the PR ready without auto-merge for a human to merge.
+  - Post a one-line status comment confirming the PR is ready and whether auto-merge is on, then STOP.
 
 $(_build_placeholder_disarm_note "${item_id}")
 

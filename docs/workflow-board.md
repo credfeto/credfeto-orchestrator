@@ -35,7 +35,7 @@ options (defined once, in `lib/project-status`):
 | AI Review | the agent | Running an automated code review pass. |
 | AI Security Review | the agent | Running an automated security review pass. |
 | AI Coverage | the agent | Checks that the branch's overall test coverage has not dropped below `main`'s, per language, against the `COVERAGE.md` committed on `main` (see [coverage-ratchet.instructions.md](https://github.com/credfeto/cs-template/blob/main/ai/global/coverage-ratchet.instructions.md)). This is the last automated gate, placed after both review passes so it also catches coverage regressions those later commits could otherwise introduce unchecked. A drop sends the card back to Development; a pass regenerates `COVERAGE.md` on the branch. |
-| Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to enable auto-merge — reaching this status does not by itself mean that has happened yet. |
+| Human Review | the agent | Everything automated has passed. A later invocation (Finalize, below) still has to mark the PR ready and then enable auto-merge — reaching this status does not by itself mean that has happened yet. |
 | Complete | (implicit — the PR merges) | Done. |
 
 Using the built-in field means there is one status per card, and GitHub's own views and automation
@@ -122,8 +122,9 @@ over driving the board through a fixed sequence of phases (see `build_pr_claude_
    merges. Placed after both review phases (not right after Development) because those phases can
    themselves commit production code, and an earlier gate would let those commits degrade coverage
    unchecked.
-8. **Finalize** — enable auto-merge (or mark the PR ready if auto-merge isn't available) and
-   stop. GitHub takes it from here.
+8. **Finalize** — mark the PR ready (if it is still a draft), then enable auto-merge, and stop.
+   GitHub refuses auto-merge on a draft PR, so the order matters. If the repository doesn't support
+   auto-merge, the PR is left ready for a human to merge. GitHub takes it from here.
 
 Each of these is its own single agent invocation — never more than one phase per session (see
 [oneshot.md](oneshot.md) for why: a fresh, memoryless session per invocation is what keeps each
