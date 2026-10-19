@@ -6454,11 +6454,12 @@ run_issue_search() {
         [[ "${output}" == "${ISSUE_SEARCH_USAGE}"$'\n'* ]]
         [[ "${output}" == *$'\n'"  <number>  <OPEN|CLOSED>  <title>  <labels>"$'\n'* ]]
         [[ "${output}" == *"exactly four tab-separated fields and none is empty"* ]]
-        [[ "${output}" == *"letters, digits, spaces and"$'\n'"         - _ . # ' only"* ]]
-        [[ "${output}" == *"AND, OR and NOT"$'\n'"         are refused as whole words in upper case"* ]]
+        [[ "${output}" == *"printable ASCII, with no control character, and hold a letter or a digit."* ]]
+        [[ "${output}" == *"so cfwf: add issue list searches for cfwf add issue"$'\n'"         list"* ]]
+        [[ "${output}" == *"AND, OR and NOT are refused as whole words in upper case, the only case GitHub"$'\n'"         reads as search operators"* ]]
         [[ "${output}" == *"open, closed or all. The default is open."* ]]
         [[ "${output}" == *"from 1 to 100. The default is 30."* ]]
-        [[ "${output}" == *"cfwf adds \"in:title,body\" before the words, so the search only looks in titles and bodies, and"$'\n'"gh adds the repository itself, so the search never leaves it. The words must be at most"$'\n'"256 characters."* ]]
+        [[ "${output}" == *"cfwf adds \"in:title,body\" before the words, so the search only looks in titles and bodies, and"$'\n'"gh adds the repository itself, so the search never leaves it. The words must be at most"$'\n'"256 characters, counted as they are sent. Both the text as given and the words are"$'\n'"also checked for a token, and the text for a host path"* ]]
         [[ "${output}" == *"in the order the search returned them, never re-sorted"* ]]
         [[ "${output}" == *"\"cfwf: warning: more than <n> issues match; only the first <n> are printed\", and the exit code is"$'\n'"still 0."* ]]
         [[ "${output}" == *"Search is eventually consistent"* ]]
@@ -6766,34 +6767,63 @@ assert_issue_usage_error() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "issue search refuses a --text that could add a qualifier, a phrase, a group or an operator, naming the rule and never the value, before any gh call" {
+@test "issue search refuses a --text that is not printable ASCII, has no letter or digit, or holds an operator, naming the rule and never the value, before any gh call" {
     write_issue_list "$(issue_entry 5 OPEN "a title")"
-    local charset="invalid value for --text: it must be letters, digits, spaces and - _ . # ' only"
+    local charset="invalid value for --text: it must be printable ASCII, with no control character"
     local text
-    for text in "repo:x" "is:pr" "org:other" "a:b" '"a phrase"' "(a" "a)" "a*" "a/b" "a@b" "a=b" "a<b" "a>b" "a,b" "a+b" \
-        "a;b" "a|b" "a\\b" "a~b" "a!b" "a\$b" "a%b" "a&b" "a?b" "\`a\`" "[a]" "{a}" $'a\tb' $'a\nb' $'a\rb' $'a\x1bb' $'caf\xc3\xa9' \
-        $'a\xc2\xa0b' "" ; do
+    # A control character or a byte above ASCII is refused rather than sent as a space: GitHub does
+    # not split words on it, so a space would cut a word in two.
+    for text in $'a\tb' $'a\nb' $'a\rb' $'a\x1bb' $'a\x7fb' $'caf\xc3\xa9' $'a\xc2\xa0b' $'a\xffb'; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${charset}" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
     # The character set is checked first: a text that also has no letter, or holds an operator, or
     # is too long, or holds a token, is refused under it.
-    for text in ":" "a:OR" "OR:x" "ghp_abc123:x" "$(head -c 300 < /dev/zero | tr '\0' a):"; do
+    for text in $'\t' $'a OR\tb' $'ghp_abc123\tx' "$(head -c 300 < /dev/zero | tr '\0' a)"$'\t'; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${charset}" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
-    for text in " " "   " "-" "." "#" "'" "_" "- . # ' _"; do
+    for text in "" " " "   " "-" "." "#" "'" "_" "- . # ' _" ":" '""' "()" ":::" "*" "@" "/ , ;"; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must hold a letter or a digit" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
-    # The operator check comes before the length and token checks. Only the upper-case forms are
-    # operators to GitHub, so only they are refused.
+    # The operator check is made on the words sent, so punctuation round an operator does not hide it,
+    # and it comes before the length and token checks. Only the upper-case forms are operators to
+    # GitHub, so only they are refused.
     for text in "OR" "a OR b" "a AND b" "NOT a" "x -NOT" "a.OR.b" "it's OR" "AND" "x-AND-y" "a OR repo-marker" \
-        "ghp_abc123 OR x" "$(head -c 300 < /dev/zero | tr '\0' a) OR"; do
+        "a:OR" "OR:x" "(a OR b)" "repo:x OR y" "x(NOT)" '"a"AND"b"' "ghp_abc123 OR x" "$(head -c 300 < /dev/zero | tr '\0' a) OR"; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must not hold AND, OR or NOT, which are search operators" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue search sends each character other than a letter, a digit, a space and - _ . # ' as a space, with one space between words, so a title is searched as it is and no qualifier, phrase or group reaches gh" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    # Each text as given, then the words gh is given after in:title,body.
+    local -a given=(
+        "cfwf: add issue list" "tool(cfwf): x" "fix(cfwf/issue): refuse a, b and c"
+        "repo:other/x" "is:pr" "author:x" "org:other" "in:comments x" "a repo:other/x b" "user:@me"
+        '"a phrase"' "(a" "a)" "[a]" "{a}" "a*" "a/b" "a@b" "a=b" "a<b" "a>b" "a,b" "a+b" "a;b" "a|b" 'a\b' "a~b"
+        "a!b" "a\$b" "a%b" "a&b" "a?b" "\`a\`" "created:>=2020-01-01..2020-12-31" "  a  ::  b  " "a(-b)" "it's: fix #12"
+    )
+    local -a sent=(
+        "cfwf add issue list" "tool cfwf x" "fix cfwf issue refuse a b and c"
+        "repo other x" "is pr" "author x" "org other" "in comments x" "a repo other x b" "user me"
+        "a phrase" "a" "a" "a" "a" "a" "a b" "a b" "a b" "a b" "a b" "a b" "a b" "a b" "a b" "a b" "a b"
+        "a b" "a b" "a b" "a b" "a b" "a" "created 2020-01-01..2020-12-31" "a b" "a -b" "it's fix #12"
+    )
+    [ "${#given[@]}" -eq "${#sent[@]}" ]
+    local index
+    for index in "${!given[@]}"; do
+        rm -f "${GH_LOG}"
+        run_issue_search --text "${given[index]}"
+        [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${given[index]}" "${status}" "${stderr}" >&2; return 1; }
+        [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
+        [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+        [ "$(gh_call_count "issue list --repo ${REPO} --state open --search ${SEARCH_PREFIX} ${sent[index]} --limit 31 ")" -eq 1 ] \
+            || { printf 'given %q, gh got: %s\n' "${given[index]}" "$(cat "${GH_LOG}")" >&2; return 1; }
+    done
 }
 
 @test "issue search takes words that only hold and, or or not inside them, a leading -, a # and an apostrophe, and passes each as it is" {
@@ -6839,17 +6869,43 @@ assert_issue_usage_error() {
     # The length is checked before the token: a text that is both is a usage error, not exit 8.
     run_issue_search --text "ghp_${fits}"
     assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: it must be at most 256 characters"
+    # It is the words sent that are counted: punctuation sent as a space, and the spaces collapsed
+    # round it, take nothing from the limit, but a character sent as a space between words counts.
+    run_issue_search --text "${fits}:b"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: it must be at most 256 characters"
+    run_issue_search --text "$(head -c 255 < /dev/zero | tr '\0' a): b"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: it must be at most 256 characters"
+    [ ! -f "${GH_LOG}" ]
+    run_issue_search --text "::  ${fits}  ::"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${fits} --limit")" -eq 1 ]
+    rm -f "${GH_LOG}"
+    run_issue_search --text "$(printf 'a: %.0s' {1..100})"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "--search ${SEARCH_PREFIX} $(printf 'a %.0s' {1..99})a --limit")" -eq 1 ]
+    rm -f "${GH_LOG}"
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "issue search refuses a --text holding a token (exit 8), never echoing it, before any gh call" {
+@test "issue search refuses a --text holding a token or a host path (exit 8), never echoing it, before any gh call" {
     write_issue_list "$(issue_entry 5 OPEN "a title")"
     local text
-    for text in "ghp_abc123" "find ghp_abc123 here" "github_pat_x" "glpat-abc" "Bearer abcdefghij0123456789xyz"; do
+    # Both the text as given and the words sent are checked: punctuation sent as a space can hide a
+    # token's shape in the words (the URL and the header) or form it there (the last two).
+    for text in "ghp_abc123" "find ghp_abc123 here" "github_pat_x" "glpat-abc" "Bearer abcdefghij0123456789xyz" \
+        "ghp_abc123:x" "(ghp_abc123)" "https://user:s3cret@example.com" "Authorization: Bearer abcdefghij0123456789xyz" \
+        "Bearer(abcdefghij0123456789xyz)" "-----BEGIN(RSA)PRIVATE KEY-----"; do
         run_issue_search --text "${text}"
         [ "${status}" -eq 8 ] || { printf 'accepted: %q (%s)\n' "${text}" "${status}" >&2; return 1; }
         [ -z "${output}" ]
         [ "${stderr}" = "cfwf: text refused: token" ]
+    done
+    # A host path is refused too, now that / can be given, though it is sent as words.
+    for text in "/home/someone/x" "see /tmp/a" "C:\\Users\\someone"; do
+        run_issue_search --text "${text}"
+        [ "${status}" -eq 8 ] || { printf 'accepted: %q (%s)\n' "${text}" "${status}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: text refused: host path" ]
     done
     [ ! -f "${GH_LOG}" ]
 }
