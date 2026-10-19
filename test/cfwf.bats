@@ -6563,12 +6563,35 @@ assert_issue_usage_error() {
         "$(issue_entry 3 OPEN "on-hold" ON-HOLD)" \
         "$(issue_entry 4 OPEN "both" "on hold" BLOCKED)" \
         "$(issue_entry 5 OPEN "neither" Blocked-by-upstream "On Holding" "Hold")" \
-        "$(issue_entry 6 OPEN "both spellings" "On Hold" "on-hold" blocked)"
+        "$(issue_entry 6 OPEN "both spellings" "On Hold" "on-hold" blocked)" \
+        "$(issue_entry 7 OPEN "upper case" "ON HOLD")" \
+        "$(issue_entry 8 OPEN "mixed case" "on-Hold" "bLoCkEd")" \
+        "$(issue_entry 9 OPEN "other spellings" On_Hold OnHold "On  Hold" "Blocked " Unblocked)"
     run_issue_list
     [ "${status}" -eq 0 ]
     local expected=$'1\tblocked\n2\ton-hold\n3\ton-hold\n4\tblocked,on-hold\n5\t-\n6\tblocked,on-hold'
+    expected+=$'\n7\ton-hold\n8\tblocked,on-hold\n9\t-'
     [ "$(cut -f 1,3 <<< "${output}")" = "${expected}" ]
-    has_field_lines "${output}" 6 6
+    has_field_lines "${output}" 9 6
+}
+
+@test "issue list and issue plan-status agree on which labels make an issue Blocked, from the one definition both use" {
+    local label flag blocked
+    for label in Blocked blocked BLOCKED Blocked-by-upstream Unblocked "On Hold" On-Hold; do
+        case "${label,,}" in
+            blocked) flag=blocked blocked=yes ;;
+            "on hold" | on-hold) flag=on-hold blocked=no ;;
+            *) flag=- blocked=no ;;
+        esac
+        write_issue_list "$(issue_entry 7 OPEN "A title" "${label}")"
+        run_issue_list
+        [ "${status}" -eq 0 ]
+        [ "$(cut -f 3 <<< "${output}")" = "${flag}" ] || { echo "list ${label}: ${output}" >&2; return 1; }
+        write_issue 7 "A title" OPEN "The request." "${label}"
+        run_issue_read plan-status --issue 7
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "$(plan_status_head no "${blocked}")" ] || { echo "plan-status ${label}: ${output}" >&2; return 1; }
+    done
 }
 
 @test "issue list prints nothing and exits 0 when there is no open issue" {
