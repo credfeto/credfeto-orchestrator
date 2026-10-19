@@ -2185,8 +2185,11 @@ readonly ISSUE_LIST_LIMIT=1000
 # issue it is given, and label_list those names comma-joined, made printable by field once the
 # whole is joined.
 readonly LABEL_LIST_DEF='def label_names: [.labels[].name]; def label_list: label_names | join(",");'
+# PRIORITIES joined by spaces (no priority holds one), so the row pattern below takes its priorities
+# from PRIORITIES, as the issue list program does, rather than a copy of them.
+readonly PRIORITY_NAMES="${PRIORITIES[*]}"
 # A row of issue list: six fields, none empty, the second a priority and the third a flags value.
-readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t(Security|Urgent|High|Medium|Low|-)\t(-|blocked|on-hold|blocked,on-hold)\t[^\t]+\t[^\t]+\t[^\t]+$'
+readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t('"${PRIORITY_NAMES// /|}"$'|-)\t(-|blocked|on-hold|blocked,on-hold)\t[^\t]+\t[^\t]+\t[^\t]+$'
 
 # Prints the jq program of issue list: the number of issues on its first line, then a row for each,
 # highest priority first and then by number. The priorities are written into the program from
