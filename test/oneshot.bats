@@ -9762,7 +9762,7 @@ STUBEOF
     [ "${RATE_LIMIT_ISSUE_TITLE}" = "oneshot: Unparseable Claude rate-limit reset time" ]
 }
 
-@test "the rate-limit tracker issue title has the shape the in-repository cfwf requires of a title in the repository it is filed in, or cfwf would refuse to file it" {
+@test "the rate-limit tracker repository is one whose issue titles the in-repository cfwf checks, so the check is not passed trivially, and the tracker title has the shape cfwf requires there" {
     run bash -c 'source "$1"; CURRENT_COMMAND="issue create"; title_check_applies "$3" && check_title_shape "$2" "$3"' \
         _ "${CFWF_SCRIPT}" "${RATE_LIMIT_ISSUE_TITLE}" "${RATE_LIMIT_ISSUE_REPO}"
     [ "${status}" -eq 0 ]
