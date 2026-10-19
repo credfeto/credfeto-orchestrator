@@ -2208,19 +2208,21 @@ readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t('"${PRIORITY_NAMES// /|}"$'|-)\t(-|b
 readonly PRIORITY_ARRAY_ITEMS="\"${PRIORITY_NAMES// /\",\"}\""
 # The jq program of issue list: the number of issues on its first line, then a row for each,
 # highest priority first and then by number. The priorities are written into the program from
-# PRIORITIES, as jq array literals, so nothing of the caller's is in it. Every value goes through
-# field, so no title or label can add a line or a field and none is empty.
+# PRIORITIES, as one jq array literal, so nothing of the caller's is in it; each is matched
+# lower-cased and printed as written. Each issue's rank is worked out once, before the sort, from
+# its label names lower-cased once. Every value goes through field, so no title or label can add a
+# line or a field and none is empty.
 ISSUE_LIST_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF}"
-ISSUE_LIST_PROGRAM+=' def lowered_label_names: label_names | map(ascii_downcase);'
-ISSUE_LIST_PROGRAM+=" def rank: lowered_label_names as \$names | [[${PRIORITY_ARRAY_ITEMS,,}] | to_entries[] | .value as \$priority"
-# $names and $priority are jq variables, not shell ones.
-# shellcheck disable=SC2016
-ISSUE_LIST_PROGRAM+=' | select($names | index($priority) != null) | .key] | .[0] // '"${#PRIORITIES[@]};"
 ISSUE_LIST_PROGRAM+=' def flags: [(if is_blocked then "blocked" else empty end),'
 ISSUE_LIST_PROGRAM+=' (if is_on_hold then "on-hold" else empty end)] | join(",");'
-ISSUE_LIST_PROGRAM+=' sort_by([rank, .number]) | (length | tostring), (.[] | [(.number | field),'
-ISSUE_LIST_PROGRAM+=" ([${PRIORITY_ARRAY_ITEMS}][rank] | field), (flags | field), ([.assignees[].login] | join(\",\") | field),"
-ISSUE_LIST_PROGRAM+=' (.title | field), (label_list | field)] | join("\t"))'
+ISSUE_LIST_PROGRAM+=" [${PRIORITY_ARRAY_ITEMS}] as \$priorities"
+ISSUE_LIST_PROGRAM+=" | (\$priorities | map(ascii_downcase) | to_entries) as \$lowered"
+ISSUE_LIST_PROGRAM+=" | map((label_names | map(ascii_downcase)) as \$names"
+ISSUE_LIST_PROGRAM+=" | {rank: ([\$lowered[] | .value as \$priority | select(\$names | index(\$priority) != null) | .key]"
+ISSUE_LIST_PROGRAM+=" | .[0] // (\$priorities | length)), issue: .})"
+ISSUE_LIST_PROGRAM+=" | sort_by([.rank, .issue.number]) | (length | tostring), (.[] | .rank as \$rank | .issue"
+ISSUE_LIST_PROGRAM+=" | [(.number | field), (\$priorities[\$rank] | field), (flags | field),"
+ISSUE_LIST_PROGRAM+=' ([.assignees[].login] | join(",") | field), (.title | field), (label_list | field)] | join("\t"))'
 readonly ISSUE_LIST_PROGRAM
 
 # Lists the open issues of REPO in one read. Nothing is printed until the whole answer has been
