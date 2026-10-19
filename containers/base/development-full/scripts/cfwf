@@ -1225,7 +1225,9 @@ matches_pattern() {
 # and the rule $4 it broke but never the value: a free-text value such as a title can hold a token,
 # and a usage error comes before the leak check, so echoing it would be the leak. The match is made
 # in the C locale, as the leak rules are, so a byte that is not valid UTF-8 gets the same answer
-# whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule.
+# whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule. The one
+# exception is a title whose text is only such bytes and whitespace: has_visible_text, which classes
+# in C.UTF-8, finds no visible character there, so check_title_shape refuses it as a usage error.
 validate() {
     local value="$1" pattern="$2" flag="$3" rule="$4"
     matches_pattern "${value}" "${pattern}" || usage_error "invalid value for ${flag}: ${rule}"
@@ -1615,9 +1617,10 @@ utf8_locale_available() {
     [ "${#accented}" -eq 1 ]
 }
 
-# Called just before a length is counted in C.UTF-8 (validate_visible_text and check_body_for_leaks),
-# so a host without it is refused rather than left to count bytes and turn away a valid multi-byte
-# title, label or body. Nothing else needs the locale, so --help and usage errors still work.
+# Called just before a length is counted or a character classed in C.UTF-8 (validate_visible_text,
+# has_visible_text and check_body_for_leaks), so a host without it is refused rather than left to
+# count or class bytes and judge a valid multi-byte title, label or body wrongly. Nothing else
+# needs the locale, so --help and usage errors still work.
 require_utf8_locale() {
     utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
 }
@@ -2032,8 +2035,22 @@ label_create_failed() {
 readonly TITLE_CHECK_OWNERS=(credfeto funfair-tech)
 # "prefix: text" or "prefix(name): text" with a lower-case prefix; a single hyphen may join two
 # parts of the prefix, as in create-project. The name holds no bracket or colon and does not start
-# or end with whitespace. Neither the name nor the text is case-checked.
-readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9]*(-[a-z0-9]+)*(\([^():[:space:]]([^():]*[^():[:space:]])?\))?: +[^[:space:]]'
+# or end with whitespace. Neither the name nor the text is case-checked. The text, the last group,
+# is only captured here: this is matched byte by byte in the C locale, where the first byte of a
+# multi-byte space looks like text, so check_title_shape asks has_visible_text about it instead.
+readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9]*(-[a-z0-9]+)*(\([^():[:space:]]([^():]*[^():[:space:]])?\))?: +(.*)$'
+readonly TITLE_SHAPE_RULE='it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
+# One character that is not whitespace in C.UTF-8. Its [:space:] takes in multi-byte spaces such as
+# U+3000 but not the no-break spaces U+00A0, U+2007 and U+202F, so those are listed here, as bytes.
+readonly VISIBLE_CHARACTER_PATTERN=$'[^[:space:]\302\240\342\200\207\342\200\257]'
+
+# Succeeds when $1 holds a character that is not whitespace, judged in C.UTF-8 so that a multi-byte
+# space such as U+3000 or U+00A0 counts as whitespace and a non-ASCII letter counts as text.
+has_visible_text() {
+    require_utf8_locale
+    local LC_ALL=C.UTF-8
+    [[ "$1" =~ ${VISIBLE_CHARACTER_PATTERN} ]]
+}
 
 # Succeeds when the repository $1 (owner/repo) belongs to one of TITLE_CHECK_OWNERS.
 title_check_applies() {
@@ -2043,11 +2060,12 @@ title_check_applies() {
 }
 
 # Refuses (exit 2) the title $1 for the repository $2 unless it has the title shape, never echoing
-# the title, since this runs before the leak check.
+# the title, since this runs before the leak check. The text after the prefix must hold a visible
+# character, so a title such as "fix: " followed only by U+3000 is refused.
 check_title_shape() {
     title_check_applies "$2" || return 0
-    validate "$1" "${TITLE_SHAPE_PATTERN}" --title \
-        'it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
+    validate "$1" "${TITLE_SHAPE_PATTERN}" --title "${TITLE_SHAPE_RULE}"
+    has_visible_text "${BASH_REMATCH[-1]}" || usage_error "invalid value for --title: ${TITLE_SHAPE_RULE}"
 }
 
 issue_create() {

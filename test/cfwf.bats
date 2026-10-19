@@ -2088,6 +2088,49 @@ assert_title_shape_refused() {
     done
 }
 
+@test "issue create refuses a title whose text after the prefix is only multi-byte spaces, such as U+3000 or U+00A0, and never echoes it" {
+    prepare_issue_create
+    local title
+    # U+3000, U+00A0, U+202F, U+2007, and a mix of them with ASCII spaces.
+    for title in $'fix: \343\200\200' $'fix: \302\240' $'fix: \342\200\257' $'fix: \342\200\207' \
+        $'tool(cfwf):  \343\200\200 \302\240 '; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+}
+
+@test "issue create accepts a title whose text after the prefix starts with a non-ASCII letter or follows a multi-byte space" {
+    prepare_issue_create
+    local title
+    # e-acute, a CJK ideograph, and a letter after U+3000 and after U+00A0.
+    for title in $'fix: \303\251t\303\251' $'fix: \346\274\242\345\255\227' $'fix: \343\200\200x' $'fix(a): \302\240x'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
+@test "issue create refuses for its shape a title whose text after the prefix is only invalid UTF-8, and leaves mixed text to the leak check" {
+    prepare_issue_create
+    local title
+    # In C.UTF-8 a byte that is not valid UTF-8 is not a character, so it is not visible text either.
+    for title in $'fix: \377' $'fix: \200' $'tool(cfwf):  \300 \377 '; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+
+    # A visible character beside the invalid byte passes the shape check and is refused by the leak check.
+    for title in $'fix: \200x' $'fix: x\377'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 8 ] || { echo "'${title}' exited ${status}: ${stderr}" >&2; return 1; }
+        [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
+        [ -z "${output}" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
 @test "a title refused for its shape is never echoed, wherever --repo is given, since a usage error comes before the leak check" {
     prepare_issue_create
     local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
