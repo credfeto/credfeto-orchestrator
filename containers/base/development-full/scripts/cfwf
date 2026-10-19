@@ -477,9 +477,10 @@ each.
 --text   Always required: the words to search for. It must be letters, digits, spaces and
          - _ . # ' only, so no qualifier (no colon), no quoted phrase, no grouping and no
          other search syntax can be added. It must hold a letter or a digit. AND, OR and NOT
-         are refused as whole words, in any case, because they are search operators that could
-         take the search beyond the repository. A - before a word leaves out the issues that
-         hold it, which only narrows the search.
+         are refused as whole words in upper case, the only case GitHub reads as search
+         operators, which could take the search beyond the repository; and, or and not in lower
+         or mixed case are plain words. A - before a word leaves out the issues that hold it,
+         which only narrows the search.
 --state  open, closed or all. The default is open.
 --limit  The most issues to print, from 1 to ${ISSUE_SEARCH_LIMIT_MAX}. The default is ${ISSUE_SEARCH_LIMIT_DEFAULT}.
 --json, --jq, --search, --label, --author, --assignee and --web are not options: the output
@@ -2239,9 +2240,10 @@ readonly SEARCH_QUERY_LIMIT=256
 # added, and without quotes or brackets no phrase or grouping, so the words cfwf puts after its own
 # repo: qualifier can never take the search to another repository.
 readonly SEARCH_TEXT_PATTERN=$'^[A-Za-z0-9 _.#\'-]+$'
-# AND, OR and NOT as whole words, matched on the lower-cased text: GitHub's issue search reads them
-# as operators, and one could bind the words to the repo: qualifier differently from how they read.
-readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(and|or|not)([^A-Za-z0-9_]|$)'
+# AND, OR and NOT as whole words, matched on the text as given: GitHub's issue search reads only the
+# upper-case forms as operators (lower and mixed case are plain words), and an operator could bind
+# the words to the repo: qualifier differently from how they read.
+readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(AND|OR|NOT)([^A-Za-z0-9_]|$)'
 # The jq program of issue search: the number of issues on its first line, then a row for each, in
 # the order the search returned them.
 readonly ISSUE_SEARCH_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF}"' (length | tostring), (.[] | [(.number | field), (.state | field), (.title | field), (label_list | field)] | join("\t"))'
@@ -2259,7 +2261,7 @@ assign_issue_search_option() {
             assign_once SEARCH_TEXT "${flag}"
             validate "${value}" "${SEARCH_TEXT_PATTERN}" "${flag}" "it must be letters, digits, spaces and - _ . # ' only"
             validate "${value}" '[A-Za-z0-9]' "${flag}" "it must hold a letter or a digit"
-            ! matches_pattern "${value,,}" "${SEARCH_OPERATOR_PATTERN}" \
+            ! matches_pattern "${value}" "${SEARCH_OPERATOR_PATTERN}" \
                 || usage_error "invalid value for ${flag}: it must not hold AND, OR or NOT, which are search operators"
             SEARCH_TEXT="${value}"
             ;;
