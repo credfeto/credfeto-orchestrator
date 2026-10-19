@@ -474,13 +474,16 @@ Searches one repository's issues for words in their title or body, in a single r
 each.
 
 --repo   Always required; never taken from the current directory.
---text   Always required: the words to search for. It must be letters, digits, spaces and
-         - _ . # ' only, so no qualifier (no colon), no quoted phrase, no grouping and no
-         other search syntax can be added. It must hold a letter or a digit. AND, OR and NOT
-         are refused as whole words in upper case, the only case GitHub reads as search
-         operators, which could take the search beyond the repository; and, or and not in lower
-         or mixed case are plain words. A - before a word leaves out the issues that hold it,
-         which only narrows the search.
+--text   Always required: the words to search for, such as an issue title as it is. It must be
+         printable ASCII, with no control character, and hold a letter or a digit. Each
+         character other than a letter, a digit, a space and - _ . # ' is sent as a space,
+         as are runs of spaces as one, so cfwf: add issue list searches for cfwf add issue
+         list: GitHub splits words on that punctuation anyway, and with no colon, quote or
+         bracket left no qualifier, quoted phrase, grouping or other search syntax can be
+         added. AND, OR and NOT are refused as whole words in upper case, the only case GitHub
+         reads as search operators, which could take the search beyond the repository; and, or
+         and not in lower or mixed case are plain words. A - before a word leaves out the
+         issues that hold it, which only narrows the search.
 --state  open, closed or all. The default is open.
 --limit  The most issues to print, from 1 to ${ISSUE_SEARCH_LIMIT_MAX}. The default is ${ISSUE_SEARCH_LIMIT_DEFAULT}.
 --json, --jq, --search, --label, --author, --assignee and --web are not options: the output
@@ -488,8 +491,9 @@ has one fixed format.
 
 cfwf adds "in:title,body" before the words, so the search only looks in titles and bodies, and
 gh adds the repository itself, so the search never leaves it. The words must be at most
-${SEARCH_TEXT_LIMIT} characters. They are also checked for a token, as a body is (see
-'cfwf help body'), because the search passes through any proxy and into GitHub's logs.
+${SEARCH_TEXT_LIMIT} characters, counted as they are sent. Both the text as given and the words are
+also checked for a token, and the text for a host path, as a body is (see 'cfwf help body'),
+because the search passes through any proxy and into GitHub's logs.
 
 Output, tab separated, in the order the search returned them, never re-sorted, with no header
 and no summary:
@@ -508,8 +512,8 @@ Search is eventually consistent: an issue created or changed seconds ago may not
 Words are matched as GitHub splits them, so a title tag such as tool(cfwf): is not matched by
 the word cfwf; to find issues by title tag, filter the output of 'cfwf issue list' instead.
 
-Exit codes: 0 searched, no match included (nothing is printed); ${BODY_REFUSED_EXIT} the --text holds a token, with
-"cfwf: text refused: token" on stderr; 1 a runtime failure, such as a gh or network error or a
+Exit codes: 0 searched, no match included (nothing is printed); ${BODY_REFUSED_EXIT} the --text holds a token or a
+host path, with "cfwf: text refused: token" or "cfwf: text refused: host path" on stderr; 1 a runtime failure, such as a gh or network error or a
 repository that is not found, prefixed "cfwf:"; 2 a usage error, which names the rule --text
 broke but never its value.
 USAGE
@@ -2242,22 +2246,49 @@ readonly ISSUE_SEARCH_LIMIT_MAX=100
 # take nothing from it. It is cfwf's own cap at the figure GitHub documents for a search: the GraphQL
 # search gh issue list runs took over 1000 characters when tried.
 readonly SEARCH_TEXT_LIMIT=256
-# The characters --text may hold. Without a colon no qualifier (repo:, org:, is:, in:) can be
-# added, and without quotes or brackets no phrase or grouping, so the words, which gh puts in brackets
-# before its own repo: qualifier, can never take the search to another repository.
-readonly SEARCH_TEXT_PATTERN=$'^[A-Za-z0-9 _.#\'-]+$'
-# AND, OR and NOT as whole words, matched on the text as given: GitHub's issue search reads only the
-# upper-case forms as operators (lower and mixed case are plain words), and an operator could bind
-# the words to the qualifiers differently from how they read.
+# --text must be printable ASCII (0x20 to 0x7E; matches_pattern matches in the C locale). A control
+# character or a byte above ASCII (an accented letter, a no-break space, invalid UTF-8) is refused,
+# not turned into a space: GitHub does not split words on it, so a space would silently cut a word
+# in two (cafe with an accent would search for caf) rather than only dropping a separator.
+readonly SEARCH_TEXT_PATTERN='^[[:print:]]*$'
+# The characters kept in the words as they are; every other printable ASCII character is turned
+# into a space (search_words). Letters, digits and the space are words and their separator. _ . # '
+# have no meaning outside a qualifier's value (.. is a range only after one), and # finds #123. A -
+# before a word leaves out the issues that hold it, which only narrows the search, so it is kept.
+# Each character turned into a space is punctuation GitHub's search already splits words on, so the
+# words searched are the ones the text holds, while its search meaning is gone: : starts a qualifier
+# (repo:, org:, is:, in:, author:), so with none left no qualifier can be added; " quotes a phrase;
+# ( and ) group, which matters because gh puts the words in brackets before its own repo:
+# qualifier; < > = compare and @ (@me) and , (a list) and * only mean anything inside a qualifier's
+# value; the rest (/ + ; | \ ~ ! $ % & ? ` [ ] { }) are plain punctuation. So the words can never
+# take the search to another repository.
+readonly SEARCH_WORD_CHARACTERS=$'A-Za-z0-9 _.#\'-'
+# AND, OR and NOT as whole words, matched on the words cfwf sends: GitHub's issue search reads only
+# the upper-case forms as operators (lower and mixed case are plain words), and an operator could
+# bind the words to the qualifiers differently from how they read.
 readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(AND|OR|NOT)([^A-Za-z0-9_]|$)'
 # The jq program of issue search: the number of issues on its first line, then a row for each, in
 # the order the search returned them.
 readonly ISSUE_SEARCH_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF}"' (length | tostring), (.[] | [(.number | field), (.state | field), (.title | field), (label_list | field)] | join("\t"))'
 # A row of issue search: four fields, none empty, the second a state.
 readonly ISSUE_SEARCH_ROW_PATTERN=$'^[0-9]+\t(OPEN|CLOSED)\t[^\t]+\t[^\t]+$'
+# The words cfwf sends for --text: SEARCH_TEXT, the text as given with every character outside
+# SEARCH_WORD_CHARACTERS turned into a space and the spaces between words collapsed to one, and
+# SEARCH_TEXT_GIVEN, the text as given, which the leak rules are applied to.
 SEARCH_TEXT=""
+SEARCH_TEXT_GIVEN=""
 SEARCH_STATE=""
 SEARCH_LIMIT=""
+
+# Prints the printable ASCII text $1 as the words to search for: each character outside
+# SEARCH_WORD_CHARACTERS a space, then one space between words and none at either end. The text
+# has no tab or newline, so read splits it on spaces alone.
+search_words() {
+    local LC_ALL=C
+    local -a words
+    read -ra words <<< "${1//[^${SEARCH_WORD_CHARACTERS}]/ }"
+    printf '%s\n' "${words[*]}"
+}
 
 assign_issue_search_option() {
     local flag="$1" value="$2"
@@ -2265,11 +2296,12 @@ assign_issue_search_option() {
         --repo) assign_repository_option "${flag}" "${value}" ;;
         --text)
             assign_once SEARCH_TEXT "${flag}"
-            validate "${value}" "${SEARCH_TEXT_PATTERN}" "${flag}" "it must be letters, digits, spaces and - _ . # ' only"
+            validate "${value}" "${SEARCH_TEXT_PATTERN}" "${flag}" "it must be printable ASCII, with no control character"
             validate "${value}" '[A-Za-z0-9]' "${flag}" "it must hold a letter or a digit"
-            ! matches_pattern "${value}" "${SEARCH_OPERATOR_PATTERN}" \
+            SEARCH_TEXT_GIVEN="${value}"
+            SEARCH_TEXT=$(search_words "${value}")
+            ! matches_pattern "${SEARCH_TEXT}" "${SEARCH_OPERATOR_PATTERN}" \
                 || usage_error "invalid value for ${flag}: it must not hold AND, OR or NOT, which are search operators"
-            SEARCH_TEXT="${value}"
             ;;
         --state)
             assign_once SEARCH_STATE "${flag}"
@@ -2301,13 +2333,20 @@ issue_search() {
     require SEARCH_TEXT --text
     SEARCH_STATE="${SEARCH_STATE:-open}"
     SEARCH_LIMIT="${SEARCH_LIMIT:-${ISSUE_SEARCH_LIMIT_DEFAULT}}"
-    # The text is ASCII, so its length in bytes is in characters.
+    # The words are ASCII, so their length in bytes is in characters. It is the words sent that are
+    # counted, so a title's punctuation and doubled spaces take nothing from it.
     [ "${#SEARCH_TEXT}" -le "${SEARCH_TEXT_LIMIT}" ] \
         || usage_error "invalid value for --text: it is too long: it must be at most ${SEARCH_TEXT_LIMIT} characters"
     # gh sends "( <query> ) repo:<owner/repo> type:issue" and its state, so it scopes the search to
     # --repo itself. The query starts with in:, so gh can never read it as a flag.
     query="in:title,body ${SEARCH_TEXT}"
+    # A token is looked for in both the text as given and the words: turning punctuation into
+    # spaces can hide a shape in one (https://user:secret@host is sent as https user secret host)
+    # and form it in the other (Bearer(x) is sent as Bearer x), and either way the secret is sent.
+    # A host path needs a /, which the words never hold, so only the text as given is checked for one.
+    ! matches_pattern "${SEARCH_TEXT_GIVEN}" "${TOKEN_PATTERN}" || refuse_text text token
     ! matches_pattern "${SEARCH_TEXT}" "${TOKEN_PATTERN}" || refuse_text text token
+    ! matches_pattern "${SEARCH_TEXT_GIVEN}" "${HOST_PATH_PATTERN}" || refuse_text text "host path"
     require_gh
     unexpected="gh returned an unexpected result for the search of the issues of ${REPO}"
     gh_capture issue list --repo "${REPO}" --state "${SEARCH_STATE}" --search "${query}" --limit "$((SEARCH_LIMIT + 1))" \
