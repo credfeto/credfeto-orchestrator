@@ -2069,7 +2069,7 @@ assert_title_shape_refused() {
     local title
     for title in "oneshot: X" "create-project: X" "tool(cfwf): X" "hook(enforce-curl-host): X" "fix: x" "fix(oneshot): x" \
         "learning: x" "audit: x" "py3: x" "tool(Some Name): x" "tool(a b): x" "repo: lower case text" "repo: --flag first" \
-        "repo: $(printf '\303\251') first" "repo:   three spaces"; do
+        "repo: $(printf '\303\251') first" "repo:   three spaces" "tool(a): x" "pre-commit-check: x"; do
         run_titled_create "${REPO}" "${title}"
         [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
         [ "${output}" = "${NEW_ISSUE_URL}" ]
@@ -2081,7 +2081,8 @@ assert_title_shape_refused() {
     local title
     for title in "Add a thing" "Audit: x" "fIx: x" "3d: x" "-fix: x" "fix_it: x" "fix.it: x" "fix:x" "fix:" "fix:   " \
         "tool(): x" "tool( a): x" "tool(a(b)): x" "tool(a: x" "tool(a)(b): x" "fix (a): x" "fix : x" " fix: x" \
-        "Fix the thing: now" "feat!: x" ": x"; do
+        "Fix the thing: now" "feat!: x" ": x" "a-: x" "fix-: x" "a--b: x" "tool(a ): x" "tool(a: b): x" "tool(a:b): x" \
+        "tool(a)): x"; do
         run_titled_create "${REPO}" "${title}"
         assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
     done
