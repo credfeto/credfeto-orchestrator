@@ -683,6 +683,54 @@ teardown() {
     [ ! -f "${TEST_TMP}/claude_log" ]
 }
 
+@test "main resets the PR idle counter but keeps the total after a successful non-agentic rebase (#1664)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()        { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"MERGEABLE","mergeStateStatus":"BEHIND"}\n'; }
+    fingerprint_pr_json()  { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    save_pr_invocation_counts 5 7 3
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #5 in org/repo rebased non-agentically — idle budget reset"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 0 ]
+}
+
+@test "main leaves the PR invocation counters alone when the non-agentic rebase conflicts (#1664)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json()        { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/test","comments":[],"reviews":[],"statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}\n'; }
+    fingerprint_pr_json()  { printf 'fp-new\n'; }
+    load_pr_fingerprint()  { printf 'fp-old\n'; }
+    try_nonagentic_rebase() { return 1; }
+    # Stop at the rate-limit gate straight after the hand-off, so no agent session runs and any
+    # change to the counters could only have come from the rebase path itself.
+    is_owner_rate_limited() { return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    save_pr_invocation_counts 5 7 3
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Non-agentic rebase of PR #5 in org/repo had conflicts — handing off to agent"* ]]
+    [[ "${output}" != *"idle budget reset"* ]]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+
+    load_pr_invocation_counts 5
+    [ "${PR_INVOCATION_TOTAL}" -eq 7 ]
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+}
+
 @test "main passes BEHIND merge state and branch name to build_pr_claude_md" {
     setup_main_mocks
     fetch_all_priorities() {
