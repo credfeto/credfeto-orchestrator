@@ -355,9 +355,10 @@ Creates an issue and puts it on the repository's Workflow board in one step, as 
              without regard to case). It is applied as the issue's priority label.
 --title      The issue title. It is checked for leaks as the body is. In a repository owned by
              credfeto or funfair-tech (owner matched without regard to case) it must be
-             "prefix: text" or "prefix(name): text" with a lower-case prefix (letters, digits
-             and -, starting with a letter), for example "oneshot: ..." or "tool(cfwf): ...";
-             any other title is a usage error (exit 2), and there is no option to skip it.
+             "prefix: text" or "prefix(name): text" with a lower-case prefix (letters and
+             digits, starting with a letter, with single - between parts), for example
+             "oneshot: ..." or "tool(cfwf): ..."; any other title is a
+             usage error (exit 2), and there is no option to skip it.
 --body-file  The issue body: a regular file, or - to read it from stdin (a pipe or /dev/stdin is
              not a regular file; use -). An empty body is an error. It is read once, into a
              private copy that is both checked and posted, so a later change to the file is
@@ -2029,9 +2030,10 @@ label_create_failed() {
 # The owners whose repositories take only titles of the shape TITLE_SHAPE_PATTERN. Hard-coded, with
 # no environment variable or option, because either would be a way to skip the check.
 readonly TITLE_CHECK_OWNERS=(credfeto funfair-tech)
-# "prefix: text" or "prefix(name): text" with a lower-case prefix; the hyphen is allowed for
-# prefixes such as create-project, and neither the name nor the text is case-checked.
-readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9-]*(\([^()[:space:]][^()]*\))?: +[^[:space:]]'
+# "prefix: text" or "prefix(name): text" with a lower-case prefix; a single hyphen may join two
+# parts of the prefix, as in create-project. The name holds no bracket or colon and does not start
+# or end with whitespace. Neither the name nor the text is case-checked.
+readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9]*(-[a-z0-9]+)*(\([^():[:space:]]([^():]*[^():[:space:]])?\))?: +[^[:space:]]'
 
 # Succeeds when the repository $1 (owner/repo) belongs to one of TITLE_CHECK_OWNERS.
 title_check_applies() {
