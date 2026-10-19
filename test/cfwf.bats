@@ -6389,7 +6389,8 @@ ISSUE_LIST_USAGE="Usage: cfwf issue list --repo <owner/repo>"
 ISSUE_SEARCH_USAGE="Usage: cfwf issue search --repo <owner/repo> --text <words> [--state open|closed|all] [--limit <n>]"
 ISSUE_LIST_UNEXPECTED="cfwf: gh returned an unexpected result for the open issues of ${REPO}"
 ISSUE_SEARCH_UNEXPECTED="cfwf: gh returned an unexpected result for the search of the issues of ${REPO}"
-SEARCH_PREFIX="repo:${REPO} in:title,body"
+# The only qualifier cfwf adds: gh adds the repository itself.
+SEARCH_PREFIX="in:title,body"
 SEARCH_WARNING_OF_2="cfwf: warning: more than 2 issues match; only the first 2 are printed"
 
 # One issue as gh issue list --json gives it: its number $1 (JSON, so a test can give one that is
@@ -6457,8 +6458,7 @@ run_issue_search() {
         [[ "${output}" == *"AND, OR and NOT"$'\n'"         are refused as whole words in upper case"* ]]
         [[ "${output}" == *"open, closed or all. The default is open."* ]]
         [[ "${output}" == *"from 1 to 100. The default is 30."* ]]
-        [[ "${output}" == *"cfwf adds \"repo:<owner/repo> in:title,body\" before the words itself, so the search never"$'\n'"leaves the repository"* ]]
-        [[ "${output}" == *"at most 256 characters"* ]]
+        [[ "${output}" == *"cfwf adds \"in:title,body\" before the words, so the search only looks in titles and bodies, and"$'\n'"gh adds the repository itself, so the search never leaves it. The words must be at most"$'\n'"256 characters."* ]]
         [[ "${output}" == *"in the order the search returned them, never re-sorted"* ]]
         [[ "${output}" == *"\"cfwf: warning: more than <n> issues match; only the first <n> are printed\", and the exit code is"$'\n'"still 0."* ]]
         [[ "${output}" == *"Search is eventually consistent"* ]]
@@ -6796,21 +6796,26 @@ assert_issue_usage_error() {
     done
 }
 
-@test "issue search refuses a --text that is too long once the repository qualifier is added, at exactly one character over" {
+@test "issue search takes a --text of up to 256 characters, counting the words alone, and refuses one character over" {
     write_issue_list
-    local fits
-    # The query is the qualifier, a space and the text, at most 256 characters.
-    fits="$(head -c "$((256 - ${#SEARCH_PREFIX} - 1))" < /dev/zero | tr '\0' a)"
+    local fits long_repo
+    # Only the words are counted, never the qualifiers cfwf and gh add, so 256 characters of words
+    # are passed on whole even with a long repository name.
+    fits="$(head -c 256 < /dev/zero | tr '\0' a)"
     run_issue_search --text "${fits}"
     [ "${status}" -eq 0 ]
     [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${fits} --limit")" -eq 1 ]
+    long_repo="$(head -c 39 < /dev/zero | tr '\0' o)/$(head -c 60 < /dev/zero | tr '\0' r)"
+    run --separate-stderr "${SCRIPT}" issue search --repo "${long_repo}" --text "${fits}"
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "issue list --repo ${long_repo} --state open --search ${SEARCH_PREFIX} ${fits} --limit")" -eq 1 ]
 
     rm -f "${GH_LOG}"
     run_issue_search --text "${fits}b"
-    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: with the repository qualifier the search must be at most 256 characters"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: it must be at most 256 characters"
     # The length is checked before the token: a text that is both is a usage error, not exit 8.
     run_issue_search --text "ghp_${fits}"
-    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: with the repository qualifier the search must be at most 256 characters"
+    assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it is too long: it must be at most 256 characters"
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -6826,7 +6831,7 @@ assert_issue_usage_error() {
     [ ! -f "${GH_LOG}" ]
 }
 
-@test "issue search asks gh for the repository's issues matching its own qualifier and the words, open by default, one more than --limit (30 by default)" {
+@test "issue search asks gh for the repository's issues matching in:title,body and the words, with no repo: of its own, open by default, one more than --limit (30 by default)" {
     write_issue_list "$(issue_entry 5 OPEN "an open one" Bug)" "$(issue_entry 6 CLOSED "a closed one")"
     run_issue_search --text "widget fails"
     [ "${status}" -eq 0 ]
@@ -6834,6 +6839,8 @@ assert_issue_usage_error() {
     [ "${output}" = "$(tab_row 5 OPEN "an open one" Bug)" ]
     [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
     [ "$(gh_call_count "issue list --repo ${REPO} --state open --search ${SEARCH_PREFIX} widget fails --limit 31 --json number,state,title,labels --jq ")" -eq 1 ]
+    # gh adds repo: itself, so cfwf never sends one.
+    [ "$(gh_call_count "repo:")" -eq 0 ]
 
     run_issue_search --text "widget" --state closed --limit 007
     [ "${status}" -eq 0 ]
