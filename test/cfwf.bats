@@ -6454,7 +6454,7 @@ run_issue_search() {
         [[ "${output}" == *$'\n'"  <number>  <OPEN|CLOSED>  <title>  <labels>"$'\n'* ]]
         [[ "${output}" == *"exactly four tab-separated fields and none is empty"* ]]
         [[ "${output}" == *"letters, digits, spaces and"$'\n'"         - _ . # ' only"* ]]
-        [[ "${output}" == *"AND, OR and NOT"$'\n'"         are refused as whole words"* ]]
+        [[ "${output}" == *"AND, OR and NOT"$'\n'"         are refused as whole words in upper case"* ]]
         [[ "${output}" == *"open, closed or all. The default is open."* ]]
         [[ "${output}" == *"from 1 to 100. The default is 30."* ]]
         [[ "${output}" == *"cfwf adds \"repo:<owner/repo> in:title,body\" before the words itself, so the search never"$'\n'"leaves the repository"* ]]
@@ -6755,7 +6755,7 @@ assert_issue_usage_error() {
     done
     # The character set is checked first: a text that also has no letter, or holds an operator, or
     # is too long, or holds a token, is refused under it.
-    for text in ":" "a:or" "OR:x" "ghp_abc123:x" "$(head -c 300 < /dev/zero | tr '\0' a):"; do
+    for text in ":" "a:OR" "OR:x" "ghp_abc123:x" "$(head -c 300 < /dev/zero | tr '\0' a):"; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "${charset}" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
@@ -6763,9 +6763,10 @@ assert_issue_usage_error() {
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must hold a letter or a digit" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
-    # The operator check comes before the length and token checks.
-    for text in "OR" "a OR b" "a and b" "Not a" "x -not" "a.or.b" "it's or" "AND" "nOt" "x-and-y" "a OR repo-marker" \
-        "ghp_abc123 or x" "$(head -c 300 < /dev/zero | tr '\0' a) or"; do
+    # The operator check comes before the length and token checks. Only the upper-case forms are
+    # operators to GitHub, so only they are refused.
+    for text in "OR" "a OR b" "a AND b" "NOT a" "x -NOT" "a.OR.b" "it's OR" "AND" "x-AND-y" "a OR repo-marker" \
+        "ghp_abc123 OR x" "$(head -c 300 < /dev/zero | tr '\0' a) OR"; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must not hold AND, OR or NOT, which are search operators" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
@@ -6776,6 +6777,18 @@ assert_issue_usage_error() {
     write_issue_list "$(issue_entry 5 OPEN "a title")"
     local text
     for text in notable order cannot "don't" "-foo" "#123" "a_b.c" "Android oregano" "and_or" "1535"; do
+        run_issue_search --text "${text}"
+        [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${text}" "${status}" "${stderr}" >&2; return 1; }
+        [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
+        [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${text} --limit")" -eq 1 ]
+    done
+}
+
+@test "issue search takes and, or and not as whole words in lower or mixed case, which GitHub reads as plain words, and passes each as it is" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local text
+    for text in "cannot read or write config" "token not refreshed" "a and b" "Not a" "nOt" "x -not" "a.or.b" "it's or" \
+        "x-and-y" "And Or Not" "oR aNd NoT"; do
         run_issue_search --text "${text}"
         [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${text}" "${status}" "${stderr}" >&2; return 1; }
         [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
