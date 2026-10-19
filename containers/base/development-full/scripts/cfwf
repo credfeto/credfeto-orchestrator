@@ -1943,7 +1943,7 @@ title_check_applies() {
 }
 
 # Refuses (exit 2) the title $1 for the repository $2 unless it has the title shape, never echoing
-# the title, since this runs before the leak check. Every command that sets a title calls it.
+# the title, since this runs before the leak check.
 check_title_shape() {
     title_check_applies "$2" || return 0
     validate "$1" "${TITLE_SHAPE_PATTERN}" --title \
