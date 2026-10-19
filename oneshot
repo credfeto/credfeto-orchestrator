@@ -248,6 +248,10 @@ main() {
     run_daily_digest_rollover "${owner_filter}"
 
     local items_json item_count fetch_rc
+    # Resolve the login here, not only inside fetch_all_priorities' command substitution, so
+    # _GH_ME stays cached for the rest of the run. A failure is not fatal: the feed is then
+    # fetched without the user parameter, and later per-item lookups retry the resolution.
+    resolve_gh_me || warn "Fetching priorities without the user parameter"
     info "Fetching priorities from ${PRIORITIES_URL}..."
     items_json=$(fetch_all_priorities)
     fetch_rc=$?

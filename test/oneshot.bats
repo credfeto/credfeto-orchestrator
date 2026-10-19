@@ -5534,6 +5534,7 @@ STUBEOF
 # --- fetch_all_priorities -----------------------------------------------------
 
 @test "fetch_all_priorities returns all open and draft non-on-hold items in API order" {
+    _GH_ME="testuser"
     make_stub curl 'printf '"'"'{"priorities":[
         {"id":3,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":3},
         {"id":1,"itemType":"Issue","repository":"org/repo","status":"Open","isOnHold":false,"priority":1},
@@ -5551,6 +5552,7 @@ STUBEOF
 }
 
 @test "fetch_all_priorities includes Draft items" {
+    _GH_ME="testuser"
     make_stub curl 'printf '"'"'{"priorities":[
         {"id":1,"itemType":"PullRequest","repository":"org/repo","status":"Draft","isOnHold":false,"priority":1},
         {"id":2,"itemType":"PullRequest","repository":"org/repo","status":"Open","isOnHold":false,"priority":2}
@@ -5564,6 +5566,7 @@ STUBEOF
 }
 
 @test "fetch_all_priorities returns empty array when no open items exist" {
+    _GH_ME="testuser"
     make_stub curl 'printf '"'"'{"priorities":[]}\n'"'"
     run fetch_all_priorities
     [ "${status}" -eq 0 ]
@@ -5571,6 +5574,7 @@ STUBEOF
 }
 
 @test "fetch_all_priorities includes items from multiple repositories" {
+    _GH_ME="testuser"
     make_stub curl 'printf '"'"'{"priorities":[
         {"id":10,"itemType":"Issue","repository":"org/repoA","status":"Open","isOnHold":false,"priority":1},
         {"id":20,"itemType":"Issue","repository":"org/repoB","status":"Open","isOnHold":false,"priority":2}
@@ -5585,6 +5589,7 @@ STUBEOF
 }
 
 @test "fetch_all_priorities retries and succeeds after a transient curl failure (#1089)" {
+    _GH_ME="testuser"
     PRIORITIES_FETCH_RETRY_ATTEMPTS=3
     PRIORITIES_FETCH_RETRY_DELAY_SECS=0
     # shellcheck disable=SC2016  # $n/$(...) are intentionally literal — evaluated inside the stub at run time
@@ -5596,6 +5601,7 @@ STUBEOF
 }
 
 @test "fetch_all_priorities returns 1 without dying after exhausting retries on a persistent curl failure (#1089)" {
+    _GH_ME="testuser"
     PRIORITIES_FETCH_RETRY_ATTEMPTS=2
     PRIORITIES_FETCH_RETRY_DELAY_SECS=0
     make_stub curl 'exit 1'
@@ -5605,12 +5611,83 @@ STUBEOF
 }
 
 @test "fetch_all_priorities returns 2 (not 1) without dying when the response is not valid JSON (#1089, #1171)" {
+    _GH_ME="testuser"
     PRIORITIES_FETCH_RETRY_ATTEMPTS=1
     PRIORITIES_FETCH_RETRY_DELAY_SECS=0
     make_stub curl 'printf "not json"'
 
     run fetch_all_priorities
     [ "${status}" -eq 2 ]
+}
+
+@test "fetch_all_priorities sends the resolved GitHub login as the user query parameter (#1570)" {
+    unset _GH_ME
+    make_stub gh 'printf "octocat\n"'
+    make_stub curl 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/curl_args"; printf "{\"priorities\":[]}\n"'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "[]" ]
+    grep -qF -- "${PRIORITIES_URL}?user=octocat" "${TEST_TMP}/curl_args"
+}
+
+@test "fetch_all_priorities URL-encodes special characters in the user query parameter (#1570)" {
+    _GH_ME='a b&c/d+e?f'
+    make_stub curl 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/curl_args"; printf "{\"priorities\":[]}\n"'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    grep -qF -- "${PRIORITIES_URL}?user=a%20b%26c%2Fd%2Be%3Ff" "${TEST_TMP}/curl_args"
+}
+
+@test "fetch_all_priorities fetches without the user query parameter when the login cannot be resolved (#1570)" {
+    unset _GH_ME
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    make_stub curl 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/curl_args"; printf "{\"priorities\":[]}\n"'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "[]" ]
+    [[ "$(cat "${TEST_TMP}/curl_args")" == *" ${PRIORITIES_URL}" ]]
+    [[ "$(cat "${TEST_TMP}/curl_args")" != *"user="* ]]
+}
+
+@test "fetch_all_priorities still returns 1 with the user query parameter set on a persistent curl failure (#1570)" {
+    _GH_ME="testuser"
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=2
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    make_stub curl 'exit 1'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to fetch priorities from ${PRIORITIES_URL}?user=testuser after 2 attempt(s)"* ]]
+}
+
+@test "fetch_all_priorities still returns 2 with the user query parameter set when the response is not valid JSON (#1570)" {
+    _GH_ME="testuser"
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=1
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    make_stub curl 'printf "not json"'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"Failed to parse priorities JSON from ${PRIORITIES_URL}?user=testuser"* ]]
+}
+
+@test "fetch_all_priorities still returns 1 without the user query parameter when the login cannot be resolved (#1570)" {
+    unset _GH_ME
+    GH_USER_RETRY_ATTEMPTS=1
+    GH_USER_RETRY_DELAY_SECS=0
+    PRIORITIES_FETCH_RETRY_ATTEMPTS=1
+    PRIORITIES_FETCH_RETRY_DELAY_SECS=0
+    make_stub gh 'exit 1'
+    make_stub curl 'exit 1'
+
+    run fetch_all_priorities
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to fetch priorities from ${PRIORITIES_URL} after 1 attempt(s)"* ]]
 }
 
 # --- find_open_nonblocked_pr_for_repo -----------------------------------------
@@ -7676,6 +7753,30 @@ STUBEOF
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Failed to fetch priorities"* ]]
     [ ! -f "${discord_log}" ]
+}
+
+@test "main resolves the GitHub login before fetching priorities so it stays cached for the run (#1570)" {
+    setup_main_mocks
+    unset _GH_ME
+    resolve_gh_me() { _GH_ME="resolved-login"; return 0; }
+    fetch_all_priorities() { printf 'me=%s\n' "${_GH_ME:-}" > "${TEST_TMP}/fetch_log"; printf '[]\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${TEST_TMP}/fetch_log")" = "me=resolved-login" ]
+}
+
+@test "main still fetches priorities and does not fail when the GitHub login cannot be resolved (#1570)" {
+    setup_main_mocks
+    unset _GH_ME
+    resolve_gh_me() { return 1; }
+    fetch_all_priorities() { printf 'called\n' > "${TEST_TMP}/fetch_log"; printf '[]\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [ -f "${TEST_TMP}/fetch_log" ]
+    [[ "${output}" == *"Fetching priorities without the user parameter"* ]]
+    [[ "${output}" == *"No open work items"* ]]
 }
 
 @test "main dies loudly when the priorities item count cannot be determined (#1089)" {

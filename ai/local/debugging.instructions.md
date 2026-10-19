@@ -306,9 +306,10 @@ Missing or malformed config causes Discord notifications to silently fail and GH
 
 ```bash
 curl --silent --fail https://git-workflow.markridgwell.com/priorities | jq '.'
+curl --silent --fail "https://git-workflow.markridgwell.com/priorities?user=$(gh api user --jq '.login' | jq -Rr '@uri')" | jq '.'
 ```
 
-Confirms whether the priorities API is reachable and returning valid JSON. An empty or malformed response will cause `oneshot` to exit early.
+Confirms whether the priorities API is reachable and returning valid JSON. An empty or malformed response will cause `oneshot` to exit early. `oneshot` requests the second form: when `resolve_gh_me` resolves the login `gh` is authenticated as, `fetch_all_priorities` appends it URL-encoded as the optional `user` query parameter so the feed can leave out items assigned to other users; when the login cannot be resolved it fetches the first form. The fetch and parse warnings name the URL actually requested. Compare both forms when items look missing from, or wrongly present in, a run.
 
 ## Interpreting Common Symptoms
 
