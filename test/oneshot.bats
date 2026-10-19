@@ -1860,6 +1860,49 @@ teardown() {
     grep -q "Last session's diagnostic:" "${call_log}"
 }
 
+@test "block_pr_for_idle_exhausted_no_progress gives the board status and the next phase due when there is a board (#1650)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    _WF_PROJECT_ID="PVT_test"
+    fetch_board_item_statuses() { return 0; }
+    board_substatus_for_item() { printf 'AI Security Review'; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "false" '{"statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+    grep -q "Blocking this PR until a human investigates. Board status: AI Security Review; next phase due: PHASE F (security review)." "${call_log}"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress says no phase is due when the board status names none (#1650)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    _WF_PROJECT_ID="PVT_test"
+    fetch_board_item_statuses() { return 0; }
+    board_substatus_for_item() { printf 'Complete'; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "false" '{"statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+    grep -q "Board status: Complete; next phase due: none (the board status names no phase)." "${call_log}"
+}
+
+@test "block_pr_for_idle_exhausted_no_progress leaves the board out when there is no board (#1650)" {
+    local call_log="${TEST_TMP}/gh_calls"
+    # shellcheck disable=SC2016
+    make_stub gh 'printf "%s\n" "$*" >> "'"${call_log}"'"; case "$*" in *"--json labels"*) printf "true\n" ;; esac; exit 0'
+    notify_discord_blocked_item() { :; }
+    _WF_PROJECT_ID=""
+    board_substatus_for_item() { printf 'AI Review'; }
+
+    run block_pr_for_idle_exhausted_no_progress 5 "org/repo" "false" '{"statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+    grep -q "pr comment 5 --repo org/repo --body This PR's automation idle-invocation budget" "${call_log}"
+    run grep -c "Board status:" "${call_log}"
+    [ "${output}" = "0" ]
+}
+
 # --- apply_blocked_label_with_reason (#1140 review) -----------------------------
 
 @test "apply_blocked_label_with_reason posts the reason as a comment and notifies with it on success" {
@@ -13459,19 +13502,26 @@ STUBEOF
     [ "${status}" -eq 0 ]
     [[ "${output}" != *"WF_PROJECT_ID"* ]]
     [[ "${output}" != *"WF_PLANNING"* ]]
+    [[ "${output}" != *"Workflow board: this repository has a Workflow board"* ]]
 }
 
-@test "build_issue_claude_md includes WF section when _WF_PROJECT_ID is set" {
+@test "build_issue_claude_md includes WF section with the cfwf commands and no raw board ids when _WF_PROJECT_ID is set (#1650)" {
     _WF_PROJECT_ID="PVT_test123"
     _WF_STATUS_FIELD_ID="PVTSSF_field456"
     _WF_OPTION_IDS[Planning]="opt_plan_id"
     _WF_OPTION_IDS[Development]="opt_dev_id"
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WF_PROJECT_ID=PVT_test123"* ]]
-    [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_field456"* ]]
-    [[ "${output}" == *"WF_PLANNING=opt_plan_id"* ]]
-    [[ "${output}" == *"WF_DEVELOPMENT=opt_dev_id"* ]]
+    [[ "${output}" == *"Its Status values, in order: Not Started, Planning, Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review, Complete."* ]]
+    [[ "${output}" == *"Set this issue's status:  cfwf workflow-status --set --repo ${REPO_FULL} --issue 42 --status \"<Status>\""* ]]
+    [[ "${output}" == *"Read this issue's status: cfwf workflow-status --check --repo ${REPO_FULL} --issue 42"* ]]
+    [[ "${output}" == *"Never update the board with gh project or gh api graphql; they are denied."* ]]
+    [[ "${output}" != *"PVT_"* ]]
+    [[ "${output}" != *"PVTSSF_"* ]]
+    [[ "${output}" != *"opt_plan_id"* ]]
+    [[ "${output}" != *"opt_dev_id"* ]]
+    [[ "${output}" != *"WF_PROJECT_ID"* ]]
+    [[ "${output}" != *"--pr 42"* ]]
 }
 
 @test "build_issue_claude_md without board uses comment-based approval fallback" {
@@ -13520,6 +13570,61 @@ STUBEOF
     run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"approval comment"* ]]
+}
+
+# --- cfwf board commands in the generated prompts (#1650) ----------------------
+
+@test "build_issue_claude_md gives the cfwf command where it moves the board to Planning and to Development (#1650)" {
+    _WF_PROJECT_ID="PVT_test123"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'update the Workflow board status to "Planning" with `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "Planning"`'* ]]
+    [[ "${output}" == *'update the Workflow board status to "Development" with `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "Development"`'* ]]
+}
+
+@test "build_pr_claude_md gives the matching cfwf command on every line that sets, advances or moves the board (#1650)" {
+    _WF_PROJECT_ID="PVT_test123"
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
+    [ "${status}" -eq 0 ]
+    local line target checked=0
+    while IFS= read -r line; do
+        while IFS= read -r target; do
+            [ -n "${target}" ] || continue
+            if [[ "${line}" != *"to \"${target}\" with \`cfwf workflow-status --set --repo ${REPO_FULL} --pr 7 --status \"${target}\"\`"* ]]; then
+                printf 'board move to %s without its cfwf command: %s\n' "${target}" "${line}"
+                return 1
+            fi
+            checked=$((checked + 1))
+        done < <(grep -oiE '(set|advance|move) the board( status)?( back)? to "[^"]+"' <<< "${line}" | sed -E 's/.*to "([^"]+)"$/\1/')
+    done <<< "${output}"
+    # PHASE C, D (three), E (two), F (two) and G (three).
+    [ "${checked}" -ge 11 ]
+}
+
+@test "prompts for a repository without a board contain no cfwf board command (#1650)" {
+    _WF_PROJECT_ID=""
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"cfwf workflow-status"* ]]
+    [[ "${output}" != *"If a Workflow board update is denied"* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"cfwf workflow-status"* ]]
+    [[ "${output}" != *"If a Workflow board update is denied"* ]]
+    [[ "${output}" == *'advance the board to "AI Review", post a one-line status comment'* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"cfwf workflow-status"* ]]
+}
+
+@test "the permission-denial rule says to retry a denied board update once with cfwf when there is a board (#1650)" {
+    _WF_PROJECT_ID="PVT_test123"
+    run build_issue_claude_md 42 "/resolved/.ai-instructions" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'search. If a Workflow board update is denied, retry it once as `cfwf workflow-status --set --repo '"${REPO_FULL}"' --issue 42 --status "<Status>"`; never hand-write GraphQL. If that form is also denied'* ]]
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *'If a Workflow board update is denied, retry it once as `cfwf workflow-status --set --repo '"${REPO_FULL}"' --pr 7 --status "<Status>"`; never hand-write GraphQL.'* ]]
 }
 
 # --- fetch_board_approved_items unit tests ------------------------------------
@@ -14632,37 +14737,51 @@ EOF
     [[ "${output}" != *"WF_PROJECT_ID"* ]]
 }
 
-@test "build_pr_claude_md includes WF section when _WF_PROJECT_ID is set" {
+@test "build_pr_claude_md includes WF section with the cfwf commands for this PR and no raw board ids when _WF_PROJECT_ID is set (#1650)" {
     _WF_PROJECT_ID="PVT_pr_proj"
     _WF_STATUS_FIELD_ID="PVTSSF_pr_field"
     _WF_OPTION_IDS["AI Review"]="opt_air_id"
     _WF_OPTION_IDS["Human Review"]="opt_hr_id"
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WF_PROJECT_ID=PVT_pr_proj"* ]]
-    [[ "${output}" == *'WF_AI_REVIEW=opt_air_id'* ]]
-    [[ "${output}" == *'WF_HUMAN_REVIEW=opt_hr_id'* ]]
+    [[ "${output}" == *"Set this pull request's status:  cfwf workflow-status --set --repo ${REPO_FULL} --pr 7 --status \"<Status>\""* ]]
+    [[ "${output}" == *"Read this pull request's status: cfwf workflow-status --check --repo ${REPO_FULL} --pr 7"* ]]
+    [[ "${output}" == *"Never update the board with gh project or gh api graphql; they are denied."* ]]
+    [[ "${output}" != *"PVT_"* ]]
+    [[ "${output}" != *"PVTSSF_"* ]]
+    [[ "${output}" != *"opt_air_id"* ]]
+    [[ "${output}" != *"opt_hr_id"* ]]
+    [[ "${output}" != *"WF_PROJECT_ID"* ]]
+    [[ "${output}" != *"--issue 7"* ]]
 }
 
 # --- _build_wf_section unit tests ---------------------------------------------
 
 @test "_build_wf_section outputs nothing when _WF_PROJECT_ID is empty" {
     _WF_PROJECT_ID=""
-    run _build_wf_section
+    run _build_wf_section pr 9
     [ "${status}" -eq 0 ]
     [ -z "${output}" ]
 }
 
-@test "_build_wf_section outputs project ID and field ID when set" {
+@test "_build_wf_section outputs the cfwf set and check commands for the item instead of the project and field ids (#1650)" {
     _WF_PROJECT_ID="PVT_abc123"
     _WF_STATUS_FIELD_ID="PVTSSF_def456"
-    run _build_wf_section
+    REPO_FULL="owner/repo"
+    run _build_wf_section pr 9
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WF_PROJECT_ID=PVT_abc123"* ]]
-    [[ "${output}" == *"WF_STATUS_FIELD_ID=PVTSSF_def456"* ]]
+    [[ "${output}" == *"Set this pull request's status:  cfwf workflow-status --set --repo owner/repo --pr 9 --status \"<Status>\""* ]]
+    [[ "${output}" == *"Read this pull request's status: cfwf workflow-status --check --repo owner/repo --pr 9"* ]]
+    [[ "${output}" == *"Never update the board with gh project or gh api graphql; they are denied."* ]]
+    [[ "${output}" != *"PVT_abc123"* ]]
+    [[ "${output}" != *"PVTSSF_def456"* ]]
+    run _build_wf_section issue 3
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Set this issue's status:  cfwf workflow-status --set --repo owner/repo --issue 3 --status \"<Status>\""* ]]
+    [[ "${output}" == *"Read this issue's status: cfwf workflow-status --check --repo owner/repo --issue 3"* ]]
 }
 
-@test "_build_wf_section outputs all ten status option keys" {
+@test "_build_wf_section outputs all ten status names in board order and no option ids (#1650)" {
     _WF_PROJECT_ID="PVT_test"
     _WF_STATUS_FIELD_ID="PVTSSF_test"
     _WF_OPTION_IDS["Not Started"]="opt1"
@@ -14675,34 +14794,20 @@ EOF
     _WF_OPTION_IDS["AI Coverage"]="opt6b"
     _WF_OPTION_IDS["Human Review"]="opt7"
     _WF_OPTION_IDS[Complete]="opt8"
-    run _build_wf_section
+    run _build_wf_section pr 9
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"WF_NOT_STARTED=opt1"* ]]
-    [[ "${output}" == *"WF_PLANNING=opt2"* ]]
-    [[ "${output}" == *"WF_APPROVED=opt3"* ]]
-    [[ "${output}" == *"WF_DEVELOPMENT=opt4"* ]]
-    [[ "${output}" == *"WF_AI_SIMPLIFY=opt4b"* ]]
-    [[ "${output}" == *"WF_AI_REVIEW=opt5"* ]]
-    [[ "${output}" == *"WF_AI_SECURITY_REVIEW=opt6"* ]]
-    [[ "${output}" == *"WF_AI_COVERAGE=opt6b"* ]]
-    [[ "${output}" == *"WF_HUMAN_REVIEW=opt7"* ]]
-    [[ "${output}" == *"WF_COMPLETE=opt8"* ]]
+    [[ "${output}" == *"Its Status values, in order: Not Started, Planning, Approved, Development, AI Simplify, AI Review, AI Security Review, AI Coverage, Human Review, Complete."* ]]
+    local id
+    for id in opt1 opt2 opt3 opt4 opt5 opt6 opt7 opt8; do
+        [[ "${output}" != *"${id}"* ]]
+    done
 }
 
-@test "_build_wf_section emits WF_AI_COVERAGE between WF_AI_SECURITY_REVIEW and WF_HUMAN_REVIEW" {
+@test "_build_wf_section lists AI Coverage between AI Security Review and Human Review" {
     _WF_PROJECT_ID="PVT_test"
-    _WF_STATUS_FIELD_ID="PVTSSF_test"
-    _WF_OPTION_IDS["AI Security Review"]="opt6"
-    _WF_OPTION_IDS["AI Coverage"]="opt6b"
-    _WF_OPTION_IDS["Human Review"]="opt7"
-    run _build_wf_section
+    run _build_wf_section pr 9
     [ "${status}" -eq 0 ]
-    local security_line coverage_line human_line
-    security_line=$(grep -n "WF_AI_SECURITY_REVIEW=" <<< "${output}" | cut -d: -f1)
-    coverage_line=$(grep -n "WF_AI_COVERAGE=" <<< "${output}" | cut -d: -f1)
-    human_line=$(grep -n "WF_HUMAN_REVIEW=" <<< "${output}" | cut -d: -f1)
-    [ "${security_line}" -lt "${coverage_line}" ]
-    [ "${coverage_line}" -lt "${human_line}" ]
+    [[ "${output}" == *"AI Security Review, AI Coverage, Human Review"* ]]
 }
 
 # --- project_cache_file_path / load_project_cache / save_project_cache / --------------

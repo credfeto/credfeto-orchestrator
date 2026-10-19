@@ -92,8 +92,9 @@ visible decision a human has to make — everything downstream of it is automati
   tick (see [Keeping a PR's card in step with its issue's](#keeping-a-prs-card-in-step-with-its-issues)
   below), or whatever status the agent itself decided to move to as part of its own turn (the
   agent is the one actually setting "Development," "AI Review," etc. — see `_build_wf_section`
-  in `lib/prompts`, which hands the agent the raw GitHub Project field/option IDs it needs to
-  make that GraphQL call itself).
+  and `_board_set_clause` in `lib/prompts`, which give the agent the status names and the exact
+  `cfwf workflow-status --set` command for its item at every step that moves the board; the agent
+  never sees the raw project, field or option ids and never writes the GraphQL itself, #1650).
 
 ## How a Pull Request actually moves through these columns
 

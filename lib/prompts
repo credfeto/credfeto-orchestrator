@@ -4,23 +4,39 @@
 # every phase/step description. Heredoc bodies here are read directly by the agent - treat
 # any edit to their wording as a behaviour change, not a refactor.
 
-# Outputs the Workflow board data block for embedding in a generated CLAUDE.md.
+# Outputs the cfwf command that sets this item's Workflow board status to the given status, or
+# nothing when _WF_PROJECT_ID is empty (no board). item_kind is "issue" or "pr", the cfwf option
+# that names the item. The agent moves the board only through cfwf; raw project, field and option
+# ids are never given to it (#1650).
+_board_set_cmd() {
+    local item_kind="$1" item_id="$2" status="$3"
+    [ -n "${_WF_PROJECT_ID}" ] || return 0
+    printf 'cfwf workflow-status --set --repo %s --%s %s --status "%s"' "${REPO_FULL}" "${item_kind}" "${item_id}" "${status}"
+}
+
+# Outputs _board_set_cmd as a clause to follow the status name in a sentence that moves the board,
+# e.g. 'advance the board to "AI Review"' then this, so the status and its command stay together.
+# Outputs nothing when there is no board, leaving the sentence as it reads without one.
+_board_set_clause() {
+    local cmd
+    cmd=$(_board_set_cmd "$@")
+    [ -n "${cmd}" ] || return 0
+    # shellcheck disable=SC2016  # the backticks are prompt text for the agent, not a command substitution
+    printf ' with `%s`' "${cmd}"
+}
+
+# Outputs the Workflow board block for embedding in a generated CLAUDE.md: the status names in
+# order and the cfwf commands that set and read this item's status. item_kind is "issue" or "pr".
 # Outputs nothing when _WF_PROJECT_ID is empty (project disabled).
 _build_wf_section() {
+    local item_kind="$1" item_id="$2" noun="pull request" states
     [ -n "${_WF_PROJECT_ID}" ] || return 0
-    printf 'Workflow board (see agent-roles.instructions.md for update commands):\n'
-    printf '  WF_PROJECT_ID=%s\n'            "${_WF_PROJECT_ID}"
-    printf '  WF_STATUS_FIELD_ID=%s\n'       "${_WF_STATUS_FIELD_ID}"
-    printf '  WF_NOT_STARTED=%s\n'           "${_WF_OPTION_IDS["Not Started"]:-}"
-    printf '  WF_PLANNING=%s\n'              "${_WF_OPTION_IDS[Planning]:-}"
-    printf '  WF_APPROVED=%s\n'              "${_WF_OPTION_IDS[Approved]:-}"
-    printf '  WF_DEVELOPMENT=%s\n'           "${_WF_OPTION_IDS[Development]:-}"
-    printf '  WF_AI_SIMPLIFY=%s\n'           "${_WF_OPTION_IDS["AI Simplify"]:-}"
-    printf '  WF_AI_REVIEW=%s\n'             "${_WF_OPTION_IDS["AI Review"]:-}"
-    printf '  WF_AI_SECURITY_REVIEW=%s\n'   "${_WF_OPTION_IDS["AI Security Review"]:-}"
-    printf '  WF_AI_COVERAGE=%s\n'          "${_WF_OPTION_IDS["AI Coverage"]:-}"
-    printf '  WF_HUMAN_REVIEW=%s\n'          "${_WF_OPTION_IDS["Human Review"]:-}"
-    printf '  WF_COMPLETE=%s\n'              "${_WF_OPTION_IDS[Complete]:-}"
+    [ "${item_kind}" = "issue" ] && noun="issue"
+    states=$(printf '%s, ' "${_WF_STATUS_ORDER[@]}")
+    printf 'Workflow board: this repository has a Workflow board. Its Status values, in order: %s.\n' "${states%, }"
+    printf '  Set this %s'"'"'s status:  %s\n' "${noun}" "$(_board_set_cmd "${item_kind}" "${item_id}" "<Status>")"
+    printf '  Read this %s'"'"'s status: cfwf workflow-status --check --repo %s --%s %s\n' "${noun}" "${REPO_FULL}" "${item_kind}" "${item_id}"
+    printf 'Never update the board with gh project or gh api graphql; they are denied.\n'
 }
 
 # Output the step-2 approval-check line(s) for build_issue_claude_md.
@@ -144,10 +160,17 @@ BGRULE
 
 # Duplicated from cs-template on purpose: every container session reads the generated CLAUDE.md
 # directly, and a session that misreads one denial as Bash being disabled ends before it would
-# otherwise act on the instruction files.
+# otherwise act on the instruction files. item_kind ("issue" or "pr") and item_id name the item for
+# the cfwf board command in the board-update retry sentence, which is left out when there is no
+# board (_board_set_cmd outputs nothing), as are all the other board instructions.
 _build_permission_denial_rule() {
-    cat <<'PDRULE'
-MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: `git -C <dir>` instead of `cd <dir>; git`, literal values instead of `$VAR`, one simple command instead of a `;`/`&&` chain, and the mandated exclusions on any `find`/`grep -r` search. If that form is also denied, add a comment to credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name (its first word, e.g. `find`) and a one-line generic reason, then carry on with the rest of the task. That issue is public: never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private.
+    local item_kind="$1" item_id="$2" board_cmd board_retry=""
+    board_cmd=$(_board_set_cmd "${item_kind}" "${item_id}" "<Status>")
+    if [ -n "${board_cmd}" ]; then
+        board_retry=" If a Workflow board update is denied, retry it once as \`${board_cmd}\`; never hand-write GraphQL."
+    fi
+    cat <<PDRULE
+MANDATORY: a "don't ask mode" permission denial refuses only the one command it names; Bash is still available. Never end the session, report Bash as disabled, or treat the item as blocked because of one. Rewrite the command in its rule-compliant form and retry: \`git -C <dir>\` instead of \`cd <dir>; git\`, literal values instead of \`\$VAR\`, one simple command instead of a \`;\`/\`&&\` chain, and the mandated exclusions on any \`find\`/\`grep -r\` search.${board_retry} If that form is also denied, add a comment to credfeto/credfeto-orchestrator#1167 (check it is not already listed first) giving only the denied command's name (its first word, e.g. \`find\`) and a one-line generic reason, then carry on with the rest of the task. That issue is public: never include the command's arguments, paths, search patterns, heredoc or body content or literal values, and never name the source repository if it is private.
 PDRULE
 }
 
@@ -227,7 +250,8 @@ EOF
 # aside must still see the right instruction right here, where it actually acts (#1262 review).
 _build_issue_branch_step() {
     local item_id="$1" repo_path="$2" stale_branch="$3"
-    local board_note='Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to "Development" (if board data is present above) — do NOT advance the board before the draft PR exists, so a session that dies mid-step does not leave the board looking further along than the work actually is (#1262). Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it.'
+    local board_note
+    board_note="Only once the draft pull request (with its placeholder CHANGELOG.md entry) has been successfully created, update the Workflow board status to \"Development\"$(_board_set_clause issue "${item_id}" "Development") (if board data is present above) — do NOT advance the board before the draft PR exists, so a session that dies mid-step does not leave the board looking further along than the work actually is (#1262). Once the draft pull request exists, STOP — the pull-request workflow takes over on the next cycle to implement, review, and merge it."
     if [ -n "${stale_branch}" ]; then
         printf 'When ready to start work: an existing branch for this issue already exists (see the mandatory note above) — check it out and continue on it INSTEAD OF creating a new one: git -C %s checkout %s. It may already contain only a placeholder CHANGELOG.md entry from an earlier session; implement the plan on top of it, then push and create a draft pull request. The PR body MUST include the line "Closes #%s" so GitHub automatically closes the issue when the PR is merged. Do NOT create a second branch for this issue. %s' \
             "${repo_path}" "${stale_branch}" "${item_id}" "${board_note}"
@@ -251,7 +275,7 @@ $(_build_trusted_commenters_section "${trusted_logins}")
 $(_build_git_ssh_section)
 $(_build_scratch_dir_note)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management).
-$(_build_wf_section)
+$(_build_wf_section issue "${item_id}")
 $(_build_issue_dirty_branch_section "${dirty_branch}" "${repo_path}" "${stale_branch}")
 $(_build_issue_stale_branch_section "${stale_branch}" "${repo_path}" "${dirty_branch}")
 
@@ -291,14 +315,14 @@ $(_build_plan_approval_check "${item_id}" "${plan_approved}" "${trusted_logins}"
 ### Open questions
 <list or "None — ready to proceed pending approval">
 
-4. Mark the issue as Blocked and update the Workflow board status to "Planning" (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
+4. Mark the issue as Blocked and update the Workflow board status to "Planning"$(_board_set_clause issue "${item_id}" "Planning") (if board data is present above), then STOP — do not continue. $(_build_plan_approval_instruction):
      gh issue edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
 5. (Implementation mode) Proceed with the plan from the plan comment.
 6. Reply to every issue comment that prompted an action with "<one sentence description>"
 7. $(_build_issue_branch_step "${item_id}" "${repo_path}" "${stale_branch}")
 8. All interaction with humans including status reports must be made as either a comment to the issue or a comment to the pull request if we've opened one (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 10).
 9. $(_build_background_commands_rule)
-10. $(_build_permission_denial_rule)
+10. $(_build_permission_denial_rule issue "${item_id}")
 EOF
 }
 
@@ -354,14 +378,15 @@ CAPLINE
 # self-detected-convergence design (present since this mechanism's first commit, not specific to
 # min_rounds), not something introduced or fixed here; giving each pass its own count would need
 # an explicit pass-boundary marker this design does not currently have.
+# item_id is the PR number, used only for the cfwf command that moves the board (_board_set_clause).
 _build_review_convergence_block() {
-    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5" min_rounds="$6"
+    local review_label="$1" next_status="$2" max_iter="$3" fix_step="$4" downstream_note="$5" min_rounds="$6" item_id="$7"
     local review_noun="${review_label//-/ }"
     local cap_condition="(judge from the PR's history of ${review_label} comments) and findings remain, whether or not this round's findings are themselves new"
     cat <<CONVBLOCK
   - Otherwise, judge convergence yourself from the PR's history of prior ${review_label} comments: are this round's findings substantively new/distinct, or substantially a repeat of findings already reported (and left unresolved, or fixed and now recurring) in an earlier round?
 $(_build_round_cap_check_line "${max_iter}" "${review_label} rounds" "${cap_condition}" "post a PR comment listing the unresolved findings")
-    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging) AND at least ${min_rounds} ${review_label} rounds (judge from the PR's history of ${review_label} comments, counting this round) have now run: post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}", post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
+    - Otherwise, if substantially repeating a prior round (you are not finding anything new; not converging) AND at least ${min_rounds} ${review_label} rounds (judge from the PR's history of ${review_label} comments, counting this round) have now run: post a PR comment summarising the unresolved findings and stating that ${review_noun} is not converging, advance the board to "${next_status}"$(_board_set_clause pr "${item_id}" "${next_status}"), post a one-line status comment, then STOP. Do NOT add the Blocked label; ${downstream_note}
     - Otherwise (either substantially new, or a repeat but fewer than ${min_rounds} rounds have run so far, so one failed fix attempt is not yet enough evidence to give up; and the round cap has not been reached): ${fix_step}
 CONVBLOCK
 }
@@ -495,7 +520,7 @@ Steps:
      gh pr ready ${item_id} --repo ${REPO_FULL}
    - Else (checks are still PENDING): stop without taking action — the next cycle will re-evaluate.
 4. All interaction with humans must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in step 5). Do NOT open issues.
-5. $(_build_permission_denial_rule)
+5. $(_build_permission_denial_rule pr "${item_id}")
 EOF
     else
         cat <<EOF
@@ -510,7 +535,7 @@ $(_build_trusted_commenters_section "${trusted_logins}")
 $(_build_git_ssh_section)
 $(_build_scratch_dir_note)
 Follow all mandatory rules from the AI instructions (GitHub CLI comment bodies, label management, CI checks).
-$(_build_wf_section)
+$(_build_wf_section pr "${item_id}")
 
 PHASE DISCIPLINE (MANDATORY — read first):
 - This is a FRESH session with no memory of previous runs. All state lives in GitHub (the branch, commits, PR comments, labels, and the Workflow board status above).
@@ -539,45 +564,45 @@ PHASE B — CI pending: if any required check is still running (gh pr checks ${i
 PHASE C — Fix outstanding work (do this if CI has failed, or there are unaddressed comments/reviews, or linked-issue work remains — including finishing the real implementation when this PR is currently only a scaffold/placeholder commit deliberately left for this phase to complete):
   - Check BOTH comment surfaces before concluding there is nothing to address — they are different GitHub object models and neither shows the other: top-level PR comments and review summaries (gh pr view ${item_id} --repo ${REPO_FULL} --json comments,reviews,reviewDecision) AND inline/diff-level review comments (gh api repos/${REPO_FULL}/pulls/${item_id}/comments). A reviewer can submit a CHANGES_REQUESTED review with an empty top-level body and put their actual question only in an inline diff comment — that review decision alone is reason enough to treat this PR as having unaddressed work, and the inline comment endpoint is the only place its content is visible.
   - If a required check FAILED: diagnose and fix it in a commit. Reply to every PR comment that prompted an action with "Fixed in <commit-sha> — <one sentence description>". If a question needs a human answer, ask it and mark Blocked: gh pr edit ${item_id} --repo ${REPO_FULL} --add-label Blocked
-  - If this round pushes a genuine code commit (a CI fix, or completed linked-issue implementation work): set the board status to "Development", commit it (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push it, then STOP. (CI will run; the next cycle continues.)
+  - If this round pushes a genuine code commit (a CI fix, or completed linked-issue implementation work): set the board status to "Development"$(_board_set_clause pr "${item_id}" "Development"), commit it (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push it, then STOP. (CI will run; the next cycle continues.)
   - If this round's only action is a reply, a label sync, a \`gh pr edit\` metadata change (e.g. title/description), or re-running a flaky check — with no commit pushed: leave the board status exactly as it currently is (do NOT reset it to "Development"), post a one-line status comment describing what was done, then STOP. The next cycle resumes at whichever phase the unchanged board status already reflects.
 
 PHASE D — Simplify (do this ONLY when CI is fully green, there is no outstanding work, and the board is not yet at "AI Review" or later):
-  - Set the board status to "AI Simplify" (if not already set).
+  - Set the board status to "AI Simplify"$(_board_set_clause pr "${item_id}" "AI Simplify") (if not already set).
   - Run /simplify against the diff. It applies reuse/simplification/efficiency/altitude cleanups directly rather than just reporting them.
   - If it changed any files: commit them (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "${ROUND_MARKER_SIMPLIFY}" (detail may follow, e.g. "${ROUND_MARKER_SIMPLIFY} — 3 files changed") — the orchestrator counts this exact prefix across the PR's comment history to report which simplify round this is, so it must appear verbatim, once, on every round that makes a change — then STOP. (CI will run; the next cycle continues.) Do NOT proceed to code review in this same session — a fresh session must re-verify CI on this new commit first.
-  - If it made NO changes: advance the board to "AI Review", post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
+  - If it made NO changes: advance the board to "AI Review"$(_board_set_clause pr "${item_id}" "AI Review"), post a one-line status comment ("Simplify clean — advancing to code review"), then STOP.
   - Otherwise, judge convergence from the PR's commit history of simplify rounds, comparing each round's diff size (lines changed by that round's commit) to the previous round's:
     - If ${SIMPLIFY_THRASH_LIMIT} or more simplify rounds have run AND the latest round is thrashing (its diff is flat or larger than the previous round's, i.e. not shrinking): give up now, even though ${MAX_SIMPLIFY_ITERATIONS} has not been reached.
     - Otherwise, once ${MAX_SIMPLIFY_ITERATIONS} simplify rounds have run without converging to no changes: give up regardless of whether the diff was still shrinking.
-    - When giving up for either reason: post a PR comment noting that simplify did not converge, advance the board to "AI Review", post a one-line status comment ("Simplify not converging after N rounds — advancing to code review"), then STOP. Do NOT add the Blocked label — the next cycle proceeds straight to code review, which re-covers the same reuse/simplification/efficiency categories as a safety net.
+    - When giving up for either reason: post a PR comment noting that simplify did not converge, advance the board to "AI Review"$(_board_set_clause pr "${item_id}" "AI Review"), post a one-line status comment ("Simplify not converging after N rounds — advancing to code review"), then STOP. Do NOT add the Blocked label — the next cycle proceeds straight to code review, which re-covers the same reuse/simplification/efficiency categories as a safety net.
 
 PHASE E — Code review (do this ONLY when CI is fully green, there is no outstanding work, and the board is at "AI Review"):
   - Run ONE round: /code-review --comment
-  - If NO findings: advance the board to "AI Security Review", post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
+  - If NO findings: advance the board to "AI Security Review"$(_board_set_clause pr "${item_id}" "AI Security Review"), post a one-line status comment ("Code review clean — advancing to security review"), then STOP.
 $(_build_review_convergence_block "code-review" "AI Security Review" "${MAX_CODE_REVIEW_ITERATIONS}" \
     'fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "'"${ROUND_MARKER_CODE_REVIEW}"'" (e.g. "'"${ROUND_MARKER_CODE_REVIEW}"' fixed N findings") — the orchestrator counts this exact prefix across the PR comment history to report which code-review round this is, so it must appear verbatim, once, on every round that fixes findings — then STOP. The next cycle runs the next round.' \
     "this means no new correctness issues are surfacing, not that a known one is safe to ignore; unlike Simplify (whose non-convergence is always safely re-covered by code review itself), the posted comment is what carries this forward to Human Review." \
-    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}" "${item_id}")
 
 PHASE F — Security review (do this ONLY when the board is at "AI Security Review"):
   - Run ONE round: /security-review
-  - If NO findings: advance the board to "AI Coverage", post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
+  - If NO findings: advance the board to "AI Coverage"$(_board_set_clause pr "${item_id}" "AI Coverage"), post a one-line status comment ("Security review clean, advancing to coverage check"), then STOP.
 $(_build_review_convergence_block "security-review" "AI Coverage" "${MAX_SECURITY_REVIEW_ITERATIONS}" \
     'post them as a PR comment if not already inline, fix EACH in its own commit (run_in_background: true, then wait for it to finish per the MANDATORY rule below) and push, post a one-line status comment starting with the exact text "'"${ROUND_MARKER_SECURITY_REVIEW}"'" (e.g. "'"${ROUND_MARKER_SECURITY_REVIEW}"' fixed N findings") — the orchestrator counts this exact prefix across the PR comment history to report which security-review round this is, so it must appear verbatim, once, on every round that fixes findings — then STOP.' \
     "the same principle as PHASE E's code-review exit applies here: this means no new security issues are surfacing, not that a known one is safe to ignore, so the posted comment is what carries this forward to Human Review." \
-    "${MIN_REVIEW_CONVERGENCE_ROUNDS}")
+    "${MIN_REVIEW_CONVERGENCE_ROUNDS}" "${item_id}")
 
 PHASE G: Coverage (do this ONLY when the board is at "AI Coverage"):
   - Load coverage-ratchet.instructions.md and run its AI Coverage Phase Decision Procedure: if the branch is non-code-only (every changed file is a dependency manifest/version-pin, a GitHub Actions workflow/composite action beyond a version pin, SQL/T-SQL, a shell script, a Dockerfile/Docker Compose file, or a documentation-only change — no source or test file touched), skip straight to the success step below without measuring anything. Otherwise, read COVERAGE.md from origin/main live (git -C <repodir> show origin/main:COVERAGE.md) — do NOT look for a PR comment, there isn't one. If COVERAGE.md doesn't exist on origin/main yet, this is the bootstrap case: there is nothing to compare against, so treat it as passed.
   - Otherwise, re-run the same per-language extraction against the branch's current (already checked out) working tree (per-component rows plus each language's Overall figure) and compare branch Overall vs. baseline Overall per language — component rows never gate, only Overall does.
-  - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review", post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
+  - On success (every present language's branch Overall >= its baseline Overall, or the non-code-only/bootstrap skip applied): write/overwrite COVERAGE.md on the branch with the numbers just measured (skip this write if the non-code-only skip applied and no measurement was taken), commit and push it, advance the board to "Human Review"$(_board_set_clause pr "${item_id}" "Human Review"), post a one-line status comment ("Coverage ratchet passed - advancing to Human Review"), then STOP.
   - On failure (any language's branch Overall below its baseline Overall):
 $(_build_round_cap_check_line "${MAX_COVERAGE_ITERATIONS}" "coverage rounds" "${phase_g_cap_condition}" "post a PR comment listing the still-failing languages and their gap") Do not touch COVERAGE.md in this case.
     - Otherwise, compare each still-failing language's Overall this round against its Overall in the most recent prior coverage comment that mentions that language by name (judge from the PR's history of prior "...${ROUND_MARKER_COVERAGE}" coverage comments) - this is not necessarily the immediately preceding round, since a language that passed in a round leaves no comment mentioning it for that round, so a later failure must be compared against its last-mentioned figure, not a stale or absent one. Treat a language as trending, with nothing yet to compare, only when no prior comment mentions it at all, regardless of which round this is.
-      - If the gap is closing (every still-failing language's Overall either improved versus its own previous coverage round, or is being treated as trending per the carve-out above because it has no previous round to compare against, or this is the whole PR's first coverage round): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>%${ROUND_MARKER_COVERAGE}"), move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
+      - If the gap is closing (every still-failing language's Overall either improved versus its own previous coverage round, or is being treated as trending per the carve-out above because it has no previous round to compare against, or this is the whole PR's first coverage round): post the status comment in the decision procedure's format (one line per failing language: "<lang> <branch-pct>% < main <baseline-pct>%${ROUND_MARKER_COVERAGE}"), move the board back to "Development"$(_board_set_clause pr "${item_id}" "Development"), then STOP. Do not touch COVERAGE.md in this case.
       - If the trend is flat or worsening for a still-failing language AND you judge, from the actual gap and the code, that further Development-phase rounds are unlikely to close it: post a PR comment giving the per-language numbers, the round-over-round trend, and your specific reasoning for why you believe coverage cannot realistically be raised further here, add the Blocked label, and STOP. Do not touch COVERAGE.md in this case. This can fire before ${MAX_COVERAGE_ITERATIONS} is reached (checked above). Unlike Phase E/F's early exit, this one blocks: a coverage round's pass/fail IS the ratchet's own verdict, so giving up here means proposing to waive the gate itself, not merely reporting that no new findings turned up; a human must see and agree with that reasoning before the gate is treated as satisfied.
-      - Otherwise (trend is flat/worsening but you judge more rounds are still worth trying): post the status comment as above, move the board back to "Development", then STOP. Do not touch COVERAGE.md in this case.
+      - Otherwise (trend is flat/worsening but you judge more rounds are still worth trying): post the status comment as above, move the board back to "Development"$(_board_set_clause pr "${item_id}" "Development"), then STOP. Do not touch COVERAGE.md in this case.
 
 PHASE H: Finalize (do this ONLY when everything above has passed / board is at "Human Review" and auto-merge is not yet enabled):
   - $(_build_placeholder_guard_note "${item_id}" remove)
@@ -592,7 +617,7 @@ Otherwise, if auto-merge is already enabled (gh pr view ${item_id} --repo ${REPO
 General rules:
 - All interaction with humans including status reports must be made as a comment to the pull request (the one exception is the denied-command report on credfeto/credfeto-orchestrator#1167 in the permission-denial rule below).
 - $(_build_background_commands_rule)
-- $(_build_permission_denial_rule)
+- $(_build_permission_denial_rule pr "${item_id}")
 EOF
     fi
 }

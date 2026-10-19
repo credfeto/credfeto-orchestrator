@@ -72,8 +72,8 @@ Review `build_issue_prompt` and `build_pr_prompt` whenever adding a new rule. If
 
 | Data block | Source | Purpose |
 | --- | --- | --- |
-| Workflow board section (`WF_PROJECT_ID`, `WF_STATUS_FIELD_ID`, `WF_*` option IDs) | `_build_wf_section()` — populated by `discover_or_create_workflow_project` | Agent uses these to move the issue/PR through the Workflow board mid-session |
+| Workflow board section (the status names in order and the `cfwf workflow-status --set`/`--check` commands for this item; never raw project, field or option IDs) | `_build_wf_section()` and `_board_set_clause()` — board presence from `discover_or_create_workflow_project` | Agent uses these to move the issue/PR through the Workflow board mid-session; every step that moves the board names its exact cfwf command |
 
 This is not policy — it is per-repo instance data that changes between runs. Do not move it to instruction files.
 
-When `_WF_PROJECT_ID` is empty (project discovery failed or not configured), `_build_wf_section` emits nothing and the agent skips all board updates silently.
+When `_WF_PROJECT_ID` is empty (project discovery failed or not configured), `_build_wf_section` and `_board_set_clause` emit nothing and the agent skips all board updates silently.

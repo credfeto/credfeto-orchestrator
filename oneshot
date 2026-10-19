@@ -671,7 +671,7 @@ main() {
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                             else
                                 info "PR #${open_pr} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}"
+                                block_pr_for_idle_exhausted_no_progress "${open_pr}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}"
                                 item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                             fi
                             count_unchanged=$((count_unchanged + 1))
@@ -1133,7 +1133,7 @@ main() {
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with an unaddressed review request - blocking")")
                     else
                         info "PR #${item_id} in ${item_repo}: idle budget exhausted with no known blocking reason — blocking"
-                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}"
+                        block_pr_for_idle_exhausted_no_progress "${item_id}" "${item_repo}" "${pr_required_checks_lookup_failed}" "${pr_json}"
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "idle budget exhausted with no known blocking reason - blocking")")
                     fi
                     count_unchanged=$((count_unchanged + 1))
