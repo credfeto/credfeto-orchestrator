@@ -2120,6 +2120,13 @@ unexpected_issue_result() {
 # lines first, so ^ and $ in either pattern mean the same to jq, where they match at every line,
 # and to gh's gojq, where they match only at the ends of the text.
 readonly SIGNS_OFF_DEF='def signs_off: any(split("\n")[]; (test("^ {0,3}>") | not) and test("'"${APPROVAL_KEYWORD_PATTERN}"'"; "i"));'
+# A jq definition, put before a filter that uses it, and the one place that says which labels make
+# an issue Blocked or On Hold, so issue plan-status and issue list cannot disagree: is_blocked and
+# is_on_hold are whether the issue it is given has a label that, lower-cased, is blocked, or is
+# on hold (the standard label) or on-hold.
+# $name below is a jq variable, not a shell one.
+# shellcheck disable=SC2016
+readonly HOLD_LABELS_DEF='def has_label_named($name): any(.labels[]; .name | ascii_downcase == $name); def is_blocked: has_label_named("blocked"); def is_on_hold: has_label_named("on hold") or has_label_named("on-hold");'
 # What ends the output of a filter whose last field must keep its trailing newlines: a command
 # substitution drops every newline at the end of what it captures, and none before this.
 readonly OUTPUT_END=$'\x1f'
@@ -2165,10 +2172,10 @@ issue_plan_status() {
     # $comments and $plan below are jq variables, not shell ones.
     # shellcheck disable=SC2016
     read_issue "labels,comments" \
-        "${PRINTABLE_DEF} ${SIGNS_OFF_DEF}"' (.comments // []) as $comments
+        "${PRINTABLE_DEF} ${SIGNS_OFF_DEF} ${HOLD_LABELS_DEF}"' (.comments // []) as $comments
          | ([$comments | to_entries[] | select(.value.body // "" | split("\n") | any(rtrimstr("\r") == "## Implementation Plan")) | .key] | last) as $plan
          | ("plan\t" + (if $plan == null then "no" else "yes" end)),
-           ("blocked\t" + (if any(.labels[]; .name | ascii_downcase == "blocked") then "yes" else "no" end)),
+           ("blocked\t" + (if is_blocked then "yes" else "no" end)),
            (select($plan != null)
             | ($comments[$plan]
                | ["plan-at", .createdAt], ["plan-by", (.author.login // ""), (.authorAssociation // ""), .url]),
@@ -2204,12 +2211,12 @@ issue_list_program() {
     done
     # $names and $priority below are jq variables, not shell ones.
     # shellcheck disable=SC2016
-    printf '%s' "${ROW_FIELD_DEF} ${LABEL_LIST_DEF}" \
+    printf '%s' "${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF}" \
         ' def lowered_label_names: label_names | map(ascii_downcase);' \
         " def rank: lowered_label_names as \$names | [[${lowered}] | to_entries[] | .value as \$priority" \
         ' | select($names | index($priority) != null) | .key] | .[0] // '"${#PRIORITIES[@]};" \
-        ' def flags: lowered_label_names as $names | [(if ($names | index("blocked")) != null then "blocked" else empty end),' \
-        ' (if ($names | index("on hold")) != null or ($names | index("on-hold")) != null then "on-hold" else empty end)] | join(",");' \
+        ' def flags: [(if is_blocked then "blocked" else empty end),' \
+        ' (if is_on_hold then "on-hold" else empty end)] | join(",");' \
         ' sort_by([rank, .number]) | (length | tostring), (.[] | [(.number | field),' \
         " ([${spelled}][rank] | field), (flags | field), ([.assignees[].login] | join(\",\") | field)," \
         ' (.title | field), (label_list | field)] | join("\t"))'
