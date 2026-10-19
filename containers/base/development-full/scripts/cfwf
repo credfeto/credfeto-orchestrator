@@ -2193,34 +2193,31 @@ readonly ISSUE_LIST_LIMIT=1000
 # issue it is given, and label_list those names comma-joined, made printable by field once the
 # whole is joined.
 readonly LABEL_LIST_DEF='def label_names: [.labels[].name]; def label_list: label_names | join(",");'
-# PRIORITIES joined by spaces (no priority holds one), so the row pattern below takes its priorities
-# from PRIORITIES, as the issue list program does, rather than a copy of them.
+# PRIORITIES joined by spaces (no priority holds one), so the row pattern and the issue list program
+# below take their priorities from PRIORITIES rather than a copy of them.
 readonly PRIORITY_NAMES="${PRIORITIES[*]}"
 # A row of issue list: six fields, none empty, the second a priority and the third a flags value.
 readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t('"${PRIORITY_NAMES// /|}"$'|-)\t(-|blocked|on-hold|blocked,on-hold)\t[^\t]+\t[^\t]+\t[^\t]+$'
 
-# Prints the jq program of issue list: the number of issues on its first line, then a row for each,
+# PRIORITIES as the items of a jq array literal, each quoted and comma-separated (gh --jq takes no
+# --arg; no priority holds a space or a quote), built from PRIORITY_NAMES as the row pattern is.
+readonly PRIORITY_ARRAY_ITEMS="\"${PRIORITY_NAMES// /\",\"}\""
+# The jq program of issue list: the number of issues on its first line, then a row for each,
 # highest priority first and then by number. The priorities are written into the program from
-# PRIORITIES, as jq array literals (gh --jq takes no --arg), so nothing of the caller's is in it.
-# Every value goes through field, so no title or label can add a line or a field and none is empty.
-issue_list_program() {
-    local spelled="" lowered="" priority
-    for priority in "${PRIORITIES[@]}"; do
-        spelled+="${spelled:+,}\"${priority}\""
-        lowered+="${lowered:+,}\"${priority,,}\""
-    done
-    # $names and $priority below are jq variables, not shell ones.
-    # shellcheck disable=SC2016
-    printf '%s' "${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF}" \
-        ' def lowered_label_names: label_names | map(ascii_downcase);' \
-        " def rank: lowered_label_names as \$names | [[${lowered}] | to_entries[] | .value as \$priority" \
-        ' | select($names | index($priority) != null) | .key] | .[0] // '"${#PRIORITIES[@]};" \
-        ' def flags: [(if is_blocked then "blocked" else empty end),' \
-        ' (if is_on_hold then "on-hold" else empty end)] | join(",");' \
-        ' sort_by([rank, .number]) | (length | tostring), (.[] | [(.number | field),' \
-        " ([${spelled}][rank] | field), (flags | field), ([.assignees[].login] | join(\",\") | field)," \
-        ' (.title | field), (label_list | field)] | join("\t"))'
-}
+# PRIORITIES, as jq array literals, so nothing of the caller's is in it. Every value goes through
+# field, so no title or label can add a line or a field and none is empty.
+ISSUE_LIST_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF}"
+ISSUE_LIST_PROGRAM+=' def lowered_label_names: label_names | map(ascii_downcase);'
+ISSUE_LIST_PROGRAM+=" def rank: lowered_label_names as \$names | [[${PRIORITY_ARRAY_ITEMS,,}] | to_entries[] | .value as \$priority"
+# $names and $priority are jq variables, not shell ones.
+# shellcheck disable=SC2016
+ISSUE_LIST_PROGRAM+=' | select($names | index($priority) != null) | .key] | .[0] // '"${#PRIORITIES[@]};"
+ISSUE_LIST_PROGRAM+=' def flags: [(if is_blocked then "blocked" else empty end),'
+ISSUE_LIST_PROGRAM+=' (if is_on_hold then "on-hold" else empty end)] | join(",");'
+ISSUE_LIST_PROGRAM+=' sort_by([rank, .number]) | (length | tostring), (.[] | [(.number | field),'
+ISSUE_LIST_PROGRAM+=" ([${PRIORITY_ARRAY_ITEMS}][rank] | field), (flags | field), ([.assignees[].login] | join(\",\") | field),"
+ISSUE_LIST_PROGRAM+=' (.title | field), (label_list | field)] | join("\t"))'
+readonly ISSUE_LIST_PROGRAM
 
 # Lists the open issues of REPO in one read. Nothing is printed until the whole answer has been
 # checked: the count, the rows and the shape of each row (take_checked_rows).
@@ -2231,7 +2228,7 @@ issue_list() {
     require_gh
     unexpected="gh returned an unexpected result for the open issues of ${REPO}"
     gh_capture issue list --repo "${REPO}" --state open --limit "$((ISSUE_LIST_LIMIT + 1))" \
-        --json number,title,labels,assignees --jq "$(issue_list_program)" \
+        --json number,title,labels,assignees --jq "${ISSUE_LIST_PROGRAM}" \
         || die "could not list the open issues of ${REPO}: $(gh_failure_text)"
 
     take_checked_rows "${ISSUE_LIST_LIMIT}" "${ISSUE_LIST_ROW_PATTERN}" "${unexpected}" \
