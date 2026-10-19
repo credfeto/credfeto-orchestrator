@@ -1194,6 +1194,13 @@ main() {
                         count_error=$((count_error + 1))
                         item_status_log+=("$(record_item_status "PullRequest" "${item_id}" "${item_repo}" "rebased non-agentically but failed to compute post-rebase fingerprint - will re-evaluate next tick")")
                     fi
+                    # A successful mechanical rebase is progress the agent did not have to make, so
+                    # the PR gets a fresh idle budget (#1664); the lifetime total is kept so the
+                    # runaway backstop still sees every agent invocation. A conflicting rebase
+                    # falls through to the agent below and resets nothing.
+                    load_pr_invocation_counts "${item_id}"
+                    save_pr_invocation_counts "${item_id}" "${PR_INVOCATION_TOTAL}" 0
+                    info "PR #${item_id} in ${item_repo} rebased non-agentically — idle budget reset"
                     # A free non-agentic rebase must not block other same-repo Issues from
                     # being picked up in the same tick (#1114).
                     _filtered_repos=()
