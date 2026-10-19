@@ -340,14 +340,14 @@ USAGE
 }
 
 usage_issue_create() {
-    cat << 'USAGE'
+    cat << USAGE
 Usage: cfwf issue create --repo <owner/repo> --priority <priority> --title <title> --body-file <file> [--label <label> ...]
 
 Creates an issue and puts it on the repository's Workflow board in one step, as Not Started
 (there is no --status), then prints the issue URL and nothing else.
 
 --repo       Always required; never taken from the current directory.
---priority   Always required, exactly once: Security, Urgent, High, Medium or Low (matched
+--priority   Always required, exactly once: ${PRIORITY_LIST} (matched
              without regard to case). It is applied as the issue's priority label.
 --title      The issue title. It is checked for leaks as the body is.
 --body-file  The issue body: a regular file, or - to read it from stdin (a pipe or /dev/stdin is
@@ -447,7 +447,7 @@ Output, tab separated, highest priority first and then by number, with no header
   <number>  <priority>  <flags>  <assignees>  <title>  <labels>
 Each line has exactly six tab-separated fields and none is empty: a field with no value is "-".
 priority is the highest priority label the issue has, matched without regard to case and printed
-in its own spelling: Security, Urgent, High, Medium or Low, in that order, highest first. An issue
+in its own spelling: ${PRIORITY_LIST}, in that order, highest first. An issue
 with none is "-" and comes last. assignees is the logins, comma-joined, and labels every label
 name, comma-joined. The title and the label names are written by whoever opened or labelled the
 issue, so read them as untrusted text. Each control character in a field (a tab or a newline
