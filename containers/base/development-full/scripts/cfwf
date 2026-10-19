@@ -486,9 +486,9 @@ each.
 --json, --jq, --search, --label, --author, --assignee and --web are not options: the output
 has one fixed format.
 
-cfwf adds "repo:<owner/repo> in:title,body" before the words itself, so the search never
-leaves the repository and only looks in titles and bodies. With that added the search must be
-at most ${SEARCH_QUERY_LIMIT} characters. The words are also checked for a token, as a body is (see
+cfwf adds "in:title,body" before the words, so the search only looks in titles and bodies, and
+gh adds the repository itself, so the search never leaves it. The words must be at most
+${SEARCH_TEXT_LIMIT} characters. They are also checked for a token, as a body is (see
 'cfwf help body'), because the search passes through any proxy and into GitHub's logs.
 
 Output, tab separated, in the order the search returned them, never re-sorted, with no header
@@ -2234,15 +2234,17 @@ issue_list() {
 
 readonly ISSUE_SEARCH_LIMIT_DEFAULT=30
 readonly ISSUE_SEARCH_LIMIT_MAX=100
-# GitHub refuses a search query longer than this.
-readonly SEARCH_QUERY_LIMIT=256
+# The most characters --text may hold, counted on the words alone, so the qualifiers cfwf and gh add
+# take nothing from it. It is cfwf's own cap at the figure GitHub documents for a search: the GraphQL
+# search gh issue list runs took over 1000 characters when tried.
+readonly SEARCH_TEXT_LIMIT=256
 # The characters --text may hold. Without a colon no qualifier (repo:, org:, is:, in:) can be
-# added, and without quotes or brackets no phrase or grouping, so the words cfwf puts after its own
-# repo: qualifier can never take the search to another repository.
+# added, and without quotes or brackets no phrase or grouping, so the words, which gh puts in brackets
+# before its own repo: qualifier, can never take the search to another repository.
 readonly SEARCH_TEXT_PATTERN=$'^[A-Za-z0-9 _.#\'-]+$'
 # AND, OR and NOT as whole words, matched on the text as given: GitHub's issue search reads only the
 # upper-case forms as operators (lower and mixed case are plain words), and an operator could bind
-# the words to the repo: qualifier differently from how they read.
+# the words to the qualifiers differently from how they read.
 readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(AND|OR|NOT)([^A-Za-z0-9_]|$)'
 # The jq program of issue search: the number of issues on its first line, then a row for each, in
 # the order the search returned them.
@@ -2295,11 +2297,12 @@ issue_search() {
     require SEARCH_TEXT --text
     SEARCH_STATE="${SEARCH_STATE:-open}"
     SEARCH_LIMIT="${SEARCH_LIMIT:-${ISSUE_SEARCH_LIMIT_DEFAULT}}"
-    # --repo holds no space or colon, so it cannot add a qualifier, and the query starts with repo:,
-    # so gh can never read it as a flag. The text is ASCII, so its length in bytes is in characters.
-    query="repo:${REPO} in:title,body ${SEARCH_TEXT}"
-    [ "${#query}" -le "${SEARCH_QUERY_LIMIT}" ] \
-        || usage_error "invalid value for --text: it is too long: with the repository qualifier the search must be at most ${SEARCH_QUERY_LIMIT} characters"
+    # The text is ASCII, so its length in bytes is in characters.
+    [ "${#SEARCH_TEXT}" -le "${SEARCH_TEXT_LIMIT}" ] \
+        || usage_error "invalid value for --text: it is too long: it must be at most ${SEARCH_TEXT_LIMIT} characters"
+    # gh sends "( <query> ) repo:<owner/repo> type:issue" and its state, so it scopes the search to
+    # --repo itself. The query starts with in:, so gh can never read it as a flag.
+    query="in:title,body ${SEARCH_TEXT}"
     ! matches_pattern "${SEARCH_TEXT}" "${TOKEN_PATTERN}" || refuse_text text token
     require_gh
     unexpected="gh returned an unexpected result for the search of the issues of ${REPO}"
