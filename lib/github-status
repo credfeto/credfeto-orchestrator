@@ -518,11 +518,26 @@ block_pr_for_idle_exhausted_review() {
 # required-check lookup failed this tick (set_pr_required_checks), so "no required check has
 # failed" is not something the orchestrator knows; the reason then says so, pointing the human at
 # the lookup rather than asserting the PR has no failed required check.
+# Optional fourth argument pr_json: when the repository has a Workflow board, the reason also gives
+# the PR's board status and the phase the orchestrator expected next from it
+# (pr_next_phase_for_board_status), so a human can see where the review loop stalled (#1650).
+# Without a board, or without pr_json, the reason is unchanged.
 block_pr_for_idle_exhausted_no_progress() {
-    local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}"
+    local item_id="$1" item_repo="$2" required_checks_unknown="${3:-false}" pr_json="${4:-}"
+    local board_status next_phase
     local reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason — no required check has failed and there is no unaddressed review request. Blocking this PR until a human investigates."
     if [ "${required_checks_unknown}" = "true" ]; then
         reason="This PR's automation idle-invocation budget (${MAX_PR_IDLE_INVOCATIONS}) is exhausted with no known blocking reason, but the lookup of which checks are required failed, so a failed required check could not be ruled out. There is no unaddressed review request. Blocking this PR until a human investigates."
+    fi
+    if [ -n "${pr_json}" ] && [ -n "${_WF_PROJECT_ID}" ]; then
+        # Populated here, outside the command substitution below, so the per-tick board cache
+        # survives it (as in plan_unchanged_pr_reinvocation).
+        fetch_board_item_statuses
+        board_status=$(board_substatus_for_item "${item_id}")
+        if ! next_phase=$(pr_next_phase_for_board_status "${board_status}" "${pr_json}" "${required_checks_unknown}"); then
+            next_phase="none (the board status names no phase)"
+        fi
+        reason="${reason} Board status: ${board_status}; next phase due: ${next_phase}."
     fi
     reason=$(append_last_diagnostic_to_reason "PullRequest" "${item_id}" "${reason}")
     apply_blocked_label_with_reason "PullRequest" "${item_id}" "${item_repo}" "${reason}"
