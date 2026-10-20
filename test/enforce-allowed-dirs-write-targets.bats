@@ -557,11 +557,12 @@ EOF'
     assert_each 0 '' "git --version" "git -C ."
 }
 
-@test "dotnet changelog --message is text in both spellings" {
+@test "dotnet changelog --message is text in both spellings, for that call only" {
     assert_each 0 '' \
         "dotnet changelog -f CHANGELOG.md -a Fixed --message 'see ~/.claude/settings.json'" \
         "dotnet changelog -f CHANGELOG.md -a Fixed --message='see ~/.claude/settings.json'"
-    assert_each 2 'writing to Claude Code configuration' "dotnet build --message ~/.claude/settings.json"
+    assert_each 2 'writing to Claude Code configuration' "dotnet build --message ~/.claude/settings.json" \
+        "dotnet changelog -f CHANGELOG.md -a Fixed -m x && dotnet build --message ~/.claude/settings.json"
 }
 
 @test "mktemp -t, --tmpdir and -p DIR also write into TMPDIR, and -p's directory is checked" {
