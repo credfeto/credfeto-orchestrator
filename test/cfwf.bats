@@ -2133,6 +2133,17 @@ assert_nothing_created() {
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "the priority list the help and error texts name is PRIORITIES, comma-separated with or before the last, and both helps print it" {
+    run bash -c 'source "$1"; [ "${#PRIORITIES[@]}" -gt 1 ] || exit 2; expected="${PRIORITIES[0]}"; for p in "${PRIORITIES[@]:1:${#PRIORITIES[@]}-2}"; do expected+=", ${p}"; done; expected+=" or ${PRIORITIES[-1]}"; [ "${PRIORITY_LIST}" = "${expected}" ] || { printf "%s\n%s\n" "${PRIORITY_LIST}" "${expected}" >&2; exit 1; }' _ "${SCRIPT}"
+    [ "${status}" -eq 0 ] || { echo "${output}" >&2; return 1; }
+    run "${SCRIPT}" help issue create
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"exactly once: Security, Urgent, High, Medium or Low (matched"* ]]
+    run "${SCRIPT}" help issue list
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"in its own spelling: Security, Urgent, High, Medium or Low, in that order"* ]]
+}
+
 @test "issue create refuses --priority given twice, because an issue has one priority" {
     prepare_issue_create
     create_args
