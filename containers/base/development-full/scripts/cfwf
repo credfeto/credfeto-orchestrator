@@ -1625,15 +1625,17 @@ require_utf8_locale() {
     utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
 }
 
-# Refuses a value that is only whitespace or longer than GitHub accepts, so the call fails here and
-# not half way through creating things. GitHub counts characters, and bash counts bytes in the C
-# locale a container usually has, so the length is taken in a UTF-8 one.
+# Refuses a value that is only whitespace and INVISIBLE_CHARACTERS, or longer than GitHub accepts,
+# so the call fails here and not half way through creating things. GitHub counts characters, and
+# bash counts bytes in the C locale a container usually has, so the length is taken in a UTF-8 one,
+# of the value as given, invisible characters and all.
 validate_visible_text() {
     local value="$1" limit="$2" flag="$3"
     require_utf8_locale
     local LC_ALL=C.UTF-8
-    [[ "${value}" =~ [^[:space:]] && "${#value}" -le "${limit}" ]] \
-        || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
+    if ! has_visible_text "${value}" || [ "${#value}" -gt "${limit}" ]; then
+        usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
+    fi
 }
 
 # Refuses (exit 2) the flag $2 when the variable $1 it sets is already set: $3, when given, says
