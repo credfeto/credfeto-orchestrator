@@ -77,7 +77,7 @@ teardown() {
     main
 
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c")" = "755" ]
-    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/block-claude-config-writes")" = "755" ]
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/enforce-allowed-dirs")" = "755" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/command-allowlist")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks/allowed-dirs")" = "444" ]
     [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/hooks")" = "755" ]
@@ -312,12 +312,11 @@ teardown() {
     [ "${status}" -eq 1 ]
 }
 
-@test "the Bash chain runs enforce-allowed-dirs then block-claude-config-writes straight after reject-obfuscated-commands (#1385)" {
-    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0:3][] | .command' "${SOURCE_MANAGED_SETTINGS}"
+@test "the Bash chain runs enforce-allowed-dirs straight after reject-obfuscated-commands (#1385)" {
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0:2][] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "/etc/claude-code/hooks/reject-obfuscated-commands
-/etc/claude-code/hooks/enforce-allowed-dirs
-/etc/claude-code/hooks/block-claude-config-writes" ]
+/etc/claude-code/hooks/enforce-allowed-dirs" ]
 }
 
 @test "the Bash chain includes block-git-worktree, block-dotnet-tool-install and cache-gh-lookups (#1380)" {
@@ -340,10 +339,10 @@ teardown() {
     [ "${output}" = '/etc/claude-code/hooks/block-github-mcp-write-tools' ]
 }
 
-@test "block-claude-config-writes is registered against the Edit, Write and NotebookEdit tools" {
+@test "enforce-allowed-dirs is registered against the Edit, Write and NotebookEdit tools" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "Edit|Write|NotebookEdit") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
-    [ "${output}" = '/etc/claude-code/hooks/block-claude-config-writes' ]
+    [ "${output}" = '/etc/claude-code/hooks/enforce-allowed-dirs' ]
 }
 
 @test "the repo's own .claude settings, .mcp.json and ~/.claude.json are denied to Edit by relative path" {

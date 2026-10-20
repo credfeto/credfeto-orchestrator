@@ -1,30 +1,138 @@
 #!/usr/bin/env bash
-# Restricts every directory- or path-taking argument of the commands below to
-# a configured allowlist of directory roots, and denies the flags on those same
-# commands that turn a "path argument" into arbitrary code execution.
+# The single write-target policy for the agent's tool calls: every path a
+# Bash command writes must sit inside a configured allowlist of directory
+# roots and outside Claude Code's own configuration, and every path-taking
+# argument of the directory-changing and path-taking commands below must sit
+# inside those roots. Also denies the flags on those commands that turn a
+# "path argument" into arbitrary code execution, and blocks Edit, Write and
+# NotebookEdit calls on Claude Code's configuration.
 # Exit 2 = blocked, 0 = allowed.
 #
-# Why this hook exists (#1385): claude-settings.json's permissions.allow rule
-# syntax has exactly two matching primitives - literal text and `*` - and no
-# typed placeholder for "a directory goes here". So every rule of the shape
-# `git -C <dir> config ...`, `npm --prefix <dir> ci ...`, `find <dir> ...`,
-# `cd <dir> && ...` has to be written with a `*` in the directory position,
-# and that `*` matches any option injected there too: `git -C d -c
-# core.hooksPath=/evil status`, `npm --prefix d --script-shell=/evil run x`,
-# `find d -exec /evil {} +`. Claude Code itself warns about exactly this at
-# startup ("has a wildcard before the rest of the command, so it also matches
-# any options inserted at that position"). The permission layer cannot
-# express the check; this hook can, because it parses argv with a real shell
-# parser and inspects each word by position and value. With this hook in the
-# chain, the per-subcommand wildcard rules in claude-settings.json are
+# Registered (in claude-managed-settings.json) twice: second in the Bash
+# chain, and under its own `Edit|Write|NotebookEdit` matcher. Dispatch is on
+# `.tool_name`:
+#   Edit, Write        `.tool_input.file_path` must not be a protected path
+#   NotebookEdit       `.tool_input.notebook_path`, the same
+#   Bash, or empty     `.tool_input.command`, every check below (the payloads
+#                      the other Bash hooks' tests send omit tool_name, so
+#                      empty is treated as Bash)
+#   anything else      blocked, fail closed
+# The Edit/Write/NotebookEdit branch only resolves one path and never parses
+# shell; it lives here so the protected-path list and the path resolver exist
+# once.
+#
+# Why this hook exists (#1385): claude-managed-settings.json's
+# permissions.allow rule syntax has exactly two matching primitives - literal
+# text and `*` - and no typed placeholder for "a directory goes here". So
+# every rule of the shape `git -C <dir> config ...`, `npm --prefix <dir> ci
+# ...`, `find <dir> ...`, `cd <dir> && ...` has to be written with a `*` in
+# the directory position, and that `*` matches any option injected there
+# too: `git -C d -c core.hooksPath=/evil status`, `npm --prefix d
+# --script-shell=/evil run x`, `find d -exec /evil {} +`. Claude Code itself
+# warns about exactly this at startup ("has a wildcard before the rest of the
+# command, so it also matches any options inserted at that position"). The
+# permission layer cannot express the check; this hook can, because it
+# parses argv with a real shell parser and inspects each word by position and
+# value. With this hook in the chain, the per-subcommand wildcard rules are
 # redundant and are removed, leaving the bare tool-level entries plus a
 # belt-and-braces permissions.deny for the same code-execution flags.
 #
-# Checked commands (in the command-name position, or the position immediately
-# after a known wrapper name - see WRAPPERS):
-#   cd, pushd     exactly one argument, no flags; it must resolve under a root.
-#                 popd, or a bare cd/pushd, or cd -, changes to a directory
-#                 this hook cannot see, so they are blocked.
+# ---- Write targets (deny by default) ---------------------------------------
+#
+# Every command in command-allowlist carries a classification column:
+# `read-only` (the command writes no file named by its arguments) or `writer`.
+# A call whose command has no valid classification is blocked, so adding a
+# command to the allowlist without deciding whether it writes fails closed
+# rather than open; test/command-allowlist-parity.bats fails the build on an
+# unclassified entry too. A command behind a wrapper name (sudo, nice, ...)
+# is looked up by the wrapped name; the wrapper itself is banned upstream by
+# command-blocklist. Exactly `set -e` is read-only, matching
+# reject-obfuscated-commands' own carve-out for it.
+#
+# Write targets are:
+#   - the word of every `>`, `>>`, `>|`, `&>`, `&>>` and `<>` redirection, and
+#     of a `>&` redirection to anything but a file descriptor number or `-`
+#     (`>& file` writes the file, like `&>`);
+#   - for a writer, its arguments: by default every non-option argument, the
+#     value of every `--option=value`, and every tail of a short-option word
+#     (`-o/etc/x` is checked as `o/etc/x`, `/etc/x`, ...), because a glued
+#     value cannot be told from a flag cluster without each tool's own option
+#     table. A few writers have their own rule instead:
+#       rm, mv, cp   every operand and --target-directory (see below), which
+#                    must also be under a root before anything else runs;
+#       ln           with -s/--symbolic only the link being created (the last
+#                    operand, or the --target-directory), since a symbolic
+#                    link's target is text and anything written through the
+#                    link later is resolved physically; a hard link names an
+#                    existing file to share, so every operand is checked;
+#       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
+#                    restore, mv, rm, clone) or a call with an option starting
+#                    `--o` (`--output` and its abbreviations), and then every
+#                    argument after the subcommand, relative to the last -C;
+#       gh           only when it downloads or clones or is given an output
+#                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), since its
+#                    other arguments are routinely issue and PR text;
+#       dotnet       every argument, except the message of `dotnet changelog
+#                    -m`/`--message`, which is text;
+#       mktemp       every argument, plus $TMPDIR (default /tmp) when no
+#                    template is given or -t/--tmpdir names no directory;
+#       sed, awk     the program text (sed's script, awk's program and -v
+#                    assignments) is checked as text against the protected
+#                    names only, since a program routinely names paths it does
+#                    not write (`sed -n '/x/p'`); the file operands are write
+#                    targets only when editing in place (sed -i/--in-place,
+#                    awk -i/--include/-l/--load).
+# Each write target must be fully literal (a variable or substitution could
+# be anything, so it is blocked, as is `$'...'` quoting); it is resolved like
+# a path argument below, and then must not be a protected path (checked both
+# with `realpath -ms`, so `..` cannot hide a protected name, and `realpath
+# -m`, so a symlink to one cannot either) and must be under a root.
+# /dev/null, /dev/stdout and /dev/stderr are always allowed. An unquoted glob
+# is also expanded now and every match checked against the protected paths.
+#
+# Protected paths, wherever they sit (a repo's own `.claude/`, the user's
+# `~/.claude/`, any nested directory):
+#   .claude                          the directory itself
+#   .claude/settings*.json*          settings, settings.local, backups
+#   .claude/hooks, .claude/agents,   the directories and everything under them
+#   .claude/skills
+#   .claude.json                     the user's global Claude Code state
+#   .mcp.json                        project MCP server config
+#   /etc/claude-code                 managed settings and the installed hooks
+# The tracked sources under containers/base/development-full/ have no
+# `.claude/` path segment, so they stay editable for normal hook development:
+# they take effect only once a human reinstalls or rebuilds.
+#
+# Accepted gaps, each documented in ai/local/claude-hooks.instructions.md:
+#   - Code run by a writer (python3, node, npm/npx/bun scripts, dotnet run,
+#     pre-commit hooks, ...) writes wherever it likes; only the paths named on
+#     the command line are checked. The same goes for files a tool writes
+#     implicitly (caches, node_modules, ~/.nuget).
+#   - An awk or sed program can build a file name at run time (awk string
+#     concatenation and system(), GNU sed's `e`), and a program file given
+#     with -f is not read, so for those only a protected name spelled out in
+#     the program text is caught.
+#   - git subcommands that write the working tree from commit content
+#     (merge, cherry-pick, reset --hard, stash, pull, switch, checkout
+#     <branch>, rebase) can write a protected path with nothing protected on
+#     the command line. Blocking them would break normal work; the managed
+#     settings locks, the root-owned /etc/claude-code and the agent
+#     entrypoint's refusal of a repo whose `.claude/settings*.json` or
+#     `.mcp.json` differs from origin/main are what hold against them.
+#   - A recursive copy of a directory whose contents include a `.claude`
+#     entry (`cp -r /tmp/d/. .`) names nothing protected.
+# Accepted false positives: a sed or awk program, or any other writer
+# argument, that merely mentions a protected path (`sed -i
+# 's|~/.claude/hooks/|...|' README.md`) is blocked; make such a text edit with
+# the Edit tool instead, which checks only the file being edited.
+#
+# ---- Path-taking commands --------------------------------------------------
+#
+# Checked whatever their classification (in the command-name position, or
+# the position immediately after a known wrapper name - see WRAPPERS):
+#   cd, pushd     exactly one argument, no flags, no glob; it must resolve
+#                 under a root. popd, or a bare cd/pushd, or cd -, changes to
+#                 a directory this hook cannot see, so they are blocked.
 #   git           every `-C <dir>` (cumulative, each relative to the previous)
 #                 must resolve under a root; `--exec-path`, `--git-dir`,
 #                 `--work-tree`, `--namespace`, `--super-prefix` are denied
@@ -39,7 +147,7 @@
 #                 gpg.program, ...) and would also let `-c
 #                 commit.gpgsign=false` quietly defeat enforce-git-identity.
 #                 Only the global options before the subcommand are
-#                 inspected; enforce-git-dash-c still owns "must have -C".
+#                 inspected here; enforce-git-dash-c still owns "must have -C".
 #   npm           `--prefix <dir>` / `--prefix=<dir>` must resolve under a
 #                 root; `--script-shell`, `--userconfig`, `--globalconfig`
 #                 (any form) are denied outright.
@@ -59,67 +167,71 @@
 #
 # Path resolution: a word is resolved with `realpath -m` (existing symlink
 # components followed, so a symlink inside a root pointing outside it fails;
-# non-existent trailing components allowed, since rm/mv/cp/find/git -C
-# targets need not exist yet) against a base directory, then must equal a
-# root or sit strictly beneath one. The base is this hook's own $PWD unless
-# the command's very first call expression is its only `cd <dir>` (or
-# `pushd <dir>`), in which case that already-validated directory is the base
-# for every later relative path. Any other cd/pushd/popd arrangement - more
-# than one, not first, or nested inside a substitution - makes the base
-# unknowable by static parsing (the flat call walk discards control flow:
-# `cd a || cd b`, `(cd x; ...)`), so every later relative path is blocked
-# (absolute paths still work). A glob (`*`, `?`, `[`) in a path word is
-# allowed but only the literal prefix before the first glob character is
-# resolved: a glob cannot expand to `..` (pathname expansion never matches
-# `..`, and `.`-prefixed names only with dotglob), so the expansion can never
-# climb above that prefix. Brace expansion, tilde and backslash are blocked
-# in a path word - each can turn one literal into a different word (or
-# several) at runtime, and enforce-ssh-host-and-key documents the same
-# exclusion for the same reason. A non-literal word (variable, substitution,
+# non-existent trailing components allowed, since write targets need not
+# exist yet) against a base directory, then must equal a root or sit strictly
+# beneath one. The base is this hook's own $PWD unless the command's very
+# first call expression is its only `cd <dir>` (or `pushd <dir>`), in which
+# case that already-validated directory is the base for every later relative
+# path. Any other cd/pushd/popd arrangement - more than one, not first, or
+# nested inside a substitution - makes the base unknowable by static parsing
+# (the flat call walk discards control flow: `cd a || cd b`, `(cd x; ...)`),
+# so every later relative path is blocked (absolute paths still work). An
+# unquoted glob (`*`, `?`, `[`) in a path word is allowed but only the literal
+# prefix before the first glob character is resolved: a glob cannot expand
+# to `..` (pathname expansion never matches `..`, and `.`-prefixed names only
+# with dotglob), so the expansion can never climb above that prefix. Brace
+# expansion (an unquoted `{` with a `,` or `..`), a tilde bash would expand
+# (leading, or after an unquoted `=` or `:`) and a backslash outside single
+# quotes are blocked in a path word - each can turn one literal into a
+# different word (or several) at runtime, and enforce-ssh-host-and-key
+# documents the same exclusion for the same reason. Quoted characters are
+# literal and need none of this. A non-literal word (variable, substitution,
 # ANSI-C quoting) in a path position is blocked: it could evaluate to
-# anything.
+# anything. Once a call that can create a symlink has run (see
+# LINK_CAPABLE_NAMES), every later checked path must already exist.
 #
 # Allowed roots come from the data file `allowed-dirs` next to this hook
-# (baked root:root read-only into the container, listing /workspace/repo,
-# /workspace/rules and /workspace/tmp). On a host, where those do not exist,
-# an `allowed-dirs.local` in the same directory takes precedence when present
-# (created by hand, never shipped; the container's hooks directory is
-# root-owned, so it cannot be planted there). One path per line, `#`
-# comments and blank lines ignored, a leading `~` expands to $HOME and a
-# `$NAME` prefix to that environment variable - a line whose variable is
-# unset or empty is skipped rather than resolving to `/`. Each surviving
+# (installed root:root read-only, listing /workspace/repo, /workspace/rules
+# and /workspace/tmp). On a host, where those do not exist, an
+# `allowed-dirs.local` in the same directory takes precedence when present
+# (created by install-claude-hooks from a path argument, never shipped; the
+# hooks directory is root-owned, so it cannot be planted there). One path per
+# line, `#` comments and blank lines ignored, a leading `~` expands to $HOME
+# and a `$NAME` prefix to that environment variable - a line whose variable
+# is unset or empty is skipped rather than resolving to `/`. Each surviving
 # line is itself passed through `realpath -m`. No usable roots at all fails
-# closed: every checked call is blocked, commands without one still pass.
+# closed: every check that needs one is blocked.
 #
 # Parses the command with shfmt (mvdan/sh) and walks the resulting AST with
-# a single jq pass that emits a header (does any checked command appear at
-# all, how many cd-family calls, is the first call one) followed by every
-# call's words, base64-encoded one per line - the same delimiter-collision-
-# free transport as enforce-ssh-host-and-key (see its header for why a tab/
+# a single jq pass that emits a header (how many cd-family calls, is the
+# first call one) followed by every call's and every writing redirection's
+# words, base64-encoded one per line - the same delimiter-collision-free
+# transport as enforce-ssh-host-and-key (see its header for why a tab/
 # newline text join was a live bypass), folded into the AST query so there
-# is one jq fork per command rather than one per call. A command with no
-# checked command name exits before the allowlist is even read, so the
-# common no-op case costs jq + shfmt + jq and nothing else. Obfuscated
-# command names, quote-splices and non-ASCII bytes are not this hook's job:
-# reject-obfuscated-commands rejects those categorically before this hook
-# ever runs, which is also what makes the plain substring permissions.deny
-# entries in claude-settings.json a genuine second layer rather than a weak
-# one. No auto-correction: a directory outside the allowed roots is a fact
-# about what the command would do, not a syntax slip a rewrite could fix.
+# is one jq fork per command rather than one per call. Write targets are
+# queued and resolved in one batch at the end: one realpath per mode for the
+# whole command rather than two per target. Obfuscated command names,
+# quote-splices in a command name and non-ASCII bytes are not this hook's
+# job: reject-obfuscated-commands rejects those categorically before this
+# hook ever runs, which is also what makes the plain substring
+# permissions.deny entries a genuine second layer rather than a weak one. No
+# auto-correction: a path outside the allowed roots is a fact about what the
+# command would do, not a syntax slip a rewrite could fix.
 #
-# Fails closed: jq, shfmt or realpath missing, the command not parsing as
-# shell, a realpath failure, or no usable allowed roots all block.
+# Fails closed: jq, shfmt or realpath missing, the payload or the command not
+# parsing, an unclassified or unreadable command-allowlist, a realpath
+# failure, or no usable allowed roots all block.
 
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
 
-# Directory of this script (a symlink path on a host install resolves to the
-# ~/.claude/hooks directory it was linked into, which is where allowed-dirs
-# and any allowed-dirs.local live - no need to follow the link).
+# Directory of this script, which is where allowed-dirs, any
+# allowed-dirs.local and command-allowlist live.
 case "${BASH_SOURCE[0]}" in
   */*) HOOK_DIR="${BASH_SOURCE[0]%/*}" ;;
   *) HOOK_DIR="." ;;
 esac
+COMMAND_ALLOWLIST="${HOOK_DIR}/command-allowlist"
 
 # The message says the command never ran (not "blocked mid-run") because a denial is easy to
 # misread as "started, now wait for it" - which then waits forever, since a denied call never
@@ -127,6 +239,10 @@ esac
 block() {
   printf 'Blocked (command did not run - fix and retry, do not wait for it): %s\n' "$1" >&2
   exit 2
+}
+
+block_config_write() {
+  block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills and MCP config are changed by a human editing the tracked source files and reinstalling"
 }
 
 in_list() {
@@ -143,6 +259,7 @@ in_list() {
 # bans these upstream in the normal PreToolUse chain.
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 CD_NAMES=(cd pushd popd)
+# Commands with a path check of their own, whatever their classification.
 CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
 # Commands that can leave a new symlink behind (see resolve_word), plus the
 # git subcommands that materialise repo content - which the prompt-injection
@@ -150,8 +267,24 @@ CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
 # ...) cannot, so it does not trip the rule.
 LINK_CAPABLE_NAMES=(ln cp mv tar unzip rsync)
 GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase cherry-pick revert am apply stash reset worktree submodule archive read-tree)
+# git subcommands that write paths named on the command line (clone writes a
+# whole tree at its destination). restore, mv and rm are not on
+# enforce-git-dash-c's subcommand allowlist today; they stay here so allowing
+# them there cannot silently skip this check.
+GIT_PATH_WRITERS=(checkout restore mv rm clone)
+# gh writes a named path only when it downloads or clones, or is given an
+# output option: its other arguments are routinely issue and PR text that may
+# well name these paths without writing them.
+GH_WRITE_ARGS=(download clone)
+GH_WRITE_OPTION_RE='^(-D|--dir|-O|--output)'
 LINK_SEEN=0
 GIT_SUBCOMMAND=""
+GIT_SUBCOMMAND_INDEX=0
+GIT_BASE=""
+GIT_RELATIVE_OK=1
+# Option names whose value is text, not a path, for the writer being checked
+# (see queue_all_arguments); set per call.
+TEXT_VALUE_OPTIONS=()
 
 is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
 
@@ -174,9 +307,48 @@ FIND_DENIED_ACTIONS=(-exec -execdir -ok -okdir -delete -fprint -fprint0 -fprintf
 
 MARKER='(non-literal)'
 
+# ---- protected paths -------------------------------------------------------
+
+# Text check, for words that are not resolved as paths (sed and awk programs).
+names_protected_config() {
+  case "$1" in
+    *.claude | *.claude/ | *.claude/settings*.json* | *.claude/hooks* | *.claude/agents* | *.claude/skills* | *.claude.json* | *.mcp.json* | *etc/claude-code*) return 0 ;;
+  esac
+  return 1
+}
+
+# Path check, for a fully resolved absolute path.
+is_protected_path() {
+  case "$1" in
+    */.claude | */.claude/settings*.json* | */.claude/hooks | */.claude/hooks/* | */.claude/agents | */.claude/agents/* | */.claude/skills | */.claude/skills/*) return 0 ;;
+    */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
+  esac
+  return 1
+}
+
+# ---- command classification ------------------------------------------------
+
+declare -A COMMAND_CLASS=()
+CLASSIFIED_LINE_RE='^[[:space:]]*([^[:space:]]+)[[:space:]]+(read-only|writer)[[:space:]]*$'
+COMMENT_LINE_RE='^[[:space:]]*(#|$)'
+
+# Fills COMMAND_CLASS from command-allowlist. A line without exactly a name
+# and a valid classification is skipped, so its command is unclassified and
+# blocked.
+load_classes() {
+  local line
+  [ -r "$COMMAND_ALLOWLIST" ] || block "${COMMAND_ALLOWLIST##*/} could not be read - failing closed"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ $COMMENT_LINE_RE ]] && continue
+    [[ "$line" =~ $CLASSIFIED_LINE_RE ]] || continue
+    COMMAND_CLASS["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+  done <"$COMMAND_ALLOWLIST"
+}
+
 # ---- allowed roots ---------------------------------------------------------
 
 ROOTS=()
+ROOTS_LOADED=0
 load_roots() {
   local file="${HOOK_DIR}/allowed-dirs" line expanded resolved name rest
   [ -f "${HOOK_DIR}/allowed-dirs.local" ] && file="${HOOK_DIR}/allowed-dirs.local"
@@ -208,6 +380,16 @@ load_roots() {
   done <"$file"
 }
 
+# Loads the roots on first use and fails closed when there are none, so a
+# command that needs no root check never reads allowed-dirs.
+require_roots() {
+  if [ "$ROOTS_LOADED" -eq 0 ]; then
+    load_roots
+    ROOTS_LOADED=1
+  fi
+  [ "${#ROOTS[@]}" -gt 0 ] || block "no allowed directories are configured (${ALLOWED_DIRS_FILE}) - failing closed"
+}
+
 is_root() { in_list "$1" "${ROOTS[@]}"; }
 
 under_root() {
@@ -228,44 +410,57 @@ under_root() {
 BASE_DIR="$PWD"
 RELATIVE_OK=1
 
-# Resolves literal word $1 against base $3 (default BASE_DIR), with relative
-# paths permitted iff $4 (default RELATIVE_OK) is 1, into the global RESOLVED.
-# Blocks on anything that could change meaning at runtime. $2 is the label
-# used in messages, e.g. "git -C" or "rm operand". Runs in the main shell
-# (never inside $(...)) so that block's exit is the hook's exit.
-RESOLVED=""
-resolve_word() {
-  local word="$1" label="$2" base="${3:-$BASE_DIR}" relative_ok="${4:-$RELATIVE_OK}" prefix
-  [ "$word" = "$MARKER" ] && block "${label} argument could not be verified (non-literal argument)"
+# Checks literal word $1 (transport flags $2: N non-literal, r a character
+# that could expand, g an unquoted glob) for anything that could change its
+# meaning at runtime, then sets PREPARED_ABS to the absolute path to resolve
+# (the literal prefix before an unquoted glob) and PREPARED_GLOB to the
+# absolute glob pattern, or "" when there is none. $3 is the label used in
+# messages, e.g. "git -C" or "rm operand"; $4 the base (default BASE_DIR) and
+# $5 whether relative paths are permitted (default RELATIVE_OK). Runs in the
+# main shell (never inside $(...)) so that block's exit is the hook's exit.
+PREPARED_ABS=""
+PREPARED_GLOB=""
+prepare_word() {
+  local word="$1" flags="$2" label="$3" base="${4:-$BASE_DIR}" relative_ok="${5:-$RELATIVE_OK}" prefix
+  [ "$flags" = N ] && block "${label} argument could not be verified (non-literal argument)"
   case "$word" in
     *$'\n'* | *$'\t'* | *$'\r'*) block "${label} argument contains a control character" ;;
-    *'{'* | *'}'* | *\~* | *\\*) block "${label} argument '${word}' contains a character that could expand into a different path at runtime (brace, tilde or backslash)" ;;
   esac
-  # Only the literal prefix before the first glob character is resolved - a
-  # glob can never expand upward past it (see header).
+  [[ "$flags" == *r* ]] && block "${label} argument '${word}' contains a character that could expand into a different path at runtime (brace, tilde or backslash)"
   prefix="$word"
-  case "$prefix" in
-    *'*'* | *'?'* | *'['*)
-      # A glob component itself never matches `..`, but a literal `..`
-      # component AFTER the glob is expanded by bash exactly as written
-      # (`su*/../../etc` -> `sub/../../etc`), so the unresolved remainder
-      # must not climb. Blocking any `..` component in a glob word is the
-      # simple, complete rule.
-      case "/${word}/" in
-        */../*) block "${label} argument '${word}' combines a glob with a .. component - the part after the glob is not resolved and could climb out of the allowed directories" ;;
-      esac
-      prefix="${prefix%%[\*\?\[]*}"
-      prefix="${prefix%/*}"
-      [[ "$word" == /* ]] && [ -z "$prefix" ] && prefix="/"
-      ;;
-  esac
+  PREPARED_GLOB=""
+  if [[ "$flags" == *g* ]]; then
+    # A glob component itself never matches `..`, but a literal `..`
+    # component AFTER the glob is expanded by bash exactly as written
+    # (`su*/../../etc` -> `sub/../../etc`), so the unresolved remainder
+    # must not climb. Blocking any `..` component in a glob word is the
+    # simple, complete rule.
+    case "/${word}/" in
+      */../*) block "${label} argument '${word}' combines a glob with a .. component - the part after the glob is not resolved and could climb out of the allowed directories" ;;
+    esac
+    prefix="${prefix%%[\*\?\[]*}"
+    prefix="${prefix%/*}"
+    [[ "$word" == /* ]] && [ -z "$prefix" ] && prefix="/"
+    PREPARED_GLOB="$word"
+  fi
   if [[ "$prefix" != /* ]]; then
     [ "$relative_ok" = 1 ] || block "${label} argument '${word}' is relative, but a directory change earlier in this command makes the working directory unknowable - use an absolute path"
     prefix="${base}/${prefix}"
   fi
+  if [ -n "$PREPARED_GLOB" ] && [[ "$PREPARED_GLOB" != /* ]]; then
+    PREPARED_GLOB="${base}/${PREPARED_GLOB}"
+  fi
+  PREPARED_ABS="$prefix"
+}
+
+# Resolves word $1 now, with the arguments of prepare_word, into the global
+# RESOLVED.
+RESOLVED=""
+resolve_word() {
+  prepare_word "$@"
   # A word containing a newline was blocked above, so $(...) has nothing to
   # strip here.
-  RESOLVED=$(realpath -m -- "$prefix" 2>/dev/null) || block "${label} argument '${word}' could not be resolved"
+  RESOLVED=$(realpath -m -- "$PREPARED_ABS" 2>/dev/null) || block "${3} argument '${1}' could not be resolved"
   # Symlinks are resolved as they exist NOW. An earlier call in the same
   # command that can create one (ln, cp/mv of a link, tar/unzip, any git
   # checkout-shaped subcommand materialising repo content) could make a
@@ -274,18 +469,114 @@ resolve_word() {
   # already exist - and therefore resolved through real, current links -
   # are accepted.
   if [ "$LINK_SEEN" -eq 1 ] && [ ! -e "$RESOLVED" ]; then
-    block "${label} argument '${word}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+    block "${3} argument '${1}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
   fi
 }
 
 require_under_root() {
+  require_roots
   resolve_word "$@"
-  under_root "$RESOLVED" || block "${2} argument '${1}' resolves to '${RESOLVED}', which is outside the allowed directories"
+  under_root "$RESOLVED" || block "${3} argument '${1}' resolves to '${RESOLVED}', which is outside the allowed directories"
+}
+
+# ---- queued write targets --------------------------------------------------
+
+# Paths waiting to be resolved in one batch by resolve_queued_paths, with the
+# label and word each is reported under, whether it must also be under a root
+# (w) or only outside the protected paths (p), and whether it must already
+# exist (an earlier call could have created a symlink).
+QUEUED_PATHS=()
+QUEUED_LABELS=()
+QUEUED_WORDS=()
+QUEUED_MODES=()
+QUEUED_MUST_EXIST=()
+
+queue_path() {
+  QUEUED_PATHS+=("$1")
+  QUEUED_LABELS+=("$2")
+  QUEUED_WORDS+=("$3")
+  QUEUED_MODES+=("$4")
+  QUEUED_MUST_EXIST+=("$5")
+}
+
+# Queues every current match of the unquoted glob prepare_word left in
+# PREPARED_GLOB for the protected-path check, reported as label $1 / word $2.
+queue_glob_matches() {
+  local match
+  [ -n "$PREPARED_GLOB" ] || return 0
+  while IFS= read -r match; do
+    [ -n "$match" ] && queue_path "$match" "$1" "$2" p 0
+  done < <(compgen -G "$PREPARED_GLOB")
+}
+
+# Queues word $1 (flags $2) as a write target labelled $3, relative to base
+# $4 with relative paths permitted iff $5 (defaults as for prepare_word). Its
+# text is checked against the protected names as well, which catches a
+# protected path inside a word that is not itself one path (sqlite3's
+# `.once FILE`, `--logger "trx;LogFileName=FILE"`).
+queue_write_target() {
+  case "$1" in
+    /dev/null | /dev/stdout | /dev/stderr) return 0 ;;
+  esac
+  [ "$2" != N ] && names_protected_config "$1" && block_config_write "$1"
+  prepare_word "$@"
+  queue_path "$PREPARED_ABS" "$3" "$1" w "$LINK_SEEN"
+  queue_glob_matches "$3" "$1"
+}
+
+# Queues word $1 (flags $2) for the protected-path check only - for operands
+# a dedicated check has already held to the roots.
+queue_protected() {
+  prepare_word "$@"
+  queue_path "$PREPARED_ABS" "$3" "$1" p 0
+  queue_glob_matches "$3" "$1"
+}
+
+# Checks word $1 (flags $2), program text labelled $3, against the protected
+# names only. Non-literal program text could name anything, so it blocks.
+check_program_text() {
+  [ "$2" = N ] && block "${3} could not be verified (non-literal) - a program can name files it writes"
+  names_protected_config "$1" && block_config_write "$1"
+  return 0
+}
+
+# Resolves every queued path with `realpath -ms` (so `..` cannot hide a
+# protected name) and `realpath -m` (so a symlink to a protected file cannot
+# either, and so a symlink out of a root fails the root check), then blocks
+# if any is protected, and then if any write target is outside the roots or
+# does not exist when it must. Each realpath prints one NUL-terminated line
+# per operand, so any count other than two per path means one of them
+# failed, which fails closed.
+resolve_queued_paths() {
+  local count="${#QUEUED_PATHS[@]}" i physical
+  local -a results=()
+  [ "$count" -eq 0 ] && return 0
+  mapfile -t -d '' results < <(
+    realpath -ms -z -- "${QUEUED_PATHS[@]}" 2>/dev/null
+    realpath -m -z -- "${QUEUED_PATHS[@]}" 2>/dev/null
+  )
+  [ "${#results[@]}" -eq $((2 * count)) ] || block 'a write target could not be resolved - failing closed'
+  for ((i = 0; i < count; i++)); do
+    if is_protected_path "${results[i]}" || is_protected_path "${results[count + i]}"; then
+      block_config_write "${QUEUED_WORDS[i]}"
+    fi
+  done
+  for ((i = 0; i < count; i++)); do
+    [ "${QUEUED_MODES[i]}" = w ] || continue
+    require_roots
+    physical="${results[count + i]}"
+    under_root "$physical" || block "${QUEUED_LABELS[i]} argument '${QUEUED_WORDS[i]}' resolves to '${physical}', which is outside the allowed directories"
+    if [ "${QUEUED_MUST_EXIST[i]}" -eq 1 ] && [ ! -e "$physical" ]; then
+      block "${QUEUED_LABELS[i]} argument '${QUEUED_WORDS[i]}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+    fi
+  done
+  return 0
 }
 
 # ---- per-command checks ----------------------------------------------------
-# Each receives the call's words in the array `words` with `i` = index of the
-# command name, and either blocks or returns 0.
+# Each receives the call's words in the array `words` (transport flags in
+# `wflags`) with `i` = index of the command name, and either blocks or
+# returns 0.
 
 # Set by check_cd for the main loop's base-directory tracking.
 CD_TARGET=""
@@ -297,7 +588,10 @@ check_cd() {
   case "$arg" in
     -*) block "${name} flags (including 'cd -') are not permitted - use ${name} <absolute dir>" ;;
   esac
-  require_under_root "$arg" "$name"
+  # A glob could change into any match, so the directory later relative
+  # paths resolve against would be unknown.
+  [[ "${wflags[$((i + 1))]}" == *g* ]] && block "${name} target '${arg}' is a glob - name the directory exactly"
+  require_under_root "$arg" "${wflags[$((i + 1))]}" "$name"
   # A cd to a directory that does not exist fails at runtime and leaves the
   # shell where it was, so a later relative path would resolve somewhere
   # this hook did not check. Only an existing directory may become the base.
@@ -312,21 +606,25 @@ check_cd() {
 # a root, exactly as `-C .` would have to be.
 require_git_cwd_when_no_dash_c() {
   [ "$1" -eq 1 ] && return 0
-  require_under_root "." "git (implicit -C ., the working directory)"
+  require_under_root "." "" "git (implicit -C ., the working directory)"
 }
 
 check_git() {
   local j=$((i + 1)) tok keyval base="$BASE_DIR" relative_ok="$RELATIVE_OK" saw_C=0
   GIT_SUBCOMMAND=""
+  GIT_SUBCOMMAND_INDEX=0
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
+    # Each -C is relative to the previous one, exactly as git applies them -
+    # a local cursor, never the globals; paths after the subcommand are
+    # relative to the last one.
+    GIT_BASE="$base"
+    GIT_RELATIVE_OK="$relative_ok"
     case "$tok" in
       "$MARKER") block 'a git global option could not be verified (non-literal argument)' ;;
       -C)
         [ "$((j + 1))" -lt "${#words[@]}" ] || block 'git -C requires a directory'
-        # Each -C is relative to the previous one, exactly as git applies
-        # them - a local cursor, never the globals.
-        require_under_root "${words[$((j + 1))]}" "git -C" "$base" "$relative_ok"
+        require_under_root "${words[$((j + 1))]}" "${wflags[$((j + 1))]}" "git -C" "$base" "$relative_ok"
         base="$RESOLVED"
         relative_ok=1
         saw_C=1
@@ -350,7 +648,13 @@ check_git() {
         ;;
       --) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;;
       -*) : ;; # any other global option (--no-pager, --bare, -p, ...) is inert here
-      *) GIT_SUBCOMMAND="$tok"; require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;; # the subcommand - global options end here
+      *)
+        # the subcommand - global options end here
+        GIT_SUBCOMMAND="$tok"
+        GIT_SUBCOMMAND_INDEX="$j"
+        require_git_cwd_when_no_dash_c "$saw_C"
+        return 0
+        ;;
     esac
     j=$((j + 1))
   done
@@ -375,9 +679,10 @@ npm_canonical_option() {
 }
 
 check_npm() {
-  local j=$((i + 1)) tok opt val has_val
+  local j=$((i + 1)) tok opt val val_flags has_val
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
+    val_flags="${wflags[$j]}"
     case "$tok" in
       -C) opt="prefix"; has_val=0 ;; # npm's short alias for --prefix
       # nopt strips ALL leading dashes, so -prefix and -script-shell are the
@@ -392,9 +697,10 @@ check_npm() {
         if [ "$has_val" -eq 0 ]; then
           [ "$((j + 1))" -lt "${#words[@]}" ] || block 'npm --prefix requires a directory'
           val="${words[$((j + 1))]}"
+          val_flags="${wflags[$((j + 1))]}"
           j=$((j + 1))
         fi
-        require_under_root "$val" "npm --prefix"
+        require_under_root "$val" "$val_flags" "npm --prefix"
         ;;
       script-shell | userconfig | globalconfig)
         block "npm --${opt} is not permitted (any abbreviation of it too) - it changes which program npm runs scripts through or which config it trusts"
@@ -418,11 +724,11 @@ check_find() {
       -D | -D* | -O | -O*) block "find ${tok} is not permitted - debug/optimisation options are not needed here and hide where the starting points begin" ;;
       -* | '(' | '!' | ',') break ;;
     esac
-    require_under_root "$tok" "find starting point"
+    require_under_root "$tok" "${wflags[$j]}" "find starting point"
     paths=$((paths + 1))
     j=$((j + 1))
   done
-  [ "$paths" -eq 0 ] && require_under_root "." "find starting point (implicit .)"
+  [ "$paths" -eq 0 ] && require_under_root "." "" "find starting point (implicit .)"
   # Denied actions anywhere in the expression.
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
@@ -432,13 +738,13 @@ check_find() {
   return 0
 }
 
-# Classifies one cp/mv option word: returns 0 when it is --target-directory
-# in any spelling getopt accepts, setting TARGET_DIR_VALUE to the attached
-# value ("" when the value is the next word). Long: `--target-directory`,
-# any unique abbreviation of it (`--t` onwards - no other cp/mv long option
-# starts with t), with or without `=value`. Short: `-t`, or a bundled
-# cluster containing t (`-rt`, `-rt/etc`): everything after the first t is
-# the attached value.
+# Classifies one cp/mv/ln option word: returns 0 when it is
+# --target-directory in any spelling getopt accepts, setting TARGET_DIR_VALUE
+# to the attached value ("" when the value is the next word). Long:
+# `--target-directory`, any unique abbreviation of it (`--t` onwards - no
+# other cp/mv/ln long option starts with t), with or without `=value`.
+# Short: `-t`, or a bundled cluster containing t (`-rt`, `-rt/etc`):
+# everything after the first t is the attached value.
 TARGET_DIR_VALUE=""
 target_directory_option() {
   local tok="$1" name
@@ -465,18 +771,26 @@ target_directory_option() {
 # a glob under a root (`rm -rf <root>/*`) empties it but leaves it in place,
 # and mv's last operand is a destination, into which moving is fine.
 deny_root_operand() {
-  local name="$1" word="$2"
-  case "$word" in *'*'* | *'?'* | *'['*) return 0 ;; esac
+  local name="$1" word="$2" flags="$3"
+  [[ "$flags" == *g* ]] && return 0
   is_root "$RESOLVED" && block "${name} may not target an allowed root directory itself ('${word}' resolves to '${RESOLVED}')"
   return 0
 }
 
+# Holds operand $1 (flags $2) of $3 to the roots now and queues it for the
+# protected-path check.
+check_operand() {
+  require_under_root "$1" "$2" "$3"
+  queue_protected "$1" "$2" "$3"
+}
+
 check_rm_mv_cp() {
-  local name="${words[$i]}" j=$((i + 1)) tok operands_only=0 last_operand=""
-  local -a operands=()
+  local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 last_operand="" k
+  local -a operands=() operand_flags=()
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
-    if [ "$operands_only" -eq 0 ]; then
+    flags="${wflags[$j]}"
+    if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
         --no-preserve-root) block 'rm --no-preserve-root is not permitted' ;;
@@ -487,10 +801,10 @@ check_rm_mv_cp() {
           # value attached or following (-rt/etc, -rt /etc).
           if [ "$name" != "rm" ] && target_directory_option "$tok"; then
             if [ -n "$TARGET_DIR_VALUE" ]; then
-              require_under_root "$TARGET_DIR_VALUE" "${name} --target-directory"
+              check_operand "$TARGET_DIR_VALUE" "$flags" "${name} --target-directory"
             else
               [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
-              require_under_root "${words[$((j + 1))]}" "${name} --target-directory"
+              check_operand "${words[$((j + 1))]}" "${wflags[$((j + 1))]}" "${name} --target-directory"
               j=$((j + 1))
             fi
           fi
@@ -499,23 +813,314 @@ check_rm_mv_cp() {
           ;;
       esac
     fi
-    require_under_root "$tok" "${name} operand"
+    check_operand "$tok" "$flags" "${name} operand"
     operands+=("$tok")
+    operand_flags+=("$flags")
     case "$name" in
-      rm) deny_root_operand rm "$tok" ;;
+      rm) deny_root_operand rm "$tok" "$flags" ;;
       mv) last_operand="$tok" ;;
     esac
     j=$((j + 1))
   done
   # For mv every operand but the last is a source being moved away.
   if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
-    for tok in "${operands[@]}"; do
-      [ "$tok" = "$last_operand" ] && continue
-      resolve_word "$tok" "mv operand"
-      deny_root_operand mv "$tok"
+    for ((k = 0; k < ${#operands[@]} - 1; k++)); do
+      [ "${operands[k]}" = "$last_operand" ] && continue
+      resolve_word "${operands[k]}" "${operand_flags[k]}" "mv operand"
+      deny_root_operand mv "${operands[k]}" "${operand_flags[k]}"
     done
   fi
   return 0
+}
+
+# ---- writer target extraction ----------------------------------------------
+
+# Queues the call's words from index $1 onwards as write targets, relative to
+# base $2 with relative paths permitted iff $3 (defaults as for
+# prepare_word): every non-option word, the value of `--option=value`, every
+# tail of a short-option word (see header), and every word after `--`. The
+# value of an option in TEXT_VALUE_OPTIONS is skipped.
+queue_all_arguments() {
+  local j="$1" base="${2:-$BASE_DIR}" relative_ok="${3:-$RELATIVE_OK}" name="${words[$i]##*/}" tok flags k operands_only=0
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    flags="${wflags[$j]}"
+    if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
+      case "$tok" in
+        --) operands_only=1; j=$((j + 1)); continue ;;
+        -) j=$((j + 1)); continue ;; # stdin/stdout
+        -*)
+          if [ "${#TEXT_VALUE_OPTIONS[@]}" -gt 0 ] && in_list "${tok%%=*}" "${TEXT_VALUE_OPTIONS[@]}"; then
+            [[ "$tok" == *=* ]] || j=$((j + 1))
+            j=$((j + 1))
+            continue
+          fi
+          case "$tok" in
+            *=*) queue_write_target "${tok#*=}" "$flags" "${name} ${tok%%=*}" "$base" "$relative_ok" ;;
+            --*) : ;; # a long option takes a glued value only after =
+            *)
+              for ((k = 2; k < ${#tok}; k++)); do
+                queue_write_target "${tok:k}" "$flags" "${name} ${tok:0:2}" "$base" "$relative_ok"
+              done
+              ;;
+          esac
+          j=$((j + 1))
+          continue
+          ;;
+      esac
+    fi
+    queue_write_target "$tok" "$flags" "$name" "$base" "$relative_ok"
+    j=$((j + 1))
+  done
+  return 0
+}
+
+git_write_targets() {
+  local j writes=0
+  [ -n "$GIT_SUBCOMMAND" ] || return 0
+  in_list "$GIT_SUBCOMMAND" "${GIT_PATH_WRITERS[@]}" && writes=1
+  for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
+    [[ "${words[$j]}" == --o* ]] && writes=1
+  done
+  [ "$writes" -eq 1 ] && queue_all_arguments $((GIT_SUBCOMMAND_INDEX + 1)) "$GIT_BASE" "$GIT_RELATIVE_OK"
+  return 0
+}
+
+gh_write_targets() {
+  local j
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    if in_list "${words[$j]}" "${GH_WRITE_ARGS[@]}" || [[ "${words[$j]}" =~ $GH_WRITE_OPTION_RE ]]; then
+      queue_all_arguments $((i + 1))
+      return 0
+    fi
+  done
+  return 0
+}
+
+dotnet_write_targets() {
+  local j
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    case "${words[$j]}" in
+      -*) continue ;;
+      changelog) TEXT_VALUE_OPTIONS=(-m --message) ;;
+    esac
+    break
+  done
+  queue_all_arguments $((i + 1))
+  TEXT_VALUE_OPTIONS=()
+}
+
+mktemp_write_targets() {
+  local j template=0 implicit_dir=0
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    case "${words[$j]}" in
+      -t | --tmpdir) implicit_dir=1 ;;
+      -p) j=$((j + 1)) ;;
+      -*) : ;;
+      *) template=1 ;;
+    esac
+  done
+  [ "$template" -eq 0 ] && implicit_dir=1
+  queue_all_arguments $((i + 1))
+  [ "$implicit_dir" -eq 1 ] && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
+  return 0
+}
+
+ln_write_targets() {
+  local j tok flags symbolic=0 operands_only=0 last="" last_flags=""
+  local -a operands=()
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    flags="${wflags[$j]}"
+    if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
+      case "$tok" in
+        --) operands_only=1; continue ;;
+        --sy* | -s) symbolic=1; continue ;;
+        --*) continue ;;
+        -*)
+          [[ "$tok" == *s* ]] && [[ "${tok%%t*}" == *s* ]] && symbolic=1
+          continue
+          ;;
+      esac
+    fi
+    operands+=("$tok")
+    last="$tok"
+    last_flags="$flags"
+  done
+  if [ "$symbolic" -eq 0 ]; then
+    queue_all_arguments $((i + 1))
+    return 0
+  fi
+  # Symbolic: only what is created - the --target-directory, else the last
+  # operand (a lone operand links into the working directory).
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    [ "$tok" = "--" ] && break
+    if [ "${wflags[$j]}" != N ] && target_directory_option "$tok"; then
+      if [ -n "$TARGET_DIR_VALUE" ]; then
+        queue_write_target "$TARGET_DIR_VALUE" "${wflags[$j]}" "ln --target-directory"
+      else
+        [ "$((j + 1))" -lt "${#words[@]}" ] || block "ln ${tok} requires a directory"
+        queue_write_target "${words[$((j + 1))]}" "${wflags[$((j + 1))]}" "ln --target-directory"
+      fi
+      return 0
+    fi
+  done
+  case "${#operands[@]}" in
+    0) return 0 ;;
+    1) queue_write_target "." "" "ln (implicit link in the working directory)" ;;
+    *) queue_write_target "$last" "$last_flags" "ln link" ;;
+  esac
+  return 0
+}
+
+# sed: the script (the first operand, or every -e/--expression value) is
+# program text; the file operands are write targets only when editing in
+# place. A short-option cluster is read letter by letter, since -i takes its
+# backup suffix glued and -e/-f/-l take a value.
+sed_write_targets() {
+  local j tok flags rest k c in_place=0 script_given=0 operands_only=0
+  local -a operands=() operand_flags=()
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    flags="${wflags[$j]}"
+    if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
+      case "$tok" in
+        --) operands_only=1; continue ;;
+        --e*=*) check_program_text "${tok#*=}" "$flags" "sed script"; script_given=1; continue ;;
+        --e | --ex*)
+          j=$((j + 1))
+          check_program_text "${words[$j]:-}" "${wflags[$j]:-}" "sed script"
+          script_given=1
+          continue
+          ;;
+        --fi*=*) script_given=1; continue ;;
+        --fi | --fil*) j=$((j + 1)); script_given=1; continue ;;
+        --i | --in*) in_place=1; continue ;;
+        --l*=*) continue ;;
+        --l | --li*) j=$((j + 1)); continue ;;
+        --*) continue ;;
+        -?*)
+          for ((k = 1; k < ${#tok}; k++)); do
+            c="${tok:k:1}"
+            rest="${tok:k+1}"
+            case "$c" in
+              i) in_place=1; break ;;
+              e)
+                script_given=1
+                if [ -z "$rest" ]; then
+                  j=$((j + 1))
+                  check_program_text "${words[$j]:-}" "${wflags[$j]:-}" "sed script"
+                else
+                  check_program_text "$rest" "$flags" "sed script"
+                fi
+                break
+                ;;
+              f) script_given=1; [ -z "$rest" ] && j=$((j + 1)); break ;;
+              l) [ -z "$rest" ] && j=$((j + 1)); break ;;
+            esac
+          done
+          continue
+          ;;
+      esac
+    fi
+    operands+=("$tok")
+    operand_flags+=("$flags")
+  done
+  k=0
+  if [ "$script_given" -eq 0 ] && [ "${#operands[@]}" -gt 0 ]; then
+    check_program_text "${operands[0]}" "${operand_flags[0]}" "sed script"
+    k=1
+  fi
+  [ "$in_place" -eq 1 ] || return 0
+  for (( ; k < ${#operands[@]}; k++)); do
+    queue_write_target "${operands[k]}" "${operand_flags[k]}" "sed -i"
+  done
+  return 0
+}
+
+# awk: the program (the first operand unless -f/-E/--file/--exec gives one)
+# and every -v/--assign or `name=value` operand are program text; the file
+# operands are write targets only when a library is loaded (-i inplace, or
+# any -i/--include/-l/--load, which can do the same).
+awk_write_targets() {
+  local j tok flags in_place=0 program_given=0 operands_only=0 k
+  local -a operands=() operand_flags=()
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    flags="${wflags[$j]}"
+    if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
+      case "$tok" in
+        --) operands_only=1; continue ;;
+        -f | -E | --file | --exec) j=$((j + 1)); program_given=1; continue ;;
+        -f?* | -E?* | --file=* | --exec=*) program_given=1; continue ;;
+        -e | --source)
+          j=$((j + 1))
+          check_program_text "${words[$j]:-}" "${wflags[$j]:-}" "awk program"
+          program_given=1
+          continue
+          ;;
+        -e?* | --source=*) check_program_text "${tok#-e}" "$flags" "awk program"; program_given=1; continue ;;
+        -v | --assign)
+          j=$((j + 1))
+          check_program_text "${words[$j]:-}" "${wflags[$j]:-}" "awk assignment"
+          continue
+          ;;
+        -v?* | --assign=*) check_program_text "$tok" "$flags" "awk assignment"; continue ;;
+        -i | --include | -l | --load) j=$((j + 1)); in_place=1; continue ;;
+        -i?* | --include=* | -l?* | --load=*) in_place=1; continue ;;
+        -F) j=$((j + 1)); continue ;;
+        -*) continue ;;
+      esac
+    fi
+    operands+=("$tok")
+    operand_flags+=("$flags")
+  done
+  k=0
+  if [ "$program_given" -eq 0 ] && [ "${#operands[@]}" -gt 0 ]; then
+    check_program_text "${operands[0]}" "${operand_flags[0]}" "awk program"
+    k=1
+  fi
+  for (( ; k < ${#operands[@]}; k++)); do
+    if [[ "${operands[k]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      check_program_text "${operands[k]}" "${operand_flags[k]}" "awk assignment"
+    elif [ "$in_place" -eq 1 ]; then
+      queue_write_target "${operands[k]}" "${operand_flags[k]}" "awk -i"
+    fi
+  done
+  return 0
+}
+
+queue_writer_targets() {
+  case "$1" in
+    rm | mv | cp) : ;; # check_rm_mv_cp already covered every operand
+    git) git_write_targets ;;
+    gh) gh_write_targets ;;
+    dotnet) dotnet_write_targets ;;
+    mktemp) mktemp_write_targets ;;
+    ln) ln_write_targets ;;
+    sed) sed_write_targets ;;
+    awk) awk_write_targets ;;
+    *) queue_all_arguments $((i + 1)) ;;
+  esac
+}
+
+# ---- Edit / Write / NotebookEdit -------------------------------------------
+
+check_file_tool() {
+  local path
+  command -v realpath >/dev/null 2>&1 || block 'realpath is not available to resolve paths - failing closed'
+  path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""') || block 'tool payload could not be parsed by jq - failing closed'
+  [ -z "$path" ] && block "${tool_name} payload has no file path - failing closed"
+  case "$path" in
+    \~) PREPARED_ABS="$HOME" ;;
+    \~/*) PREPARED_ABS="${HOME}${path#\~}" ;;
+    /*) PREPARED_ABS="$path" ;;
+    *) PREPARED_ABS="${PWD}/${path}" ;;
+  esac
+  queue_path "$PREPARED_ABS" "$tool_name" "$path" p 0
+  resolve_queued_paths
+  exit 0
 }
 
 # ---- main ------------------------------------------------------------------
@@ -523,6 +1128,14 @@ check_rm_mv_cp() {
 command -v jq >/dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
 
 input=$(cat)
+tool_name=$(printf '%s' "$input" | jq -r '.tool_name // ""') || block 'tool payload could not be parsed by jq - failing closed'
+
+case "$tool_name" in
+  Edit | Write | NotebookEdit) check_file_tool ;;
+  Bash | "") : ;;
+  *) block "unrecognised tool_name '${tool_name}' - failing closed" ;;
+esac
+
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""') || block 'tool payload could not be parsed by jq - failing closed'
 
 [ -z "$raw_cmd" ] && exit 0
@@ -539,60 +1152,84 @@ to_json_array() {
 }
 
 # One jq pass over the AST. Line 1 is a header:
-#   H<TAB><any checked command present: 0/1><TAB><cd-family call count><TAB><first call is cd-family: 0/1>
-# then, per CallExpr in document order, a line "C" followed by one line per
-# word: "L:<base64 of the literal>" for a single plain literal word (bare, or
-# one layer of ordinary quoting with no expansion inside), "N" for anything
-# else (substitution, expansion, ANSI-C quoting, mixed quoting). The command
-# name a call dispatches on is word 0, or word 1 when word 0 is a known
-# wrapper - the same two positions the per-call loop below checks. See
-# enforce-ssh-host-and-key for the transport rationale.
+#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1>
+# then, in document order, a line "C" per CallExpr followed by one line per
+# word, and a line "R" per writing redirection followed by its word (a
+# statement's redirections come before its command, as they are applied
+# first). A word line is "N" for anything not fully literal (substitution,
+# expansion, ANSI-C or $"..." quoting, a double-quoted part that is not plain
+# text), else "L<flags>:<base64 of the text>", the text being every part
+# joined with quoting removed. Flag r: an unquoted brace expansion, a tilde
+# bash would expand, or a backslash outside single quotes; flag g: an
+# unquoted glob character. The command name a call dispatches on is word 0,
+# or word 1 when word 0 is a known wrapper - the same two positions the
+# per-call loop below checks. See enforce-ssh-host-and-key for the transport
+# rationale.
 transport=$(printf '%s' "$ast" | jq -r \
   --argjson wrappers "$(to_json_array "${WRAPPERS[@]}")" \
   --argjson cd_names "$(to_json_array "${CD_NAMES[@]}")" \
-  --argjson checked "$(to_json_array "${CHECKED_NAMES[@]}")" '
-  def literal_value:
-    if (.Parts | length) != 1 then null
-    else
-      .Parts[0] as $p |
-      if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then $p.Value
-      elif $p.Type == "SglQuoted" then $p.Value
-      elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
-        then $p.Parts[0].Value
-      else null
-      end
+  --argjson redirects "$(to_json_array '>' '>>' '>|' '&>' '&>>' '<>')" '
+  def part_info:
+    if .Type == "Lit" then {ok: true, q: "u", t: .Value}
+    elif .Type == "SglQuoted" and ((.Dollar // false) | not) then {ok: true, q: "s", t: .Value}
+    elif .Type == "DblQuoted" and ((.Dollar // false) | not) and all((.Parts // [])[]; .Type == "Lit")
+      then {ok: true, q: "d", t: ((.Parts // []) | map(.Value) | join(""))}
+    else {ok: false}
     end;
-  def basename: if . == null then "" else (split("/") | last) end;
-  def cmdname: (.[0] | basename) as $n0
-    | if ($wrappers | index($n0)) != null then (.[1] | basename) else $n0 end;
-  [ .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) | [ .Args[] | literal_value ] ] as $calls
-  | ($calls | map(cmdname)) as $names
-  | "H\t" + (if any($names[]; . as $n | ($checked | index($n)) != null) then "1" else "0" end)
-    + "\t" + ([ $names[] | select(. as $n | ($cd_names | index($n)) != null) ] | length | tostring)
-    + "\t" + (if ($names | length) > 0 and (($cd_names | index($names[0])) != null) then "1" else "0" end),
-    ( $calls[] | "C", ( .[] | if . == null then "N" else "L:" + @base64 end ) )
+  def word_info:
+    [(.Parts // [])[] | part_info] as $ps
+    | if ($ps | length) == 0 or any($ps[]; .ok | not) then {lit: false}
+      else
+        ([$ps[] | select(.q == "u") | .t] | join("")) as $u
+        | {lit: true,
+           t: ($ps | map(.t) | join("")),
+           r: (($ps[0].q == "u" and ($ps[0].t | startswith("~")))
+               or ($u | test("[=:]~"))
+               or (($u | test("[{]")) and ($u | test(",|[.][.]")))
+               or any($ps[]; .q != "s" and (.t | test("[\\\\]")))),
+           g: ($u | test("[*?\\[]"))}
+      end;
+  def word_line:
+    if .lit then "L" + (if .r then "r" else "" end) + (if .g then "g" else "" end) + ":" + (.t | @base64)
+    else "N" end;
+  def basename: split("/") | last // "";
+  def name_at($n): if (.[$n].lit // false) then (.[$n].t | basename) else "" end;
+  def cmdname: name_at(0) as $n0 | if ($wrappers | index($n0)) != null then name_at(1) else $n0 end;
+  def fd_word: ((.Parts // []) | length) == 1 and .Parts[0].Type == "Lit" and (.Parts[0].Value | test("^([0-9]+|-)$"));
+  [ .. | objects
+    | if .Type? == "CallExpr" and ((.Args // []) | length) > 0 then {call: [.Args[] | word_info]}
+      elif (.Redirs? | type) == "array" then
+        (.Redirs[]
+         | select((.Op as $op | $redirects | index($op) != null) or (.Op == ">&" and (.Word | fd_word | not)))
+         | {redir: (.Word | word_info)})
+      else empty end
+  ] as $items
+  | [$items[] | select(.call) | .call | cmdname] as $names
+  | "H\t" + ([$names[] | select(. as $n | $cd_names | index($n) != null)] | length | tostring)
+    + "\t" + (if ($names | length) > 0 and ($cd_names | index($names[0])) != null then "1" else "0" end),
+    ( $items[] | if .call then "C", (.call[] | word_line) else "R", (.redir | word_line) end )
 ') || block 'command structure could not be analyzed - failing closed'
 
 header="${transport%%$'\n'*}"
-IFS=$'\t' read -r _ has_checked cd_count first_is_cd <<<"$header"
-[ "$has_checked" = 1 ] || exit 0
+IFS=$'\t' read -r _ cd_count first_is_cd <<<"$header"
+
+load_classes
+[ "${#COMMAND_CLASS[@]}" -gt 0 ] || block "${COMMAND_ALLOWLIST##*/} classifies no command - failing closed"
 
 # PreToolUse hooks run in parallel on the ORIGINAL command, and
 # reject-obfuscated-commands may allow a rewritten one (its Layer 0 turns a
 # curly-quoted word into a plainly quoted one via updatedInput). This hook
 # would then have judged `rm -rf <curly>/etc/x<curly>` as one harmless
 # literal while the command that actually runs is `rm -rf '/etc/x'`. So
-# once a checked command is present, any non-ASCII byte fails closed here
-# regardless of what the normalising hook decides - the agent retries in
-# plain ASCII.
+# once a checked or writing command or a writing redirection is present, any
+# non-ASCII byte fails closed here regardless of what the normalising hook
+# decides - the agent retries in plain ASCII.
 NON_PRINTABLE_RE=$'[^ -~\t\n\r]' # same class reject-obfuscated-commands' Layer 0 uses; LC_ALL=C makes it byte-exact
-if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
-  block 'command contains non-ASCII or non-printable bytes and includes a directory-taking command - rewrite it in plain ASCII'
-fi
-
-load_roots
-[ "${#ROOTS[@]}" -gt 0 ] || block "no allowed directories are configured (${ALLOWED_DIRS_FILE}) - failing closed"
+require_ascii() {
+  if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
+    block 'command contains non-ASCII or non-printable bytes and includes a directory-taking or file-writing command - rewrite it in plain ASCII'
+  fi
+}
 
 # Runs the checks for the call currently accumulated in `words`, then, after
 # the first call only, fixes the base directory for everything that follows:
@@ -601,11 +1238,21 @@ load_roots
 # here on (see header).
 first_call=1
 process_call() {
-  local tok base_name positions=(0)
-  is_wrapper "${words[0]:-}" && positions+=(1)
+  local tok base_name class positions=(0)
+  is_wrapper "${words[0]##*/}" && positions=(1)
   for i in "${positions[@]}"; do
     tok="${words[$i]:-}"
+    [ "$tok" = "$MARKER" ] && block 'a command name could not be verified (non-literal) - failing closed'
     base_name="${tok##*/}"
+    class=""
+    [ -n "$base_name" ] && class="${COMMAND_CLASS[$base_name]:-}"
+    if [ -z "$class" ] && [ "$base_name" = "set" ] && [ "${#words[@]}" -eq $((i + 2)) ] && [ "${words[$((i + 1))]}" = "-e" ]; then
+      class="read-only"
+    fi
+    [ -n "$class" ] || block "${base_name:-(empty command name)} has no writer/read-only classification in ${COMMAND_ALLOWLIST##*/} - failing closed"
+    if [ "$class" = "writer" ] || in_list "$base_name" "${CHECKED_NAMES[@]}"; then
+      require_ascii
+    fi
     case "$base_name" in
       cd | pushd | popd) check_cd ;;
       git) check_git ;;
@@ -613,6 +1260,7 @@ process_call() {
       find) check_find ;;
       rm | mv | cp) check_rm_mv_cp ;;
     esac
+    [ "$class" = "writer" ] && queue_writer_targets "$base_name"
     # Only after this call's own checks: a call cannot exploit a link it
     # has not created yet.
     if in_list "$base_name" "${LINK_CAPABLE_NAMES[@]}"; then
@@ -631,28 +1279,50 @@ process_call() {
   fi
 }
 
+process_redirect() {
+  require_ascii
+  queue_write_target "${words[0]}" "${wflags[0]}" "redirection"
+}
+
+process_item() {
+  case "$item" in
+    C) process_call ;;
+    R) process_redirect ;;
+  esac
+}
+
 words=()
-in_call=0
+wflags=()
+item=""
 while IFS= read -r line; do
   case "$line" in
     H*) ;;
-    C)
-      [ "$in_call" -eq 1 ] && process_call
+    C | R)
+      process_item
+      item="$line"
       words=()
-      in_call=1
+      wflags=()
       ;;
-    L:*)
+    L*:*)
+      tag="${line%%:*}"
       # $(...) strips trailing newlines; the sentinel keeps a real trailing
       # newline in a quoted word intact so the path checks see it (and block).
       decoded=$(
-        printf '%s' "${line#L:}" | base64 -d 2>/dev/null
+        printf '%s' "${line#*:}" | base64 -d 2>/dev/null
         printf '.'
       )
       words+=("${decoded%.}")
+      wflags+=("${tag#L}")
       ;;
-    *) words+=("$MARKER") ;; # "N", or any unrecognised tag - fail closed, not silently drop
+    *)
+      # "N", or any unrecognised tag - fail closed, not silently drop
+      words+=("$MARKER")
+      wflags+=(N)
+      ;;
   esac
 done <<<"$transport"
-[ "$in_call" -eq 1 ] && process_call
+process_item
+
+resolve_queued_paths
 
 exit 0
