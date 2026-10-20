@@ -91,7 +91,10 @@ agent container's three mounts, `/workspace/repo`, `/workspace/rules`, `/workspa
 that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--work-tree`/`--namespace`/
 `--super-prefix`, every `git -c` key outside a short allowlist of inert display/behaviour keys,
 `npm --script-shell`/`--userconfig`/`--globalconfig`, `find -exec`/`-execdir`/`-ok`/`-okdir`/`-delete`/`-D`/`-O`,
-`rm --no-preserve-root`) are denied outright. This is
+`rm --no-preserve-root`) are denied outright. It also holds every path a command writes (the writing
+redirections, and the arguments of every command `claude-hooks/command-allowlist` classifies as `writer`;
+an unclassified command is blocked) to the same roots and away from Claude Code's own configuration, and
+checks Edit/Write/NotebookEdit paths against that configuration. This is
 the check `claude-settings.json`'s own rule syntax cannot express (it has only literal text and `*`, so a
 `git -C <dir> ...` allow entry needs a `*` in the directory position that also matches any option injected
 there, the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
