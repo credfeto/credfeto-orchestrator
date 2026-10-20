@@ -2271,8 +2271,10 @@ readonly SEARCH_TEXT_PATTERN='^[[:print:]]*$'
 readonly SEARCH_WORD_CHARACTERS=$'A-Za-z0-9 _.#\'-'
 # AND, OR and NOT as whole words, matched on the words cfwf sends: GitHub's issue search reads only
 # the upper-case forms as operators (lower and mixed case are plain words), and an operator could
-# bind the words to the qualifiers differently from how they read.
-readonly SEARCH_OPERATOR_PATTERN='(^|[^A-Za-z0-9_])(AND|OR|NOT)([^A-Za-z0-9_]|$)'
+# bind the words to the qualifiers differently from how they read. A word is what search_words
+# splits on, the space alone, so one joined to a kept character (OR-tools, NOT-FOUND, v1.OR.2) is a
+# plain word; a leading - (-NOT) still makes it one of the three.
+readonly SEARCH_OPERATOR_PATTERN='(^| )-?(AND|OR|NOT)( |$)'
 # The jq program of issue search: the number of issues on its first line, then a row for each, in
 # the order the search returned them.
 readonly ISSUE_SEARCH_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF}"' (length | tostring), (.[] | [(.number | field), (.state | field), (.title | field), (label_list | field)] | join("\t"))'

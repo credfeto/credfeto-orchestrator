@@ -6798,10 +6798,10 @@ assert_issue_usage_error() {
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must hold a letter or a digit" || { printf 'text: %q\n' "${text}" >&2; return 1; }
     done
-    # The operator check is made on the words sent, so punctuation round an operator does not hide it,
-    # and it comes before the length and token checks. Only the upper-case forms are operators to
-    # GitHub, so only they are refused.
-    for text in "OR" "a OR b" "a AND b" "NOT a" "x -NOT" "a.OR.b" "it's OR" "AND" "x-AND-y" "a OR repo-marker" \
+    # The operator check is made on the words sent, so punctuation turned into a space round an
+    # operator does not hide it, and it comes before the length and token checks. Only the upper-case
+    # forms are operators to GitHub, so only they are refused, and a leading - does not hide one.
+    for text in "OR" "a OR b" "a AND b" "NOT a" "x -NOT" "-OR" "it's OR" "AND" "a OR repo-marker" \
         "a:OR" "OR:x" "(a OR b)" "repo:x OR y" "x(NOT)" '"a"AND"b"' "ghp_abc123 OR x" "$(head -c 300 < /dev/zero | tr '\0' a) OR"; do
         run_issue_search --text "${text}"
         assert_issue_usage_error "${status}" "${output}" "${stderr}" search "invalid value for --text: it must not hold AND, OR or NOT, which are search operators" || { printf 'text: %q\n' "${text}" >&2; return 1; }
@@ -6841,6 +6841,18 @@ assert_issue_usage_error() {
     write_issue_list "$(issue_entry 5 OPEN "a title")"
     local text
     for text in notable order cannot "don't" "-foo" "#123" "a_b.c" "Android oregano" "and_or" "1535"; do
+        run_issue_search --text "${text}"
+        [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${text}" "${status}" "${stderr}" >&2; return 1; }
+        [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
+        [ "$(gh_call_count "--search ${SEARCH_PREFIX} ${text} --limit")" -eq 1 ]
+    done
+}
+
+@test "issue search takes AND, OR and NOT joined to other letters by a character the words keep, as one plain word, and passes each as it is" {
+    write_issue_list "$(issue_entry 5 OPEN "a title")"
+    local text
+    for text in "OR-tools upgrade" "NOT-FOUND error" "v1.OR.2" "a.OR.b" "x-AND-y" "OR's fix" "it's-NOT" "'OR'" "AND_OR" \
+        "-NOT-FOUND" "NOT."; do
         run_issue_search --text "${text}"
         [ "${status}" -eq 0 ] || { printf 'refused: %q (%s) %s\n' "${text}" "${status}" "${stderr}" >&2; return 1; }
         [ "${output}" = "$(tab_row 5 OPEN "a title" -)" ]
