@@ -2938,8 +2938,11 @@ EXISTING_PR_NUMBER=""
 EXISTING_PR_BASE=""
 EXISTING_PR_URL=""
 # The shape of a Conventional Commits title: a lower-case type, an optional scope in brackets, an
-# optional ! and a colon, one space and a description that starts with a visible character.
-readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: [^[:space:]]'
+# optional ! and a colon, one space and a description that does not start with whitespace. The
+# description, the last group, is only captured here: this is matched byte by byte in the C locale,
+# where the first byte of a multi-byte space looks like text, so validate_pull_request_title asks
+# has_visible_text about it.
+readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: ([^[:space:]].*)$'
 
 assign_pr_create_option() {
     local flag="$1" value="$2"
@@ -2951,10 +2954,14 @@ assign_pr_create_option() {
 }
 
 # Refuses (exit 2) the title $1 of a pull request in the repository $2 unless it has the shape a
-# title must have there. This is the one place that knows the rule, which today is the same for
-# every repository.
+# title must have there, never echoing the title. The description must hold a visible character,
+# so a title such as "fix: " followed only by U+3000 is refused. This is the one place that knows
+# the rule, which today is the same for every repository.
 validate_pull_request_title() {
-    validate "$1" "${PR_TITLE_PATTERN}" --title "it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"
+    local LC_ALL=C
+    if ! [[ "$1" =~ ${PR_TITLE_PATTERN} ]] || ! has_visible_text "${BASH_REMATCH[-1]}"; then
+        usage_error "invalid value for --title: it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"
+    fi
 }
 
 # Sets EXISTING_PR_NUMBER, EXISTING_PR_BASE and EXISTING_PR_URL to the one open pull request of
