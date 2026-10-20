@@ -360,10 +360,6 @@
           },
           {
             "type": "command",
-            "command": "/etc/claude-code/hooks/block-claude-config-writes"
-          },
-          {
-            "type": "command",
             "command": "block-no-verify"
           },
           {
@@ -423,7 +419,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/etc/claude-code/hooks/block-claude-config-writes"
+            "command": "/etc/claude-code/hooks/enforce-allowed-dirs"
           }
         ]
       },
