@@ -113,12 +113,15 @@ NARROW_ALLOW_ONLY_NAMES=(set)
 # enforce-allowed-dirs treats a command with no valid classification as unclassified and blocks
 # it, so an entry added without deciding whether the command writes files fails at runtime; this
 # fails the build first, naming the entries, so the decision is made when the entry is added. The
-# pattern matches enforce-allowed-dirs' own CLASSIFIED_LINE_RE.
-CLASSIFIED_ENTRY_RE='^[[:space:]]*[^[:space:]]+[[:space:]]+(read-only|writer)[[:space:]]*$'
+# pattern is enforce-allowed-dirs' own CLASSIFIED_LINE_RE, read from the hook so the two cannot
+# drift apart.
+ENFORCE_ALLOWED_DIRS="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-allowed-dirs"
+CLASSIFIED_ENTRY_RE=$(sed -n "s/^CLASSIFIED_LINE_RE='\(.*\)'$/\1/p" "${ENFORCE_ALLOWED_DIRS}")
 
 # Prints every entry of allowlist file $1 that is not a name followed by exactly one valid
-# classification.
+# classification. An empty pattern would match every line and report nothing, so it fails.
 unclassified_entries() {
+    [ -n "${CLASSIFIED_ENTRY_RE}" ] || { echo "could not read CLASSIFIED_LINE_RE from ${ENFORCE_ALLOWED_DIRS}" >&2; return 1; }
     grep -vE '^[[:space:]]*(#|$)' "$1" | grep -vE "${CLASSIFIED_ENTRY_RE}" || true
 }
 
