@@ -115,15 +115,13 @@ install_cfwf() {
 # Root-owned install commands that could not be run (sudo missing, or declined
 # once, after which it is not asked again), printed together at the end.
 PENDING_ROOT_COMMANDS=()
-SUDO_UNAVAILABLE=0
 
 # Runs `install <args>` as root:root via sudo, or records it for printing.
 root_install() {
     local args=(install -o root -g root "$@")
-    if [ "${SUDO_UNAVAILABLE}" -eq 0 ] && command -v sudo >/dev/null 2>&1 && sudo "${args[@]}"; then
+    if [ "${#PENDING_ROOT_COMMANDS[@]}" -eq 0 ] && command -v sudo >/dev/null 2>&1 && sudo "${args[@]}"; then
         return 0
     fi
-    SUDO_UNAVAILABLE=1
     PENDING_ROOT_COMMANDS+=("sudo ${args[*]}")
 }
 
