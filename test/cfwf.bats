@@ -2117,6 +2117,53 @@ assert_title_shape_refused() {
     done
 }
 
+# Sets INVISIBLE_ONLY_VALUES to values that show nothing: one of each kind of character in
+# INVISIBLE_CHARACTERS alone, then mixes of them with ASCII spaces and U+3000. Built from printf
+# escapes, so this file stays ASCII.
+invisible_only_values() {
+    local escape
+    INVISIBLE_ONLY_VALUES=()
+    # U+00A0, U+2007, U+202F, U+2800, U+00AD, U+034F, U+061C, U+115F, U+1160, U+17B4, U+17B5,
+    # U+180B, U+180F, U+200B, U+200F, U+202A, U+202E, U+2060, U+206F, U+3164, U+FE00, U+FE0F,
+    # U+FEFF, U+FFA0, U+FFF0, U+FFF8, U+1BCA0, U+1BCA3, U+1D173, U+1D17A, U+E0000, U+E0FFF, then
+    # mixes.
+    for escape in '\302\240' '\342\200\207' '\342\200\257' '\342\240\200' '\302\255' '\315\217' '\330\234' \
+        '\341\205\237' '\341\205\240' '\341\236\264' '\341\236\265' '\341\240\213' '\341\240\217' '\342\200\213' \
+        '\342\200\217' '\342\200\252' '\342\200\256' '\342\201\240' '\342\201\257' '\343\205\244' '\357\270\200' \
+        '\357\270\217' '\357\273\277' '\357\276\240' '\357\277\260' '\357\277\270' '\360\233\262\240' \
+        '\360\233\262\243' '\360\235\205\263' '\360\235\205\272' '\363\240\200\200' '\363\240\277\277' \
+        ' \302\240 \342\200\207\342\200\257 ' '\343\200\200\357\273\277\342\200\213 \302\240\343\200\200'; do
+        INVISIBLE_ONLY_VALUES+=("$(printf '%b' "${escape}")")
+    done
+}
+
+# Given a run's status, stdout and stderr, the flag $4, its limit $5 and the value $6: it was
+# refused as blank, with exit 2, nothing on stdout, the value never echoed and no gh call. The
+# checks are chained because a caller's || turns set -e off here, so only the last would count.
+assert_refused_as_blank() {
+    [ "$1" -eq 2 ] \
+        && [ -z "$2" ] \
+        && [[ "$3" == "cfwf: invalid value for $4: it must not be blank or longer than $5 characters"$'\n'* ]] \
+        && [[ "$3" != *"$6"* ]] \
+        && [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create refuses, as blank, a label or a title made only of invisible characters, even for an owner the title shape does not apply to, and never echoes it" {
+    prepare_issue_create
+    create_args
+    local value
+    invisible_only_values
+    for value in "${INVISIBLE_ONLY_VALUES[@]}"; do
+        run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}" --label "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --label 50 "${value}" \
+            || { echo "the label '${value}' was not refused as blank" >&2; return 1; }
+
+        run_titled_create someone-else/x "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --title 256 "${value}" \
+            || { echo "the title '${value}' was not refused as blank" >&2; return 1; }
+    done
+}
+
 @test "issue create accepts a title whose text after the prefix holds a letter beside zero-width characters, or a character just outside their ranges" {
     prepare_issue_create
     local title
@@ -4303,6 +4350,17 @@ assert_set_to_development() {
 
     run_pr_create_titled "feat: $(run_of x 250)"
     [ "${status}" -eq 0 ]
+}
+
+@test "pr create refuses, as blank, a title made only of invisible characters, and never echoes it" {
+    prepare_pr_create
+    local value
+    invisible_only_values
+    for value in "${INVISIBLE_ONLY_VALUES[@]}"; do
+        run_pr_create_titled "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --title 256 "${value}" \
+            || { echo "the title '${value}' was not refused as blank" >&2; return 1; }
+    done
 }
 
 @test "pr create counts a title of two-byte characters in characters, in any locale: 256 are taken and 257 refused" {
