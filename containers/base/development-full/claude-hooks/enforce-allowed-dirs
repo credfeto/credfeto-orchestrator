@@ -62,9 +62,11 @@
 #                    must also be under a root before anything else runs;
 #       ln           with -s/--symbolic the link being created (the last
 #                    operand, or the --target-directory) as a path, and every
-#                    target it points to as text against the protected names
-#                    only, like sed and awk program text below: a target is
-#                    text until something is written through the link, and a
+#                    target it points to as text against the protected names,
+#                    and anywhere inside a `.claude` tree or the
+#                    `claude-code` directory itself, like sed and awk program
+#                    text below: a target is text until something is
+#                    written through the link, and a
 #                    later writer's own text (a sed `w` name) is never
 #                    resolved (see check_ln_target for the brace and glob
 #                    forms; a non-literal target is not checked); a
@@ -89,9 +91,11 @@
 #                    not write (`sed -n '/x/p'`); the text is never resolved,
 #                    so the match allows anything between `.claude/` (or
 #                    `etc/`) and the protected name, which stops a `//`,
-#                    `/./` or `x/../` detour hiding it; the file operands are
-#                    write targets only when editing in place (sed -i/--in-place,
-#                    awk -i/--include/-l/--load). An awk option outside its
+#                    `/./` or `x/../` detour hiding it, and anything after
+#                    `claude-code/` matches wherever it sits, since a link
+#                    to /etc reaches /etc/claude-code without naming `etc`;
+#                    the file operands are write targets only when editing
+#                    in place (sed -i/--in-place, awk -i/--include/-l/--load). An awk option outside its
 #                    known non-writing set (gawk's -d/-o/-p, -W, an
 #                    abbreviated long option) makes every argument a write
 #                    target under the default rule instead. awk text is also
@@ -149,7 +153,12 @@
 # Accepted false positives: a sed or awk program, or any other writer
 # argument, that merely mentions a protected path (`sed -i
 # 's|~/.claude/hooks/|...|' README.md`) is blocked; make such a text edit with
-# the Edit tool instead, which checks only the file being edited.
+# the Edit tool instead, which checks only the file being edited. So is text
+# naming anything under any `claude-code` directory
+# (`node_modules/@anthropic-ai/claude-code/cli.js`, a file in a checkout of a
+# repo named claude-code), and an `ln -s` target anywhere inside a `.claude`
+# tree; a bare `claude-code` (`npm install @anthropic-ai/claude-code`, `gh repo
+# clone anthropics/claude-code`) stays allowed outside an `ln -s` target.
 #
 # ---- Path-taking commands --------------------------------------------------
 #
@@ -351,10 +360,30 @@ MARKER='(non-literal)'
 # itself (awk, sqlite3) is handled by names_protected_config_once_decoded
 # below. The text is not normalised, so each name allows anything
 # after `.claude/` or `etc/`: `.claude//settings.json`, `.claude/./skills`
-# and `.claude/x/../hooks` all still match.
+# and `.claude/x/../hooks` all still match. Anything after `claude-code/`
+# matches wherever it sits, not only after `etc/`, because text can reach
+# /etc/claude-code without naming `etc`: through a link to /etc (`ln -s /etc
+# foo`, then `w foo/claude-code/...`) or a system symlink to a directory
+# under it (`w /usr/lib/ssl/certs/../../claude-code/...`). It is not
+# anchored to a `/` or the start of the text, since a name can follow any
+# character there (sed's `wclaude-code/...`).
 names_protected_config() {
   case "$1" in
     *.claude | *.claude/ | *.claude/*settings*.json* | *.claude/*hooks* | *.claude/*agents* | *.claude/*skills* | *.claude.json* | *.mcp.json* | *etc/*claude-code*) return 0 ;;
+    *claude-code/*) return 0 ;;
+  esac
+  return 1
+}
+
+# Text check, for symbolic link targets: anywhere inside a `.claude` tree,
+# and a `claude-code` directory itself, on top of names_protected_config. A
+# link is an alias that splits a path across two commands' text, so from
+# `ln -s ~/.claude/projects p` the later `w p/../settings.json`, and from
+# `ln -s foo/claude-code bar` the later `w bar/managed-settings.json`, name
+# nothing protected.
+names_config_tree() {
+  case "$1" in
+    *.claude/* | */claude-code | claude-code) return 0 ;;
   esac
   return 1
 }
@@ -612,12 +641,13 @@ queue_path() {
 }
 
 # Queues every current match of the unquoted glob prepare_word left in
-# PREPARED_GLOB for the protected-path check, reported as label $1 / word $2.
+# PREPARED_GLOB for the protected-path check, reported as label $1 / word $2,
+# in mode $3 (default p; t also blocks anywhere inside a configuration tree).
 queue_glob_matches() {
-  local match
+  local match mode="${3:-p}"
   [ -n "$PREPARED_GLOB" ] || return 0
   while IFS= read -r match; do
-    [ -n "$match" ] && queue_path "$match" "$1" "$2" p 0
+    [ -n "$match" ] && queue_path "$match" "$1" "$2" "$mode" 0
   done < <(compgen -G "$PREPARED_GLOB")
 }
 
@@ -670,7 +700,8 @@ check_awk_text() {
 # Resolves every queued path with `realpath -ms` (so `..` cannot hide a
 # protected name) and `realpath -m` (so a symlink to a protected file cannot
 # either, and so a symlink out of a root fails the root check), then blocks
-# if any is protected, and then if any write target is outside the roots or
+# if any is protected, or for mode t (an ln -s glob target, as
+# names_config_tree for text) anywhere inside a configuration tree, and then if any write target is outside the roots or
 # does not exist when it must. Each realpath prints one NUL-terminated line
 # per operand, so any count other than two per path means one of them
 # failed, which fails closed.
@@ -685,6 +716,10 @@ resolve_queued_paths() {
   [ "${#results[@]}" -eq $((2 * count)) ] || block 'a write target could not be resolved - failing closed'
   for ((i = 0; i < count; i++)); do
     if is_protected_path "${results[i]}" || is_protected_path "${results[count + i]}"; then
+      block_config_write "${QUEUED_WORDS[i]}"
+    fi
+    [ "${QUEUED_MODES[i]}" = t ] || continue
+    if is_in_claude_config_tree "${results[i]}" || is_in_claude_config_tree "${results[count + i]}"; then
       block_config_write "${QUEUED_WORDS[i]}"
     fi
   done
@@ -1155,18 +1190,20 @@ mktemp_write_targets() {
 }
 
 # Checks symbolic link target $1 (flags $2) as text against the protected
-# names. bash expands a brace or glob before ln sees the word, so either
-# could hide a protected name from the text: a brace expansion blocks, and
-# every current match of a glob is checked as a path. A non-literal target is
-# not checked.
+# names and anywhere inside a configuration tree (names_config_tree). bash
+# expands a brace or glob before ln sees the word, so either could hide a
+# protected name from the text: a brace expansion blocks, and every current
+# match of a glob is checked as a path, blocking anywhere inside a
+# configuration tree as the text check does. A non-literal target is not
+# checked.
 check_ln_target() {
   local word="$1" flags="$2"
   [ "$flags" = N ] && return 0
-  names_protected_config "$word" && block_config_write "$word"
+  { names_protected_config "$word" || names_config_tree "$word"; } && block_config_write "$word"
   [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
   if [[ "$flags" == *g* ]]; then
     prepare_word "$word" "$flags" "ln target"
-    queue_glob_matches "ln target" "$word"
+    queue_glob_matches "ln target" "$word" t
   fi
   return 0
 }
