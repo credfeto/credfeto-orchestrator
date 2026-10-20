@@ -765,11 +765,22 @@ EOF'
 
 @test "ln -S takes the rest of its word: an s after it is not -s, and a t after it is not -t" {
     local cmd
-    for cmd in "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json"; do
+    for cmd in "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json" \
+        "ln -sf ${SRC}/payload .claude/settings.json -S .bak" "ln -sfS .bak ${SRC}/payload .claude/settings.json" \
+        "ln -sf ${SRC}/payload .claude/settings.json --suffix .bak" "ln -sf ${SRC}/payload .claude/settings.json --suf .bak"; do
         run_in_repo "${cmd}"
         assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
     done
     assert_each 0 '' "ln -sS.bak ${TEST_TMP}/outside/x link"
+    # A separate-word -S/--suffix value is skipped, so the real link name is still the last operand.
+    for cmd in "ln -s -S .bak ${TEST_TMP}/outside/x .claude/settings.json" \
+        "ln -s --suffix .bak ${TEST_TMP}/outside/x .claude/settings.json" \
+        "ln -sf ${SRC}/payload .claude/settings.json --suffix=.bak"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "ln -s -S .bak ${TEST_TMP}/outside/x link" "ln -s --suffix .bak ${TEST_TMP}/outside/x link" \
+        "ln -s ${TEST_TMP}/outside/x link --suffix=.bak"
     # cp/mv share the -t parser: a t inside a -S suffix is not -t, so no operand is taken as the
     # target directory.
     assert_each 0 '' "cp -Sxt a.txt b.txt" "mv -fSt a.txt b.txt"
