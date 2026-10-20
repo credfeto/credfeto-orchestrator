@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - enforce-allowed-dirs hook: report offending byte offset and hex value when blocking non-ASCII commands, and add regression tests for plain-ASCII heredocs - #1677
 ### Changed
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
+- TBD - to be finalized after review
 ### Deprecated
 ### Removed
 ### Deployment Changes
