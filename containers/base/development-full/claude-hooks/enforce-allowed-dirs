@@ -818,7 +818,7 @@ check_operand() {
 }
 
 check_rm_mv_cp() {
-  local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 last_operand="" k
+  local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 k
   local -a operands=() operand_flags=()
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
@@ -849,16 +849,12 @@ check_rm_mv_cp() {
     check_operand "$tok" "$flags" "${name} operand"
     operands+=("$tok")
     operand_flags+=("$flags")
-    case "$name" in
-      rm) deny_root_operand rm "$tok" "$flags" ;;
-      mv) last_operand="$tok" ;;
-    esac
+    [ "$name" = "rm" ] && deny_root_operand rm "$tok" "$flags"
     j=$((j + 1))
   done
   # For mv every operand but the last is a source being moved away.
   if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
     for ((k = 0; k < ${#operands[@]} - 1; k++)); do
-      [ "${operands[k]}" = "$last_operand" ] && continue
       resolve_word "${operands[k]}" "${operand_flags[k]}" "mv operand"
       deny_root_operand mv "${operands[k]}" "${operand_flags[k]}"
     done
