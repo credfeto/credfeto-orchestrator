@@ -134,6 +134,10 @@ assert_blocked() {
     assert_blocked "git -C /etc status" 'outside the allowed directories'
 }
 
+@test "git -C written with a backslash bash removes is still checked as -C" {
+    assert_blocked "git -\\C /etc status" 'outside the allowed directories'
+}
+
 @test "cumulative git -C is resolved relative to the previous -C, as git does" {
     assert_allowed "git -C ${ROOT} -C sub status"
     assert_blocked "git -C ${ROOT} -C ../outside status"
@@ -243,6 +247,11 @@ assert_blocked() {
     for action in -execdir -ok -okdir -delete -fprint -fprint0 -fprintf -fls; do
         assert_blocked "find ${ROOT} -name x ${action} /x"
     done
+}
+
+@test "a find action written with a backslash bash removes is still blocked" {
+    assert_blocked "find ${ROOT} -name x -\\exec rm {} \\;" '-exec'
+    assert_blocked "find ${ROOT} -name x -\\delete" '-delete'
 }
 
 # --- rm / mv / cp ---------------------------------------------------------------

@@ -450,8 +450,17 @@ assert_each() {
 @test "a protected path spelled with quote splices is blocked; a backslash in a write target is blocked" {
     assert_each 2 'writing to Claude Code configuration' \
         'echo x > .cla"ude"/settings.json' \
-        "echo x > .cla'ude'/settings.json"
-    assert_each 2 'brace, tilde or backslash' 'echo x > .cl\aude/settings.json'
+        "echo x > .cla'ude'/settings.json" \
+        'echo x > .cl\aude/settings.json' \
+        'sqlite3 db .once\ .cl\aude/settings.json'
+    assert_each 2 'brace, tilde or backslash' 'echo x > sub\x'
+}
+
+@test "a write target is reported as bash passes it: an unquoted backslash, or one before \$ in double quotes, is removed" {
+    assert_each 2 "argument 'subx' was written with" 'echo x > sub\x'
+    # shellcheck disable=SC2016  # literal \$ - must reach the hook unexpanded
+    assert_each 2 "argument 'sub\$x' was written with" 'echo x > "sub\$x"'
+    assert_each 2 "argument 'sub\\ax' was written with" 'echo x > "sub\ax"'
 }
 
 @test "a relative Bash path that reaches a protected file once normalised or through a symlink is blocked" {
@@ -559,7 +568,8 @@ EOF'
     run_in_repo "git -C sub checkout main -- .claude/settings.json"
     assert_blocked_config_write
     assert_each 0 '' "git -C sub checkout main -- src/x" "git -C sub checkout main -- ../x"
-    assert_each 2 'outside the allowed directories' "git -C sub checkout main -- ../../x"
+    assert_each 2 'outside the allowed directories' "git -C sub checkout main -- ../../x" \
+        "git -C sub checko\\ut main -- ../../x"
 }
 
 @test "ln -s may point outside the roots, but the link it creates and any hard link may not" {
@@ -592,7 +602,26 @@ EOF'
         assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
     done
     assert_each 2 'brace expansion' "ln -s ${HOME}/.{claude,x}/settings.json foo" "ln -s -t sub .{claude,x}"
-    assert_each 0 '' "ln -s '.cl{aude}' foo" "ln -s 'sub\\x' foo" "ln -s ${TEST_TMP}/outside/* sub" "ln -s sub/nomatch* foo"
+    assert_each 0 '' "ln -s '.cl{aude}' foo" "ln -s 'sub\\x' foo" "ln -s ${TEST_TMP}/outside/* sub" "ln -s sub/nomatch* foo" \
+        "ln -s '.cl\\aude/settings.json' foo" "ln -s .cl\\\\aude/settings.json foo"
+}
+
+@test "sed and awk program text that names protected config only once bash removes a backslash is blocked" {
+    local cmd
+    for cmd in "sed -n w.cl\\aude/settings.json f.txt" "sed -n -e w.cl\\aude/settings.json f.txt" \
+        "sed -n --expression=w.cl\\aude/settings.json f.txt" "sed -n 'w '.cl\\aude/settings.json f.txt" \
+        "awk '{print > f}' f=.cl\\aude/settings.json x" "awk -v f=.cl\\aude/settings.json '{print > f}' x" \
+        "awk -e 'print > \"'.cl\\aude/settings.json'\"' x"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+}
+
+@test "a backslash bash keeps, or one that spells no protected name once removed, is allowed in sed and awk program text" {
+    assert_each 0 '' "sed -n 'w .cl\\aude/settings.json' f.txt" "sed -n \"w .cl\\aude/settings.json\" f.txt" \
+        "sed -n \"w .cl\\\\aude/settings.json\" f.txt" "sed -n w.cl\\\\aude/settings.json f.txt" \
+        "sed -i 's/\\.claude\\.json/x/' f.txt" "sed -i s/a\\.b/c/ f.txt" \
+        "awk -v f=a\\b '{print > f}' x" "awk '{print n}' n=a\\\\b x"
 }
 
 @test "a hard ln to protected config is blocked" {
