@@ -218,7 +218,6 @@ COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-dash-c /etc/claude-
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-git-identity /etc/claude-code/hooks/enforce-git-identity
 COPY --chown=root:root --chmod=0755 claude-hooks/reject-obfuscated-commands /etc/claude-code/hooks/reject-obfuscated-commands
 COPY --chown=root:root --chmod=0755 claude-hooks/enforce-allowed-dirs /etc/claude-code/hooks/enforce-allowed-dirs
-COPY --chown=root:root --chmod=0755 claude-hooks/block-claude-config-writes /etc/claude-code/hooks/block-claude-config-writes
 COPY --chown=root:root --chmod=0755 claude-hooks/block-config-skills /etc/claude-code/hooks/block-config-skills
 COPY --chown=root:root --chmod=0755 claude-hooks/block-git-worktree /etc/claude-code/hooks/block-git-worktree
 COPY --chown=root:root --chmod=0755 claude-hooks/block-dotnet-tool-install /etc/claude-code/hooks/block-dotnet-tool-install
@@ -415,7 +414,7 @@ RUN set -e; \
         || { echo "FATAL sanity: ~/.claude/settings.json must hold preferences only - permissions, hooks, sandbox and MCP config belong in /etc/claude-code/managed-settings.json" >&2; exit 1; }; \
     ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE 'block-no-verify|/etc/claude-code/hooks/[A-Za-z0-9-]+' \
         || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
-    for h in reject-obfuscated-commands enforce-allowed-dirs block-claude-config-writes block-config-skills enforce-git-identity enforce-git-dash-c \
+    for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-dash-c \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \
              enforce-background-for-long-running-commands cache-gh-lookups; do \
         [ "$(stat -c '%U:%G %a' /etc/claude-code/hooks/$h)" = "root:root 755" ] \
