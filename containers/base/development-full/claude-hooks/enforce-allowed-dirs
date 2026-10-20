@@ -1040,13 +1040,22 @@ ln_write_targets() {
       case "$tok" in
         --) operands_only=1; continue ;;
         --sy* | -s) symbolic=1; continue ;;
+        --su*=*) continue ;;
+        # --suffix takes the next word, which is not an operand: as the
+        # "last operand" it would hide the real link name.
+        --su*) j=$((j + 1)); continue ;;
         --*) continue ;;
         -*)
           # -S (backup suffix) and -t (target directory) take the rest of
-          # the word as their value, so an `s` after either is not -s.
+          # the word as their value, so an `s` after either is not -s; a
+          # bare trailing -S takes the next word instead.
           for ((k = 1; k < ${#tok}; k++)); do
             case "${tok:k:1}" in
-              S | t) break ;;
+              S)
+                [ "$k" -eq $((${#tok} - 1)) ] && j=$((j + 1))
+                break
+                ;;
+              t) break ;;
               s) symbolic=1 ;;
             esac
           done
