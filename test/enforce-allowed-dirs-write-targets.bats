@@ -593,6 +593,45 @@ EOF'
         "ln -s ${TEST_TMP}/outside/x" "ln -s \"\${HOME}/.claude/settings.json\" foo"
 }
 
+@test "text naming anything under a claude-code directory is blocked, since a link to /etc reaches it without naming etc" {
+    local cmd
+    # /usr/lib/ssl/certs stands for any system symlink to a directory under /etc; the check is text only.
+    for cmd in \
+        "sed -n 'w foo/claude-code/managed-settings.json' ${SRC}/payload" \
+        "awk '{print > \"foo/claude-code/hooks/x\"}' ${SRC}/payload" \
+        "ln -s /etc foo && sed -n 'w foo/claude-code/managed-settings.json' ${SRC}/payload" \
+        "sed -n 'w /usr/lib/ssl/certs/../../claude-code/managed-settings.json' ${SRC}/payload" \
+        "sed -n 'w claude-code/CLAUDE.md' ${SRC}/payload" "sed -n 'wclaude-code/x' ${SRC}/payload" \
+        "sqlite3 :memory: '.once foo/claude-code/managed-mcp.json' 'select 1;'" \
+        "ln -s foo/claude-code/hooks bar"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+    run_hook_in_dir "sed -n 'w claude-code/managed-settings.json' ${SRC}/payload" /etc
+    assert_blocked_config_write
+    assert_each 0 '' "ln -s /etc foo" "ln -sf /etc/hosts sub/hosts" \
+        "npm install @anthropic-ai/claude-code" "gh repo clone anthropics/claude-code" \
+        "git -C . clone https://github.com/anthropics/claude-code" \
+        "sed -n 'w claude-codex/x' ${SRC}/payload" "sed -n 'w x/claude-code.d' ${SRC}/payload"
+}
+
+@test "ln -s to a claude-code directory or anywhere inside a .claude tree is blocked, since a later write through it names nothing protected" {
+    local cmd
+    for cmd in "ln -s foo/claude-code bar" "ln -s claude-code bar" "ln -s ${HOME}/.claude/projects p" \
+        "ln -s -t sub .claude/x" "ln -s /etc/claude-code bar"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "ln -s claude-code.d bar" "ln -s foo/claude-codex bar" "ln -s ${HOME}/.claudex/y bar"
+    # A glob target is checked by what each match resolves to, anywhere inside a configuration tree.
+    mkdir -p "${HOME}/.claude/projects" "${TEST_TMP}/outside/projects"
+    for cmd in "ln -s ${HOME}/.cl?ude/projects p" "ln -s -t sub ${HOME}/.claude/proj*" "ln -s /et?/claude-code bar"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "ln -s ${TEST_TMP}/outsid?/projects p"
+}
+
 @test "ln -s to a target that names protected config only once bash expands it is blocked" {
     local cmd
     mkdir -p "${HOME}/.claude"
