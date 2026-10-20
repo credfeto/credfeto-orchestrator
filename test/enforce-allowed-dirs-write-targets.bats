@@ -358,6 +358,49 @@ assert_each() {
     assert_blocked_config_write
 }
 
+@test "a cd is checked where bash's logical cd lands: a .. after a link out of .claude stays in .claude" {
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    ln -s "${TEST_TMP}/repo/sub" "${TEST_TMP}/repo/.claude/x"
+    local cmd
+    for cmd in \
+        "cd .claude/x/.. && curl -O https://example.com/settings.json" \
+        "pushd .claude/x/.. && sed -n 'w settings.json' ${SRC}/payload" \
+        "cd .claude/x/.. && echo '{}' > settings.json"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "cd .claude/x/.. && ls" "cd .claude/x && curl -O https://example.com/x.json"
+}
+
+@test "a cd .. through a symlinked directory is checked where bash lands, so an allowed landing stays allowed" {
+    mkdir -p "${TEST_TMP}/repo/links" "${TEST_TMP}/outside/skill"
+    ln -s "${TEST_TMP}/outside/skill" "${TEST_TMP}/repo/links/skill"
+    assert_each 0 '' \
+        "cd links/skill/.. && echo x > out.txt" \
+        "cd links/skill/.. && curl -O https://example.com/x.json"
+    run_hook_in_dir "cd .. && echo x > out.txt" "${TEST_TMP}/repo/links/skill"
+    [ "${status}" -eq 0 ] || { echo "got: ${output}" >&2; return 1; }
+    assert_each 2 'outside the allowed directories' "cd links/skill && ls"
+}
+
+@test "a cd bash would resolve physically instead of logically is blocked (fail closed)" {
+    mkdir -p "${TEST_TMP}/outside/a" "${TEST_TMP}/outside/x" "${TEST_TMP}/outside/real"
+    ln -s "${TEST_TMP}/outside/a" "${TEST_TMP}/repo/l"
+    assert_each 2 'is not a directory' "cd l/../x/.. && ls" "cd sub/file/.. && ls"
+    assert_each 2 'does not exist as a directory' "cd l/../real && ls"
+    assert_each 0 '' "cd ./sub/./../sub && ls"
+}
+
+@test "a cd into a directory the shell cannot enter is blocked (fail closed)" {
+    [ "$(id -u)" -ne 0 ] || skip "root can enter any directory"
+    mkdir -p "${TEST_TMP}/repo/locked"
+    chmod 0600 "${TEST_TMP}/repo/locked"
+    run_in_repo "cd locked && ls"
+    chmod 0700 "${TEST_TMP}/repo/locked"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'does not exist as a directory the shell can enter'* ]] || { echo "got: ${output}" >&2; return 1; }
+}
+
 @test "a writer anywhere inside a .claude tree is blocked, since a .. in program text reaches a protected entry" {
     mkdir -p "${TEST_TMP}/repo/.claude/x"
     assert_each 2 'through a cd into it' \
@@ -818,6 +861,26 @@ run_payload_with_path() {
     run_payload_with_path '{"tool_input":{"command":"ls"}}' "$(path_with_only jq shfmt)"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'realpath is not available'* ]]
+}
+
+@test "a cd target whose logical or landing resolution fails is blocked (fail closed)" {
+    local dir real
+    dir="$(path_with_only jq shfmt base64)"
+    real="$(command -v realpath)"
+    # shellcheck disable=SC2016  # literal $1 - the stub script reads its own arguments
+    printf '#!/bin/sh\n[ "$1" = "-ms" ] && exit 1\nexec %s "$@"\n' "${real}" > "${dir}/realpath"
+    chmod +x "${dir}/realpath"
+    run bash -c 'cd "$4" && printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ \
+        '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${HOOK}" "${TEST_TMP}/repo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"cd target 'sub' could not be resolved"* ]] || { echo "got: ${output}" >&2; return 1; }
+    # Fails only the landing resolution, the one realpath -m call made on exactly <repo>/sub.
+    # shellcheck disable=SC2016  # literal $1/$3 - the stub script reads its own arguments
+    printf '#!/bin/sh\n[ "$1" = "-m" ] && [ "$3" = "%s" ] && exit 1\nexec %s "$@"\n' "${TEST_TMP}/repo/sub" "${real}" > "${dir}/realpath"
+    run bash -c 'cd "$4" && printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ \
+        '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${HOOK}" "${TEST_TMP}/repo"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"cd target 'sub' could not be resolved"* ]] || { echo "got: ${output}" >&2; return 1; }
 }
 
 @test "missing jq is blocked (fail closed)" {
