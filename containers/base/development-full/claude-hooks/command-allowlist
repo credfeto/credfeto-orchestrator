@@ -1,15 +1,25 @@
-# Known-good command names for the reject-obfuscated-commands hook.
-# One name per line; blank lines and #-comments are ignored.
+# Known-good command names for the reject-obfuscated-commands hook, each with
+# its write classification for the enforce-allowed-dirs hook.
+# One entry per line: the name, whitespace, then exactly one of
+#   read-only   the command writes no file named by its arguments
+#   writer      it can create, replace, remove or re-mode a file named by its
+#               arguments, or runs code that can (an interpreter, a runner,
+#               a build tool); enforce-allowed-dirs checks its arguments as
+#               write targets
+# When in doubt, classify as writer: a read-only command's arguments are not
+# checked at all. Blank lines and #-comments are ignored.
 # Path-qualified invocations (/usr/bin/git, ./scripts/x, <hooks-path>/pre-commit)
 # are matched by basename. A command that is not on this list (and not on
-# command-blocklist, which wins) is rejected outright — extend this file
-# when a new tool is legitimately required, rather than changing hook logic.
+# command-blocklist, which wins) is rejected outright, and one without a valid
+# classification is blocked by enforce-allowed-dirs - extend this file when a
+# new tool is legitimately required, rather than changing hook logic.
+# test/command-allowlist-parity.bats fails on an unclassified entry.
 #
 # NOTE: being listed here only means "not obfuscated and known-good by name".
-# The claude-settings.json permissions allow/deny layer still governs what a
-# listed command may actually do.
+# The claude-managed-settings.json permissions allow/deny layer still governs
+# what a listed command may actually do.
 
-ssh
+ssh                                   read-only
 # (scp deliberately excluded - no legitimate need for the agent's own Bash
 # tool to transfer files directly; file movement in this repo's workflow
 # goes through git, and scp's own [user@]host:path grammar was the source
@@ -17,37 +27,37 @@ ssh
 # and-key's header)
 
 # Version control / forge
-git
-gh
+git                                   writer
+gh                                    writer
 # (gpg deliberately excluded - only used for commit signing, which git
 # invokes internally via user.signingkey/commit.gpgsign; the agent's own
 # Bash tool has no legitimate reason to run gpg directly, see #1315)
-pre-commit
-pre-commit-check
+pre-commit                            writer
+pre-commit-check                      writer
 
 # .NET
-dotnet
-buildcheck
-buildtest
+dotnet                                writer
+buildcheck                            writer
+buildtest                             writer
 
 # Python toolchain (python3 -c inline code is still rejected by the
 # interpreter re-invocation check)
-python3
-uv
-ruff
-pip
-pytest
-coverage
+python3                               writer
+uv                                    writer
+ruff                                  writer
+pip                                   writer
+pytest                                writer
+coverage                              writer
 
 # JavaScript toolchains
-npm
-npx
-bun
-# node itself is scoped narrowly in claude-settings.json's permissions.allow
+npm                                   writer
+npx                                   writer
+bun                                   writer
+# node itself is scoped narrowly in claude-managed-settings.json's permissions.allow
 # (node --check, and running a .github/actions/*/*.js script directly) -
 # node -e/-c/--eval, -p/--print and -i/--interactive are still rejected by
 # the interpreter re-invocation check in reject-obfuscated-commands
-node
+node                                  writer
 
 # (podman/docker deliberately excluded and blocklisted in command-blocklist -
 # container execution is banned outright in this workflow: running a script
@@ -55,121 +65,121 @@ node
 # in-session workflow needs one, see #1539)
 
 # Network
-curl
-ping
+curl                                  writer
+ping                                  read-only
 
 # Crypto / TLS
-openssl
+openssl                               writer
 
 # Linters / test tooling
-# (sqlcmd deliberately excluded - denied in claude-settings.json to prevent
+# (sqlcmd deliberately excluded - denied in claude-managed-settings.json to prevent
 # reading .database credential files; keep it off this list too)
-shellcheck
-checkbashisms
-shfmt
-bats
-actionlint
-yamllint
-markdownlint-cli2
-sqlfluff
-sqlite3
-jq
+shellcheck                            read-only
+checkbashisms                         read-only
+shfmt                                 writer
+bats                                  writer
+actionlint                            read-only
+yamllint                              read-only
+markdownlint-cli2                     writer
+sqlfluff                              writer
+sqlite3                               writer
+jq                                    read-only
 
 # credfeto-global-pre-commit: pre-commit-hooks (pip package) console scripts,
 # language linters, and misc tools its .pre-commit-config.yaml/hooks/pre-commit
 # invoke by bare name
-check-merge-conflict
-check-case-conflict
-check-added-large-files
-end-of-file-fixer
-trailing-whitespace-fixer
-mixed-line-ending
-check-toml
-detect-private-key
-trufflehog
-check-executables-have-shebangs
-check-shebang-scripts-are-executable
-check-json
-check-xml
-check-yaml
-flake8
-markdownlint
-ansible-lint
-hadolint
-composite-action-lint
-pylint
-stylelint
-eslint
-xmllint
-dotenv-linter
-trivy
-cfn-lint
+check-merge-conflict                  read-only
+check-case-conflict                   read-only
+check-added-large-files               read-only
+end-of-file-fixer                     writer
+trailing-whitespace-fixer             writer
+mixed-line-ending                     writer
+check-toml                            read-only
+detect-private-key                    read-only
+trufflehog                            writer
+check-executables-have-shebangs       read-only
+check-shebang-scripts-are-executable  read-only
+check-json                            read-only
+check-xml                             read-only
+check-yaml                            read-only
+flake8                                writer
+markdownlint                          writer
+ansible-lint                          writer
+hadolint                              read-only
+composite-action-lint                 writer
+pylint                                writer
+stylelint                             writer
+eslint                                writer
+xmllint                               writer
+dotenv-linter                         writer
+trivy                                 writer
+cfn-lint                              writer
 
 # Repo-local test/deploy scripts (committed to main, basename-matched
 # across every repo since this allowlist is shared globally)
-testdb
-testdocker
-querydb
-cfwf
+testdb                                writer
+testdocker                            writer
+querydb                               writer
+cfwf                                  writer
 # create-project provisions and converts a repository's Workflow board; oneshot already runs
 # the same conversion (lib/project-status), so an agent running it adds nothing oneshot does not
-create-project
+create-project                        writer
 
 # credfeto-global-pre-commit: repo-bundled wrapper scripts, invoked by
 # basename via a PATH prepend from src/hooks/pre-commit
-run-eslint
-run-stylelint
-run-psscriptanalyzer
-run-bats
-run-formatter
+run-eslint                            writer
+run-stylelint                         writer
+run-psscriptanalyzer                  writer
+run-bats                              writer
+run-formatter                         writer
 
 # Core utilities
-ls
-cat
-grep
-find
-sed
-awk
-base64
-head
-tail
-sort
-uniq
-wc
-tr
-cut
-diff
-echo
-printf
-test
-[
-true
-false
-mkdir
-cd
-cp
-mv
-rm
-touch
-chmod
-ln
-basename
-dirname
-realpath
-readlink
-pwd
-date
-sleep
-which
-tee
-stat
-file
-ps
-xargs
-mktemp
-df
-du
+ls                                    read-only
+cat                                   read-only
+grep                                  read-only
+find                                  read-only
+sed                                   writer
+awk                                   writer
+base64                                read-only
+head                                  read-only
+tail                                  read-only
+sort                                  writer
+uniq                                  writer
+wc                                    read-only
+tr                                    read-only
+cut                                   read-only
+diff                                  read-only
+echo                                  read-only
+printf                                read-only
+test                                  read-only
+[                                     read-only
+true                                  read-only
+false                                 read-only
+mkdir                                 writer
+cd                                    read-only
+cp                                    writer
+mv                                    writer
+rm                                    writer
+touch                                 writer
+chmod                                 writer
+ln                                    writer
+basename                              read-only
+dirname                               read-only
+realpath                              read-only
+readlink                              read-only
+pwd                                   read-only
+date                                  read-only
+sleep                                 read-only
+which                                 read-only
+tee                                   writer
+stat                                  read-only
+file                                  writer
+ps                                    read-only
+xargs                                 writer
+mktemp                                writer
+df                                    read-only
+du                                    read-only
 
 
 ## Static web publishing
-hugo
+hugo                                  writer
