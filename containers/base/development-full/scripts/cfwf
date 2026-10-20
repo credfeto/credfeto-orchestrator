@@ -2040,16 +2040,38 @@ readonly TITLE_CHECK_OWNERS=(credfeto funfair-tech)
 # multi-byte space looks like text, so check_title_shape asks has_visible_text about it instead.
 readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9]*(-[a-z0-9]+)*(\([^():[:space:]]([^():]*[^():[:space:]])?\))?: +(.*)$'
 readonly TITLE_SHAPE_RULE='it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
-# One character that is not whitespace in C.UTF-8. Its [:space:] takes in multi-byte spaces such as
-# U+3000 but not the no-break spaces U+00A0, U+2007 and U+202F, so those are listed here, as bytes.
-readonly VISIBLE_CHARACTER_PATTERN=$'[^[:space:]\302\240\342\200\207\342\200\257]'
+# The characters that show nothing although C.UTF-8 classes them as graphic, not as [:space:]: the
+# no-break spaces U+00A0, U+2007 and U+202F, U+2800 (the blank braille pattern), and Unicode's
+# Default_Ignorable_Code_Point set (soft hyphen, zero-width spaces and joiners, direction marks, the
+# Hangul fillers, variation selectors, the byte order mark and tags). As bytes, for a bash pattern
+# bracket: a regular expression bracket refuses a multi-byte range.
+# U+00A0, U+2007, U+202F and U+2800.
+INVISIBLE_CHARACTERS=$'\302\240\342\200\207\342\200\257\342\240\200'
+# U+00AD, U+034F, U+061C, U+115F, U+1160, U+17B4, U+17B5 and U+180B-U+180F.
+INVISIBLE_CHARACTERS+=$'\302\255\315\217\330\234\341\205\237\341\205\240\341\236\264\341\236\265\341\240\213-\341\240\217'
+# U+200B-U+200F, U+202A-U+202E, U+2060-U+206F and U+3164.
+INVISIBLE_CHARACTERS+=$'\342\200\213-\342\200\217\342\200\252-\342\200\256\342\201\240-\342\201\257\343\205\244'
+# U+FE00-U+FE0F, U+FEFF, U+FFA0 and U+FFF0-U+FFF8.
+INVISIBLE_CHARACTERS+=$'\357\270\200-\357\270\217\357\273\277\357\276\240\357\277\260-\357\277\270'
+# U+1BCA0-U+1BCA3, U+1D173-U+1D17A and U+E0000-U+E0FFF.
+INVISIBLE_CHARACTERS+=$'\360\233\262\240-\360\233\262\243\360\235\205\263-\360\235\205\272\363\240\200\200-\363\240\277\277'
+readonly INVISIBLE_CHARACTERS
 
-# Succeeds when $1 holds a character that is not whitespace, judged in C.UTF-8 so that a multi-byte
-# space such as U+3000 or U+00A0 counts as whitespace and a non-ASCII letter counts as text.
+# Succeeds when $1 holds a character that is neither whitespace nor in INVISIBLE_CHARACTERS, judged
+# in C.UTF-8 so that a multi-byte space such as U+3000 counts as whitespace and a non-ASCII letter
+# counts as text. Each character is classed on its own: bash matches a pattern against a string
+# that is not valid UTF-8 byte by byte, where a range would take in the bytes of a letter. Every
+# copy of an invisible character is dropped at once, so this loops once per distinct one.
 has_visible_text() {
     require_utf8_locale
-    local LC_ALL=C.UTF-8
-    [[ "$1" =~ ${VISIBLE_CHARACTER_PATTERN} ]]
+    local LC_ALL=C.UTF-8 text="$1" character
+    while [[ "${text}" =~ [^[:space:]] ]]; do
+        character="${BASH_REMATCH[0]}"
+        # The pattern is unquoted on purpose: its ranges must match as ranges.
+        [[ "${character}" == [${INVISIBLE_CHARACTERS}] ]] || return 0
+        text="${text//"${character}"/}"
+    done
+    return 1
 }
 
 # Succeeds when the repository $1 (owner/repo) belongs to one of TITLE_CHECK_OWNERS.
