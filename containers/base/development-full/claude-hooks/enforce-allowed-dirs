@@ -68,7 +68,9 @@
 #       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
 #                    restore, mv, rm, clone) or a call with an option starting
 #                    `--o` (`--output` and its abbreviations), and then every
-#                    argument after the subcommand, relative to the last -C;
+#                    argument after the subcommand, relative to the last -C,
+#                    plus, for clone, the directory git names after the
+#                    repository when none is given;
 #       gh           only when it downloads or clones or is given an output
 #                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), since its
 #                    other arguments are routinely issue and PR text;
@@ -95,6 +97,12 @@
 # -m`, so a symlink to one cannot either) and must be under a root.
 # /dev/null, /dev/stdout and /dev/stderr are always allowed. An unquoted glob
 # is also expanded now and every match checked against the protected paths.
+# A writer (git and gh only when they write, as above) can also write into its
+# working directory without naming anything (`curl -O`, `gh release
+# download`), so it may not run where that directory is protected: not in a
+# protected $PWD or leading cd/`git -C` target, and not in a command that
+# also cds into a protected directory anywhere, whatever the order (a loop
+# can run the cd first). A cd there with no writer, to read, stays allowed.
 #
 # Protected paths, wherever they sit (a repo's own `.claude/`, the user's
 # `~/.claude/`, any nested directory):
@@ -606,6 +614,13 @@ check_cd() {
   # this hook did not check. Only an existing directory may become the base.
   [ -d "$RESOLVED" ] || block "${name} target '${arg}' does not exist - the cd would fail and leave the working directory unknown"
   CD_TARGET="$RESOLVED"
+  # Reading there stays allowed; a writer in the same command does not (see
+  # note_writer).
+  if is_protected_path "$RESOLVED"; then
+    CD_INTO_PROTECTED="$RESOLVED"
+    [ -n "$WRITER_SEEN" ] && block_cd_with_writer
+  fi
+  return 0
 }
 
 # Called when the git subcommand (or the end of the global options) is
@@ -853,6 +868,58 @@ check_rm_mv_cp() {
 
 # ---- writer target extraction ----------------------------------------------
 
+# A writer can write into its working directory without naming anything
+# there (`curl -O`, `gh release download`, `git clone <url>`, a sed `w name`
+# program), so a writer may not run in Claude Code configuration. Its working
+# directory is $2 when $3 is 1; under an unknowable cd only CD_INTO_PROTECTED
+# tells, and a cd into configuration anywhere in the same command as a
+# writer is blocked whatever their order, since a loop can run the cd first.
+WRITER_SEEN=""
+CD_INTO_PROTECTED=""
+PWD_PHYSICAL=""
+note_writer() {
+  local dir="$2" relative_ok="$3"
+  WRITER_SEEN="$1"
+  [ -n "$CD_INTO_PROTECTED" ] && block_cd_with_writer
+  [ "$relative_ok" = 1 ] || return 0
+  if [ "$dir" = "$PWD" ]; then
+    is_protected_path "$PWD" && block_config_write "$PWD"
+    if [ -z "$PWD_PHYSICAL" ]; then
+      PWD_PHYSICAL=$(realpath -m -- "$PWD" 2>/dev/null) || block 'the working directory could not be resolved'
+    fi
+    dir="$PWD_PHYSICAL"
+  fi
+  is_protected_path "$dir" && block_config_write "$dir"
+  return 0
+}
+
+block_cd_with_writer() {
+  block "writing to Claude Code configuration ('${CD_INTO_PROTECTED}') through a cd into it, in the same command as ${WRITER_SEEN}, which can write into its working directory without naming a path, is not permitted - stop and report what you needed instead"
+}
+
+# The directory `git clone <repository>` creates when none is given: git's
+# own guess from the repository (trailing `/` and `/.git` dropped, then the
+# last `/` or `:` component, then a `.git` or `.bundle` suffix dropped).
+# Every non-option argument is treated as a possible repository, which can
+# only over-check.
+queue_git_clone_default_dirs() {
+  local j tok name
+  for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    [ "${wflags[$j]}" = N ] && continue
+    case "$tok" in -*) continue ;; esac
+    name="${tok%"${tok##*[!/]}"}"
+    name="${name%/.git}"
+    name="${name%"${name##*[!/]}"}"
+    name="${name##*[/:]}"
+    name="${name%.git}"
+    name="${name%.bundle}"
+    [ -n "$name" ] || continue
+    queue_write_target "$name" "" "git clone (default directory for '${tok}')" "$GIT_BASE" "$GIT_RELATIVE_OK"
+  done
+  return 0
+}
+
 # Queues the call's words from index $1 onwards as write targets, relative to
 # base $2 with relative paths permitted iff $3 (defaults as for
 # prepare_word): every non-option word, the value of `--option=value`, every
@@ -900,7 +967,10 @@ git_write_targets() {
   for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
     [[ "${words[$j]}" == --o* ]] && writes=1
   done
-  [ "$writes" -eq 1 ] && queue_all_arguments $((GIT_SUBCOMMAND_INDEX + 1)) "$GIT_BASE" "$GIT_RELATIVE_OK"
+  [ "$writes" -eq 1 ] || return 0
+  note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
+  queue_all_arguments $((GIT_SUBCOMMAND_INDEX + 1)) "$GIT_BASE" "$GIT_RELATIVE_OK"
+  [ "$GIT_SUBCOMMAND" = "clone" ] && queue_git_clone_default_dirs
   return 0
 }
 
@@ -908,6 +978,7 @@ gh_write_targets() {
   local j
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     if in_list "${words[$j]}" "${GH_WRITE_ARGS[@]}" || [[ "${words[$j]}" =~ $GH_WRITE_OPTION_RE ]]; then
+      note_writer gh "$BASE_DIR" "$RELATIVE_OK"
       queue_all_arguments $((i + 1))
       return 0
     fi
@@ -1127,6 +1198,10 @@ awk_write_targets() {
 }
 
 queue_writer_targets() {
+  case "$1" in
+    git | gh) : ;; # each notes itself as a writer only when it writes
+    *) note_writer "$1" "$BASE_DIR" "$RELATIVE_OK" ;;
+  esac
   case "$1" in
     rm | mv | cp) : ;; # check_rm_mv_cp already covered every operand
     git) git_write_targets ;;
