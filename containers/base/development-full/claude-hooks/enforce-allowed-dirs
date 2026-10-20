@@ -753,7 +753,7 @@ check_find() {
 # everything after the first t is the attached value.
 TARGET_DIR_VALUE=""
 target_directory_option() {
-  local tok="$1" name
+  local tok="$1" name k
   TARGET_DIR_VALUE=""
   case "$tok" in
     --*)
@@ -765,9 +765,18 @@ target_directory_option() {
       return 0
       ;;
     -[A-Za-z]*)
-      [[ "$tok" == *t* ]] || return 1
-      TARGET_DIR_VALUE="${tok#*t}"
-      return 0
+      # -S (backup suffix) takes the rest of the word, so a `t` after it is
+      # part of the suffix, not -t.
+      for ((k = 1; k < ${#tok}; k++)); do
+        case "${tok:k:1}" in
+          S) return 1 ;;
+          t)
+            TARGET_DIR_VALUE="${tok:k+1}"
+            return 0
+            ;;
+        esac
+      done
+      return 1
       ;;
   esac
   return 1
@@ -933,7 +942,7 @@ mktemp_write_targets() {
 }
 
 ln_write_targets() {
-  local j tok flags symbolic=0 operands_only=0 last="" last_flags=""
+  local j tok flags symbolic=0 operands_only=0 last="" last_flags="" k
   local -a operands=()
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     tok="${words[$j]}"
@@ -944,7 +953,14 @@ ln_write_targets() {
         --sy* | -s) symbolic=1; continue ;;
         --*) continue ;;
         -*)
-          [[ "$tok" == *s* ]] && [[ "${tok%%t*}" == *s* ]] && symbolic=1
+          # -S (backup suffix) and -t (target directory) take the rest of
+          # the word as their value, so an `s` after either is not -s.
+          for ((k = 1; k < ${#tok}; k++)); do
+            case "${tok:k:1}" in
+              S | t) break ;;
+              s) symbolic=1 ;;
+            esac
+          done
           continue
           ;;
       esac
