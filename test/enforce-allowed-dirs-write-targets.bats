@@ -624,6 +624,47 @@ EOF'
         "awk -v f=a\\b '{print > f}' x" "awk '{print n}' n=a\\\\b x"
 }
 
+# awk decodes escapes in its own string literals and in -v and name=value values (an unknown
+# escape is the plain letter, octal is masked to a byte, hex takes two digits (every digit in older
+# gawk), a NUL ends the name and a backslash-newline is removed), and sqlite3 does the same in a
+# double-quoted dot-command argument, after bash has passed the backslash through.
+@test "awk text and sqlite3 arguments that name protected config only once the program decodes its escapes are blocked" {
+    local cmd
+    for cmd in "awk '{print > \".c\\laude/settings.json\"}' x" \
+        "awk '{print > \"\\056claude/settings.json\"}' x" \
+        "awk 'BEGIN{print 1 > \"\\456claude/hooks/x\"}'" \
+        "awk 'BEGIN{print 1 > \"\\x2eclaude/agents/x\"}'" \
+        "awk 'BEGIN{print 1 > \"\\x02emcp.json\"}'" \
+        "awk 'BEGIN{print 1 > \".claude\\000x\"}'" \
+        "awk 'BEGIN{print 1 > \".claude\\/skills/x\"}'" \
+        $'awk \'BEGIN{print 1 > ".cl\\\naude/settings.json"}\'' \
+        "awk -v f='.c\\laude/settings.json' '{print > f}' x" \
+        "awk -v f='\\056mcp.json' '{print > f}' x" \
+        "awk '{print > f}' 'f=\\056claude/settings.json' x" \
+        "awk -e 'print > \".c\\laude/settings.json\"' x" \
+        "sqlite3 db '.once \".c\\laude/settings.json\"' 'select 1;'" \
+        "sqlite3 db '.output \"\\056claude/settings.json\"' 'select 1;'" \
+        "sqlite3 db '.once \"\\x2emcp.json\"' 'select 1;'"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+}
+
+# gawk 5.3+ and sqlite3 read `\u` and its hex digits as a code point, gawk with no fixed digit
+# count, so a `\u` escape cannot be decoded reliably and blocks outright.
+@test "a \\u escape in awk text or a writer argument is blocked, and a \\u before a non-hex character is allowed" {
+    assert_each 2 'contains a \u escape' "awk '{print > \"\\u002eclaude/settings.json\"}' x" \
+        "awk -v f='\\u002emcp.json' '{print > f}' x" "sqlite3 db '.once \"\\u002emcp.json\"' 'select 1;'"
+    assert_each 0 '' "awk '{print \"\\users\"}' f.txt" "sqlite3 db '.once \"x\\users\"' 'select 1;'"
+}
+
+@test "awk text and sqlite3 arguments whose escapes decode to no protected name are allowed" {
+    assert_each 0 '' "awk '{print \$1 \"\\t\" \$2}' f.txt" "awk '{printf \"%s\\n\", \$1}' f.txt" \
+        "awk -v OFS='\\t' '{print}' f.txt" "awk '{gsub(/\\./, \"_\"); print}' f.txt" "awk '/\\.txt\$/' f.txt" \
+        "awk '{print > \"out\\056txt\"}' f.txt" "awk 'BEGIN{print 1 > \"\\x41claude\"}'" \
+        "sqlite3 db '.once \"out\\056csv\"' 'select 1;'" "sqlite3 db '.print \"a\\tb\"'"
+}
+
 @test "a hard ln to protected config is blocked" {
     local cmd
     for cmd in "ln ${HOME}/.claude/settings.json foo" "ln .claude/hooks/x foo" "ln -t sub .claude/settings.json"; do
