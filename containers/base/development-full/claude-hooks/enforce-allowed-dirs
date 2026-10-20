@@ -647,8 +647,6 @@ check_git() {
     # Each -C is relative to the previous one, exactly as git applies them -
     # a local cursor, never the globals; paths after the subcommand are
     # relative to the last one.
-    GIT_BASE="$base"
-    GIT_RELATIVE_OK="$relative_ok"
     case "$tok" in
       "$MARKER") block 'a git global option could not be verified (non-literal argument)' ;;
       -C)
@@ -681,6 +679,8 @@ check_git() {
         # the subcommand - global options end here
         GIT_SUBCOMMAND="$tok"
         GIT_SUBCOMMAND_INDEX="$j"
+        GIT_BASE="$base"
+        GIT_RELATIVE_OK="$relative_ok"
         require_git_cwd_when_no_dash_c "$saw_C"
         return 0
         ;;
