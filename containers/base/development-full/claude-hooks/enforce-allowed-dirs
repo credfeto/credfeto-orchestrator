@@ -145,8 +145,13 @@
 #
 # Checked whatever their classification (in the command-name position, or
 # the position immediately after a known wrapper name - see WRAPPERS):
-#   cd, pushd     exactly one argument, no flags, no glob; it must resolve
-#                 under a root. popd, or a bare cd/pushd, or cd -, changes to
+#   cd, pushd     exactly one argument, no flags, no glob. The target is
+#                 where bash's logical cd lands (`..` removed as text, then
+#                 symlinks followed), which must be under a root and must be
+#                 an existing directory the shell can enter, and must not
+#                 have a `..` after a component that is not a directory:
+#                 otherwise bash falls back to a physical cd this hook does
+#                 not follow. popd, or a bare cd/pushd, or cd -, changes to
 #                 a directory this hook cannot see, so they are blocked.
 #   git           every `-C <dir>` (cumulative, each relative to the previous)
 #                 must resolve under a root; `--exec-path`, `--git-dir`,
@@ -186,8 +191,8 @@
 # exist yet) against a base directory, then must equal a root or sit strictly
 # beneath one. The base is this hook's own $PWD unless the command's very
 # first call expression is its only `cd <dir>` (or `pushd <dir>`), in which
-# case that already-validated directory is the base for every later relative
-# path. Any other cd/pushd/popd arrangement - more than one, not first, or
+# case the already-validated directory that cd lands in (see cd above) is the
+# base for every later relative path. Any other cd/pushd/popd arrangement - more than one, not first, or
 # nested inside a substitution - makes the base unknowable by static parsing
 # (the flat call walk discards control flow: `cd a || cd b`, `(cd x; ...)`),
 # so every later relative path is blocked (absolute paths still work). An
@@ -625,18 +630,49 @@ check_cd() {
   # A glob could change into any match, so the directory later relative
   # paths resolve against would be unknown.
   [[ "${wflags[$((i + 1))]}" == *g* ]] && block "${name} target '${arg}' is a glob - name the directory exactly"
-  require_under_root "$arg" "${wflags[$((i + 1))]}" "$name"
-  # A cd to a directory that does not exist fails at runtime and leaves the
-  # shell where it was, so a later relative path would resolve somewhere
-  # this hook did not check. Only an existing directory may become the base.
-  [ -d "$RESOLVED" ] || block "${name} target '${arg}' does not exist - the cd would fail and leave the working directory unknown"
-  CD_TARGET="$RESOLVED"
+  require_roots
+  prepare_word "$arg" "${wflags[$((i + 1))]}" "$name"
+  # bash's cd is logical: it removes `x/..` as text and only then follows
+  # links, so `cd .claude/link/..` lands in `.claude` wherever link points.
+  # The landing directory, not the physical resolution of the words, is what
+  # every later check must see.
+  local logical landing
+  logical=$(realpath -ms -- "$PREPARED_ABS" 2>/dev/null) || block "${name} target '${arg}' could not be resolved"
+  landing=$(realpath -m -- "$logical" 2>/dev/null) || block "${name} target '${arg}' could not be resolved"
+  under_root "$landing" || block "${name} target '${arg}' lands in '${landing}', which is outside the allowed directories"
+  # When the logical path fails bash's own checks (a component before a `..`
+  # is not a directory, or the landing is missing or not searchable), bash
+  # falls back to chdir on the words as given, which the kernel resolves
+  # physically, so the shell ends up somewhere this hook did not check. A cd
+  # that fails outright leaves the working directory unknown just the same.
+  logical_cd_prefixes_are_directories "$PREPARED_ABS" || block "${name} target '${arg}' has a .. after something that is not a directory - bash would fall back to a physical cd this hook does not follow"
+  [ -d "$landing" ] && [ -x "$landing" ] || block "${name} target '${arg}' does not exist as a directory the shell can enter - bash would fall back to a physical cd this hook does not follow, or fail and leave the working directory unknown"
+  CD_TARGET="$landing"
   # Reading there stays allowed; a writer in the same command does not (see
   # note_writer).
-  if is_in_claude_config_tree "$RESOLVED"; then
-    CD_INTO_PROTECTED="$RESOLVED"
+  if is_in_claude_config_tree "$landing"; then
+    CD_INTO_PROTECTED="$landing"
     [ -n "$WRITER_SEEN" ] && block_cd_with_writer
   fi
+  return 0
+}
+
+# Mirrors the check bash's logical cd makes before removing each `..` from
+# absolute path $1: the path built so far must be a directory.
+logical_cd_prefixes_are_directories() {
+  local prefix="" component
+  local -a components=()
+  IFS=/ read -r -a components <<<"$1"
+  for component in "${components[@]}"; do
+    case "$component" in
+      '' | .) ;;
+      ..)
+        [ -d "${prefix:-/}" ] || return 1
+        prefix="${prefix%/*}"
+        ;;
+      *) prefix="${prefix}/${component}" ;;
+    esac
+  done
   return 0
 }
 
