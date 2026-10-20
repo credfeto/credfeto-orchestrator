@@ -68,11 +68,16 @@ agent definitions but cannot add, remove, or retarget entries.
 
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
-`containers/base/development-full/claude-settings.json`, `claude-policy-limits.json`, and
-`claude-hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-background-for-long-running-commands,cache-gh-lookups}` are version-controlled copies of the operator's
-`~/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-background-for-long-running-commands,cache-gh-lookups}}`, copied into the image at
-`/home/developer/.claude/{settings.json,policy-limits.json,hooks/{enforce-git-dash-c,enforce-git-identity,reject-obfuscated-commands,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-background-for-long-running-commands,cache-gh-lookups}}` as root:root
-0444 (files) / 0755 (hook scripts and hooks directory) — read-only for `developer`. `reject-obfuscated-commands`
+`containers/base/development-full/claude-user-settings.json`, `claude-policy-limits.json`,
+`claude-managed-settings.json`, and
+`claude-hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-dash-c,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}` are version-controlled,
+copied into the image at `/home/developer/.claude/{settings.json,policy-limits.json}` (the preferences
+half only) and
+`/etc/claude-code/{managed-settings.json,hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-dash-c,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}}` as root:root
+0444 (files) / 0755 (hook scripts and directories) — read-only for `developer`. Claude Code reads
+`/etc/claude-code/managed-settings.json` ahead of every user and project settings file, and its
+`allowManagedPermissionRulesOnly`/`allowManagedHooksOnly`/`allowManagedMcpServersOnly` locks stop a repo's
+`.claude/settings*.json` adding permissions, hooks or MCP servers. `reject-obfuscated-commands`
 runs first in the `PreToolUse` hook chain, ahead of every other hook, and parses each Bash command with
 `shfmt` (a real shell parser, baked into this image) rather than text-scanning: any non-printable or
 non-ASCII byte, any command that fails to parse, any command name that is not a single plain literal word
@@ -95,7 +100,7 @@ that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--
 redirections, and the arguments of every command `claude-hooks/command-allowlist` classifies as `writer`;
 an unclassified command is blocked) to the same roots and away from Claude Code's own configuration, and
 checks Edit/Write/NotebookEdit paths against that configuration. This is
-the check `claude-settings.json`'s own rule syntax cannot express (it has only literal text and `*`, so a
+the check `claude-managed-settings.json`'s own rule syntax cannot express (it has only literal text and `*`, so a
 `git -C <dir> ...` allow entry needs a `*` in the directory position that also matches any option injected
 there, the source of Claude Code's "has a wildcard before the rest of the command" startup warning); with
 the hook in place the per-subcommand wildcard entries are gone from `permissions.allow` and the same flags
@@ -121,7 +126,7 @@ that write through the API directly (`create_or_update_file`, `delete_file`, `pu
 relies on (pre-commit, commit-msg, pre-push); it fails closed on a missing/empty `tool_name`.
 `enforce-ssh-host-and-key` runs next,
 restricting `ssh` to a strict `user@host.lan` grammar with a usable key already loaded in the forwarded
-ssh-agent, since `claude-settings.json`'s own `Bash(ssh *)` allow entry is otherwise blanket; see
+ssh-agent, since `claude-managed-settings.json`'s own `Bash(ssh *)` allow entry is otherwise blanket; see
 `claude-hooks.instructions.md` for the full grammar/host-allowlist rules. `enforce-background-for-long-running-commands`
 runs next, using the same shfmt-parsed AST to block `git commit`, a directly-invoked `pre-commit`,
 `pre-commit-check`, `buildtest`, `dotnet build`, `dotnet test`, `npm test`, and `bun test` unless the tool
@@ -132,27 +137,30 @@ not parse. `cache-gh-lookups` runs last and, unlike every hook above, never bloc
 whole-command `gh api user --jq '.login'` call into a read of a small persistent cache file instead
 (populating it first if it isn't there yet); anything else (a parse failure, missing shfmt, or a
 non-matching command) just passes through to the normal permission check.
-All hook paths referenced from `settings.json`'s `PreToolUse` block use the literal `$HOME` token
-(`$HOME/.claude/hooks/reject-obfuscated-commands`, `$HOME/.claude/hooks/enforce-git-dash-c`,
-`$HOME/.claude/hooks/enforce-git-identity`, `$HOME/.claude/hooks/block-git-worktree`,
-`$HOME/.claude/hooks/block-dotnet-tool-install`, `$HOME/.claude/hooks/block-github-mcp-write-tools`,
-`$HOME/.claude/hooks/enforce-ssh-host-and-key`,
-`$HOME/.claude/hooks/enforce-background-for-long-running-commands`, and
-`$HOME/.claude/hooks/cache-gh-lookups`) rather than a hardcoded path, since none of these hook
-entries set an `args` field — Claude Code runs them in shell form (`sh -c`), which expands `$HOME` at
-execution time to whichever user actually invoked it (`/home/developer` in the container, the current
-user's home when installed on a host via `install-claude-hooks` below). This removes an entire class of
-"wrong hardcoded path baked into committed data" bug (see the Dockerfile's own build-time sanity check,
-which fails the build if any hook command string contains `/home/developer` instead of `$HOME`).
+Every hook command in `managed-settings.json`'s `PreToolUse` block is an absolute
+`/etc/claude-code/hooks/<name>` path (`/etc/claude-code/hooks/reject-obfuscated-commands`,
+`/etc/claude-code/hooks/enforce-allowed-dirs`, `/etc/claude-code/hooks/block-config-skills`,
+`/etc/claude-code/hooks/enforce-git-identity`, `/etc/claude-code/hooks/enforce-git-dash-c`,
+`/etc/claude-code/hooks/block-git-worktree`, `/etc/claude-code/hooks/block-dotnet-tool-install`,
+`/etc/claude-code/hooks/block-github-mcp-write-tools`, `/etc/claude-code/hooks/enforce-ssh-host-and-key`,
+`/etc/claude-code/hooks/enforce-curl-host`,
+`/etc/claude-code/hooks/enforce-background-for-long-running-commands`, and
+`/etc/claude-code/hooks/cache-gh-lookups`), apart from the `block-no-verify` entry, so the same
+root-owned copies run in the container and on a host set up with `install-claude-hooks` below. The
+Dockerfile's own build-time sanity check fails the build if any hook command is anything else.
 `oneshot` does not bind-mount over any of these
 paths at runtime (see `containers/agent/Dockerfile` for the full mount contract) — only `CLAUDE.md` and
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) and the
 per-work-item transcript directory (`projects/`) are mounted per invocation.
 
-The repo-root `install-claude-hooks` script installs this same settings.json and hook set into the
-current host user's `~/.claude`, so the hooks can be exercised directly outside the container: hook/data
-files are symlinked straight back into this repo, and settings.json is copied verbatim (no rewriting
-needed, since its hook paths are already the portable `$HOME` form). It also installs the `cfwf`
+The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
+hooks can be exercised directly outside the container: the managed settings and every hook/data file are
+copied root-owned into `/etc/claude-code` with `sudo install` (a copy, so re-run the script after a hook
+changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the preferences from
+`claude-user-settings.json` are copied to `~/.claude/settings.json` (keeping the previous file as
+`settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. An
+optional first argument names a file of host directory roots, installed as the root-owned
+`/etc/claude-code/hooks/allowed-dirs.local`. It also installs the `cfwf`
 helper into `/usr/local/bin` (`CFWF_BIN_DIR` overrides the directory) so anyone on the host can run it
 (a copy, not a symlink, so re-run the script after `cfwf` changes),
 falling back to `sudo install` if the plain install fails (typically because that directory is not writable), and it aborts before changing
@@ -185,7 +193,7 @@ Standalone scripts maintained in this repo (`containers/base/development-full/sc
 - `querydb`: runs `sqlcmd` with the connection settings from `.database` files. See [querydb](../../../docs/development/scripts/querydb.md).
 - `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board, creating an issue, reading an issue's details or whether its plan has been answered, reading a repository's default branch, visibility, allowed merge methods and description (`cfwf repo view`), listing its collaborators and their roles (`cfwf repo collaborators`), probing the authenticated login, the host and the `gh` version without ever printing a token (`cfwf auth status`), adding a comment to a PR or an issue, judging the checks on a PR's head (with exit codes that keep a failed check apart from a failed read), reading a PR's state and metadata as fixed `key<TAB>value` lines (`cfwf pr view`, with no `--json` or `--jq`), listing a repository's open pull requests (`cfwf pr list`), listing a repository's open issues by priority (`cfwf issue list`), searching one repository's issues (`cfwf issue search`), creating a draft pull request and putting it on the Workflow board as Development in one step, or getting the existing one when the branch already has one (`cfwf pr create`), reading a pull request's comments, reviews and review threads (`cfwf pr comments`), replying to an inline review comment (`cfwf pr reply`), or looking up a repository's latest release (`cfwf release view`), its releases (`cfwf release list`) or the commit a tag points to (`cfwf tag view`), as when pinning a GitHub Action, and checks every body, title and label it posts for leaks (tokens, host paths, private repository names) first. See [cfwf](../../../docs/development/scripts/cfwf.md).
 
-Every name is registered on `claude-hooks/command-allowlist` and `claude-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
+Every name is registered on `claude-hooks/command-allowlist` and `claude-managed-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
 
 ---
 
@@ -217,21 +225,27 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/opt/dotnet-skills/` | root:root | 0755 | Sparse-checkout of dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade plugins (pinned to `DOTNET_SKILLS_COMMIT`); agent can read/execute but not modify |
 | `/home/developer/.claude/skills/` | root:root | 0755 | Symlinks into the `/opt/*` skill repos above, one per skill (count recorded at build time in `/opt/.claude-skill-count`); agent can read/execute but not add, remove, or retarget |
 | `/home/developer/.claude/agents/` | root:root | 0755 | Symlinks named `credfeto-<name>.md` to each `/opt/credfeto-ai-skills/ai/agents/<name>/AGENT.md` (count recorded at build time in `/opt/.claude-agent-count`); agent can read but not add, remove, or retarget |
-| `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code settings (from `claude-settings.json`); read-only for all users |
+| `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code preferences (from `claude-user-settings.json`); read-only for all users |
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
-| `/home/developer/.claude/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
-| `/home/developer/.claude/hooks/enforce-git-dash-c` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-dash-c`); read/execute only |
-| `/home/developer/.claude/hooks/enforce-git-identity` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-identity`); read/execute only |
-| `/home/developer/.claude/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
-| `/home/developer/.claude/hooks/block-git-worktree` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-git-worktree`); read/execute only |
-| `/home/developer/.claude/hooks/block-dotnet-tool-install` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-dotnet-tool-install`); read/execute only |
-| `/home/developer/.claude/hooks/block-github-mcp-write-tools` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-github-mcp-write-tools`); read/execute only |
-| `/home/developer/.claude/hooks/enforce-ssh-host-and-key` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-ssh-host-and-key`); read/execute only |
-| `/home/developer/.claude/hooks/enforce-background-for-long-running-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-background-for-long-running-commands`); read/execute only |
-| `/home/developer/.claude/hooks/cache-gh-lookups` | root:root | 0755 | Baked-in hook script (from `claude-hooks/cache-gh-lookups`); read/execute only |
-| `/home/developer/.claude/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
-| `/home/developer/.claude/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
-| `/home/developer/.claude/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
+| `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
+| `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
+| `/etc/claude-code/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
+| `/etc/claude-code/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
+| `/etc/claude-code/hooks/enforce-allowed-dirs` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-allowed-dirs`); read/execute only |
+| `/etc/claude-code/hooks/block-config-skills` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-config-skills`); read/execute only |
+| `/etc/claude-code/hooks/enforce-git-identity` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-identity`); read/execute only |
+| `/etc/claude-code/hooks/enforce-git-dash-c` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-git-dash-c`); read/execute only |
+| `/etc/claude-code/hooks/block-git-worktree` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-git-worktree`); read/execute only |
+| `/etc/claude-code/hooks/block-dotnet-tool-install` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-dotnet-tool-install`); read/execute only |
+| `/etc/claude-code/hooks/block-github-mcp-write-tools` | root:root | 0755 | Baked-in hook script (from `claude-hooks/block-github-mcp-write-tools`); read/execute only |
+| `/etc/claude-code/hooks/enforce-ssh-host-and-key` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-ssh-host-and-key`); read/execute only |
+| `/etc/claude-code/hooks/enforce-curl-host` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-curl-host`); read/execute only |
+| `/etc/claude-code/hooks/enforce-background-for-long-running-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-background-for-long-running-commands`); read/execute only |
+| `/etc/claude-code/hooks/cache-gh-lookups` | root:root | 0755 | Baked-in hook script (from `claude-hooks/cache-gh-lookups`); read/execute only |
+| `/etc/claude-code/hooks/command-allowlist` | root:root | 0444 | Known-good command names for `reject-obfuscated-commands` (from `claude-hooks/command-allowlist`); read-only |
+| `/etc/claude-code/hooks/command-blocklist` | root:root | 0444 | Known-bad command names for `reject-obfuscated-commands` (from `claude-hooks/command-blocklist`); read-only |
+| `/etc/claude-code/hooks/env-var-blocklist` | root:root | 0444 | Banned environment-variable assignments for `reject-obfuscated-commands` (from `claude-hooks/env-var-blocklist`); read-only |
+| `/etc/claude-code/hooks/allowed-dirs` | root:root | 0444 | Allowed directory roots for `enforce-allowed-dirs` (from `claude-hooks/allowed-dirs`); read-only |
 | `/opt/composite-action-lint` | root:root | (installed by upstream) | Composite action linter binary from upstream image |
 | `/usr/local/bin/pre-commit-check` | root:root | 0755 | Repo-local wrapper script (from `scripts/pre-commit-check`); read/execute only |
 | `/usr/local/bin/querydb` | root:root | 0755 | Repo-local wrapper script (from `scripts/querydb`); read/execute only |
@@ -271,13 +285,19 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 - `/opt/pre-commit/src/.pre-commit-config.yaml` must exist.
 - `/opt/git-global-hooks/pre-commit` must be executable.
 
-**Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json` and
-`.../policy-limits.json` must be root:root 0444; `.../hooks/enforce-git-dash-c`,
-`.../hooks/enforce-git-identity`, `.../hooks/reject-obfuscated-commands`, `.../hooks/block-git-worktree`,
-`.../hooks/block-dotnet-tool-install`, `.../hooks/block-github-mcp-write-tools`, `.../hooks/enforce-ssh-host-and-key`,
-`.../hooks/enforce-background-for-long-running-commands`, and `.../hooks/cache-gh-lookups` must
-each be root:root 0755 and executable; the
-`.../hooks/{command-allowlist,command-blocklist,env-var-blocklist}` policy data files must each be root:root 0444.
+**Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json`,
+`/home/developer/.claude/policy-limits.json` and `/etc/claude-code/managed-settings.json` must be root:root
+0444, and `/etc/claude-code` and `/etc/claude-code/hooks` root:root 0755; `managed-settings.json` must set
+the `allowManaged*Only` locks and disable bypass-permissions mode, `~/.claude/settings.json` must hold no
+permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
+`block-no-verify` or under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
+`.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-dash-c`,
+`.../block-git-worktree`, `.../block-dotnet-tool-install`, `.../block-github-mcp-write-tools`,
+`.../enforce-ssh-host-and-key`, `.../enforce-curl-host`, `.../enforce-background-for-long-running-commands`,
+and `.../cache-gh-lookups` must each be root:root 0755; the
+`/etc/claude-code/hooks/{command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}` policy data
+files must each be root:root 0444, `allowed-dirs` must list the three agent mounts, and no
+`allowed-dirs.local` may be baked in.
 
 **Claude Code skills wiring**: the number of symlinks recorded at build time in
 `/opt/.claude-skill-count` must exist directly under `/home/developer/.claude/skills/`; a spot-check of
