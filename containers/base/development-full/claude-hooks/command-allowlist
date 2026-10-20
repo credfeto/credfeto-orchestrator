@@ -35,6 +35,7 @@ buildtest
 python3
 uv
 ruff
+pip
 
 # JavaScript toolchains
 npm
