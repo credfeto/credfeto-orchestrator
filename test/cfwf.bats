@@ -333,6 +333,22 @@ gh_line_of() {
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
 }
 
+# Writes a body file for each character that shows nothing although it is not ASCII whitespace,
+# U+3000, U+00A0, U+200B and U+FEFF, each as the only text on its lines (invisible-<name>.md), one
+# that mixes all four with ASCII whitespace (invisible-mixed.md), and the same mix with a single
+# visible character (visible-among-invisible.md). Each body must be refused as empty, the last one
+# taken.
+write_invisible_bodies() {
+    printf '\343\200\200\343\200\200\n\343\200\200\n' > "${TEST_TMP}/invisible-ideographic-space.md" \
+        && printf '\302\240\n\302\240\302\240\n' > "${TEST_TMP}/invisible-no-break-space.md" \
+        && printf '\342\200\213\n\342\200\213\342\200\213\n' > "${TEST_TMP}/invisible-zero-width-space.md" \
+        && printf '\357\273\277\n\357\273\277\n' > "${TEST_TMP}/invisible-byte-order-mark.md" \
+        && printf ' \343\200\200\t\302\240\n\342\200\213\357\273\277\n' > "${TEST_TMP}/invisible-mixed.md" \
+        && printf ' \343\200\200\t\302\240\n\342\200\213x\357\273\277\n' > "${TEST_TMP}/visible-among-invisible.md"
+}
+
+INVISIBLE_BODIES=(ideographic-space no-break-space zero-width-space byte-order-mark mixed)
+
 @test "--set refuses an option the board has that is not a workflow state, and writes nothing (#1519)" {
     jq -n '{fields: [{id: "PVTSSF_status", name: "Status", options: [
         {id: "st_3", name: "Approved"}, {id: "x1", name: "Banana"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
@@ -1830,6 +1846,23 @@ reply_posts() {
     cmp "${TEST_TMP}/long.md" "${GH_FIXTURES}/reply-body.txt"
 }
 
+@test "pr reply refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and posts one with a visible character" {
+    prepare_pr_reply
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run_pr_reply --pr 42 --comment-id 500 --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run_pr_reply --pr 42 --comment-id 500 --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/reply-body.txt"
+}
+
 @test "pr reply refuses a blank, missing or unreadable body as a runtime failure, without calling gh" {
     prepare_pr_reply
     printf ' \n\t\n' > "${TEST_TMP}/blank.md"
@@ -2527,6 +2560,24 @@ assert_refused_as_blank() {
     run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}"
     [ "${status}" -eq 1 ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and takes one with a visible character" {
+    prepare_issue_create
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${NEW_ISSUE_URL}" ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/issue-body.txt"
 }
 
 @test "issue create reads the body from stdin for --body-file -, and an empty stdin is refused" {
@@ -5952,6 +6003,24 @@ run_comment_add() {
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the body is empty" ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and posts one with a visible character" {
+    prepare_comment
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run_comment_add --pr 1623 --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/comment-body.txt"
 }
 
 @test "comment add refuses a leaking body with exit 8, naming the rule only, and posts nothing" {
