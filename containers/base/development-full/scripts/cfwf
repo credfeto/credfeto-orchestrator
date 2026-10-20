@@ -139,7 +139,11 @@ readonly REPOSITORY_LINK_PREFIX='(^|[^A-Za-z0-9.-]|\.\.)\.*((www\.)?github\.com[
 # account, and an attachment under a repository (<owner>/<repo>/assets/...) is that repository's.
 readonly GITHUB_RESERVED_PATHS=" about account advisories apps codespaces collections contact copilot customer-stories dashboard enterprise enterprises events explore features issues join login logout marketplace new notifications organizations orgs pricing pulls readme resources search security sessions settings signup site solutions sponsors stars team topics trending user-attachments users watching "
 readonly PRIORITIES=(Security Urgent High Medium Low)
-readonly PRIORITY_LIST="Security, Urgent, High, Medium or Low"
+# PRIORITIES as the help and error texts name them, comma-separated with "or" before the last,
+# built from PRIORITIES (no priority holds a space) so a new priority cannot leave them naming the
+# old ones.
+readonly PRIORITIES_BUT_LAST="${PRIORITIES[*]:0:${#PRIORITIES[@]}-1}"
+readonly PRIORITY_LIST="${PRIORITIES_BUT_LAST// /, } or ${PRIORITIES[-1]}"
 readonly NEW_ISSUE_STATUS="Not Started"
 readonly NEW_PR_STATUS="Development"
 # The ten workflow states, in board order, which the project's built-in "Status" field carries
