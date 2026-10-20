@@ -60,11 +60,16 @@
 #     table. A few writers have their own rule instead:
 #       rm, mv, cp   every operand and --target-directory (see below), which
 #                    must also be under a root before anything else runs;
-#       ln           with -s/--symbolic only the link being created (the last
-#                    operand, or the --target-directory), since a symbolic
-#                    link's target is text and anything written through the
-#                    link later is resolved physically; a hard link names an
-#                    existing file to share, so every operand is checked;
+#       ln           with -s/--symbolic the link being created (the last
+#                    operand, or the --target-directory) as a path, and every
+#                    target it points to as text against the protected names
+#                    only, like sed and awk program text below: a target is
+#                    text until something is written through the link, and a
+#                    later writer's own text (a sed `w` name) is never
+#                    resolved (see check_ln_target for the backslash, brace
+#                    and glob forms; a non-literal target is not checked); a
+#                    hard link names an existing file to share, so every
+#                    operand is checked as a path;
 #       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
 #                    restore, mv, rm, clone) or a call with an option starting
 #                    `--o` (`--output` and its abbreviations), and then every
@@ -1066,9 +1071,26 @@ mktemp_write_targets() {
   return 0
 }
 
+# Checks symbolic link target $1 (flags $2) as text against the protected
+# names. bash removes a backslash and expands a brace or glob before ln sees
+# the word, so each could hide a protected name from the text: a backslash is
+# dropped before matching, a brace expansion blocks, and every current match
+# of a glob is checked as a path. A non-literal target is not checked.
+check_ln_target() {
+  local word="$1" flags="$2"
+  [ "$flags" = N ] && return 0
+  names_protected_config "${word//\\/}" && block_config_write "$word"
+  [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
+  if [[ "$flags" == *g* ]]; then
+    prepare_word "$word" "$flags" "ln target"
+    queue_glob_matches "ln target" "$word"
+  fi
+  return 0
+}
+
 ln_write_targets() {
-  local j tok flags symbolic=0 operands_only=0 last="" last_flags="" k
-  local -a operands=() target_dirs=() target_dir_flags=()
+  local j tok flags symbolic=0 operands_only=0 last="" last_flags="" k sources
+  local -a operands=() operand_flags=() target_dirs=() target_dir_flags=()
   # One pass, so the words taken as option values (-S/--suffix, -t/
   # --target-directory) are exactly the ones left out of the operands: a
   # suffix spelled like an option (`-S -tx`) is never read as one.
@@ -1127,6 +1149,7 @@ ln_write_targets() {
       esac
     fi
     operands+=("$tok")
+    operand_flags+=("$flags")
     last="$tok"
     last_flags="$flags"
   done
@@ -1134,7 +1157,17 @@ ln_write_targets() {
     queue_all_arguments $((i + 1))
     return 0
   fi
-  # Symbolic: only what is created - the --target-directory, else the last
+  # Symbolic: what each link points to is text, resolved only when something
+  # is written through the link later, and a later writer's own text (a sed
+  # `w` name) is never resolved, so a target naming configuration is blocked
+  # as text. Every operand is a target except the link name: the last of two
+  # or more, when no --target-directory is given.
+  sources=${#operands[@]}
+  [ "${#target_dirs[@]}" -eq 0 ] && [ "$sources" -ge 2 ] && sources=$((sources - 1))
+  for ((k = 0; k < sources; k++)); do
+    check_ln_target "${operands[k]}" "${operand_flags[k]}"
+  done
+  # Then only what is created - the --target-directory, else the last
   # operand (a lone operand links into the working directory).
   if [ "${#target_dirs[@]}" -gt 0 ]; then
     for ((k = 0; k < ${#target_dirs[@]}; k++)); do
