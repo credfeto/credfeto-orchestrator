@@ -1753,6 +1753,17 @@ resolve_body() {
     BODY_FILE="${BODY_PATH_TMP}"
     LC_ALL=C grep -q '[^[:space:]]' "${BODY_FILE}" || die "the body is empty"
     check_body_for_leaks "${BODY_FILE}" "${REPO}"
+    require_body_has_visible_text "${BODY_FILE}"
+}
+
+# Refuses (exit 1) the body file $1 when it holds only whitespace and INVISIBLE_CHARACTERS, such as
+# U+3000 or U+00A0, which the byte check in resolve_body counts as text. It runs after the leak
+# check, so a body that is not valid UTF-8 is refused there (exit 8) and never called empty here.
+# bash cannot hold a NUL, so NULs are dropped from the text classed, never from the body posted.
+require_body_has_visible_text() {
+    local text
+    text=$(LC_ALL=C tr -d '\000' < "$1") || die "could not read the body"
+    has_visible_text "${text}" || die "the body is empty"
 }
 
 # Refuses the text $1 names (body, title or label) under the rule $2. It names only the subject,
