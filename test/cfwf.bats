@@ -2100,6 +2100,39 @@ assert_title_shape_refused() {
     done
 }
 
+@test "issue create refuses a title whose text after the prefix is only zero-width or blank-looking characters, and never echoes it" {
+    prepare_issue_create
+    local title
+    # U+200B, U+200C, U+200D, U+2060, U+FEFF, U+3164, U+2800, U+115F, U+1160, U+FFA0, U+00AD,
+    # U+034F, U+061C, U+17B4, U+17B5, U+180E, U+200E, U+202A, U+202E, U+206F, U+FE00, U+FE0F,
+    # U+FFF0, U+FFF8, U+1BCA0, U+1D173, U+1D17A, U+E0001 and U+E007F, then a mix of them with
+    # ASCII spaces, U+3000 and U+00A0.
+    for title in $'fix: \342\200\213' $'fix: \342\200\214' $'fix: \342\200\215' $'fix: \342\201\240' \
+        $'fix: \357\273\277' $'fix: \343\205\244' $'fix: \342\240\200' $'fix: \341\205\237' $'fix: \341\205\240' \
+        $'fix: \357\276\240' $'fix: \302\255' $'fix: \315\217' $'fix: \330\234' $'fix: \341\236\264' \
+        $'fix: \341\236\265' $'fix: \341\240\216' $'fix: \342\200\216' $'fix: \342\200\252' $'fix: \342\200\256' \
+        $'fix: \342\201\257' $'fix: \357\270\200' $'fix: \357\270\217' $'fix: \357\277\260' $'fix: \357\277\270' \
+        $'fix: \360\233\262\240' $'fix: \360\235\205\263' $'fix: \360\235\205\272' $'fix: \363\240\200\201' \
+        $'fix: \363\240\201\277' $'tool(cfwf): \342\200\213 \343\200\200\357\273\277\302\240\342\200\213\342\240\200 '; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+}
+
+@test "issue create accepts a title whose text after the prefix holds a letter beside zero-width characters, or a character just outside their ranges" {
+    prepare_issue_create
+    local title
+    # A letter after U+200B, e-acute between U+200C and U+200D, a letter after U+2800 and U+FEFF,
+    # then U+2010 (hyphen, just after U+200B-U+200F) and U+2030 (per mille, just after U+202A-U+202F).
+    for title in $'fix: \342\200\213x' $'fix: \342\200\214\303\251\342\200\215' $'fix(a): \342\240\200\357\273\277x' \
+        $'fix: \342\200\220' $'fix: \342\200\260'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
 @test "issue create accepts a title whose text after the prefix starts with a non-ASCII letter or follows a multi-byte space" {
     prepare_issue_create
     local title
@@ -2115,14 +2148,15 @@ assert_title_shape_refused() {
     prepare_issue_create
     local title
     # In C.UTF-8 a byte that is not valid UTF-8 is not a character, so it is not visible text either.
-    for title in $'fix: \377' $'fix: \200' $'tool(cfwf):  \300 \377 '; do
+    for title in $'fix: \377' $'fix: \200' $'tool(cfwf):  \300 \377 ' $'fix: \377\342\200\213'; do
         run_titled_create "${REPO}" "${title}"
         assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
         [[ "${stderr}" != *"${title}"* ]]
     done
 
     # A visible character beside the invalid byte passes the shape check and is refused by the leak check.
-    for title in $'fix: \200x' $'fix: x\377'; do
+    # e-acute and a CJK ideograph beside an invalid byte and a zero-width space stay visible.
+    for title in $'fix: \200x' $'fix: x\377' $'fix: \377 \303\251' $'fix: \342\200\213\377\346\274\242'; do
         run_titled_create "${REPO}" "${title}"
         [ "${status}" -eq 8 ] || { echo "'${title}' exited ${status}: ${stderr}" >&2; return 1; }
         [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
