@@ -358,6 +358,17 @@ assert_each() {
     assert_blocked_config_write
 }
 
+@test "a writer anywhere inside a .claude tree is blocked, since a .. in program text reaches a protected entry" {
+    mkdir -p "${TEST_TMP}/repo/.claude/x"
+    assert_each 2 'through a cd into it' \
+        "cd .claude/x && sed -n 'w ../settings.json' ${SRC}/payload" \
+        "cd .claude/x && awk '{print > \"../hooks/evil\"}' ${SRC}/payload" \
+        "cd .claude/x && sqlite3 :memory: '.once ../settings.local.json' 'select 1;'"
+    run_hook_in_dir "sed -n 'w ../settings.json' ${SRC}/payload" "${TEST_TMP}/repo/.claude/x"
+    assert_blocked_config_write
+    assert_each 0 '' "cd .claude/x && ls"
+}
+
 @test "git clone with no directory is checked against the directory git names after the repository" {
     local cmd
     for cmd in \
