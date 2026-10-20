@@ -2088,10 +2088,10 @@ run_titled_create() {
 # Given a run's status, stdout and stderr: it was refused for the title's shape, with exit 2, the
 # rule and the usage on stderr, nothing on stdout and no gh call.
 assert_title_shape_refused() {
-    [ "$1" -eq 2 ]
-    [ -z "$2" ]
-    [[ "$3" == "${TITLE_SHAPE_ERROR}"$'\n\n'"Usage: cfwf issue create"* ]]
-    [ ! -f "${GH_LOG}" ]
+    [ "$1" -eq 2 ] \
+        && [ -z "$2" ] \
+        && [[ "$3" == "${TITLE_SHAPE_ERROR}"$'\n\n'"Usage: cfwf issue create"* ]] \
+        && [ ! -f "${GH_LOG}" ]
 }
 
 @test "issue create accepts a title of the shape prefix: text or prefix(name): text with a lower-case prefix" {
