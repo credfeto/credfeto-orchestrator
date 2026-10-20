@@ -99,10 +99,11 @@
 # is also expanded now and every match checked against the protected paths.
 # A writer (git and gh only when they write, as above) can also write into its
 # working directory without naming anything (`curl -O`, `gh release
-# download`), so it may not run where that directory is protected: not in a
-# protected $PWD or leading cd/`git -C` target, and not in a command that
-# also cds into a protected directory anywhere, whatever the order (a loop
-# can run the cd first). A cd there with no writer, to read, stays allowed.
+# download`), so it may not run anywhere inside a `.claude` tree (or
+# /etc/claude-code), from where a `..` in a sed `w` name reaches a protected
+# entry: not in such a $PWD or leading cd/`git -C` target, and not in a
+# command that also cds into one anywhere, whatever the order (a loop can
+# run the cd first). A cd there with no writer, to read, stays allowed.
 #
 # Protected paths, wherever they sit (a repo's own `.claude/`, the user's
 # `~/.claude/`, any nested directory):
@@ -344,6 +345,17 @@ is_protected_path() {
   case "$1" in
     */.claude | */.claude/settings*.json* | */.claude/hooks | */.claude/hooks/* | */.claude/agents | */.claude/agents/* | */.claude/skills | */.claude/skills/*) return 0 ;;
     */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
+  esac
+  return 1
+}
+
+# Working-directory check, for a fully resolved absolute path: anywhere inside
+# a `.claude` tree, not only its protected entries, because a writer there
+# can reach one with a `..` in text that is never resolved (`sed -n 'w
+# ../settings.json'` from `.claude/x`).
+is_in_claude_config_tree() {
+  case "$1" in
+    */.claude | */.claude/* | /etc/claude-code | /etc/claude-code/*) return 0 ;;
   esac
   return 1
 }
@@ -621,7 +633,7 @@ check_cd() {
   CD_TARGET="$RESOLVED"
   # Reading there stays allowed; a writer in the same command does not (see
   # note_writer).
-  if is_protected_path "$RESOLVED"; then
+  if is_in_claude_config_tree "$RESOLVED"; then
     CD_INTO_PROTECTED="$RESOLVED"
     [ -n "$WRITER_SEEN" ] && block_cd_with_writer
   fi
@@ -884,13 +896,13 @@ note_writer() {
   [ -n "$CD_INTO_PROTECTED" ] && block_cd_with_writer
   [ "$relative_ok" = 1 ] || return 0
   if [ "$dir" = "$PWD" ]; then
-    is_protected_path "$PWD" && block_config_write "$PWD"
+    is_in_claude_config_tree "$PWD" && block_config_write "$PWD"
     if [ -z "$PWD_PHYSICAL" ]; then
       PWD_PHYSICAL=$(realpath -m -- "$PWD" 2>/dev/null) || block 'the working directory could not be resolved'
     fi
     dir="$PWD_PHYSICAL"
   fi
-  is_protected_path "$dir" && block_config_write "$dir"
+  is_in_claude_config_tree "$dir" && block_config_write "$dir"
   return 0
 }
 
