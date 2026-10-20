@@ -774,9 +774,7 @@ run_payload_with_path() {
 }
 
 @test "missing jq is blocked (fail closed)" {
-    mkdir -p "${STUB_BIN}/nojq"
-    ln -s "$(command -v cat)" "${STUB_BIN}/nojq/cat"
-    run bash -c 'printf "%s" "{}" | PATH="$1" "$(command -v bash)" "$2"' _ "${STUB_BIN}/nojq" "${HOOK}"
+    run_payload_with_path '{}' "$(path_with_only)"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'jq is not available'* ]]
 }
