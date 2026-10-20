@@ -129,6 +129,32 @@ teardown() {
     [[ "${output}" == *"WAIT for it to actually finish before doing anything else, including ending your turn"* ]]
 }
 
+@test "build_issue_claude_md makes the Monitor tool optional and gives a Read fallback with no shell wait loops (#1656)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"if the Monitor tool is available in this session"* ]]
+    [[ "${output}" == *"The Monitor tool is often NOT available in these sessions"* ]]
+    [[ "${output}" == *"do NOT fall back to a shell wait loop (until/while/for loops, sleep, timeout, pgrep)"* ]]
+    [[ "${output}" == *"read the command's output file (its path is in the run_in_background result) with the Read tool"* ]]
+    [[ "${output}" != *"poll with the Monitor tool for its completion string and WAIT"* ]]
+    [[ "${output}" != *"then poll with the Monitor tool for the command's own completion string"* ]]
+}
+
+@test "build_pr_claude_md makes the Monitor tool optional and gives a Read fallback with no shell wait loops (#1656)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"The Monitor tool is often NOT available in these sessions"* ]]
+    [[ "${output}" == *"do NOT fall back to a shell wait loop"* ]]
+    [[ "${output}" != *"then poll with the Monitor tool for the command's own completion string"* ]]
+}
+
+@test "the background-stall warning offers the Read fallback when Monitor is unavailable (#1656)" {
+    run build_pr_claude_md 7 "/resolved/.ai-instructions" "UNKNOWN" "" "${REPO_WORK_DIR}" "" "false" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"with the Monitor tool if it is available in this session, otherwise by re-reading the command's output file with the Read tool"* ]]
+    [[ "${output}" != *"you MUST poll for its own completion string with the Monitor tool"* ]]
+}
+
 @test "build_issue_claude_md states the container-vs-GitHub survival rule" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
