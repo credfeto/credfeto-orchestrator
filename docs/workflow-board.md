@@ -102,8 +102,9 @@ Once an Issue's plan is Approved and the agent opens a draft Pull Request, the P
 over driving the board through a fixed sequence of phases (see `build_pr_claude_md` in
 `lib/prompts`), one phase per agent invocation:
 
-1. **Setup / rebase** — check out the branch, sync labels from the linked issue, rebase if the
-   PR has fallen behind `main`.
+1. **Setup / rebase** — check out the branch and rebase if the PR has fallen behind `main`.
+   Labels from the linked issue are synced by the orchestrator itself before every PR session
+   (`sync_pr_labels_from_linked_issues` in `lib/github`), never by the agent.
 2. **Wait for CI** — if a required check is still running, do nothing this tick; just wait.
 3. **Fix outstanding work** — a failed check, an unaddressed review comment, or linked-issue
    feedback. Fix it, commit, push, stop; CI reruns and the next tick continues.
