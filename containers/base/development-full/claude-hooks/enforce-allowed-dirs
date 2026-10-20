@@ -79,8 +79,11 @@
 #       sed, awk     the program text (sed's script, awk's program and -v
 #                    assignments) is checked as text against the protected
 #                    names only, since a program routinely names paths it does
-#                    not write (`sed -n '/x/p'`); the file operands are write
-#                    targets only when editing in place (sed -i/--in-place,
+#                    not write (`sed -n '/x/p'`); the text is never resolved,
+#                    so the match allows anything between `.claude/` (or
+#                    `etc/`) and the protected name, which stops a `//`,
+#                    `/./` or `x/../` detour hiding it; the file operands are
+#                    write targets only when editing in place (sed -i/--in-place,
 #                    awk -i/--include/-l/--load).
 # Each write target must be fully literal (a variable or substitution could
 # be anything, so it is blocked, as is `$'...'` quoting); it is resolved like
@@ -310,9 +313,12 @@ MARKER='(non-literal)'
 # ---- protected paths -------------------------------------------------------
 
 # Text check, for words that are not resolved as paths (sed and awk programs).
+# The text is not normalised, so each name allows anything after `.claude/`
+# or `etc/`: `.claude//settings.json`, `.claude/./skills` and
+# `.claude/x/../hooks` all still match.
 names_protected_config() {
   case "$1" in
-    *.claude | *.claude/ | *.claude/settings*.json* | *.claude/hooks* | *.claude/agents* | *.claude/skills* | *.claude.json* | *.mcp.json* | *etc/claude-code*) return 0 ;;
+    *.claude | *.claude/ | *.claude/*settings*.json* | *.claude/*hooks* | *.claude/*agents* | *.claude/*skills* | *.claude.json* | *.mcp.json* | *etc/*claude-code*) return 0 ;;
   esac
   return 1
 }
