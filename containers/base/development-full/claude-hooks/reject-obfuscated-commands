@@ -47,7 +47,9 @@
 #   5. command-allowlist (known-good names): anything not listed is
 #      rejected. Extending policy = adding one line to a data file, not
 #      changing this logic. Path-qualified names (/usr/bin/git, ./git,
-#      <hooks-path>/pre-commit) are matched by basename.
+#      <hooks-path>/pre-commit) are matched by basename. Only the first
+#      field of each line is the name; the second, the write
+#      classification, is enforce-allowed-dirs' concern.
 #
 # Deliberate residual gaps (accepted, ~1%): a listed command doing damage
 # via plain arguments (the claude-settings.json allow/deny layer covers
@@ -314,6 +316,11 @@ NAME_RE='^(\[|[A-Za-z0-9_./][A-Za-z0-9_./-]*)$'
 # Loaded once, not re-read from disk per CallExpr.
 mapfile -t command_blocklist_lines < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
 mapfile -t command_allowlist < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null)
+# Each line is "<name> <classification>"; keep only the name.
+for idx in "${!command_allowlist[@]}"; do
+  entry="${command_allowlist[$idx]#"${command_allowlist[$idx]%%[![:space:]]*}"}"
+  command_allowlist[idx]="${entry%%[[:space:]]*}"
+done
 
 is_allowlisted() {
   local w

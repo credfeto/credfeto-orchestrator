@@ -7,10 +7,13 @@ SOURCE_HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-
 SOURCE_HOOK_DIR="${REPO_ROOT}/containers/base/development-full/claude-hooks"
 
 # The hook reads its allowlist from `allowed-dirs` (or `allowed-dirs.local`)
-# next to its own file, so each test gets a private copy of the hook in a
-# directory whose allowlist it controls, plus a directory tree to point that
-# allowlist at: ROOT (allowed), ROOT/sub, ROOT/escape -> OUTSIDE (a symlink
-# leading out of the root), and OUTSIDE (never allowed).
+# and the command classifications from `command-allowlist`, both next to its
+# own file, so each test gets a private copy of the hook in a directory whose
+# data files it controls, plus a directory tree to point that allowlist at:
+# ROOT (allowed), ROOT/sub, ROOT/escape -> OUTSIDE (a symlink leading out of
+# the root), and OUTSIDE (never allowed). pushd is not on the shipped
+# command-allowlist (reject-obfuscated-commands rejects it), so the private
+# copy classifies it to keep the hook's own cd-family handling under test.
 setup() {
     setup_isolated_env
     HOOK_DIR="${TEST_TMP}/hooks"
@@ -19,6 +22,8 @@ setup() {
     OUTSIDE="${TEST_TMP}/outside"
     mkdir -p "${HOOK_DIR}" "${ROOT}/sub" "${OUTSIDE}"
     cp "${SOURCE_HOOK}" "${HOOK}"
+    cp "${SOURCE_HOOK_DIR}/command-allowlist" "${HOOK_DIR}/command-allowlist"
+    printf '%s\n' 'pushd read-only' >> "${HOOK_DIR}/command-allowlist"
     ln -s "${OUTSIDE}" "${ROOT}/escape"
     printf '%s\n' "${ROOT}" > "${HOOK_DIR}/allowed-dirs"
 }
@@ -90,7 +95,11 @@ assert_blocked() {
 
 @test "a cd nested in a substitution never becomes the base" {
     # shellcheck disable=SC2016  # literal $(...) - must reach the hook unexpanded
-    assert_blocked '$(cd '"${ROOT}/sub"') ; rm -rf x' 'unknowable'
+    assert_blocked 'echo $(cd '"${ROOT}/sub"') ; rm -rf x' 'unknowable'
+}
+
+@test "a command name that is not a plain literal fails closed" {
+    assert_blocked "\$(cd ${ROOT}/sub) ; rm -rf x" 'command name could not be verified'
 }
 
 @test "git -C does not leak its directory into a later call's relative paths (regression)" {
@@ -304,11 +313,11 @@ assert_blocked() {
     assert_blocked 'echo $(find /etc -name x)'
 }
 
-@test "a checked name as a non-command argument is not checked" {
-    assert_allowed "ls | xargs rm -rf /etc/x"
+@test "a checked name as a read-only command's argument is not checked" {
+    assert_allowed "ls | grep rm -rf /etc/x"
 }
 
-@test "a command with no checked call is allowed untouched, without reading the allowlist at all" {
+@test "a read-only command with no checked call is allowed untouched, without reading allowed-dirs at all" {
     rm -f "${HOOK_DIR}/allowed-dirs"
     assert_allowed "echo hello"
     assert_allowed "ls -la /etc"
