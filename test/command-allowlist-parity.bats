@@ -51,7 +51,7 @@ NARROW_ALLOW_ONLY_NAMES=(set)
     # Same comment-stripping convention as reject-obfuscated-commands itself
     # uses on these exact two files, so an indented comment is handled the
     # same way by both consumers.
-    allow_names=$(grep -vE '^[[:space:]]*(#|$)' "${ALLOWLIST}" | sort -u)
+    allow_names=$(grep -vE '^[[:space:]]*(#|$)' "${ALLOWLIST}" | awk '{ print $1 }' | sort -u)
     blocklist_names=$(grep -vE '^[[:space:]]*(#|$)' "${BLOCKLIST}" | cut -f1 | sort -u)
     # Whole-command denies only - Bash(name), Bash(name *), or the no-space
     # Bash(name*) style also used elsewhere in this same deny array. A
@@ -108,6 +108,41 @@ NARROW_ALLOW_ONLY_NAMES=(set)
     fi
 
     [ "${failed}" -eq 0 ]
+}
+
+# enforce-allowed-dirs treats a command with no valid classification as unclassified and blocks
+# it, so an entry added without deciding whether the command writes files fails at runtime; this
+# fails the build first, naming the entries, so the decision is made when the entry is added. The
+# pattern matches enforce-allowed-dirs' own CLASSIFIED_LINE_RE.
+CLASSIFIED_ENTRY_RE='^[[:space:]]*[^[:space:]]+[[:space:]]+(read-only|writer)[[:space:]]*$'
+
+# Prints every entry of allowlist file $1 that is not a name followed by exactly one valid
+# classification.
+unclassified_entries() {
+    grep -vE '^[[:space:]]*(#|$)' "$1" | grep -vE "${CLASSIFIED_ENTRY_RE}" || true
+}
+
+@test "every command-allowlist entry is classified as exactly one of writer or read-only" {
+    [ -s "${ALLOWLIST}" ] || { echo "ALLOWLIST not found or empty: ${ALLOWLIST}" >&2; return 1; }
+
+    local unclassified
+    [ "$(grep -cvE '^[[:space:]]*(#|$)' "${ALLOWLIST}")" -gt 0 ]
+    unclassified=$(unclassified_entries "${ALLOWLIST}")
+
+    if [ -n "${unclassified}" ]; then
+        echo "command-allowlist entries without exactly one writer/read-only classification - add one (writer when in doubt):" >&2
+        echo "${unclassified}" >&2
+        return 1
+    fi
+}
+
+@test "the classification check reports an unclassified, misspelt or over-long entry" {
+    local fixture="${BATS_TEST_TMPDIR}/command-allowlist"
+    printf '%s\n' '# comment' '' 'ls read-only' 'sed    writer' 'cat' 'grep reader' 'tee writer extra' > "${fixture}"
+    run unclassified_entries "${fixture}"
+    [ "${output}" = "cat
+grep reader
+tee writer extra" ]
 }
 
 # Non-Bash tool names the agent's mandated workflow provably needs (#1329), independent
