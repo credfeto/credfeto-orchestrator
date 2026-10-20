@@ -85,6 +85,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - SDK - Updated DotNet SDK to 10.0.402
 - The tracking issue that oneshot files when it cannot parse a Claude rate-limit reset time is now titled oneshot: Unparseable Claude rate-limit reset time, so it follows the repository's issue title format, and the lookup for an open tracking issue uses the same title (#1609)
 - Generated issue and pull request CLAUDE.md files now give the agent the Workflow status names and the exact cfwf workflow-status --set and --check commands for its item, inline at every step that moves the board, instead of raw project, field and option ids it had to turn into GraphQL itself, and say never to update the board with gh project or gh api graphql; an idle-exhausted pull request's Blocked comment now also gives its board status and the phase that was due next (#1650)
+- TBD - to be finalized after review
 ### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
