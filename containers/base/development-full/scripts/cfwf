@@ -1225,9 +1225,7 @@ matches_pattern() {
 # and the rule $4 it broke but never the value: a free-text value such as a title can hold a token,
 # and a usage error comes before the leak check, so echoing it would be the leak. The match is made
 # in the C locale, as the leak rules are, so a byte that is not valid UTF-8 gets the same answer
-# whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule. The one
-# exception is a title whose text is only such bytes and whitespace: has_visible_text, which classes
-# in C.UTF-8, finds no visible character there, so check_title_shape refuses it as a usage error.
+# whatever locale cfwf is run in, and is left to the leak check's invalid UTF-8 rule.
 validate() {
     local value="$1" pattern="$2" flag="$3" rule="$4"
     matches_pattern "${value}" "${pattern}" || usage_error "invalid value for ${flag}: ${rule}"
@@ -2095,12 +2093,17 @@ title_check_applies() {
 }
 
 # Refuses (exit 2) the title $1 for the repository $2 unless it has the title shape, never echoing
-# the title, since this runs before the leak check. The text after the prefix must hold a visible
-# character, so a title such as "fix: " followed only by U+3000 is refused.
+# the title, since this runs before the leak check. The shape is matched in the C locale, as
+# validate matches, so a byte that is not valid UTF-8 is left to the leak check's invalid UTF-8
+# rule. The text after the prefix must hold a visible character, so a title such as "fix: "
+# followed only by U+3000, or only by such bytes and whitespace, is refused. The match is made here
+# rather than through validate so that the text is read from this match's own BASH_REMATCH.
 check_title_shape() {
     title_check_applies "$2" || return 0
-    validate "$1" "${TITLE_SHAPE_PATTERN}" --title "${TITLE_SHAPE_RULE}"
-    has_visible_text "${BASH_REMATCH[-1]}" || usage_error "invalid value for --title: ${TITLE_SHAPE_RULE}"
+    local LC_ALL=C
+    if ! [[ "$1" =~ ${TITLE_SHAPE_PATTERN} ]] || ! has_visible_text "${BASH_REMATCH[-1]}"; then
+        usage_error "invalid value for --title: ${TITLE_SHAPE_RULE}"
+    fi
 }
 
 issue_create() {
