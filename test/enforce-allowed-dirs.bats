@@ -59,6 +59,11 @@ assert_blocked() {
     assert_blocked "cd escape" 'outside the allowed directories'
 }
 
+@test "cd through a symlink leaving the root and back with .. is allowed, since bash's logical cd lands in the root" {
+    assert_allowed "cd escape/.. && rm -rf x"
+    assert_blocked "cd escape/.. && rm -rf ../x" 'outside the allowed directories'
+}
+
 @test "bare cd, cd -, and cd with more than one argument are blocked" {
     assert_blocked "cd" 'requires a directory'
     assert_blocked "cd -" 'flags'
