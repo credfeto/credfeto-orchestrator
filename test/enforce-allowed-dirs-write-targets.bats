@@ -185,6 +185,14 @@ assert_each() {
         "sed --in-pl=.bak 's/a/b/' .mcp.json" \
         "sed -n 'w .claude/settings.json' ${SRC}/payload" \
         "sed 's/^//w .claude/skills/x/SKILL.md' ${SRC}/p" \
+        "sed -n 'w .claude//settings.json' ${SRC}/payload" \
+        "sed -n 'w .claude/./skills/x/SKILL.md' ${SRC}/payload" \
+        "sed -n 'w .claude/x/../settings.json' ${SRC}/payload" \
+        "awk '{print > \".claude//settings.local.json\"}' ${SRC}/x" \
+        "awk '{print > \".claude/./hooks/x\"}' ${SRC}/x" \
+        "awk '{print > \".claude/x/../agents/y\"}' ${SRC}/x" \
+        "sed -n 'w /etc//claude-code/managed-settings.json' ${SRC}/payload" \
+        "sqlite3 :memory: '.once .claude//settings.json' 'select 1;'" \
         "git -C . clone https://github.com/x/y .claude/skills/evil" \
         "git -C . show --output=.claude/hooks/x HEAD:payload" \
         "git -C . diff --output .claude/settings.json" \
