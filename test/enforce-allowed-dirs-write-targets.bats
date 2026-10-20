@@ -366,6 +366,18 @@ assert_each() {
         "cd .claude/x && sqlite3 :memory: '.once ../settings.local.json' 'select 1;'"
     run_hook_in_dir "sed -n 'w ../settings.json' ${SRC}/payload" "${TEST_TMP}/repo/.claude/x"
     assert_blocked_config_write
+    # A later cd makes the working directory unknowable, but the writer can run before it.
+    local cmd
+    for cmd in \
+        "ls; true || cd ${TEST_TMP}/repo; sed -n 'w settings.json' ${SRC}/payload" \
+        "for x in a; do ls; sed -n 'w settings.json' ${SRC}/payload; cd ${TEST_TMP}/repo; done"; do
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/repo/.claude"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+    # The same, from a working directory that reaches .claude only through a symlink.
+    ln -s "${TEST_TMP}/repo/.claude" "${TEST_TMP}/repo/innocent"
+    run_hook_in_dir "ls; true || cd ${TEST_TMP}/repo; sed -n 'w settings.json' ${SRC}/payload" "${TEST_TMP}/repo/innocent"
+    assert_blocked_config_write
     assert_each 0 '' "cd .claude/x && ls"
 }
 
@@ -713,6 +725,15 @@ EOF'
         [ "${status}" -eq 2 ] || { echo "realpath ${mode} failing was not blocked: ${output}" >&2; return 1; }
         [[ "${output}" == *'could not be resolved - failing closed'* ]]
     done
+}
+
+@test "a writer whose working directory realpath cannot resolve is blocked (fail closed)" {
+    local real_realpath
+    real_realpath=$(command -v realpath)
+    make_stub realpath "[ \"\$1\" = '-m' ] && [ \"\$3\" = \"\$PWD\" ] && exit 1; exec '${real_realpath}' \"\$@\""
+    run_in_repo "sed -n 'w out.txt' ${SRC}/payload"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'the working directory could not be resolved'* ]]
 }
 
 @test "glob matches realpath does not resolve one for one are blocked (fail closed)" {
