@@ -2210,24 +2210,29 @@ readonly ISSUE_LIST_ROW_PATTERN=$'^[0-9]+\t('"${PRIORITY_NAMES// /|}"$'|-)\t(-|b
 # PRIORITIES as the items of a jq array literal, each quoted and comma-separated (gh --jq takes no
 # --arg; no priority holds a space or a quote), built from PRIORITY_NAMES as the row pattern is.
 readonly PRIORITY_ARRAY_ITEMS="\"${PRIORITY_NAMES// /\",\"}\""
+# A jq definition, put before a filter that uses it and after HOLD_LABELS_DEF: flags is the flags
+# value of an issue list row for the issue it is given, blocked then on-hold, comma-joined.
+readonly ISSUE_FLAGS_DEF='def flags: [(if is_blocked then "blocked" else empty end), (if is_on_hold then "on-hold" else empty end)] | join(",");'
 # The jq program of issue list: the number of issues on its first line, then a row for each,
 # highest priority first and then by number. The priorities are written into the program from
 # PRIORITIES, as one jq array literal, so nothing of the caller's is in it; each is matched
 # lower-cased and printed as written. Each issue's rank is worked out once, before the sort, from
 # its label names lower-cased once. Every value goes through field, so no title or label can add a
 # line or a field and none is empty.
-ISSUE_LIST_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF}"
-ISSUE_LIST_PROGRAM+=' def flags: [(if is_blocked then "blocked" else empty end),'
-ISSUE_LIST_PROGRAM+=' (if is_on_hold then "on-hold" else empty end)] | join(",");'
-ISSUE_LIST_PROGRAM+=" [${PRIORITY_ARRAY_ITEMS}] as \$priorities"
-ISSUE_LIST_PROGRAM+=" | (\$priorities | map(ascii_downcase) | to_entries) as \$lowered"
-ISSUE_LIST_PROGRAM+=" | map((label_names | map(ascii_downcase)) as \$names"
-ISSUE_LIST_PROGRAM+=" | {rank: ([\$lowered[] | .value as \$priority | select(\$names | index(\$priority) != null) | .key]"
-ISSUE_LIST_PROGRAM+=" | .[0] // (\$priorities | length)), issue: .})"
-ISSUE_LIST_PROGRAM+=" | sort_by([.rank, .issue.number]) | (length | tostring), (.[] | .rank as \$rank | .issue"
-ISSUE_LIST_PROGRAM+=" | [(.number | field), (\$priorities[\$rank] | field), (flags | field),"
-ISSUE_LIST_PROGRAM+=' ([.assignees[].login] | join(",") | field), (.title | field), (label_list | field)] | join("\t"))'
-readonly ISSUE_LIST_PROGRAM
+# $priorities, $lowered, $names, $priority and $rank below are jq variables, not shell ones.
+# shellcheck disable=SC2016
+readonly ISSUE_LIST_PROGRAM="${ROW_FIELD_DEF} ${LABEL_LIST_DEF} ${HOLD_LABELS_DEF} ${ISSUE_FLAGS_DEF} [${PRIORITY_ARRAY_ITEMS}]"' as $priorities
+    | ($priorities | map(ascii_downcase) | to_entries) as $lowered
+    | map((label_names | map(ascii_downcase)) as $names
+          | {rank: ([$lowered[] | .value as $priority | select($names | index($priority) != null) | .key]
+                    | .[0] // ($priorities | length)),
+             issue: .})
+    | sort_by([.rank, .issue.number])
+    | (length | tostring),
+      (.[] | .rank as $rank | .issue
+       | [(.number | field), ($priorities[$rank] | field), (flags | field),
+          ([.assignees[].login] | join(",") | field), (.title | field), (label_list | field)]
+       | join("\t"))'
 
 # Lists the open issues of REPO in one read. Nothing is printed until the whole answer has been
 # checked: the count, the rows and the shape of each row (take_checked_rows).
