@@ -570,6 +570,39 @@ EOF'
         "ln ${TEST_TMP}/outside/x link"
 }
 
+@test "ln -s to a target naming protected config is blocked as text, in every option form" {
+    local cmd
+    for cmd in "ln -s ~/.claude/settings.json foo" "ln -sf .claude/hooks/x foo" \
+        "ln -s -t sub .claude/settings.json" "ln --symbolic /etc/claude-code/managed-settings.json foo" \
+        "ln -s ../.claude/settings.json foo" "ln -s ${HOME}/.claude foo" "ln -s .claude/settings.json" \
+        "ln -s -t sub ${TEST_TMP}/outside/x .claude/skills/y" "ln -s ${TEST_TMP}/outside/x .mcp.json sub"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "ln -s ${TEST_TMP}/outside/x link" "ln -s sub/x link" "ln -s -t sub ${TEST_TMP}/outside/x ../y" \
+        "ln -s ${TEST_TMP}/outside/x" "ln -s \"\${HOME}/.claude/settings.json\" foo"
+}
+
+@test "ln -s to a target that names protected config only once bash expands it is blocked" {
+    local cmd
+    mkdir -p "${HOME}/.claude"
+    touch "${TEST_TMP}/outside/a"
+    for cmd in "ln -s .cl\\aude/settings.json foo" "ln -s ${HOME}/.cla* foo" "ln -s -t sub ${HOME}/.clau?e"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+    assert_each 2 'brace expansion' "ln -s ${HOME}/.{claude,x}/settings.json foo" "ln -s -t sub .{claude,x}"
+    assert_each 0 '' "ln -s '.cl{aude}' foo" "ln -s 'sub\\x' foo" "ln -s ${TEST_TMP}/outside/* sub" "ln -s sub/nomatch* foo"
+}
+
+@test "a hard ln to protected config is blocked" {
+    local cmd
+    for cmd in "ln ${HOME}/.claude/settings.json foo" "ln .claude/hooks/x foo" "ln -t sub .claude/settings.json"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
+    done
+}
+
 @test "mktemp with no template writes into TMPDIR, which must be under a root" {
     printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
     run_in_repo "mktemp -d"
