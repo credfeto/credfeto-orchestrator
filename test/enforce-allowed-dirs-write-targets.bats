@@ -596,13 +596,14 @@ EOF'
     assert_each 2 'outside the allowed directories' "mktemp -p ${TEST_TMP}/outside"
 }
 
-@test "ln option forms: --, long options, --target-directory=, a missing -t directory, no or one operand" {
+@test "ln option forms: --, long options, --target-directory (glued or separate), a missing -t/--target-directory directory, no or one operand" {
     assert_each 2 'outside the allowed directories' \
         "ln -s -- x ${TEST_TMP}/outside/link" \
         "ln --force -s x ${TEST_TMP}/outside/link" \
         "ln -s --target-directory=${TEST_TMP}/outside x" \
+        "ln -s --target-directory ${TEST_TMP}/outside x" \
         "ln --symbolic -t ${TEST_TMP}/outside -- x"
-    assert_each 2 'requires a directory' "ln -s x -t"
+    assert_each 2 'requires a directory' "ln -s x -t" "ln -s x --target-directory"
     assert_each 0 '' "ln -s" "ln -s ${TEST_TMP}/outside/x" "ln -s -- ${TEST_TMP}/outside/x link"
     run_hook_in_dir "ln -s x" "${TEST_TMP}/outside"
     [ "${status}" -eq 2 ]
@@ -767,7 +768,9 @@ EOF'
     local cmd
     for cmd in "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json" \
         "ln -sf ${SRC}/payload .claude/settings.json -S .bak" "ln -sfS .bak ${SRC}/payload .claude/settings.json" \
-        "ln -sf ${SRC}/payload .claude/settings.json --suffix .bak" "ln -sf ${SRC}/payload .claude/settings.json --suf .bak"; do
+        "ln -sf ${SRC}/payload .claude/settings.json --suffix .bak" "ln -sf ${SRC}/payload .claude/settings.json --suf .bak" \
+        "ln -sf -S -tx ${SRC}/payload .claude/settings.json" "ln -sf --suffix -tx ${SRC}/payload .claude/settings.json" \
+        "ln -sf -S --target-directory=x ${SRC}/payload .claude/settings.json" "ln -s -t x -t .claude/skills ${SRC}/payload"; do
         run_in_repo "${cmd}"
         assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
     done
