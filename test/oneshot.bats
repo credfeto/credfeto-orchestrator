@@ -1711,6 +1711,44 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_json_has_unaddressed_trusted_comment ignores automated SARIF and Super-linter summary comments (#1660)" {
+    local pr='{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:00:00Z","body":"<!-- sarif-summary build -->\n| Rule | Count |"},{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:05:00Z","body":"  <!-- super-linter-summary-comment -->\nAll linters passed"}],"reviews":[]}'
+    run pr_json_has_unaddressed_trusted_comment "${pr}" '["credfeto"]' ""
+    [ "${status}" -eq 1 ]
+    run pr_json_has_unaddressed_trusted_comment '{"comments":[],"reviews":[]}' '["credfeto"]' "" '[]' '[{"user":{"login":"credfeto"},"created_at":"2026-10-20T07:00:00Z","updated_at":"2026-10-20T07:10:00Z","body":"<!-- sarif-summary -->"}]'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_has_unaddressed_trusted_comment still counts a human comment next to a summary comment, or one that merely mentions a marker (#1660)" {
+    local pr='{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:00:00Z","body":"<!-- sarif-summary -->"},{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:05:00Z","body":"please fix the warning"}],"reviews":[]}'
+    run pr_json_has_unaddressed_trusted_comment "${pr}" '["credfeto"]' ""
+    [ "${status}" -eq 0 ]
+    run pr_json_has_unaddressed_trusted_comment '{"comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:05:00Z","body":"why did <!-- sarif-summary --> report this?"}],"reviews":[]}' '["credfeto"]' ""
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_unaddressed_trusted_comments_text omits automated summary comments (#1660)" {
+    local pr='{"comments":[{"author":{"login":"credfeto"},"createdAt":"2026-10-20T07:00:00Z","body":"<!-- super-linter-summary-comment -->\nAll linters passed"},{"author":{"login":"credfeto"},"createdAt":"2026-10-20T07:05:00Z","body":"please rename this"}],"reviews":[]}'
+    run pr_json_unaddressed_trusted_comments_text "${pr}" '["credfeto"]' ""
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"please rename this"* ]]
+    [[ "${output}" != *"super-linter"* ]]
+    [[ "${output}" != *"All linters passed"* ]]
+}
+
+@test "fingerprint_pr_json ignores automated summary comments but not human ones (#1660)" {
+    local base='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}'
+    local with_summary='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:00:00Z","body":"<!-- sarif-summary -->\nfindings"}],"reviews":[],"statusCheckRollup":[]}'
+    local with_human='{"title":"T","body":"B","isDraft":false,"labels":[],"headRefOid":"abc","comments":[{"author":{"login":"credfeto"},"updatedAt":"2026-10-20T07:00:00Z","body":"please fix"}],"reviews":[],"statusCheckRollup":[]}'
+    local fp_base fp_summary fp_human
+    fp_base=$(fingerprint_pr_json "${base}" '["credfeto"]')
+    fp_summary=$(fingerprint_pr_json "${with_summary}" '["credfeto"]')
+    fp_human=$(fingerprint_pr_json "${with_human}" '["credfeto"]')
+    [ -n "${fp_base}" ]
+    [ "${fp_base}" = "${fp_summary}" ]
+    [ "${fp_base}" != "${fp_human}" ]
+}
+
 @test "pr_json_has_unaddressed_review_request is true for reviewDecision CHANGES_REQUESTED (#1083)" {
     run pr_json_has_unaddressed_review_request '{"reviewDecision":"CHANGES_REQUESTED"}'
     [ "${status}" -eq 0 ]
