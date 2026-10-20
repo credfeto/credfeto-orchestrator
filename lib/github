@@ -534,6 +534,9 @@ pr_is_human_driven() {
 # Title/Body/Label Sync rule already states this explicitly for the agent-driven sync path, but
 # this shell-level helper previously copied them anyway, silently re-adding Blocked to a PR every
 # tick even after a human removed it, with no comment explaining why (#1321).
+# This is the ONLY label sync: oneshot runs it before every PR session, so the generated PR
+# prompts no longer ask the agent to sync labels itself (the shell loop they used to prescribe was
+# always denied by the command hooks, #1657).
 # Arguments: pr_id pr_json
 sync_pr_labels_from_linked_issues() {
     local pr_id="$1" pr_json="$2"

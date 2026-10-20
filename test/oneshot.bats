@@ -402,16 +402,33 @@ teardown() {
     [[ "${output}" == *"- bob"* ]]
 }
 
-@test "build_pr_claude_md's PHASE A label-sync step excludes Blocked and On-Hold (#1321 review)" {
+@test "build_pr_claude_md tells the agent labels are already synced and prescribes no shell loop (#1657)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+    [[ "${output}" == *"already synced onto this PR by the orchestrator before every session"* ]]
+    [[ "${output}" == *"Do NOT sync labels yourself."* ]]
+    [[ "${output}" != *"IFS="* ]]
+    [[ "${output}" != *"while read"* ]]
+    [[ "${output}" != *"labels are unsynced"* ]]
 }
 
-@test "build_pr_claude_md's dependency-PR label-sync step excludes Blocked and On-Hold (#1321 review)" {
+@test "build_pr_claude_md's dependency-PR prompt tells the agent labels are already synced and prescribes no shell loop (#1657)" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "CLEAN" "" "" "" "true" ""
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"grep -vE '^(Blocked|On-Hold)\$'"* ]]
+    [[ "${output}" == *"already synced onto this PR by the orchestrator before every session"* ]]
+    [[ "${output}" != *"IFS="* ]]
+    [[ "${output}" != *"while read"* ]]
+}
+
+@test "build_pr_claude_md never prescribes IFS= for any merge state or dirty-branch variant (#1657)" {
+    local state dirty
+    for state in CLEAN BEHIND DIRTY; do
+        for dirty in "" "feat/x" "other"; do
+            run build_pr_claude_md 7 "/resolved/.ai-instructions" "${state}" "feat/x" "" "${dirty}"
+            [ "${status}" -eq 0 ]
+            [[ "${output}" != *"IFS="* ]]
+        done
+    done
 }
 
 @test "build_pr_claude_md includes role, ai instructions, PR number, repo, work dir and steps" {
