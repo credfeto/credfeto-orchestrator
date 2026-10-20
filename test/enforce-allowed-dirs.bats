@@ -418,6 +418,11 @@ assert_blocked() {
     assert_blocked "mv ${ROOT} ${ROOT}/sub/moved" 'may not target an allowed root'
 }
 
+@test "an mv source repeating the destination operand is still checked as a source" {
+    assert_blocked "mv ${ROOT} sub/x ${ROOT}" 'may not target an allowed root'
+    assert_allowed "mv sub/a sub/b sub/a"
+}
+
 @test "find -files0-from is blocked - it supplies starting points this hook cannot see" {
     assert_blocked "find -files0-from ${OUTSIDE}/list -name x" '-files0-from'
     assert_blocked "find ${ROOT} -files0-from ${OUTSIDE}/list"
