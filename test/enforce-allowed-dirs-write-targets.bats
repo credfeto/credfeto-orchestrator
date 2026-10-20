@@ -336,7 +336,41 @@ assert_each() {
 
 @test "cd into an ordinary directory, or into .claude without writing anything, is allowed" {
     mkdir -p "${TEST_TMP}/repo/.claude"
-    assert_each 0 '' "cd sub && cp a.txt b.txt" "cd .claude && ls" "cd sub && echo x > out.txt"
+    assert_each 0 '' "cd sub && cp a.txt b.txt" "cd .claude && ls" "cd sub && echo x > out.txt" "cd .claude && gh issue view 1"
+}
+
+@test "a writer that can write into its working directory without naming it is blocked there" {
+    mkdir -p "${TEST_TMP}/repo/.claude/skills"
+    assert_each 2 'through a cd into it' \
+        "cd .claude && gh release download v1 -R x/y" \
+        "cd .claude && curl -O https://example.com/settings.json" \
+        "cd .claude && sed -n 'w settings.json' ${SRC}/payload" \
+        "cd .claude/skills && git -C . clone https://github.com/x/evil" \
+        "ls && cd ${TEST_TMP}/repo/.claude && curl -O https://example.com/settings.json" \
+        "for x in a b; do curl -O https://example.com/settings.json; cd ${TEST_TMP}/repo/.claude; done"
+    run_hook_in_dir "curl -O https://example.com/settings.json" "${TEST_TMP}/repo/.claude"
+    assert_blocked_config_write
+    run_hook_in_dir "gh release download v1 -R x/y" "${TEST_TMP}/repo/.claude"
+    assert_blocked_config_write
+    run_hook_in_dir "gh issue view 1" "${TEST_TMP}/repo/.claude"
+    [ "${status}" -eq 0 ]
+    run_in_repo "git -C .claude clone https://github.com/x/skills"
+    assert_blocked_config_write
+}
+
+@test "git clone with no directory is checked against the directory git names after the repository" {
+    local cmd
+    for cmd in \
+        "git -C . clone https://github.com/x/.claude.git" \
+        "git -C . clone https://github.com/x/.claude/" \
+        "git -C . clone https://github.com/x/.claude/.git" \
+        "git -C . clone git@github.com:x/.claude.git" \
+        "git -C . clone host:.mcp.json.git" \
+        "git -C . clone --depth 1 https://github.com/x/.claude.bundle"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+    assert_each 0 '' "git -C . clone https://github.com/x/y.git" "git -C . clone git@github.com:x/y"
 }
 
 @test "a write target held in a variable is blocked, protected suffix or not" {
