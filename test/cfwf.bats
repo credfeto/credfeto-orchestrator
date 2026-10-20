@@ -4353,6 +4353,26 @@ assert_set_to_development() {
     [ ! -s "${GH_LOG}" ]
 }
 
+@test "pr create refuses a Conventional Commits title whose description is only invisible characters (exit 2) without echoing it, and takes one starting with a non-ASCII letter" {
+    prepare_pr_create
+    local title
+    # U+3000, U+00A0, U+200B and U+FEFF: the C locale match sees a byte that is not a space.
+    for title in "feat: $(printf '\343\200\200')" "fix: $(printf '\302\240')" "fix: $(printf '\342\200\213')" "fix: $(printf '\357\273\277')"; do
+        run_pr_create_titled "${title}"
+        [ "${status}" -eq 2 ] && [ -z "${output}" ] \
+            && [[ "${stderr}" == "cfwf: invalid value for --title: it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"$'\n\n'"${PR_CREATE_USAGE}"$'\n'* ]] \
+            && [[ "${stderr}" != *"${title}"* ]] \
+            || { echo "not refused for its description: ${title}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    for title in "fix: $(printf '\303\251')" "fix: $(printf '\343\200\200')x"; do
+        run_pr_create_titled "${title}"
+        [ "${status}" -eq 0 ] || { echo "refused: ${title}" >&2; return 1; }
+        issue_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${title} --body-file BODY"
+    done
+}
+
 @test "pr create refuses a blank title, one with a control character and one over 256 characters, without echoing it" {
     prepare_pr_create
     run_pr_create_titled "   "
