@@ -66,8 +66,8 @@
 #                    only, like sed and awk program text below: a target is
 #                    text until something is written through the link, and a
 #                    later writer's own text (a sed `w` name) is never
-#                    resolved (see check_ln_target for the backslash, brace
-#                    and glob forms; a non-literal target is not checked); a
+#                    resolved (see check_ln_target for the brace and glob
+#                    forms; a non-literal target is not checked); a
 #                    hard link names an existing file to share, so every
 #                    operand is checked as a path;
 #       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
@@ -340,9 +340,11 @@ MARKER='(non-literal)'
 # ---- protected paths -------------------------------------------------------
 
 # Text check, for words that are not resolved as paths (sed and awk programs).
-# The text is not normalised, so each name allows anything after `.claude/`
-# or `etc/`: `.claude//settings.json`, `.claude/./skills` and
-# `.claude/x/../hooks` all still match.
+# Each word arrives as bash passes it, with the backslashes bash removes
+# already gone (see the transport below), so an escaped letter cannot hide a
+# protected name. The text is not normalised, so each name allows anything
+# after `.claude/` or `etc/`: `.claude//settings.json`, `.claude/./skills`
+# and `.claude/x/../hooks` all still match.
 names_protected_config() {
   case "$1" in
     *.claude | *.claude/ | *.claude/*settings*.json* | *.claude/*hooks* | *.claude/*agents* | *.claude/*skills* | *.claude.json* | *.mcp.json* | *etc/*claude-code*) return 0 ;;
@@ -470,7 +472,7 @@ prepare_word() {
   case "$word" in
     *$'\n'* | *$'\t'* | *$'\r'*) block "${label} argument contains a control character" ;;
   esac
-  [[ "$flags" == *r* ]] && block "${label} argument '${word}' contains a character that could expand into a different path at runtime (brace, tilde or backslash)"
+  [[ "$flags" == *r* ]] && block "${label} argument '${word}' was written with a character that could expand into a different path at runtime (brace, tilde or backslash)"
   prefix="$word"
   PREPARED_GLOB=""
   if [[ "$flags" == *g* ]]; then
@@ -1072,14 +1074,14 @@ mktemp_write_targets() {
 }
 
 # Checks symbolic link target $1 (flags $2) as text against the protected
-# names. bash removes a backslash and expands a brace or glob before ln sees
-# the word, so each could hide a protected name from the text: a backslash is
-# dropped before matching, a brace expansion blocks, and every current match
-# of a glob is checked as a path. A non-literal target is not checked.
+# names. bash expands a brace or glob before ln sees the word, so either
+# could hide a protected name from the text: a brace expansion blocks, and
+# every current match of a glob is checked as a path. A non-literal target is
+# not checked.
 check_ln_target() {
   local word="$1" flags="$2"
   [ "$flags" = N ] && return 0
-  names_protected_config "${word//\\/}" && block_config_write "$word"
+  names_protected_config "$word" && block_config_write "$word"
   [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
   if [[ "$flags" == *g* ]]; then
     prepare_word "$word" "$flags" "ln target"
@@ -1382,9 +1384,15 @@ to_json_array() {
 # first). A word line is "N" for anything not fully literal (substitution,
 # expansion, ANSI-C or $"..." quoting, a double-quoted part that is not plain
 # text), else "L<flags>:<base64 of the text>", the text being every part
-# joined with quoting removed. Flag r: an unquoted brace expansion, a tilde
-# bash would expand, or a backslash outside single quotes; flag g: an
-# unquoted glob character. The command name a call dispatches on is word 0,
+# joined as bash passes it to the command: quoting removed, and with it each
+# backslash bash removes (every unquoted one, and inside double quotes one
+# before $, `, " or \), so a text check sees the `w.claude/x` that
+# `sed w.cl\aude/x` receives, while `sed 'w .cl\aude/x'` keeps the
+# backslash sed receives. shfmt keeps every backslash raw in a Lit except a
+# backslash-newline, which it drops itself. The flags come from the raw
+# text. Flag r: an unquoted brace expansion, a tilde bash would expand, or a
+# backslash outside single quotes; flag g: an unquoted glob character. The
+# command name a call dispatches on is word 0,
 # or word 1 when word 0 is a known wrapper - the same two positions the
 # per-call loop below checks. See enforce-ssh-host-and-key for the transport
 # rationale.
@@ -1393,10 +1401,11 @@ transport=$(printf '%s' "$ast" | jq -r \
   --argjson cd_names "$(to_json_array "${CD_NAMES[@]}")" \
   --argjson redirects "$(to_json_array '>' '>>' '>|' '&>' '&>>' '<>')" '
   def part_info:
-    if .Type == "Lit" then {ok: true, q: "u", t: .Value}
-    elif .Type == "SglQuoted" and ((.Dollar // false) | not) then {ok: true, q: "s", t: .Value}
+    if .Type == "Lit" then {ok: true, q: "u", t: .Value, v: (.Value | gsub("\\\\(?<c>.)"; "\(.c)"))}
+    elif .Type == "SglQuoted" and ((.Dollar // false) | not) then {ok: true, q: "s", t: .Value, v: .Value}
     elif .Type == "DblQuoted" and ((.Dollar // false) | not) and all((.Parts // [])[]; .Type == "Lit")
-      then {ok: true, q: "d", t: ((.Parts // []) | map(.Value) | join(""))}
+      then ((.Parts // []) | map(.Value) | join("")) as $raw
+        | {ok: true, q: "d", t: $raw, v: ($raw | gsub("\\\\(?<c>[$`\"\\\\])"; "\(.c)"))}
     else {ok: false}
     end;
   def word_info:
@@ -1405,7 +1414,7 @@ transport=$(printf '%s' "$ast" | jq -r \
       else
         ([$ps[] | select(.q == "u") | .t] | join("")) as $u
         | {lit: true,
-           t: ($ps | map(.t) | join("")),
+           t: ($ps | map(.v) | join("")),
            r: (($ps[0].q == "u" and ($ps[0].t | startswith("~")))
                or ($u | test("[=:]~"))
                or (($u | test("[{]")) and ($u | test(",|[.][.]")))
