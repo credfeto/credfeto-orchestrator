@@ -301,7 +301,8 @@ GIT_SUBCOMMAND_INDEX=0
 GIT_BASE=""
 GIT_RELATIVE_OK=1
 # Option names whose value is text, not a path, for the writer being checked
-# (see queue_all_arguments); set per call.
+# (see queue_all_arguments); empty here, and a writer with such options
+# (dotnet) declares its own local copy for its call only.
 TEXT_VALUE_OPTIONS=()
 
 is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
@@ -988,6 +989,8 @@ gh_write_targets() {
 
 dotnet_write_targets() {
   local j
+  # Local, so queue_all_arguments sees it for this call only.
+  local -a TEXT_VALUE_OPTIONS=()
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     case "${words[$j]}" in
       -*) continue ;;
@@ -996,7 +999,6 @@ dotnet_write_targets() {
     break
   done
   queue_all_arguments $((i + 1))
-  TEXT_VALUE_OPTIONS=()
 }
 
 mktemp_write_targets() {
