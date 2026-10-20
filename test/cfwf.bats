@@ -6564,7 +6564,8 @@ assert_issue_usage_error() {
     [ "${output}" = "${expected}" ]
     has_field_lines "${output}" 8 6
 
-    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    # The --jq program spans lines of the log, so calls are counted by the lines that start one.
+    [ "$(grep -cE '^(issue|pr|repo|api|project|label) ' "${GH_LOG}")" -eq 1 ]
     [ "$(gh_call_count "issue list --repo ${REPO} --state open --limit 1001 --json number,title,labels,assignees --jq ")" -eq 1 ]
     [ "$(gh_call_count "--search")" -eq 0 ]
 }
