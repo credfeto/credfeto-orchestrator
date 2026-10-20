@@ -111,7 +111,9 @@ fingerprint_pr_json() {
 
     canonical=$(printf '%s' "${pr_json}" | jq -r --argjson trusted "${trusted_logins}" --rawfile reviewCommentsRaw "${review_comments_file}" '
         ($reviewCommentsRaw | fromjson) as $reviewComments
-        | def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
+        | '"${_JQ_DEF_AUTOMATED_SUMMARY}"'
+        def tc(cs): if $trusted == null then cs else (cs | map(select(.author.login as $l | ($trusted | index($l)) != null))) end;
+        def tch(cs): tc(cs) | map(select(automated_summary(.body) | not));
         def trc(cs): if $trusted == null then cs else (cs | map(select(.user.login as $l | ($trusted | index($l)) != null))) end;
         .title,
         (.body // ""),
@@ -119,8 +121,8 @@ fingerprint_pr_json() {
         ([((.labels // [])[] | .name)] | sort | .[]),
         .headRefOid,
         (.baseRefName // "none"),
-        (tc(.comments // []) | length | tostring),
-        ([tc(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
+        (tch(.comments // []) | length | tostring),
+        ([tch(.comments // [])[] | [(.updatedAt // "none"), (.body // "")] | @tsv] | sort | join("\n")),
         ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | .state) // "none"),
         ((tc(.reviews // []) | sort_by(.submittedAt // .updatedAt // "") | last | (.submittedAt // .updatedAt)) // "none"),
         ([tc(.reviews // [])[] | [((.submittedAt // .updatedAt) // "none"), (.body // "")] | @tsv] | sort | join("\n")),

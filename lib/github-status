@@ -209,14 +209,15 @@ _jq_pr_json_with_comment_arrays() {
 pr_json_latest_trusted_comment_timestamp() {
     local pr_json="$1" trusted_logins="${2:-null}" review_comments_json="${3:-[]}" issue_comments_json="${4:-[]}" exclude_login="${5:-}"
     # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
-    _jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}"'
+    _jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}${_JQ_DEF_AUTOMATED_SUMMARY}"'
         def tc(cs): cs | map(select(counted_login(.author.login)));
+        def human(cs): cs | map(select(automated_summary(.body) | not));
         def trc(cs): cs | map(select(counted_login(.user.login)));
         [
-            (tc(.comments // [])[]? | (.updatedAt // .createdAt // "")),
+            (human(tc(.comments // []))[]? | (.updatedAt // .createdAt // "")),
             (tc(.reviews // [])[]? | (.submittedAt // .updatedAt // "")),
             (trc($reviewComments)[]? | (.updated_at // "")),
-            (trc($issueComments)[]? | (.updated_at // .created_at // ""))
+            (human(trc($issueComments))[]? | (.updated_at // .created_at // ""))
         ]
         | map(select(. != ""))
         | sort | last // ""
@@ -263,7 +264,7 @@ pr_json_unaddressed_trusted_comments_text() {
     local pr_json="$1" trusted_logins="${2:-null}" last_seen_timestamp="${3:-}" review_comments_json="${4:-[]}" issue_comments_json="${5:-[]}" exclude_login="${6:-}"
     local text
     # shellcheck disable=SC2016  # the program's $variables are jq's, not the shell's
-    text=$(_jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}"'
+    text=$(_jq_pr_json_with_comment_arrays "${pr_json}" "${review_comments_json}" "${issue_comments_json}" "${_JQ_DEF_COUNTED_LOGIN}${_JQ_DEF_AUTOMATED_SUMMARY}"'
         def clip: if length > $per then .[0:$per] + " [truncated]" else . end;
         [
             ($issueComments[]? | {login: .user.login, ts: (.updated_at // .created_at // ""), kind: "comment", body: (.body // "")}),
@@ -273,6 +274,7 @@ pr_json_unaddressed_trusted_comments_text() {
             ($reviewComments[]? | {login: .user.login, ts: (.updated_at // ""), kind: ("inline review comment on " + (.path // "unknown file")), body: (.body // "")})
         ]
         | map(select(.login != null and counted_login(.login) and .ts != "" and ($last == "" or .ts > $last)))
+        | map(select(.kind != "comment" or (automated_summary(.body) | not)))
         | unique_by([.login, .kind, .body])
         | sort_by(.ts)
         | map("- \(.login) (\(.kind), \(.ts)):\n\(.body | clip)")

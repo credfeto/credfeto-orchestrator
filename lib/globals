@@ -497,6 +497,18 @@ _JQ_DEF_CHECK_FAILED='def check_failed:
 # shellcheck disable=SC2016,SC2034  # $trusted, $me and $l are jq variables; read by lib/github-status after sourcing
 _JQ_DEF_COUNTED_LOGIN='def counted_login($l): ($trusted == null or ($trusted | index($l)) != null) and ($me == "" or $l != $me);'
 
+# jq definition: true when a comment body is an automated CI summary comment rather than
+# something a person wrote, identified by the HTML marker such tools open the body with (e.g.
+# "<!-- sarif-summary ... -->" for Roslyn/SARIF findings tables, "<!-- super-linter-summary-comment
+# -->" for Super-linter). They are posted under a trusted login (the workflow's token), so without
+# this they count as unaddressed trusted comments and change the PR fingerprint, starting agent
+# sessions that only acknowledge them, even on a PR already waiting with auto-merge armed (#1660).
+# Their findings already reach the agent through the failed-check path. Excluded from the
+# unaddressed-comment check, the quoted comment text and the PR fingerprint. Top-level comments
+# only: reviews and inline review comments are never automated summaries.
+# shellcheck disable=SC2016,SC2034  # $b is a jq variable; read by lib/github-status and lib/fingerprints after sourcing
+_JQ_DEF_AUTOMATED_SUMMARY='def automated_summary($b): ($b // "") | test("^\\s*<!--\\s*[A-Za-z0-9._-]*-summary(-comment)?([^A-Za-z0-9_-]|$)");'
+
 # Comma-separated list of additional trusted GitHub users, loaded from .env.
 # shellcheck disable=SC2034  # read by lib/github after sourcing
 WHITELISTED_USERS=""
