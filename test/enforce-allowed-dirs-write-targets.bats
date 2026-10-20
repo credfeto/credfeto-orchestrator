@@ -774,7 +774,7 @@ EOF'
         run_in_repo "${cmd}"
         assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
     done
-    assert_each 0 '' "ln -sS.bak ${TEST_TMP}/outside/x link"
+    assert_each 0 '' "ln -sS.bak ${TEST_TMP}/outside/x link" "ln -s --suffix=.bak ${TEST_TMP}/outside/x link"
     # A separate-word -S/--suffix value is skipped, so the real link name is still the last operand.
     for cmd in "ln -s -S .bak ${TEST_TMP}/outside/x .claude/settings.json" \
         "ln -s --suffix .bak ${TEST_TMP}/outside/x .claude/settings.json" \
