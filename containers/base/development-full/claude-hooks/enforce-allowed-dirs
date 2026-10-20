@@ -255,6 +255,10 @@ block() {
   exit 2
 }
 
+block_not_yet_existing() {
+  block "${1} argument '${2}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+}
+
 block_config_write() {
   block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills and MCP config are changed by a human editing the tracked source files and reinstalling"
 }
@@ -486,7 +490,7 @@ resolve_word() {
   # already exist - and therefore resolved through real, current links -
   # are accepted.
   if [ "$LINK_SEEN" -eq 1 ] && [ ! -e "$RESOLVED" ]; then
-    block "${3} argument '${1}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+    block_not_yet_existing "${3}" "${1}"
   fi
 }
 
@@ -584,7 +588,7 @@ resolve_queued_paths() {
     physical="${results[count + i]}"
     under_root "$physical" || block "${QUEUED_LABELS[i]} argument '${QUEUED_WORDS[i]}' resolves to '${physical}', which is outside the allowed directories"
     if [ "${QUEUED_MUST_EXIST[i]}" -eq 1 ] && [ ! -e "$physical" ]; then
-      block "${QUEUED_LABELS[i]} argument '${QUEUED_WORDS[i]}' does not exist yet, and an earlier command in this call can create symlinks - run it as a separate command so the path can be checked as it will actually resolve"
+      block_not_yet_existing "${QUEUED_LABELS[i]}" "${QUEUED_WORDS[i]}"
     fi
   done
   return 0
