@@ -3154,7 +3154,7 @@ pr_list() {
     require_gh
 
     read_open_pull_requests "${LIST_HEAD}"
-    [ "${#COUNTED_ROWS[@]}" -eq 0 ] || printf '%s\n' "${COUNTED_ROWS[@]}"
+    print_counted_rows
 }
 
 PR_HEAD=""
