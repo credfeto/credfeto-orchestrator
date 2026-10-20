@@ -883,10 +883,11 @@ check_rm_mv_cp() {
 
 # A writer can write into its working directory without naming anything
 # there (`curl -O`, `gh release download`, `git clone <url>`, a sed `w name`
-# program), so a writer may not run in Claude Code configuration. Its working
-# directory is $2 when $3 is 1; under an unknowable cd only CD_INTO_PROTECTED
-# tells, and a cd into configuration anywhere in the same command as a
-# writer is blocked whatever their order, since a loop can run the cd first.
+# program), so a writer may not run in Claude Code configuration. $PWD always
+# counts, as the command starts there; the working directory is also $2 when
+# $3 is 1; under an unknowable cd only CD_INTO_PROTECTED tells, and a cd into
+# configuration anywhere in the same command as a writer is blocked whatever
+# their order, since a loop can run the cd first.
 WRITER_SEEN=""
 CD_INTO_PROTECTED=""
 PWD_PHYSICAL=""
@@ -894,14 +895,14 @@ note_writer() {
   local dir="$2" relative_ok="$3"
   WRITER_SEEN="$1"
   [ -n "$CD_INTO_PROTECTED" ] && block_cd_with_writer
-  [ "$relative_ok" = 1 ] || return 0
-  if [ "$dir" = "$PWD" ]; then
-    is_in_claude_config_tree "$PWD" && block_config_write "$PWD"
-    if [ -z "$PWD_PHYSICAL" ]; then
-      PWD_PHYSICAL=$(realpath -m -- "$PWD" 2>/dev/null) || block 'the working directory could not be resolved'
-    fi
-    dir="$PWD_PHYSICAL"
+  # $PWD is where the command starts, so it counts even when a later cd
+  # makes the working directory unknowable: the writer can run before it.
+  is_in_claude_config_tree "$PWD" && block_config_write "$PWD"
+  if [ -z "$PWD_PHYSICAL" ]; then
+    PWD_PHYSICAL=$(realpath -m -- "$PWD" 2>/dev/null) || block 'the working directory could not be resolved'
   fi
+  is_in_claude_config_tree "$PWD_PHYSICAL" && block_config_write "$PWD"
+  [ "$relative_ok" = 1 ] || return 0
   is_in_claude_config_tree "$dir" && block_config_write "$dir"
   return 0
 }
