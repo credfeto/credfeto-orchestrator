@@ -597,6 +597,25 @@ EOF'
     assert_each 2 'outside the allowed directories' "awk --posix -i inplace '{print}' ${TEST_TMP}/outside/x"
 }
 
+@test "an awk option outside the known non-writing set makes every argument a write target" {
+    local cmd
+    for cmd in \
+        "awk --dump-variables=.claude/settings.json 1 /dev/null" \
+        "awk -d.claude/settings.json 1 /dev/null" \
+        "awk -o.claude/hooks/x '{print}' /dev/null" \
+        "awk --pretty-print=.claude/hooks/x '{print}' /dev/null" \
+        "awk -p.claude/agents/x '{print}' /dev/null" \
+        "awk --profile=.claude/skills/x '{print}' /dev/null" \
+        "awk --inc inplace '{print}' .claude/settings.json" \
+        "awk -W include=inplace '{print}' .claude/settings.json" \
+        "awk -W dump-variables=.claude/settings.json 1 /dev/null"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+    assert_each 2 'outside the allowed directories' "awk -D '{print}' ${TEST_TMP}/outside/x"
+    assert_each 0 '' "awk --posix '{print}' /etc/hosts" "awk -P -F: '{print \$1}' /etc/passwd" "awk --field-separator=: '{print}' /etc/hosts"
+}
+
 # --- fail closed ------------------------------------------------------------
 
 @test "an unrecognised tool_name is blocked (fail closed)" {
