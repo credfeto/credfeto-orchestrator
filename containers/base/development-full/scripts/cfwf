@@ -576,6 +576,7 @@ usage_issue() {
     usage_issue_list
     printf '\n'
     usage_issue_search
+    printf '\n'
     usage_issue_label_history
 }
 
