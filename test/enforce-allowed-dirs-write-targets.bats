@@ -590,7 +590,19 @@ EOF'
         assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
     done
     assert_each 0 '' "ln -s ${TEST_TMP}/outside/x link" "ln -s sub/x link" "ln -s -t sub ${TEST_TMP}/outside/x ../y" \
-        "ln -s ${TEST_TMP}/outside/x" "ln -s \"\${HOME}/.claude/settings.json\" foo"
+        "ln -s ${TEST_TMP}/outside/x"
+}
+
+@test "ln -s to a target that is not fully literal is blocked, since it could name protected config" {
+    assert_each 2 'a symbolic link target must be a literal path' \
+        "ln -s \"\$HOME/.claude\" c" "ln -s \"\${HOME}/.claude/settings.json\" foo" \
+        "ln -sf \$(echo x) c" "ln -fs \`echo x\` c" "ln --symbolic \"\${X}\" c" "ln -s \$((1)) c" \
+        "ln -s -t sub \"\$X\"" "ln -st sub \"\$X\"" "ln -s --target-directory=sub \"\$X\"" \
+        "ln -s \$'x' c" "ln -s ${TEST_TMP}/outside/x \"\$X\" sub" "ln -s -- \"\$X\" c"
+    assert_each 0 '' "ln -s ${TEST_TMP}/outside/x c" "ln -sf '${TEST_TMP}/outside/x' c" \
+        "ln --symbolic \"${TEST_TMP}/outside/x\" c" "ln -s -t sub ${TEST_TMP}/outside/x"
+    # A hard link names an existing file, so each operand is a write target as before.
+    assert_each 2 'ln argument could not be verified (non-literal argument)' "ln \"\$X\" c" "ln -f \$(echo x) c" "ln -t sub \"\$X\""
 }
 
 @test "text naming anything under a claude-code directory is blocked, since a link to /etc reaches it without naming etc" {
