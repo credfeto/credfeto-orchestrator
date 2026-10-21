@@ -6,7 +6,10 @@ Orchestrator tooling for driving Claude Code agents to work on GitHub issues and
 
 The `oneshot` script fetches the top-priority open work item for `credfeto/credfeto-orchestrator`
 from the [priorities API](https://git-workflow.markridgwell.com/priorities) and invokes a
-Claude Code session to work on it.  Every run starts a fresh session and never resumes an
+Claude Code session to work on it.  When the GitHub login `gh` is authenticated as can be
+resolved, it is sent URL-encoded as the optional `user` query parameter
+(`/priorities?user=<login>`) so the feed can leave out items assigned to other users; otherwise
+the feed is fetched without it.  Every run starts a fresh session and never resumes an
 earlier one; the state that carries between runs lives in GitHub.  Under
 `${XDG_STATE_HOME:-$HOME/.local/state}/orchestrator/<owner>/<repo>` the script keeps per-item
 bookkeeping files named `<ItemType>_<id>.<suffix>` (change-detection fingerprints, invocation
