@@ -69,7 +69,8 @@
 #                    written through the link, and a
 #                    later writer's own text (a sed `w` name) is never
 #                    resolved (see check_ln_target for the brace and glob
-#                    forms; a non-literal target is not checked); a
+#                    forms; a non-literal target blocks, since it could
+#                    name anything); a
 #                    hard link names an existing file to share, so every
 #                    operand is checked as a path;
 #       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
@@ -1194,11 +1195,12 @@ mktemp_write_targets() {
 # expands a brace or glob before ln sees the word, so either could hide a
 # protected name from the text: a brace expansion blocks, and every current
 # match of a glob is checked as a path, blocking anywhere inside a
-# configuration tree as the text check does. A non-literal target is not
-# checked.
+# configuration tree as the text check does. A non-literal target (a
+# variable, substitution or other expansion) could name anything, and a later
+# write through the link would reach it, so it blocks.
 check_ln_target() {
   local word="$1" flags="$2"
-  [ "$flags" = N ] && return 0
+  [ "$flags" = N ] && block "ln target could not be verified (non-literal argument) - a symbolic link target must be a literal path"
   { names_protected_config "$word" || names_config_tree "$word"; } && block_config_write "$word"
   [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
   if [[ "$flags" == *g* ]]; then
