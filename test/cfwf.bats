@@ -9486,7 +9486,7 @@ write_raw_rows() {
 
     run "${SCRIPT}" help issue
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Usage: cfwf issue plan-status"*$'\n\n'"${LABEL_HISTORY_USAGE}"$'\n'* ]]
+    [[ "${output}" == *"Usage: cfwf issue plan-status"*$'\n\n'"${ISSUE_LIST_USAGE}"$'\n'*$'\n\n'"${ISSUE_SEARCH_USAGE}"$'\n'*$'\n\n'"${LABEL_HISTORY_USAGE}"$'\n'* ]]
 
     run "${SCRIPT}" help pr
     [ "${status}" -eq 0 ]
