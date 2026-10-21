@@ -353,7 +353,12 @@ Creates an issue and puts it on the repository's Workflow board in one step, as 
 --repo       Always required; never taken from the current directory.
 --priority   Always required, exactly once: ${PRIORITY_LIST} (matched
              without regard to case). It is applied as the issue's priority label.
---title      The issue title. It is checked for leaks as the body is.
+--title      The issue title. It is checked for leaks as the body is. In a repository owned by
+             credfeto or funfair-tech (owner matched without regard to case) it must be
+             "prefix: text" or "prefix(name): text" with a lower-case prefix (letters and
+             digits, starting with a letter, with single - between parts), for example
+             "oneshot: ..." or "tool(cfwf): ..."; any other title is a
+             usage error (exit 2), and there is no option to skip it.
 --body-file  The issue body: a regular file, or - to read it from stdin (a pipe or /dev/stdin is
              not a regular file; use -). An empty body is an error. It is read once, into a
              private copy that is both checked and posted, so a later change to the file is
@@ -1610,22 +1615,25 @@ utf8_locale_available() {
     [ "${#accented}" -eq 1 ]
 }
 
-# Called just before a length is counted in C.UTF-8 (validate_visible_text and check_body_for_leaks),
-# so a host without it is refused rather than left to count bytes and turn away a valid multi-byte
-# title, label or body. Nothing else needs the locale, so --help and usage errors still work.
+# Called just before a length is counted or a character classed in C.UTF-8 (validate_visible_text,
+# has_visible_text and check_body_for_leaks), so a host without it is refused rather than left to
+# count or class bytes and judge a valid multi-byte title, label or body wrongly. Nothing else
+# needs the locale, so --help and usage errors still work.
 require_utf8_locale() {
     utf8_locale_available || die "the C.UTF-8 locale is not installed, so lengths cannot be counted in characters"
 }
 
-# Refuses a value that is only whitespace or longer than GitHub accepts, so the call fails here and
-# not half way through creating things. GitHub counts characters, and bash counts bytes in the C
-# locale a container usually has, so the length is taken in a UTF-8 one.
+# Refuses a value that is only whitespace and INVISIBLE_CHARACTERS, or longer than GitHub accepts,
+# so the call fails here and not half way through creating things. GitHub counts characters, and
+# bash counts bytes in the C locale a container usually has, so the length is taken in a UTF-8 one,
+# of the value as given, invisible characters and all.
 validate_visible_text() {
     local value="$1" limit="$2" flag="$3"
     require_utf8_locale
     local LC_ALL=C.UTF-8
-    [[ "${value}" =~ [^[:space:]] && "${#value}" -le "${limit}" ]] \
-        || usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
+    if ! has_visible_text "${value}" || [ "${#value}" -gt "${limit}" ]; then
+        usage_error "invalid value for ${flag}: it must not be blank or longer than ${limit} characters"
+    fi
 }
 
 # Refuses (exit 2) the flag $2 when the variable $1 it sets is already set: $3, when given, says
@@ -1743,6 +1751,17 @@ resolve_body() {
     BODY_FILE="${BODY_PATH_TMP}"
     LC_ALL=C grep -q '[^[:space:]]' "${BODY_FILE}" || die "the body is empty"
     check_body_for_leaks "${BODY_FILE}" "${REPO}"
+    require_body_has_visible_text "${BODY_FILE}"
+}
+
+# Refuses (exit 1) the body file $1 when it holds only whitespace and INVISIBLE_CHARACTERS, such as
+# U+3000 or U+00A0, which the byte check in resolve_body counts as text. It runs after the leak
+# check, so a body that is not valid UTF-8 is refused there (exit 8) and never called empty here.
+# bash cannot hold a NUL, so NULs are dropped from the text classed, never from the body posted.
+require_body_has_visible_text() {
+    local text
+    text=$(LC_ALL=C tr -d '\000' < "$1") || die "could not read the body"
+    has_visible_text "${text}" || die "the body is empty"
 }
 
 # Refuses the text $1 names (body, title or label) under the rule $2. It names only the subject,
@@ -2022,12 +2041,78 @@ label_create_failed() {
     die "could not create the label '$1' in ${REPO}: ${2%%$'\n'*}"
 }
 
+# The owners whose repositories take only titles of the shape TITLE_SHAPE_PATTERN. Hard-coded, with
+# no environment variable or option, because either would be a way to skip the check.
+readonly TITLE_CHECK_OWNERS=(credfeto funfair-tech)
+# "prefix: text" or "prefix(name): text" with a lower-case prefix; a single hyphen may join two
+# parts of the prefix, as in create-project. The name holds no bracket or colon and does not start
+# or end with whitespace. Neither the name nor the text is case-checked. The text, the last group,
+# is only captured here: this is matched byte by byte in the C locale, where the first byte of a
+# multi-byte space looks like text, so check_title_shape asks has_visible_text about it instead.
+readonly TITLE_SHAPE_PATTERN='^[a-z][a-z0-9]*(-[a-z0-9]+)*(\([^():[:space:]]([^():]*[^():[:space:]])?\))?: +(.*)$'
+readonly TITLE_SHAPE_RULE='it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
+# The characters that show nothing although C.UTF-8 classes them as graphic, not as [:space:]: the
+# no-break spaces U+00A0, U+2007 and U+202F, U+2800 (the blank braille pattern), and Unicode's
+# Default_Ignorable_Code_Point set (soft hyphen, zero-width spaces and joiners, direction marks, the
+# Hangul fillers, variation selectors, the byte order mark and tags). As bytes, for a bash pattern
+# bracket: a regular expression bracket refuses a multi-byte range.
+# U+00A0, U+2007, U+202F and U+2800.
+INVISIBLE_CHARACTERS=$'\302\240\342\200\207\342\200\257\342\240\200'
+# U+00AD, U+034F, U+061C, U+115F, U+1160, U+17B4, U+17B5 and U+180B-U+180F.
+INVISIBLE_CHARACTERS+=$'\302\255\315\217\330\234\341\205\237\341\205\240\341\236\264\341\236\265\341\240\213-\341\240\217'
+# U+200B-U+200F, U+202A-U+202E, U+2060-U+206F and U+3164.
+INVISIBLE_CHARACTERS+=$'\342\200\213-\342\200\217\342\200\252-\342\200\256\342\201\240-\342\201\257\343\205\244'
+# U+FE00-U+FE0F, U+FEFF, U+FFA0 and U+FFF0-U+FFF8.
+INVISIBLE_CHARACTERS+=$'\357\270\200-\357\270\217\357\273\277\357\276\240\357\277\260-\357\277\270'
+# U+1BCA0-U+1BCA3, U+1D173-U+1D17A and U+E0000-U+E0FFF.
+INVISIBLE_CHARACTERS+=$'\360\233\262\240-\360\233\262\243\360\235\205\263-\360\235\205\272\363\240\200\200-\363\240\277\277'
+readonly INVISIBLE_CHARACTERS
+
+# Succeeds when $1 holds a character that is neither whitespace nor in INVISIBLE_CHARACTERS, judged
+# in C.UTF-8 so that a multi-byte space such as U+3000 counts as whitespace and a non-ASCII letter
+# counts as text. Each character is classed on its own: bash matches a pattern against a string
+# that is not valid UTF-8 byte by byte, where a range would take in the bytes of a letter. Every
+# copy of an invisible character is dropped at once, so this loops once per distinct one.
+has_visible_text() {
+    require_utf8_locale
+    local LC_ALL=C.UTF-8 text="$1" character
+    while [[ "${text}" =~ [^[:space:]] ]]; do
+        character="${BASH_REMATCH[0]}"
+        # The pattern is unquoted on purpose: its ranges must match as ranges.
+        [[ "${character}" == [${INVISIBLE_CHARACTERS}] ]] || return 0
+        text="${text//"${character}"/}"
+    done
+    return 1
+}
+
+# Succeeds when the repository $1 (owner/repo) belongs to one of TITLE_CHECK_OWNERS.
+title_check_applies() {
+    # Lower-cased in the C locale, where I is always i, whatever locale cfwf is run in.
+    local LC_ALL=C owner="${1%%/*}"
+    is_one_of "${owner,,}" "${TITLE_CHECK_OWNERS[@]}"
+}
+
+# Refuses (exit 2) the title $1 for the repository $2 unless it has the title shape, never echoing
+# the title, since this runs before the leak check. The shape is matched in the C locale, as
+# validate matches, so a byte that is not valid UTF-8 is left to the leak check's invalid UTF-8
+# rule. The text after the prefix must hold a visible character, so a title such as "fix: "
+# followed only by U+3000, or only by such bytes and whitespace, is refused. The match is made here
+# rather than through validate so that the text is read from this match's own BASH_REMATCH.
+check_title_shape() {
+    title_check_applies "$2" || return 0
+    local LC_ALL=C
+    if ! [[ "$1" =~ ${TITLE_SHAPE_PATTERN} ]] || ! has_visible_text "${BASH_REMATCH[-1]}"; then
+        usage_error "invalid value for --title: ${TITLE_SHAPE_RULE}"
+    fi
+}
+
 issue_create() {
     parse_issue_options "$@"
     require REPO --repo
     [ -n "${PRIORITY}" ] || usage_error "--priority is required (${PRIORITY_LIST})"
     require TITLE --title
     require BODY_FILE --body-file
+    check_title_shape "${TITLE}" "${REPO}"
     collect_issue_labels
     require_gh
     resolve_body
@@ -3168,8 +3253,11 @@ EXISTING_PR_NUMBER=""
 EXISTING_PR_BASE=""
 EXISTING_PR_URL=""
 # The shape of a Conventional Commits title: a lower-case type, an optional scope in brackets, an
-# optional ! and a colon, one space and a description that starts with a visible character.
-readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: [^[:space:]]'
+# optional ! and a colon, one space and a description that does not start with whitespace. The
+# description, the last group, is only captured here: this is matched byte by byte in the C locale,
+# where the first byte of a multi-byte space looks like text, so validate_pull_request_title asks
+# has_visible_text about it.
+readonly PR_TITLE_PATTERN='^[a-z]+(\([^()]+\))?!?: ([^[:space:]].*)$'
 
 assign_pr_create_option() {
     local flag="$1" value="$2"
@@ -3181,10 +3269,14 @@ assign_pr_create_option() {
 }
 
 # Refuses (exit 2) the title $1 of a pull request in the repository $2 unless it has the shape a
-# title must have there. This is the one place that knows the rule, which today is the same for
-# every repository.
+# title must have there, never echoing the title. The description must hold a visible character,
+# so a title such as "fix: " followed only by U+3000 is refused. This is the one place that knows
+# the rule, which today is the same for every repository.
 validate_pull_request_title() {
-    validate "$1" "${PR_TITLE_PATTERN}" --title "it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"
+    local LC_ALL=C
+    if ! [[ "$1" =~ ${PR_TITLE_PATTERN} ]] || ! has_visible_text "${BASH_REMATCH[-1]}"; then
+        usage_error "invalid value for --title: it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"
+    fi
 }
 
 # Sets EXISTING_PR_NUMBER, EXISTING_PR_BASE and EXISTING_PR_URL to the one open pull request of

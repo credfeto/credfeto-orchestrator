@@ -336,6 +336,22 @@ gh_line_of() {
     [ "$(gh_call_count "project item-edit")" -eq 0 ]
 }
 
+# Writes a body file for each character that shows nothing although it is not ASCII whitespace,
+# U+3000, U+00A0, U+200B and U+FEFF, each as the only text on its lines (invisible-<name>.md), one
+# that mixes all four with ASCII whitespace (invisible-mixed.md), and the same mix with a single
+# visible character (visible-among-invisible.md). Each body must be refused as empty, the last one
+# taken.
+write_invisible_bodies() {
+    printf '\343\200\200\343\200\200\n\343\200\200\n' > "${TEST_TMP}/invisible-ideographic-space.md" \
+        && printf '\302\240\n\302\240\302\240\n' > "${TEST_TMP}/invisible-no-break-space.md" \
+        && printf '\342\200\213\n\342\200\213\342\200\213\n' > "${TEST_TMP}/invisible-zero-width-space.md" \
+        && printf '\357\273\277\n\357\273\277\n' > "${TEST_TMP}/invisible-byte-order-mark.md" \
+        && printf ' \343\200\200\t\302\240\n\342\200\213\357\273\277\n' > "${TEST_TMP}/invisible-mixed.md" \
+        && printf ' \343\200\200\t\302\240\n\342\200\213x\357\273\277\n' > "${TEST_TMP}/visible-among-invisible.md"
+}
+
+INVISIBLE_BODIES=(ideographic-space no-break-space zero-width-space byte-order-mark mixed)
+
 @test "--set refuses an option the board has that is not a workflow state, and writes nothing (#1519)" {
     jq -n '{fields: [{id: "PVTSSF_status", name: "Status", options: [
         {id: "st_3", name: "Approved"}, {id: "x1", name: "Banana"}], type: "ProjectV2SingleSelectField"}]}' > "${GH_FIXTURES}/field-list.json"
@@ -1833,6 +1849,23 @@ reply_posts() {
     cmp "${TEST_TMP}/long.md" "${GH_FIXTURES}/reply-body.txt"
 }
 
+@test "pr reply refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and posts one with a visible character" {
+    prepare_pr_reply
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run_pr_reply --pr 42 --comment-id 500 --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run_pr_reply --pr 42 --comment-id 500 --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/reply-body.txt"
+}
+
 @test "pr reply refuses a blank, missing or unreadable body as a runtime failure, without calling gh" {
     prepare_pr_reply
     printf ' \n\t\n' > "${TEST_TMP}/blank.md"
@@ -1941,7 +1974,7 @@ prepare_issue_create() {
 }
 
 create_args() {
-    CREATE_ARGS=(issue create --repo "${REPO}" --priority "${1:-High}" --title "A new issue" --body-file "${TEST_TMP}/body.md")
+    CREATE_ARGS=(issue create --repo "${REPO}" --priority "${1:-High}" --title "repo: A new issue" --body-file "${TEST_TMP}/body.md")
 }
 
 # Nothing was written: no label, no issue and no board item.
@@ -1976,11 +2009,11 @@ assert_nothing_created() {
 
 @test "issue create needs --repo, --priority, --title and --body-file, and never calls gh without them" {
     prepare_issue_create
-    run "${SCRIPT}" issue create --priority High --title T --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --repo"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --title T --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"--priority is required (Security, Urgent, High, Medium or Low)"* ]]
 
@@ -1988,7 +2021,7 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --title"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"missing required option --body-file"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -2000,7 +2033,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label -wip
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- -wip" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label -wip"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label -wip"
 }
 
 @test "issue create refuses --title given twice, like --priority and --body-file" {
@@ -2019,8 +2052,9 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"invalid value for --title: it must not be blank or longer than 256 characters"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..257})" --body-file "${TEST_TMP}/body.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf 'x%.0s' {1..251})" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *"invalid value for --title: it must not be blank or longer than 256 characters"* ]]
 
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label " "
     [ "${status}" -eq 2 ]
@@ -2030,7 +2064,7 @@ assert_nothing_created() {
     [ "${status}" -eq 2 ]
     [ ! -f "${GH_LOG}" ]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf 'x%.0s' {1..256})" --body-file "${TEST_TMP}/body.md" --label "$(printf 'y%.0s' {1..50})"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf 'x%.0s' {1..250})" --body-file "${TEST_TMP}/body.md" --label "$(printf 'y%.0s' {1..50})"
     [ "${status}" -eq 0 ]
 }
 
@@ -2039,8 +2073,242 @@ assert_nothing_created() {
     local accented
     accented=$(printf '\303\251%.0s' {1..200})
     LC_ALL=C.UTF-8 bash -c 'v=$(printf "\303\251"); [ "${#v}" -eq 1 ]' || skip "no C.UTF-8 locale on this host"
-    LC_ALL=C run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${accented}" --body-file "${TEST_TMP}/body.md" --label "$(printf '\303\251%.0s' {1..50})"
+    LC_ALL=C run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: ${accented}" --body-file "${TEST_TMP}/body.md" --label "$(printf '\303\251%.0s' {1..50})"
     [ "${status}" -eq 0 ]
+}
+
+# --- issue create: the title shape ---------------------------------------------
+
+TITLE_SHAPE_ERROR='cfwf: invalid value for --title: it must be "prefix: text" or "prefix(name): text" with a lower-case prefix, for example "oneshot: ..." or "tool(cfwf): ..."'
+
+# Runs issue create for the repository $1 with the title $2 and any further arguments.
+run_titled_create() {
+    local repository="$1" title="$2"
+    shift 2
+    run --separate-stderr "${SCRIPT}" issue create --repo "${repository}" --priority High --title "${title}" --body-file "${TEST_TMP}/body.md" "$@"
+}
+
+# Given a run's status, stdout and stderr: it was refused for the title's shape, with exit 2, the
+# rule and the usage on stderr, nothing on stdout and no gh call.
+assert_title_shape_refused() {
+    [ "$1" -eq 2 ] \
+        && [ -z "$2" ] \
+        && [[ "$3" == "${TITLE_SHAPE_ERROR}"$'\n\n'"Usage: cfwf issue create"* ]] \
+        && [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create accepts a title of the shape prefix: text or prefix(name): text with a lower-case prefix" {
+    prepare_issue_create
+    local title
+    for title in "oneshot: X" "create-project: X" "tool(cfwf): X" "hook(enforce-curl-host): X" "fix: x" "fix(oneshot): x" \
+        "learning: x" "audit: x" "py3: x" "tool(Some Name): x" "tool(a b): x" "repo: lower case text" "repo: --flag first" \
+        "repo: $(printf '\303\251') first" "repo:   three spaces" "tool(a): x" "pre-commit-check: x"; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
+@test "issue create refuses, with exit 2 and before any gh call, a title without a lower-case prefix, a colon and a space" {
+    prepare_issue_create
+    local title
+    for title in "Add a thing" "Audit: x" "fIx: x" "3d: x" "-fix: x" "fix_it: x" "fix.it: x" "fix:x" "fix:" "fix:   " \
+        "tool(): x" "tool( a): x" "tool(a(b)): x" "tool(a: x" "tool(a)(b): x" "fix (a): x" "fix : x" " fix: x" \
+        "Fix the thing: now" "feat!: x" ": x" "a-: x" "fix-: x" "a--b: x" "tool(a ): x" "tool(a: b): x" "tool(a:b): x" \
+        "tool(a)): x"; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+    done
+}
+
+@test "issue create refuses a title whose text after the prefix is only multi-byte spaces, such as U+3000 or U+00A0, and never echoes it" {
+    prepare_issue_create
+    local title
+    # U+3000, U+00A0, U+202F, U+2007, and a mix of them with ASCII spaces.
+    for title in $'fix: \343\200\200' $'fix: \302\240' $'fix: \342\200\257' $'fix: \342\200\207' \
+        $'tool(cfwf):  \343\200\200 \302\240 '; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+}
+
+@test "issue create refuses a title whose text after the prefix is only zero-width or blank-looking characters, and never echoes it" {
+    prepare_issue_create
+    local title
+    # U+200B, U+200C, U+200D, U+2060, U+FEFF, U+3164, U+2800, U+115F, U+1160, U+FFA0, U+00AD,
+    # U+034F, U+061C, U+17B4, U+17B5, U+180E, U+200E, U+202A, U+202E, U+206F, U+FE00, U+FE0F,
+    # U+FFF0, U+FFF8, U+1BCA0, U+1D173, U+1D17A, U+E0001 and U+E007F, then a mix of them with
+    # ASCII spaces, U+3000 and U+00A0.
+    for title in $'fix: \342\200\213' $'fix: \342\200\214' $'fix: \342\200\215' $'fix: \342\201\240' \
+        $'fix: \357\273\277' $'fix: \343\205\244' $'fix: \342\240\200' $'fix: \341\205\237' $'fix: \341\205\240' \
+        $'fix: \357\276\240' $'fix: \302\255' $'fix: \315\217' $'fix: \330\234' $'fix: \341\236\264' \
+        $'fix: \341\236\265' $'fix: \341\240\216' $'fix: \342\200\216' $'fix: \342\200\252' $'fix: \342\200\256' \
+        $'fix: \342\201\257' $'fix: \357\270\200' $'fix: \357\270\217' $'fix: \357\277\260' $'fix: \357\277\270' \
+        $'fix: \360\233\262\240' $'fix: \360\235\205\263' $'fix: \360\235\205\272' $'fix: \363\240\200\201' \
+        $'fix: \363\240\201\277' $'tool(cfwf): \342\200\213 \343\200\200\357\273\277\302\240\342\200\213\342\240\200 '; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+}
+
+# Sets INVISIBLE_ONLY_VALUES to values that show nothing: one of each kind of character in
+# INVISIBLE_CHARACTERS alone, then mixes of them with ASCII spaces and U+3000. Built from printf
+# escapes, so this file stays ASCII.
+invisible_only_values() {
+    local escape
+    INVISIBLE_ONLY_VALUES=()
+    # U+00A0, U+2007, U+202F, U+2800, U+00AD, U+034F, U+061C, U+115F, U+1160, U+17B4, U+17B5,
+    # U+180B, U+180F, U+200B, U+200F, U+202A, U+202E, U+2060, U+206F, U+3164, U+FE00, U+FE0F,
+    # U+FEFF, U+FFA0, U+FFF0, U+FFF8, U+1BCA0, U+1BCA3, U+1D173, U+1D17A, U+E0000, U+E0FFF, then
+    # mixes.
+    for escape in '\302\240' '\342\200\207' '\342\200\257' '\342\240\200' '\302\255' '\315\217' '\330\234' \
+        '\341\205\237' '\341\205\240' '\341\236\264' '\341\236\265' '\341\240\213' '\341\240\217' '\342\200\213' \
+        '\342\200\217' '\342\200\252' '\342\200\256' '\342\201\240' '\342\201\257' '\343\205\244' '\357\270\200' \
+        '\357\270\217' '\357\273\277' '\357\276\240' '\357\277\260' '\357\277\270' '\360\233\262\240' \
+        '\360\233\262\243' '\360\235\205\263' '\360\235\205\272' '\363\240\200\200' '\363\240\277\277' \
+        ' \302\240 \342\200\207\342\200\257 ' '\343\200\200\357\273\277\342\200\213 \302\240\343\200\200'; do
+        INVISIBLE_ONLY_VALUES+=("$(printf '%b' "${escape}")")
+    done
+}
+
+# Given a run's status, stdout and stderr, the flag $4, its limit $5 and the value $6: it was
+# refused as blank, with exit 2, nothing on stdout, the value never echoed and no gh call. The
+# checks are chained because a caller's || turns set -e off here, so only the last would count.
+assert_refused_as_blank() {
+    [ "$1" -eq 2 ] \
+        && [ -z "$2" ] \
+        && [[ "$3" == "cfwf: invalid value for $4: it must not be blank or longer than $5 characters"$'\n'* ]] \
+        && [[ "$3" != *"$6"* ]] \
+        && [ ! -f "${GH_LOG}" ]
+}
+
+@test "issue create refuses, as blank, a label or a title made only of invisible characters, even for an owner the title shape does not apply to, and never echoes it" {
+    prepare_issue_create
+    create_args
+    local value
+    invisible_only_values
+    for value in "${INVISIBLE_ONLY_VALUES[@]}"; do
+        run --separate-stderr "${SCRIPT}" "${CREATE_ARGS[@]}" --label "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --label 50 "${value}" \
+            || { echo "the label '${value}' was not refused as blank" >&2; return 1; }
+
+        run_titled_create someone-else/x "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --title 256 "${value}" \
+            || { echo "the title '${value}' was not refused as blank" >&2; return 1; }
+    done
+}
+
+@test "issue create accepts a title whose text after the prefix holds a letter beside zero-width characters, or a character just outside their ranges" {
+    prepare_issue_create
+    local title
+    # A letter after U+200B, e-acute between U+200C and U+200D, a letter after U+2800 and U+FEFF,
+    # then U+2010 (hyphen, just after U+200B-U+200F) and U+2030 (per mille, just after U+202A-U+202F).
+    for title in $'fix: \342\200\213x' $'fix: \342\200\214\303\251\342\200\215' $'fix(a): \342\240\200\357\273\277x' \
+        $'fix: \342\200\220' $'fix: \342\200\260'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
+@test "issue create accepts a title whose text after the prefix starts with a non-ASCII letter or follows a multi-byte space" {
+    prepare_issue_create
+    local title
+    # e-acute, a CJK ideograph, and a letter after U+3000 and after U+00A0.
+    for title in $'fix: \303\251t\303\251' $'fix: \346\274\242\345\255\227' $'fix: \343\200\200x' $'fix(a): \302\240x'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 0 ] || { echo "'${title}' was refused: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+    done
+}
+
+@test "issue create refuses for its shape a title whose text after the prefix is only invalid UTF-8, and leaves mixed text to the leak check" {
+    prepare_issue_create
+    local title
+    # In C.UTF-8 a byte that is not valid UTF-8 is not a character, so it is not visible text either.
+    for title in $'fix: \377' $'fix: \200' $'tool(cfwf):  \300 \377 ' $'fix: \377\342\200\213'; do
+        run_titled_create "${REPO}" "${title}"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "'${title}' was not refused for its shape" >&2; return 1; }
+        [[ "${stderr}" != *"${title}"* ]]
+    done
+
+    # A visible character beside the invalid byte passes the shape check and is refused by the leak check.
+    # e-acute and a CJK ideograph beside an invalid byte and a zero-width space stay visible.
+    for title in $'fix: \200x' $'fix: x\377' $'fix: \377 \303\251' $'fix: \342\200\213\377\346\274\242'; do
+        run_titled_create "${REPO}" "${title}"
+        [ "${status}" -eq 8 ] || { echo "'${title}' exited ${status}: ${stderr}" >&2; return 1; }
+        [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
+        [ -z "${output}" ]
+        [ ! -f "${GH_LOG}" ]
+    done
+}
+
+@test "a title refused for its shape is never echoed, wherever --repo is given, since a usage error comes before the leak check" {
+    prepare_issue_create
+    local secret="ghp_${RANDOM}abcdefghijklmnopqrstuvwxyz0123456789"
+    run_titled_create "${REPO}" "Rotate ${secret} now"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+    [[ "${stderr}" != *"${secret}"* ]]
+
+    run --separate-stderr "${SCRIPT}" issue create --priority High --title "Add a thing" --body-file "${TEST_TMP}/body.md" --repo "${REPO}"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+}
+
+@test "issue create checks the title's shape before the body's leak check, and a prefixed title still goes to the leak check" {
+    prepare_issue_create
+    printf 'a path /tmp/out\n' > "${TEST_TMP}/body.md"
+    run_titled_create "${REPO}" "Add a thing"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+
+    prepare_issue_create
+    run_titled_create "${REPO}" "repo: see /tmp/x"
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: title refused: host path" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "the title shape applies to every repository of credfeto and funfair-tech, in any case, and to no other owner" {
+    prepare_issue_create
+    local repository
+    for repository in credfeto/x funfair-tech/x Credfeto/x FUNFAIR-TECH/x; do
+        run_titled_create "${repository}" "Add a thing"
+        assert_title_shape_refused "${status}" "${output}" "${stderr}" || { echo "the title was not refused for ${repository}" >&2; return 1; }
+    done
+
+    for repository in someone-else/x credfeto-other/x notcredfeto/x funfair/x; do
+        run_titled_create "${repository}" "Add a thing"
+        [ "${status}" -eq 0 ] || { echo "the title was refused for ${repository}: ${stderr}" >&2; return 1; }
+        [ "${output}" = "${NEW_ISSUE_URL}" ]
+        issue_create_called_with "issue create --repo ${repository} --title Add a thing --body-file BODY --label High"
+    done
+}
+
+@test "the title shape check has no way round it: no option skips it and the owner list is not read from the environment" {
+    prepare_issue_create
+    local flag
+    for flag in --no-title-check --force; do
+        run_titled_create "${REPO}" "Add a thing" "${flag}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: unknown option (argument 11; its value is not shown)"* ]]
+    done
+
+    TITLE_CHECK_OWNERS=someone-else run_titled_create "${REPO}" "Add a thing"
+    assert_title_shape_refused "${status}" "${output}" "${stderr}"
+}
+
+@test "issue create help states the title shape, the lower-case prefix, the owners and that it cannot be skipped, and calls no gh" {
+    local args
+    for args in "issue create --help" "help issue"; do
+        # shellcheck disable=SC2086  # each row is the words of one command line
+        run "${SCRIPT}" ${args}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *'"prefix: text" or "prefix(name): text" with a lower-case prefix'* ]]
+        [[ "${output}" == *"credfeto or funfair-tech"* ]]
+        [[ "${output}" == *"usage error (exit 2), and there is no option to skip it"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
 }
 
 @test "issue create refuses to count a title, a label or a body when the C.UTF-8 locale is not installed" {
@@ -2077,13 +2345,13 @@ assert_nothing_created() {
 @test "issue create refuses a body over GitHub's 65536 characters with exit 8 before calling gh, and accepts exactly that many" {
     prepare_issue_create
     head -c 65537 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/long.md"
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/long.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/long.md"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: body refused: too long" ]
     [ ! -f "${GH_LOG}" ]
 
     head -c 65536 /dev/zero | tr '\0' 'x' > "${TEST_TMP}/limit.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/limit.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/limit.md"
     [ "${status}" -eq 0 ]
 }
 
@@ -2117,7 +2385,7 @@ assert_nothing_created() {
     prepare_issue_create
     local bad
     for bad in "no-slash" "a/b/c" "a b/c" 'a/b;rm' "" "../.." "./x" "x/." "x/.." "../repo"; do
-        run "${SCRIPT}" issue create --repo "${bad}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+        run "${SCRIPT}" issue create --repo "${bad}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 2 ] || { echo "--repo '${bad}' was accepted" >&2; return 1; }
         [[ "${output}" == *"invalid value for --repo"* ]]
     done
@@ -2163,7 +2431,7 @@ assert_nothing_created() {
         create_args "${given}"
         run "${SCRIPT}" "${CREATE_ARGS[@]}"
         [ "${status}" -eq 0 ]
-        issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label ${canonical}"
+        issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label ${canonical}"
     done
 }
 
@@ -2221,7 +2489,7 @@ assert_nothing_created() {
         [[ "${stderr}" != *"${secret}"* ]]
     done
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority "${secret}" --title T --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority "${secret}" --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == "cfwf: unknown --priority "* && "${stderr}" != *"${secret}"* ]]
 
@@ -2251,7 +2519,7 @@ assert_nothing_created() {
 
 @test "issue create refuses one argument that holds two of its flags as an unknown option" {
     prepare_issue_create
-    run --separate-stderr "${SCRIPT}" issue create "--title --body-file" x --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create "--title --body-file" x --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 2 ]
     [[ "${stderr}" == *"unknown option (argument 3; its value is not shown)"* && "${stderr}" != *"--title --body-file"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -2289,34 +2557,52 @@ assert_nothing_created() {
 @test "issue create refuses a missing, unreadable, empty or blank body, without calling gh" {
     prepare_issue_create
     create_args
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/nope.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/nope.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"cfwf: cannot read the --body-file"* && "${output}" != *"${TEST_TMP}"* ]]
 
     : > "${TEST_TMP}/empty.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/empty.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/empty.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
 
     printf ' \n\t\n' > "${TEST_TMP}/blank.md"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/blank.md"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/blank.md"
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
 
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}"
     [ "${status}" -eq 1 ]
     [ ! -f "${GH_LOG}" ]
 }
 
+@test "issue create refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and takes one with a visible character" {
+    prepare_issue_create
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${NEW_ISSUE_URL}" ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/issue-body.txt"
+}
+
 @test "issue create reads the body from stdin for --body-file -, and an empty stdin is refused" {
     prepare_issue_create
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - <<< "A body from stdin"
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: A new issue" --body-file - <<< "A body from stdin"
     [ "${status}" -eq 0 ]
     [ "${output}" = "${NEW_ISSUE_URL}" ]
     [ "$(cat "${GH_FIXTURES}/issue-body.txt")" = "A body from stdin" ]
 
     : > "${GH_LOG}"
-    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "A new issue" --body-file - < /dev/null
+    run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: A new issue" --body-file - < /dev/null
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"the body is empty"* ]]
     assert_nothing_created
@@ -2372,7 +2658,7 @@ assert_nothing_created() {
     [ "${output}" = "${NEW_ISSUE_URL}" ]
     [ -z "${stderr}" ]
 
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High"
     grep -qxF "project item-add 74 --owner credfeto --url ${NEW_ISSUE_URL} --format json --jq .id" "${GH_LOG}"
     grep -qxF "project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_1" "${GH_LOG}"
     [ "$(gh_call_count "project item-edit")" -eq 1 ]
@@ -2413,7 +2699,7 @@ assert_nothing_created() {
     create_args
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label cfwf --label CFWF
     [ "${status}" -eq 0 ]
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label cfwf"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label cfwf"
     [ "$(gh_call_count "label create")" -eq 0 ]
 }
 
@@ -2424,7 +2710,7 @@ assert_nothing_created() {
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} --color ffa500 --description Work for an AI Agent -- AI-Work" "${GH_LOG}"
     grep -qxF "label create --repo ${REPO} --color ff0000 --description Do not work on this -- On Hold" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label AI-Work --label On Hold"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label AI-Work --label On Hold"
 }
 
 @test "issue create creates any other missing label with the colour gh picks, passing no colour or description" {
@@ -2433,7 +2719,7 @@ assert_nothing_created() {
     run "${SCRIPT}" "${CREATE_ARGS[@]}" --label "brand new"
     [ "${status}" -eq 0 ]
     grep -qxF "label create --repo ${REPO} -- brand new" "${GH_LOG}"
-    issue_create_called_with "issue create --repo ${REPO} --title A new issue --body-file BODY --label High --label brand new"
+    issue_create_called_with "issue create --repo ${REPO} --title repo: A new issue --body-file BODY --label High --label brand new"
 }
 
 @test "issue create creates a missing priority label with its standard colour and description" {
@@ -2577,20 +2863,20 @@ assert_nothing_created() {
     local scratch="${TEST_TMP}/tmp"
     mkdir -p "${scratch}"
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "from stdin"
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 0 ]
     [ -z "$(ls -A "${scratch}")" ]
 
     touch "${GH_FIXTURES}/issue-create.fail"
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "from stdin"
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "from stdin"
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
 
-    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - < /dev/null
+    TMPDIR="${scratch}" run "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - < /dev/null
     [ "${status}" -eq 1 ]
     [ -z "$(ls -A "${scratch}")" ]
 }
@@ -2630,7 +2916,7 @@ run_body_check() {
 }
 
 run_issue_create_leak() {
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/leak.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/leak.md"
 }
 
 # Given a run's status, stdout and stderr: it exited 8 naming the rule $4 and line 3, printed
@@ -2870,11 +3156,11 @@ harmless_credential_shapes() {
         assert_refused "${status}" "${output}" "${stderr}" "invalid UTF-8" "secret"
         [ ! -f "${GH_LOG}" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "$(printf "a%bb" "${bytes}")" --body-file "${TEST_TMP}/body.md"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: $(printf "a%bb" "${bytes}")" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 8 ]
         [ "${stderr}" = "cfwf: title refused: invalid UTF-8" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "$(printf "a%bb" "${bytes}")"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "$(printf "a%bb" "${bytes}")"
         [ "${status}" -eq 8 ]
         [ "${stderr}" = "cfwf: label refused: invalid UTF-8" ]
         [ ! -f "${GH_LOG}" ]
@@ -3103,7 +3389,7 @@ BODIES
 
     prepare_issue_create
     rm -f "${GH_LOG}"
-    run --separate-stderr "${SCRIPT}" issue create --repo credfeto/no-such-repo --priority High --title "see credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo credfeto/no-such-repo --priority High --title "repo: see credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the repository credfeto/no-such-repo was not found, or the caller cannot see it" ]
     assert_nothing_created
@@ -3282,13 +3568,13 @@ BODIES
     prepare_issue_create
     local leak
     for leak in "fix gh""p_LEAKMARKER0123456789 now" "see /home/someone/work" "set MY_SEC""RET=LEAKMARKER" "clone $(url_with_password https user LEAKMARKER)"; do
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "${leak}" --body-file "${TEST_TMP}/body.md"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: ${leak}" --body-file "${TEST_TMP}/body.md"
         [ "${status}" -eq 8 ]
         [[ "${stderr}" == "cfwf: title refused: "@(token|host path) ]]
         [[ "${stderr}" != *LEAKMARKER* && "${stderr}" != *someone* ]]
         [ -z "${output}" ]
 
-        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label ok --label "${leak}"
+        run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label ok --label "${leak}"
         [ "${status}" -eq 8 ]
         [[ "${stderr}" == "cfwf: label refused: "@(token|host path) ]]
         [[ "${stderr}" != *LEAKMARKER* && "${stderr}" != *someone* ]]
@@ -3296,9 +3582,9 @@ BODIES
     done
     [ ! -f "${GH_LOG}" ]
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "see /tmp/x" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: see /tmp/x" --body-file "${TEST_TMP}/body.md"
     [ "${stderr}" = "cfwf: title refused: host path" ]
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "see /tmp/x"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "see /tmp/x"
     [ "${stderr}" = "cfwf: label refused: host path" ]
 }
 
@@ -3306,19 +3592,19 @@ BODIES
     prepare_issue_create
     write_visibility "${REPO}" PUBLIC
     write_visibility credfeto/hidden-thing PRIVATE
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "port credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: port credfeto/hidden-thing#3" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: title refused: private repository" ]
     assert_nothing_created
     [ "$(gh_call_count "label list")" -eq 0 ]
 
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file "${TEST_TMP}/body.md" --label "credfeto/hidden-thing#3"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file "${TEST_TMP}/body.md" --label "credfeto/hidden-thing#3"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: label refused: private repository" ]
     assert_nothing_created
 
     fail_visibility credfeto/flaky-thing
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "see credfeto/flaky-thing#1" --body-file "${TEST_TMP}/body.md"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: see credfeto/flaky-thing#1" --body-file "${TEST_TMP}/body.md"
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: could not read the visibility of the repository named in the title" ]
     assert_nothing_created
@@ -3326,7 +3612,7 @@ BODIES
 
 @test "issue create checks the stdin copy it hands to gh, and refuses a leak there before any write" {
     prepare_issue_create
-    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title T --body-file - <<< "a path /tmp/out"
+    run --separate-stderr "${SCRIPT}" issue create --repo "${REPO}" --priority High --title "repo: T" --body-file - <<< "a path /tmp/out"
     [ "${status}" -eq 8 ]
     [ "${stderr}" = "cfwf: body refused: host path (line 1)" ]
     [ ! -f "${GH_LOG}" ]
@@ -4118,6 +4404,26 @@ assert_set_to_development() {
     [ ! -s "${GH_LOG}" ]
 }
 
+@test "pr create refuses a Conventional Commits title whose description is only invisible characters (exit 2) without echoing it, and takes one starting with a non-ASCII letter" {
+    prepare_pr_create
+    local title
+    # U+3000, U+00A0, U+200B and U+FEFF: the C locale match sees a byte that is not a space.
+    for title in "feat: $(printf '\343\200\200')" "fix: $(printf '\302\240')" "fix: $(printf '\342\200\213')" "fix: $(printf '\357\273\277')"; do
+        run_pr_create_titled "${title}"
+        [ "${status}" -eq 2 ] && [ -z "${output}" ] \
+            && [[ "${stderr}" == "cfwf: invalid value for --title: it must be a Conventional Commits title, <type>[(<scope>)][!]: <description>"$'\n\n'"${PR_CREATE_USAGE}"$'\n'* ]] \
+            && [[ "${stderr}" != *"${title}"* ]] \
+            || { echo "not refused for its description: ${title}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    for title in "fix: $(printf '\303\251')" "fix: $(printf '\343\200\200')x"; do
+        run_pr_create_titled "${title}"
+        [ "${status}" -eq 0 ] || { echo "refused: ${title}" >&2; return 1; }
+        issue_create_called_with "pr create --repo ${REPO} --head ${PR_HEAD_BRANCH} --base main --draft --title ${title} --body-file BODY"
+    done
+}
+
 @test "pr create refuses a blank title, one with a control character and one over 256 characters, without echoing it" {
     prepare_pr_create
     run_pr_create_titled "   "
@@ -4135,6 +4441,17 @@ assert_set_to_development() {
 
     run_pr_create_titled "feat: $(run_of x 250)"
     [ "${status}" -eq 0 ]
+}
+
+@test "pr create refuses, as blank, a title made only of invisible characters, and never echoes it" {
+    prepare_pr_create
+    local value
+    invisible_only_values
+    for value in "${INVISIBLE_ONLY_VALUES[@]}"; do
+        run_pr_create_titled "${value}"
+        assert_refused_as_blank "${status}" "${output}" "${stderr}" --title 256 "${value}" \
+            || { echo "the title '${value}' was not refused as blank" >&2; return 1; }
+    done
 }
 
 @test "pr create counts a title of two-byte characters in characters, in any locale: 256 are taken and 257 refused" {
@@ -5706,6 +6023,24 @@ run_comment_add() {
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the body is empty" ]
     [ ! -f "${GH_LOG}" ]
+}
+
+@test "comment add refuses a body of only U+3000, U+00A0, U+200B or U+FEFF as empty, never echoing it, and posts one with a visible character" {
+    prepare_comment
+    write_invisible_bodies
+    local name
+    for name in "${INVISIBLE_BODIES[@]}"; do
+        run_comment_add --pr 1623 --body-file "${TEST_TMP}/invisible-${name}.md"
+        [ "${status}" -eq 1 ] || { echo "took ${name}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: the body is empty" ] || { echo "wrong message for ${name}" >&2; return 1; }
+    done
+    [ ! -f "${GH_LOG}" ]
+
+    run_comment_add --pr 1623 --body-file "${TEST_TMP}/visible-among-invisible.md"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${COMMENT_PR_URL}" ]
+    cmp "${TEST_TMP}/visible-among-invisible.md" "${GH_FIXTURES}/comment-body.txt"
 }
 
 @test "comment add refuses a leaking body with exit 8, naming the rule only, and posts nothing" {

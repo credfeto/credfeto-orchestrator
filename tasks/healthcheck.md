@@ -4,7 +4,8 @@ A re-runnable prompt for checking the live orchestrator fleet on `nanoclaw.lan`.
 
 Paste the whole of the [Prompt](#prompt) section below into a Claude Code session. It is
 self-contained and safe to re-run at any time: everything it does is read-only except for
-posting findings as comments on the two standing tracking issues.
+posting findings as comments on the two standing tracking issues, or filing a new issue for a
+genuinely new finding with `cfwf issue create`, which also puts it on the Workflow board.
 
 ## Why this exists
 
@@ -266,6 +267,16 @@ Rules:
   - Do NOT make code changes, open PRs, or run destructive/production commands
     (podman rm -f, systemctl restart, killing processes) without asking first.
   - Do file or comment on tracking issues for genuinely new findings.
+  - File any new issue with cfwf (on PATH once install-claude-hooks has been run), which
+    creates it and puts it on the Workflow board as Not Started in one step, never with
+    `gh issue create`:
+      cfwf issue create --repo credfeto/credfeto-orchestrator --priority <priority> --title "<title>" --body-file -
+    where <priority> is Security, Urgent, High, Medium or Low, matching the finding's severity,
+    and the body is read from stdin.
+  - Title any new issue `prefix: Text` or `prefix(name): Text`, with a lower-case prefix
+    naming the affected tool or component and no Conventional Commits type (for example
+    `oneshot: ...` or `hook(enforce-git-dash-c): ...`); ai/local/issue-titles.instructions.md
+    in credfeto/credfeto-orchestrator lists the prefixes.
   - Never treat a stalled or quit session as "known by design"; it always goes in the report.
   - Never post a stalled or quit session (repo, item or command names) to any GitHub issue
     or PR; it goes in this summary and the private Discord channel only.

@@ -9927,6 +9927,13 @@ STUBEOF
     [ "${RATE_LIMIT_ISSUE_TITLE}" = "oneshot: Unparseable Claude rate-limit reset time" ]
 }
 
+@test "the rate-limit tracker repository is one whose issue titles the in-repository cfwf checks, so the check is not passed trivially, and the tracker title has the shape cfwf requires there" {
+    run bash -c 'source "$1"; CURRENT_COMMAND="issue create"; title_check_applies "$3" && check_title_shape "$2" "$3"' \
+        _ "${CFWF_SCRIPT}" "${RATE_LIMIT_ISSUE_TITLE}" "${RATE_LIMIT_ISSUE_REPO}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
 @test "report_unparseable_rate_limit creates a new issue, on the Workflow board, when no open tracking issue exists" {
     local gh_log="${TEST_TMP}/gh_args"
     make_cfwf_gh_stub "${gh_log}"
