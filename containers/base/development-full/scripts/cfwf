@@ -1409,7 +1409,7 @@ resolve_status() {
     canonical=$(canonical_workflow_state "${STATUS}")
     if [ -z "${canonical}" ]; then
         local valid
-        valid=$(printf '%s, ' "${WORKFLOW_STATES[@]}")
+        printf -v valid '%s, ' "${WORKFLOW_STATES[@]}"
         die "unknown --status (valid: ${valid%, })"
     fi
     STATUS="${canonical}"
