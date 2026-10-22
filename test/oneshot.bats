@@ -13573,7 +13573,7 @@ STUBEOF
 @test "main does not refuse to run when ORCHESTRATOR_SELF_UPDATE_MANAGED is unset, even when the checkout is behind origin/main (#1298 review — loop/manual invocation must not be gated by the systemd-only policy)" {
     setup_main_mocks
     # ORCHESTRATOR_SELF_UPDATE_MANAGED deliberately left unset by setup_main_mocks — this is
-    # loop's or a manual invocation's shape, neither of which install-timer's ExecStartPre ran
+    # loop's or a manual invocation's shape, neither of which lib/systemd-units' ExecStartPre ran
     # ahead of. Deliberately NOT testing this via systemd's generic INVOCATION_ID: a manual shell
     # descended from an unrelated systemd --user session would have that set too, which is
     # exactly the false-positive this variable exists to avoid (#1298 review).

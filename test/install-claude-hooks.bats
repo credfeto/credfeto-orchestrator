@@ -25,7 +25,7 @@ setup() {
 }
 
 # Makes the named tools report as absent to the `command -v` presence check, deterministically and
-# without altering the real system (the same override the install-timer and setup-owner suites use).
+# without altering the real system (the same override the systemd-units and setup-owner suites use).
 hide_tools() {
     HIDDEN_TOOLS=("$@")
     command() {

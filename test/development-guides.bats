@@ -47,7 +47,8 @@ broken_links() {
     names=$(script_names)
     [[ "${names}" == *"oneshot"* ]]
     [[ "${names}" == *"cfwf"* ]]
-    [ "$(printf '%s\n' "${names}" | wc -l)" -ge 11 ]
+    # 10, not 11: install-timer and uninstall-timer were replaced by lib/systemd-units and teardown-owner.
+    [ "$(printf '%s\n' "${names}" | wc -l)" -ge 10 ]
 }
 
 @test "every script has a guide under docs/development/scripts" {
