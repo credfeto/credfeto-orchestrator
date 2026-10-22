@@ -1409,7 +1409,8 @@ awk_write_targets() {
           check_awk_text "${words[$j]:-}" "${wflags[$j]:-}" "awk assignment"
           continue
           ;;
-        -v?* | --assign=*) check_awk_text "$tok" "$flags" "awk assignment"; continue ;;
+        -v?*) check_awk_text "${tok#-v}" "$flags" "awk assignment"; continue ;;
+        --assign=*) check_awk_text "${tok#--assign=}" "$flags" "awk assignment"; continue ;;
         -i | --include | -l | --load) j=$((j + 1)); in_place=1; continue ;;
         -i?* | --include=* | -l?* | --load=*) in_place=1; continue ;;
         -F | --field-separator) j=$((j + 1)); continue ;;
