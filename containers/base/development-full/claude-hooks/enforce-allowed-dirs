@@ -320,9 +320,12 @@ GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase c
 GIT_PATH_WRITERS=(checkout restore mv rm clone)
 # gh writes a named path only when it downloads or clones, or is given an
 # output option: its other arguments are routinely issue and PR text that may
-# well name these paths without writing them.
+# well name these paths without writing them. gh (cobra/pflag) does not
+# abbreviate long options, so --dir and --output match only exactly or with
+# =value (not --output-format-style longer options); the shorthands -D and -O
+# match alone or with a glued value (-Dvalue, -D=value).
 GH_WRITE_ARGS=(download clone)
-GH_WRITE_OPTION_RE='^(-D|--dir|-O|--output)'
+GH_WRITE_OPTION_RE='^(-[DO]|--(dir|output)(=|$))'
 LINK_SEEN=0
 GIT_SUBCOMMAND=""
 GIT_SUBCOMMAND_INDEX=0
