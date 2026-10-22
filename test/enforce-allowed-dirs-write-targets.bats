@@ -769,6 +769,23 @@ EOF'
     done
 }
 
+# shfmt before 3.14 (Debian's and Ubuntu's packaged versions) encodes a redirection's Op as an
+# integer token whose value shifts between releases, so the stub rewrites every Op to an integer
+# and the operator must still be read from the command text.
+@test "a redirection is a write target when shfmt encodes its operator as an integer" {
+    local real_shfmt real_jq
+    real_shfmt=$(command -v shfmt)
+    real_jq=$(command -v jq)
+    make_stub shfmt "'${real_shfmt}' \"\$@\" | '${real_jq}' -c '(.. | objects | select(has(\"Op\")) | .Op) |= 77'"
+    local op
+    for op in '>' '>>' '>|' '&>' '&>>' '<>' '>&'; do
+        assert_each 2 'outside the allowed directories' "echo x ${op} ${TEST_TMP}/outside/f" "echo x 2${op} ${TEST_TMP}/outside/f"
+    done
+    assert_each 2 'writing to Claude Code configuration' "echo '{}' > .claude/settings.json"
+    assert_each 2 'non-ASCII' "echo x > ‘out.txt’" "echo ‘x’ > out.txt"
+    assert_each 0 '' "echo x 2>&1" "echo x >&-" "cat < ${TEST_TMP}/outside/f" "cat <<< x" "echo x > out.txt"
+}
+
 @test "an empty or missing command name is unclassified" {
     assert_each 2 '(empty command name) has no writer/read-only classification' "nice" "'' x"
 }
