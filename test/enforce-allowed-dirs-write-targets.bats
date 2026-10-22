@@ -572,6 +572,47 @@ EOF'
         "curl -osub/x.claude.json https://example.com/x"
 }
 
+@test "an '=' in a short-option word's glued value does not hide the text before it" {
+    assert_each 2 'outside the allowed directories' \
+        "sort -o../outside/a=b f" \
+        "curl -o../outside/a=b https://example.com" \
+        "mktemp -p../outside/a=b" \
+        "sort --output=../outside/a=b f"
+    assert_each_config_write \
+        "sort -o.claude/hooks/a=b f" \
+        "sort -o${HOME}/.claude/agents/x=y.md f" \
+        "sort -o${HOME}/.claude/settings.json=x f" \
+        "curl -o.claude/hooks/a=b https://example.com"
+    assert_each 0 '' \
+        "sort -o${TEST_TMP}/repo/a=b f" \
+        "sort --output=${TEST_TMP}/repo/a=b f"
+}
+
+@test "a dotnet colon-form option is checked as its value and its MSBuild property value, not as short-option tails" {
+    assert_each 0 '' \
+        "dotnet build -p:OutputPath=bin/Release" \
+        "dotnet build -property:OutputPath=bin/Release" \
+        "dotnet build -p:Prop=$(printf 'x%.0s' {1..300})" \
+        "dotnet build -o:bin/Release"
+    assert_each 2 'outside the allowed directories' \
+        "dotnet build -p:OutputPath=../outside/x" \
+        "dotnet build -o:../outside/a=b" \
+        "dotnet build --output:../outside/a=b"
+    assert_each_config_write \
+        "dotnet build -p:OutputPath=.claude/hooks" \
+        "dotnet build -property:OutputPath=${HOME}/.claude/agents" \
+        "dotnet build -o:.claude/hooks"
+}
+
+@test "a dotnet colon-form option with no value names no path and is allowed" {
+    assert_each 0 '' "dotnet build -p:" "dotnet build -o:" "dotnet build --output:"
+}
+
+@test "a colon-form word for a command other than dotnet is checked as short-option tails" {
+    assert_each 2 'outside the allowed directories' "sort -o:../outside/x f"
+    assert_each 0 '' "sort -o:${TEST_TMP}/repo/x f"
+}
+
 @test "a short-option word with a very long run before any '/' is blocked with a clear message" {
     local long
     long=$(printf 'x%.0s' {1..2500})
