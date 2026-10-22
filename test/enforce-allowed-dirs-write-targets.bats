@@ -204,6 +204,9 @@ assert_each_config_write() {
         "git -C . diff --outp=.claude/settings.json" \
         "git -C . diff --o=.claude/settings.json" \
         "git -C . format-patch --output-directory .claude/skills HEAD~1" \
+        "git -C . format-patch --output-dir .claude/skills HEAD~1" \
+        "git -C . format-patch --output-d=.claude/skills HEAD~1" \
+        "git -C . format-patch --output- .claude/skills HEAD~1" \
         "echo x >& .claude/settings.json" \
         "echo x >&.mcp.json" \
         "openssl base64 -d -in payload.b64 -out .claude/settings.json" \
@@ -269,6 +272,9 @@ assert_each_config_write() {
         "git -C . log --oneline -- .claude" \
         "git -C . clone https://github.com/x/y vendor/y" \
         "git -C . diff --output=changes.patch" \
+        "git -C . diff --output-indicator-new=+ -- .claude/settings.json" \
+        "git -C . log --output-indicator-old=- -- .claude" \
+        "git -C . diff --output-indicator-context=' ' -- .mcp.json" \
         "sed -n 'w out.txt' in.txt" \
         "echo x >&2" \
         "echo x 2>&1 >& log.txt" \
