@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# Removes the systemd units and polkit rule provisioned for an orchestrator owner.
+# Must be run as root. Leaves the owner's user account, home directory and checkout in place.
+# Usage: teardown-owner --owner <name>
+
+TEARDOWN_OWNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/core disable=SC1091
+source "${TEARDOWN_OWNER_DIR}/lib/core" \
+    || { printf 'teardown-owner: FATAL: failed to source %s/lib/core\n' "${TEARDOWN_OWNER_DIR}" >&2; exit 1; }
+# shellcheck source=lib/systemd-units disable=SC1091
+source "${TEARDOWN_OWNER_DIR}/lib/systemd-units" \
+    || die "teardown-owner: failed to source ${TEARDOWN_OWNER_DIR}/lib/systemd-units"
+
+# Overridable so tests can redirect the rule removal away from the real system directory.
+POLKIT_RULES_DIR="${POLKIT_RULES_DIR:-/etc/polkit-1/rules.d}"
+
+main() {
+    local owner=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --owner)
+                shift
+                [ -n "${1:-}" ] || die "--owner requires a value"
+                [[ "$1" =~ ^[a-z][a-z0-9_-]*$ ]] \
+                    || die "--owner value contains invalid characters: $1"
+                owner="$1"
+                shift
+                ;;
+            *)
+                die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "${owner}" ] || die "--owner is required"
+
+    is_ai_agent && die "teardown-owner must not be run inside a Claude Code session"
+
+    [ "$(id -u)" -eq 0 ] || die "teardown-owner must be run as root"
+
+    local service_name
+    service_name=$(systemd_service_name "${owner}" "${owner}") \
+        || die "Failed to derive the systemd unit name for ${owner}"
+
+    info "Tearing down Credfeto Orchestrator units for owner ${owner}..."
+
+    info "Stopping ${service_name}.timer..."
+    systemctl stop "${service_name}.timer" 2>/dev/null || true
+
+    info "Disabling ${service_name}.timer..."
+    systemctl disable "${service_name}.timer" 2>/dev/null || true
+
+    info "Removing unit files..."
+    rm -f "${UNIT_DIR}/${service_name}.service" "${UNIT_DIR}/${service_name}.timer" \
+        "${UNIT_DIR}/${service_name}-failure.service" \
+        || die "Failed to remove unit files"
+
+    info "Removing polkit rule..."
+    rm -f "${POLKIT_RULES_DIR}/50-credfeto-orchestrator-${owner}.rules" \
+        || die "Failed to remove polkit rule"
+
+    info "Reloading systemd daemon..."
+    systemctl daemon-reload || die "Failed to reload systemd daemon"
+
+    success "Credfeto Orchestrator units removed for owner ${owner}; user, home and checkout left in place"
+}
+
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    main "$@"
+fi

@@ -125,7 +125,7 @@ If `DISCORD_WEBHOOK` is absent or the file does not exist, Discord notifications
 
 ### Unit-failure alerts (`notify-unit-failure`)
 
-`install-timer` also installs a `<service>-failure.service` unit, wired to the main service's
+`setup-owner` also installs a `<service>-failure.service` unit, wired to the main service's
 `OnFailure=`, which runs the `notify-unit-failure` script and posts to the same
 `DISCORD_WEBHOOK`.
 

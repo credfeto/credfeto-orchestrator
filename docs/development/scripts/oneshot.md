@@ -11,7 +11,7 @@ Back to the [development guide](../README.md).
 ## Running it
 
 - Invocation: `oneshot [--owner <owner>]`. `--owner` is the only option; its value is validated against `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` and any other argument calls `die`. With `--owner`, only items whose repository starts with `<owner>/` are considered, and `validate_config` also requires `tokens/<owner>` (mode 600 or 400).
-- Who runs it: the systemd service `install-timer` generates (`ExecStart=<repo>/oneshot --owner <owner>`, 30 seconds by default via `ORCHESTRATOR_TIMER_INTERVAL`, `ORCHESTRATOR_SELF_UPDATE_MANAGED=1`, an `OnFailure=` unit that runs `notify-unit-failure`); `loop` (300 seconds, no `--owner`, refuses to run inside a Claude session); or a person.
+- Who runs it: the systemd service `setup-owner` installs via `lib/systemd-units` (`ExecStart=<repo>/oneshot --owner <owner>`, 30 seconds by default via `ORCHESTRATOR_TIMER_INTERVAL`, `ORCHESTRATOR_SELF_UPDATE_MANAGED=1`, an `OnFailure=` unit that runs `notify-unit-failure`); `loop` (300 seconds, no `--owner`, refuses to run inside a Claude session); or a person.
 - Required tools: `check_required_tools` (lib/core) needs `curl jq podman gh git awk grep flock timeout` and `sha256sum` or `shasum`.
 - Configuration comes from `$XDG_CONFIG_HOME/orchestrator/.env`, parsed by `load_env_config` (lib/core) rather than sourced: only a fixed key list is read (Discord webhooks, `GH_TOKEN`, `GH_HOST`, `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GIT_SIGNING_KEY`, `WHITELISTED_USERS`, `CI_CHECK_TIMEOUT_MINUTES`).
 - Environment variables that matter (defaults and validation in `lib/globals`):

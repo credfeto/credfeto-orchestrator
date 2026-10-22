@@ -15,12 +15,11 @@ this guide, not `CONTRIBUTING.md`; a change made there will be overwritten.
 - Per script, in [scripts/](scripts/):
   [create-project](scripts/create-project.md),
   [install-claude-hooks](scripts/install-claude-hooks.md),
-  [install-timer](scripts/install-timer.md),
   [loop](scripts/loop.md),
   [notify-unit-failure](scripts/notify-unit-failure.md),
   [oneshot](scripts/oneshot.md),
   [setup-owner](scripts/setup-owner.md),
-  [uninstall-timer](scripts/uninstall-timer.md), and the three scripts baked into the agent image:
+  [teardown-owner](scripts/teardown-owner.md), and the three scripts baked into the agent image:
   [cfwf](scripts/cfwf.md),
   [pre-commit-check](scripts/pre-commit-check.md),
   [querydb](scripts/querydb.md).
@@ -42,8 +41,8 @@ link in these pages is broken.
 | Path | What it is |
 | --- | --- |
 | `oneshot`, `loop` | The orchestrator itself: one work item per run, and the loop that drives it. |
-| `create-project`, `setup-owner`, `install-timer`, `uninstall-timer`, `install-claude-hooks`, `notify-unit-failure` | Setup, install and support scripts. |
-| `lib/` | The function libraries `oneshot` sources (see [lib.md](lib.md)). |
+| `create-project`, `setup-owner`, `teardown-owner`, `install-claude-hooks`, `notify-unit-failure` | Setup, install and support scripts. |
+| `lib/` | The function libraries `oneshot` sources, plus `lib/systemd-units`, which `setup-owner` and `teardown-owner` source (see [lib.md](lib.md)). |
 | `containers/base/` | The agent container image chain and, in `development-full`, the scripts and Claude Code hooks baked into it. |
 | `containers/agent/` | The agent image itself: its `Dockerfile` and `entrypoint.sh` (tested by `test/entrypoint.bats`). |
 | `tasks/` | Task notes (`healthcheck.md`). |
