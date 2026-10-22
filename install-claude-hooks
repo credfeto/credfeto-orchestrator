@@ -247,6 +247,7 @@ main() {
     fi
 
     jq empty "${SOURCE_MANAGED_SETTINGS}" 2>/dev/null || die "Managed settings are not valid JSON: ${SOURCE_MANAGED_SETTINGS}"
+    jq empty "${SOURCE_USER_SETTINGS}" 2>/dev/null || die "User settings are not valid JSON: ${SOURCE_USER_SETTINGS}"
 
     [ -n "${HOME}" ] || die "\$HOME is not set"
     local target_claude_dir="${HOME}/.claude"
