@@ -1388,7 +1388,8 @@ awk_write_targets() {
           program_given=1
           continue
           ;;
-        -e?* | --source=*) check_awk_text "${tok#-e}" "$flags" "awk program"; program_given=1; continue ;;
+        -e?*) check_awk_text "${tok#-e}" "$flags" "awk program"; program_given=1; continue ;;
+        --source=*) check_awk_text "${tok#--source=}" "$flags" "awk program"; program_given=1; continue ;;
         -v | --assign)
           j=$((j + 1))
           check_awk_text "${words[$j]:-}" "${wflags[$j]:-}" "awk assignment"
