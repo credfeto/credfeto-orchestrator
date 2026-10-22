@@ -69,9 +69,9 @@ ARG TRUFFLEHOG_SHA256_AMD64=3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202d
 ARG TRUFFLEHOG_SHA256_ARM64=929b81efffca752eafd58bf6f17bf725d354f338636a7bbbee65c086d2f9ddf3
 # trivy: pinned to a specific release for reproducible, verifiable builds.
 # Update TRIVY_VERSION and both SHA256 ARGs together when bumping.
-ARG TRIVY_VERSION=0.76.0
-ARG TRIVY_SHA256_AMD64=e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7
-ARG TRIVY_SHA256_ARM64=aab21e677a7b7071fc79f1711480840754c18a1b9d9cefa7ccd06af63a0e8f4c
+ARG TRIVY_VERSION=0.76.1
+ARG TRIVY_SHA256_AMD64=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+ARG TRIVY_SHA256_ARM64=e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
