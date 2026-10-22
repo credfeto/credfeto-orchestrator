@@ -55,9 +55,10 @@
 #     (`>& file` writes the file, like `&>`);
 #   - for a writer, its arguments: by default every non-option argument, the
 #     value of every `--option=value`, and every tail of a short-option word
-#     (`-o/etc/x` is checked as `o/etc/x`, `/etc/x`, ...), because a glued
-#     value cannot be told from a flag cluster without each tool's own option
-#     table. A few writers have their own rule instead:
+#     up to its first `/` (`-xo/etc/x` is checked as `o/etc/x` and `/etc/x`),
+#     because a glued value cannot be told from a flag cluster without each
+#     tool's own option table; a word with too long a run before its first
+#     `/` is blocked. A few writers have their own rule instead:
 #       rm, mv, cp   every operand and --target-directory (see below), which
 #                    must also be under a root before anything else runs;
 #       ln           with -s/--symbolic the link being created (the last
@@ -1102,6 +1103,10 @@ queue_git_clone_default_dirs() {
   return 0
 }
 
+# The most tails of one short-option word queue_all_arguments checks (see
+# there).
+MAX_SHORT_OPTION_TAILS=256
+
 # Queues the call's words from index $1 onwards as write targets, relative to
 # base $2 with relative paths permitted iff $3 (defaults as for
 # prepare_word): every non-option word, the value of `--option=value`, every
@@ -1127,7 +1132,16 @@ queue_all_arguments() {
             *=*) queue_write_target "${tok#*=}" "$flags" "${name} ${tok%%=*}" "$base" "$relative_ok" ;;
             --*) : ;; # a long option takes a glued value only after =
             *)
+              # A tail is a possible glued value only while every character
+              # before it could be a cluster letter, and `/` never is (any
+              # other character can be: curl's -# in `-s#o/etc/x`), so the
+              # tails stop at the first `/` after the first letter; the tails
+              # before it still cover every later name as text. A real
+              # cluster is short, so a longer run fails closed rather than
+              # queue one path per character.
               for ((k = 2; k < ${#tok}; k++)); do
+                [ "$k" -eq 2 ] || [ "${tok:k-1:1}" != / ] || break
+                [ "$k" -le "$MAX_SHORT_OPTION_TAILS" ] || block "${name} ${tok:0:2} argument '${tok:0:40}...' glues more than ${MAX_SHORT_OPTION_TAILS} characters to the option before any '/' - separate the option value from the option (${tok:0:2} VALUE)"
                 queue_write_target "${tok:k}" "$flags" "${name} ${tok:0:2}" "$base" "$relative_ok"
               done
               ;;
