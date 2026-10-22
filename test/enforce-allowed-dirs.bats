@@ -496,6 +496,14 @@ assert_blocked() {
     assert_allowed "cp -r --target=sub payload"
 }
 
+@test "an explicitly empty --target-directory= value is blocked rather than taking the next word" {
+    assert_blocked "cp --target-directory= sub payload" 'empty target directory'
+    assert_blocked "mv --t= sub payload" 'empty target directory'
+    assert_blocked "ln -s --target-directory= sub payload" 'empty target directory'
+    assert_allowed "cp -t sub payload"
+    assert_allowed "ln -s -t sub ${ROOT}/payload"
+}
+
 @test "npm single-dash long options are treated as the long option (nopt strips all leading dashes)" {
     assert_blocked "npm -script-shell /evil run build" '--script-shell'
     assert_blocked "npm -prefix ${OUTSIDE} prefix"

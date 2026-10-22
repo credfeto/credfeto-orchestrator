@@ -236,6 +236,18 @@ teardown() {
     [[ "${output}" == *'more than one URL'* ]]
 }
 
+@test "an empty URL argument is counted, so an empty extra URL is rejected rather than overwritten" {
+    run_hook 'curl -fsSL "" https://example.com'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'more than one URL'* ]]
+}
+
+@test "a single empty URL argument is rejected" {
+    run_hook 'curl -fsSL ""'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'must start with http'* ]]
+}
+
 @test "a URL argument with no scheme is rejected" {
     run_hook "curl -fsSL example.com/foo"
     [ "${status}" -eq 2 ]
