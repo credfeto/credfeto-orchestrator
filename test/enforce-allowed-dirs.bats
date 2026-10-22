@@ -128,6 +128,13 @@ assert_blocked() {
     assert_blocked "git -C . status" '' "${OUTSIDE}"
 }
 
+@test "git -- ends the global options: the cwd is still checked when no -C was given" {
+    assert_allowed "git -- status"
+    assert_blocked "git -- status" 'implicit -C .' "${OUTSIDE}"
+    assert_allowed "git -C ${ROOT} -- status" "${OUTSIDE}"
+    assert_blocked "git -C /etc -- status" 'outside the allowed directories'
+}
+
 @test "git -C .., a symlink leaving the root, or a directory outside every root is blocked" {
     assert_blocked "git -C .. status"
     assert_blocked "git -C escape status"
