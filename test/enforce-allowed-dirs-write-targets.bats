@@ -242,8 +242,7 @@ assert_each_config_write() {
 }
 
 @test "the same writing commands on ordinary paths are allowed" {
-    local cmd
-    for cmd in \
+    assert_each 0 '' \
         "touch out.txt" \
         "rm -rf build" \
         "mkdir -p sub/dir" \
@@ -270,10 +269,7 @@ assert_each_config_write() {
         "gh pr create --title fix --body 'blocks writes to .claude/settings.json'" \
         "gh issue comment 1 --body 'see ~/.claude/hooks'" \
         "dotnet changelog -f CHANGELOG.md -a Fixed -m 'blocks writes to ~/.claude/settings.json'" \
-        "dotnet test --filter 'FullyQualifiedName~Foo' -p:CollectCoverage=true"; do
-        run_in_repo "${cmd}"
-        [ "${status}" -eq 0 ] || { echo "did not allow: ${cmd}: ${output}" >&2; return 1; }
-    done
+        "dotnet test --filter 'FullyQualifiedName~Foo' -p:CollectCoverage=true"
 }
 
 @test "a copy, move or link whose destination is a .claude directory is blocked" {
@@ -559,14 +555,10 @@ EOF'
 }
 
 @test "ln -s to a target naming protected config is blocked as text, in every option form" {
-    local cmd
-    for cmd in "ln -s ~/.claude/settings.json foo" "ln -sf .claude/hooks/x foo" \
+    assert_each_config_write "ln -s ~/.claude/settings.json foo" "ln -sf .claude/hooks/x foo" \
         "ln -s -t sub .claude/settings.json" "ln --symbolic /etc/claude-code/managed-settings.json foo" \
         "ln -s ../.claude/settings.json foo" "ln -s ${HOME}/.claude foo" "ln -s .claude/settings.json" \
-        "ln -s -t sub ${TEST_TMP}/outside/x .claude/skills/y" "ln -s ${TEST_TMP}/outside/x .mcp.json sub"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+        "ln -s -t sub ${TEST_TMP}/outside/x .claude/skills/y" "ln -s ${TEST_TMP}/outside/x .mcp.json sub"
     assert_each 0 '' "ln -s ${TEST_TMP}/outside/x link" "ln -s sub/x link" "ln -s -t sub ${TEST_TMP}/outside/x ../y" \
         "ln -s ${TEST_TMP}/outside/x"
 }
@@ -584,19 +576,15 @@ EOF'
 }
 
 @test "text naming anything under a claude-code directory is blocked, since a link to /etc reaches it without naming etc" {
-    local cmd
     # /usr/lib/ssl/certs stands for any system symlink to a directory under /etc; the check is text only.
-    for cmd in \
+    assert_each_config_write \
         "sed -n 'w foo/claude-code/managed-settings.json' ${SRC}/payload" \
         "awk '{print > \"foo/claude-code/hooks/x\"}' ${SRC}/payload" \
         "ln -s /etc foo && sed -n 'w foo/claude-code/managed-settings.json' ${SRC}/payload" \
         "sed -n 'w /usr/lib/ssl/certs/../../claude-code/managed-settings.json' ${SRC}/payload" \
         "sed -n 'w claude-code/CLAUDE.md' ${SRC}/payload" "sed -n 'wclaude-code/x' ${SRC}/payload" \
         "sqlite3 :memory: '.once foo/claude-code/managed-mcp.json' 'select 1;'" \
-        "ln -s foo/claude-code/hooks bar"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+        "ln -s foo/claude-code/hooks bar"
     run_hook_in_dir "sed -n 'w claude-code/managed-settings.json' ${SRC}/payload" /etc
     assert_blocked_config_write
     assert_each 0 '' "ln -s /etc foo" "ln -sf /etc/hosts sub/hosts" \
@@ -606,44 +594,29 @@ EOF'
 }
 
 @test "ln -s to a claude-code directory or anywhere inside a .claude tree is blocked, since a later write through it names nothing protected" {
-    local cmd
-    for cmd in "ln -s foo/claude-code bar" "ln -s claude-code bar" "ln -s ${HOME}/.claude/projects p" \
-        "ln -s -t sub .claude/x" "ln -s /etc/claude-code bar"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+    assert_each_config_write "ln -s foo/claude-code bar" "ln -s claude-code bar" "ln -s ${HOME}/.claude/projects p" \
+        "ln -s -t sub .claude/x" "ln -s /etc/claude-code bar"
     assert_each 0 '' "ln -s claude-code.d bar" "ln -s foo/claude-codex bar" "ln -s ${HOME}/.claudex/y bar"
     # A glob target is checked by what each match resolves to, anywhere inside a configuration tree.
     mkdir -p "${HOME}/.claude/projects" "${TEST_TMP}/outside/projects"
-    for cmd in "ln -s ${HOME}/.cl?ude/projects p" "ln -s -t sub ${HOME}/.claude/proj*" "ln -s /et?/claude-code bar"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+    assert_each_config_write "ln -s ${HOME}/.cl?ude/projects p" "ln -s -t sub ${HOME}/.claude/proj*" "ln -s /et?/claude-code bar"
     assert_each 0 '' "ln -s ${TEST_TMP}/outsid?/projects p"
 }
 
 @test "ln -s to a target that names protected config only once bash expands it is blocked" {
-    local cmd
     mkdir -p "${HOME}/.claude"
     touch "${TEST_TMP}/outside/a"
-    for cmd in "ln -s .cl\\aude/settings.json foo" "ln -s ${HOME}/.cla* foo" "ln -s -t sub ${HOME}/.clau?e"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+    assert_each_config_write "ln -s .cl\\aude/settings.json foo" "ln -s ${HOME}/.cla* foo" "ln -s -t sub ${HOME}/.clau?e"
     assert_each 2 'brace expansion' "ln -s ${HOME}/.{claude,x}/settings.json foo" "ln -s -t sub .{claude,x}"
     assert_each 0 '' "ln -s '.cl{aude}' foo" "ln -s 'sub\\x' foo" "ln -s ${TEST_TMP}/outside/* sub" "ln -s sub/nomatch* foo" \
         "ln -s '.cl\\aude/settings.json' foo" "ln -s .cl\\\\aude/settings.json foo"
 }
 
 @test "sed and awk program text that names protected config only once bash removes a backslash is blocked" {
-    local cmd
-    for cmd in "sed -n w.cl\\aude/settings.json f.txt" "sed -n -e w.cl\\aude/settings.json f.txt" \
+    assert_each_config_write "sed -n w.cl\\aude/settings.json f.txt" "sed -n -e w.cl\\aude/settings.json f.txt" \
         "sed -n --expression=w.cl\\aude/settings.json f.txt" "sed -n 'w '.cl\\aude/settings.json f.txt" \
         "awk '{print > f}' f=.cl\\aude/settings.json x" "awk -v f=.cl\\aude/settings.json '{print > f}' x" \
-        "awk -e 'print > \"'.cl\\aude/settings.json'\"' x"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+        "awk -e 'print > \"'.cl\\aude/settings.json'\"' x"
 }
 
 @test "a backslash bash keeps, or one that spells no protected name once removed, is allowed in sed and awk program text" {
@@ -658,8 +631,7 @@ EOF'
 # gawk), a NUL ends the name and a backslash-newline is removed), and sqlite3 does the same in a
 # double-quoted dot-command argument, after bash has passed the backslash through.
 @test "awk text and sqlite3 arguments that name protected config only once the program decodes its escapes are blocked" {
-    local cmd
-    for cmd in "awk '{print > \".c\\laude/settings.json\"}' x" \
+    assert_each_config_write "awk '{print > \".c\\laude/settings.json\"}' x" \
         "awk '{print > \"\\056claude/settings.json\"}' x" \
         "awk 'BEGIN{print 1 > \"\\456claude/hooks/x\"}'" \
         "awk 'BEGIN{print 1 > \"\\x2eclaude/agents/x\"}'" \
@@ -673,10 +645,7 @@ EOF'
         "awk -e 'print > \".c\\laude/settings.json\"' x" \
         "sqlite3 db '.once \".c\\laude/settings.json\"' 'select 1;'" \
         "sqlite3 db '.output \"\\056claude/settings.json\"' 'select 1;'" \
-        "sqlite3 db '.once \"\\x2emcp.json\"' 'select 1;'"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+        "sqlite3 db '.once \"\\x2emcp.json\"' 'select 1;'"
 }
 
 # gawk 5.3+ and sqlite3 read `\u` and its hex digits as a code point, gawk with no fixed digit
@@ -695,11 +664,7 @@ EOF'
 }
 
 @test "a hard ln to protected config is blocked" {
-    local cmd
-    for cmd in "ln ${HOME}/.claude/settings.json foo" "ln .claude/hooks/x foo" "ln -t sub .claude/settings.json"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block ${cmd}" >&2; return 1; }
-    done
+    assert_each_config_write "ln ${HOME}/.claude/settings.json foo" "ln .claude/hooks/x foo" "ln -t sub .claude/settings.json"
 }
 
 @test "mktemp with no template writes into TMPDIR, which must be under a root" {
