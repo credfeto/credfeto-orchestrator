@@ -613,6 +613,12 @@ EOF'
         "ln -s ${TEST_TMP}/outside/x"
 }
 
+@test "a bare - is an ln operand (a file name), not an option" {
+    assert_each_config_write "ln -s .claude/settings.json -" "ln -s ok .claude/settings.json -"
+    assert_each 0 '' "ln -s ok -" "ln -s ${TEST_TMP}/outside/x -" "ln -s ok ${TEST_TMP}/outside/x -"
+    assert_each 2 'outside the allowed directories' "ln -s - ${TEST_TMP}/outside/link"
+}
+
 @test "ln -s to a target that is not fully literal is blocked, since it could name protected config" {
     assert_each 2 'a symbolic link target must be a literal path' \
         "ln -s \"\$HOME/.claude\" c" "ln -s \"\${HOME}/.claude/settings.json\" foo" \
