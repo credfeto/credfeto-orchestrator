@@ -90,8 +90,9 @@
 #       dotnet       every argument, except the message of `dotnet changelog
 #                    -m`/`--message`, which is text; an option word in
 #                    colon form (`-p:Name=value`, `--output:DIR`) is
-#                    checked as both the text after `:` and the text after
-#                    the `=` in that, not as short-option tails;
+#                    checked as the text after `:` and as the value of each
+#                    `;`- or `,`-separated Name=value pair in that (MSBuild's
+#                    property list), not as short-option tails;
 #       mktemp       every argument (so the DIR of -p DIR, -pDIR and
 #                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
 #                    a bare --tmpdir, or no template and no DIR; a template
@@ -1116,14 +1117,25 @@ MAX_SHORT_OPTION_TAILS=256
 # A dotnet option word in colon form, $1 (flags $2), is not a getopt cluster:
 # its value is everything after the first `:` (System.CommandLine's
 # `-o:DIR`, `--output:DIR`), or, for an MSBuild switch (`-p:Name=value`,
-# `-property:Name=value`), the text after the first `=` in that. Both are
-# queued, relative to base $3 with relative paths permitted iff $4, so either
-# reading is checked as a path and as text, with no per-character tails.
+# `-property:Name=value`), a list of Name=value pairs separated by `;` or
+# `,`. The whole value, the text after its first `=`, and each pair's value
+# (the text after the pair's first `=`, or the whole pair when it has none)
+# are queued, relative to base $3 with relative paths permitted iff $4, so
+# every reading is checked as a path and as text, with no per-character
+# tails.
 queue_dotnet_colon_option() {
-  local tok="$1" value="${1#*:}"
+  local value="${1#*:}" label="dotnet ${1%%:*}" rest pair
   [ -n "$value" ] || return 0
-  queue_write_target "$value" "$2" "dotnet ${tok%%:*}" "$3" "$4"
-  [[ "$value" == *=?* ]] && queue_write_target "${value#*=}" "$2" "dotnet ${tok%%:*}" "$3" "$4"
+  queue_write_target "$value" "$2" "$label" "$3" "$4"
+  [[ "$value" == *=?* ]] && queue_write_target "${value#*=}" "$2" "$label" "$3" "$4"
+  rest="$value"
+  while :; do
+    pair="${rest%%[;,]*}"
+    pair="${pair#*=}"
+    [ -n "$pair" ] && queue_write_target "$pair" "$2" "$label" "$3" "$4"
+    [[ "$rest" == *[\;,]* ]] || break
+    rest="${rest#*[;,]}"
+  done
   return 0
 }
 

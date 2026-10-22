@@ -604,6 +604,31 @@ EOF'
         "dotnet build -o:.claude/hooks"
 }
 
+@test "every Name=value pair of a dotnet -p/-property list, separated by ';' or ',', is checked" {
+    assert_each 2 'outside the allowed directories' \
+        "dotnet build \"-p:A=1;OutputPath=../outside/x\"" \
+        "dotnet build \"-p:A=1,OutputPath=../outside/x\"" \
+        "dotnet build \"-property:A=1;B=2,OutputPath=${TEST_TMP}/outside/x\""
+    assert_each_config_write \
+        "dotnet build \"-p:A=1;OutputPath=.claude/hooks\"" \
+        "dotnet build \"-p:A=1,OutputPath=${HOME}/.claude/agents\""
+    assert_each 0 '' \
+        "dotnet build \"-p:A=1;OutputPath=bin/Release\"" \
+        "dotnet build \"-p:A=1,B=2;;OutputPath=bin/Release;\""
+}
+
+@test "a dotnet -p list pair without '=' is checked whole" {
+    assert_each 2 'outside the allowed directories' "dotnet build \"-p:A=1;../outside/x\""
+    assert_each_config_write "dotnet build \"-p:A=1;.claude/hooks\""
+}
+
+@test "empty pairs and empty values in a dotnet -p list are skipped, and the pairs after them still checked" {
+    assert_each 0 '' "dotnet build \"-p:;;\"" "dotnet build \"-p:A=;,B=\"" "dotnet build \"-p:A=;;OutputPath=bin/Release\""
+    assert_each 2 'outside the allowed directories' "dotnet build \"-p:A=;;,OutputPath=../outside/x\""
+    # After two cds a relative path is unknowable, so an empty pair queued as '' would block.
+    assert_each 0 '' "cd ${TEST_TMP}/repo; cd ${TEST_TMP}/repo/sub && dotnet \"-o:${TEST_TMP}/repo/x;\""
+}
+
 @test "a dotnet colon-form option with no value names no path and is allowed" {
     assert_each 0 '' "dotnet build -p:" "dotnet build -o:" "dotnet build --output:"
 }
