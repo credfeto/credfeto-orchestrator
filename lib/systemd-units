@@ -1,10 +1,11 @@
-#!/bin/bash
-
-# Installs a systemd system-level service and timer that runs the orchestrator
-# on a fixed interval as the current user, even when the user is not logged in.
+# shellcheck shell=bash
+# systemd unit generation: writes the system-level service, failure-notifier and timer units that
+# run the orchestrator on a fixed interval as a given Unix user, even when that user is not logged
+# in. Expects to be run as root (it writes to UNIT_DIR and calls systemctl directly, no sudo) and
+# relies on lib/core for die/info.
 
 # How often the timer fires.  Override with ORCHESTRATOR_TIMER_INTERVAL in the
-# environment before running install-timer; any value accepted by systemd's
+# environment before installing the units; any value accepted by systemd's
 # OnUnitActiveSec is valid (e.g. "30sec", "1min", "5min").
 ORCHESTRATOR_TIMER_INTERVAL="${ORCHESTRATOR_TIMER_INTERVAL:-30sec}"
 
@@ -40,63 +41,64 @@ ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC="${ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC:-
 # OnFailure= below (alerting) and by oneshot's own MAX_CONSECUTIVE_INFRA_FAILURES escalation
 # (per-item blocking), neither of which can slow the healthy path.
 
-die() {
-    printf '\n\033[31m✗\033[0m %s\n' "$*" >&2
-    exit 1
-}
-
-success() {
-    printf '\n\033[32m✓\033[0m %s\n' "$*"
-}
-
-info() {
-    printf '\n\033[32m→\033[0m %s\n' "$*"
-}
-
-is_ai_agent() {
-    [ "${CLAUDECODE}" = "1" ]
-}
-
 # Mirrors setup-owner's helper of the same name: resolves a user's home directory via
-# getent passwd rather than assuming ~/.local always means CURRENT_USER's own $HOME (a service
-# started via sudo/systemd can have a different $HOME than the account it runs as).
+# getent passwd rather than assuming ~/.local always means the unit user's own $HOME (a service
+# started via systemd can have a different $HOME than the account it runs as).
 get_owner_home() {
     getent passwd "$1" | cut -d: -f6
 }
 
-REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Overridable so tests can redirect unit writes away from the real system directory.
+UNIT_DIR="${UNIT_DIR:-/etc/systemd/system}"
 
-case "${REPO_DIR}" in
-    *$'\n'*) die "install-timer: REPO_DIR contains a newline; aborting." ;;
-esac
-
-CURRENT_USER=$(id -un)
-case "${CURRENT_USER}" in
-    *$'\n'*) die "install-timer: CURRENT_USER contains a newline; aborting." ;;
-esac
-[[ "${CURRENT_USER}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "install-timer: CURRENT_USER contains invalid characters; aborting."
-SERVICE_NAME="credfeto-orchestrator-${CURRENT_USER}"
-[[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] || die "install-timer: SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
-UNIT_DIR="/etc/systemd/system"
-
-check_required_tools() {
-    local tool
-    for tool in id sudo systemctl git getent; do
-        command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
-    done
+# Dies unless name is non-empty and limited to characters safe in a systemd unit name and in the
+# unit file lines it is interpolated into.
+validate_unit_name_part() {
+    local label="$1" name="$2"
+    [ -n "${name}" ] || die "${label} must not be empty"
+    [[ "${name}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || die "${label} contains invalid characters: ${name}"
 }
 
-# Writes content to dest via sudo tee.
+# Prints the systemd unit base name for user, with an optional owner filter suffix:
+# credfeto-orchestrator-<user>[-<owner_filter>].
+systemd_service_name() {
+    local user="$1" owner_filter="${2:-}"
+    validate_unit_name_part "user" "${user}"
+    if [ -n "${owner_filter}" ]; then
+        validate_unit_name_part "owner" "${owner_filter}"
+        printf 'credfeto-orchestrator-%s-%s\n' "${user}" "${owner_filter}"
+    else
+        printf 'credfeto-orchestrator-%s\n' "${user}"
+    fi
+}
+
+# Writes content to dest directly; the caller is expected to be root.
 write_unit_file() {
     local dest="$1"
     local content="$2"
-    printf '%s\n' "${content}" | sudo tee "${dest}" > /dev/null || die "Failed to write ${dest}"
+    printf '%s\n' "${content}" > "${dest}" || die "Failed to write ${dest}"
 }
 
+# Dies if repo_dir is empty or contains a newline, which would break the unit file lines it is
+# interpolated into.
+validate_repo_dir() {
+    local repo_dir="$1"
+    [ -n "${repo_dir}" ] || die "Repository directory must not be empty"
+    case "${repo_dir}" in
+        *$'\n'*) die "Repository directory contains a newline; aborting." ;;
+    esac
+}
+
+# Writes <UNIT_DIR>/<service_name>.service running <repo_dir>/oneshot as user, passing
+# --owner <owner_filter> when one is given.
 create_service_unit() {
-    local owner_filter="${1:-}"
-    local dest="${UNIT_DIR}/${SERVICE_NAME}.service"
-    local exec_start="${REPO_DIR}/oneshot"
+    local user="$1" service_name="$2" repo_dir="$3" owner_filter="${4:-}"
+    validate_unit_name_part "user" "${user}"
+    validate_unit_name_part "service name" "${service_name}"
+    validate_repo_dir "${repo_dir}"
+    [ -z "${owner_filter}" ] || validate_unit_name_part "owner" "${owner_filter}"
+    local dest="${UNIT_DIR}/${service_name}.service"
+    local exec_start="${repo_dir}/oneshot"
     [ -n "${owner_filter}" ] && exec_start="${exec_start} --owner ${owner_filter}"
     # RuntimeDirectory creates /run/<name>/ owned by User= before the service
     # starts, providing an isolated location for the ssh-agent socket.
@@ -104,15 +106,15 @@ create_service_unit() {
     # so that Podman stores container state there instead of a root-owned path.
     # containers.conf sets cgroup_manager=cgroupfs; the systemd manager requires
     # D-Bus access that is denied for non-root users in system services.
-    local runtime_dir="${SERVICE_NAME}"
+    local runtime_dir="${service_name}"
     local ssh_socket="/run/${runtime_dir}/ssh-agent.socket"
     local owner_home
-    owner_home=$(get_owner_home "${CURRENT_USER}") || die "Failed to look up home directory for ${CURRENT_USER}"
-    [ -n "${owner_home}" ] || die "No home directory found for ${CURRENT_USER}"
+    owner_home=$(get_owner_home "${user}") || die "Failed to look up home directory for ${user}"
+    [ -n "${owner_home}" ] || die "No home directory found for ${user}"
     local owner_uid
-    owner_uid=$(id -u) || die "Failed to get UID for ${CURRENT_USER}"
+    owner_uid=$(id -u "${user}") || die "Failed to get UID for ${user}"
     # See the ExecStop comment in the unit body below for why this tracks OWNER (the GitHub
-    # owner) rather than CURRENT_USER (the host UNIX user), and why the unfiltered install has
+    # owner) rather than the unit's user (the host UNIX user), and why the unfiltered install has
     # to sweep by prefix instead of naming a single container.
     local exec_stop
     if [ -n "${owner_filter}" ]; then
@@ -122,7 +124,7 @@ create_service_unit() {
     fi
     local content
     content="[Unit]
-Description=Credfeto Orchestrator for ${CURRENT_USER}
+Description=Credfeto Orchestrator for ${user}
 After=network-online.target
 Wants=network-online.target
 # Fire the failure-notifier unit whenever this one enters the failed state. This is the ONLY
@@ -130,14 +132,14 @@ Wants=network-online.target
 # separate unit, so it works when oneshot dies before (or instead of) reaching its own
 # notify_discord_* calls. A stale podman name reservation after a host reboot made every
 # invocation fail at \`podman run\` for 19.5 hours with no alert whatsoever (#1361).
-OnFailure=${SERVICE_NAME}-failure.service
+OnFailure=${service_name}-failure.service
 
 [Service]
 Type=oneshot
 # See ORCHESTRATOR_TIMEOUT_START_SEC above: without this, a hung ExecStartPre step never times
 # out and the timer stops firing forever (#1098).
 TimeoutStartSec=${ORCHESTRATOR_TIMEOUT_START_SEC}
-User=${CURRENT_USER}
+User=${user}
 RuntimeDirectory=${runtime_dir}
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
@@ -163,7 +165,7 @@ Environment=SSH_AUTH_SOCK=${ssh_socket}
 # ANY systemd unit's main process, including a manual shell that happens to be a descendant of an
 # unrelated systemd --user session, which would otherwise wrongly gate a manual/interactive run.
 Environment=ORCHESTRATOR_SELF_UPDATE_MANAGED=1
-WorkingDirectory=${REPO_DIR}
+WorkingDirectory=${repo_dir}
 # Defense-in-depth self-heal (#1232): after a host reboot, \${owner_home}/.local (including
 # .local/share/containers, rootless Podman's storage/layer directory) was found root-owned,
 # breaking Podman's first pull with \"mkdir .../containers/storage/libpod: permission denied\" —
@@ -181,14 +183,14 @@ WorkingDirectory=${REPO_DIR}
 # Prefixed '-+' rather than the REPO_DIR heal's '+-': functionally identical (systemd Exec-line
 # prefix order is insignificant, systemd.service(5)) but textually distinct, so a grep/marker keyed
 # on the exact prefix string can never conflate the two lines.
-ExecStartPre=-+/bin/sh -c '/usr/bin/mkdir -p \"${owner_home}/.local\" && { [ -z \"\$(/usr/bin/find \"${owner_home}/.local\" -maxdepth 0 -not -user ${CURRENT_USER} -print -quit -o -maxdepth 0 -not -group ${CURRENT_USER} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${CURRENT_USER}:${CURRENT_USER} \"${owner_home}/.local\"; }'
+ExecStartPre=-+/bin/sh -c '/usr/bin/mkdir -p \"${owner_home}/.local\" && { [ -z \"\$(/usr/bin/find \"${owner_home}/.local\" -maxdepth 0 -not -user ${user} -print -quit -o -maxdepth 0 -not -group ${user} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${user}:${user} \"${owner_home}/.local\"; }'
 # A root-run diagnostic command against REPO_DIR (e.g. a bare 'sudo git ... status', whose optional
 # index-refresh side effect reowns .git/index to root) can leave files under REPO_DIR owned by
-# someone other than ${CURRENT_USER}, which then makes the self-update merge below fail with
+# someone other than ${user}, which then makes the self-update merge below fail with
 # \"index file open failed: Permission denied\" (#1300) and the unit reports failed indefinitely
 # until a human notices and manually re-runs setup-owner. Mirrors setup-owner's clone_or_pull_repo
 # detect-then-chown pattern so this automatic self-update path self-heals the same way the manual
-# one already does (#1302). ExecStartPre steps run as User=${CURRENT_USER} by default, so only the
+# one already does (#1302). ExecStartPre steps run as User=${user} by default, so only the
 # '+' prefix lets this step run with the privilege needed to chown files it doesn't own; it is also
 # '-'-prefixed (tolerate failure) so a chown failure, e.g. racing a sibling --owner unit's
 # concurrent operation on this same shared checkout, as already called out for setup-owner (#1300
@@ -202,7 +204,7 @@ ExecStartPre=-+/bin/sh -c '/usr/bin/mkdir -p \"${owner_home}/.local\" && { [ -z 
 # systemd/systemd#4697). Repeating '-print -quit' on each side of -o instead keeps the same single
 # tree walk without needing parentheses at all: -o's lower precedence still lets the first branch
 # whose test matches print and stop the walk, so it costs no more than the grouped form.
-ExecStartPre=+-/bin/sh -c '[ -z \"\$(/usr/bin/find \"${REPO_DIR}\" -not -user ${CURRENT_USER} -print -quit -o -not -group ${CURRENT_USER} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${CURRENT_USER}:${CURRENT_USER} \"${REPO_DIR}\"'
+ExecStartPre=+-/bin/sh -c '[ -z \"\$(/usr/bin/find \"${repo_dir}\" -not -user ${user} -print -quit -o -not -group ${user} -print -quit 2>/dev/null)\" ] || /usr/bin/chown -R ${user}:${user} \"${repo_dir}\"'
 # Both self-update steps are '-'-prefixed (tolerate failure) and timeout-wrapped: a stalled or
 # unreachable git remote must not block the run, and a diverged/dirty checkout must not stop the
 # orchestrator from running with whatever was last successfully pulled (#1098). Genuine repo
@@ -219,18 +221,18 @@ ExecStartPre=+-/bin/sh -c '[ -z \"\$(/usr/bin/find \"${REPO_DIR}\" -not -user ${
 # what tells a genuinely stale lock (older than any merge this step could still be running) apart
 # from a sibling unit's merge being in flight right now (#1298 review). oneshot's own
 # git_commits_behind check (lib/git) is the backstop if even the retry does not converge.
-ExecStartPre=-/usr/bin/timeout 60 /usr/bin/git -C \"${REPO_DIR}\" fetch origin
-ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C \"${REPO_DIR}\" merge --ff-only origin/main || { find \"${REPO_DIR}\"/.git -name \"*.lock\" -mmin +1 -delete; git -C \"${REPO_DIR}\" merge --ff-only origin/main; }'
+ExecStartPre=-/usr/bin/timeout 60 /usr/bin/git -C \"${repo_dir}\" fetch origin
+ExecStartPre=-/usr/bin/timeout 30 /bin/sh -c 'git -C \"${repo_dir}\" merge --ff-only origin/main || { find \"${repo_dir}\"/.git -name \"*.lock\" -mmin +1 -delete; git -C \"${repo_dir}\" merge --ff-only origin/main; }'
 # -f scopes this to the ssh-agent bound to THIS instance's own socket, not every ssh-agent
 # belonging to this user — an unscoped 'pkill -u <user> ssh-agent' kills the agent of any other
 # concurrently-running instance (--owner variants share the same User=) or interactive session
 # for this user (#1098).
-ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} -f \"ssh-agent -a ${ssh_socket}\"
+ExecStartPre=-/usr/bin/pkill -u ${user} -f \"ssh-agent -a ${ssh_socket}\"
 ExecStartPre=-/usr/bin/rm -f ${ssh_socket}
 ExecStartPre=/usr/bin/ssh-agent -a ${ssh_socket}
 # All paths below must be absolute. The %h specifier expands to the home of
 # the user that launched systemd (root), not the service User= home directory.
-ExecStartPre=-/usr/bin/pkill -u ${CURRENT_USER} gpg-agent
+ExecStartPre=-/usr/bin/pkill -u ${user} gpg-agent
 ExecStartPre=/usr/bin/gpgconf --launch gpg-agent
 # 0660 = owner + group only. The container gains the owner's primary GID via
 # --group-add in oneshot so the developer user can connect without world access.
@@ -305,21 +307,25 @@ MemoryDenyWriteExecute=no"
 # this exists for (#1361). Deliberately minimal: no ExecStartPre self-update, no ssh/gpg agent
 # setup, no Delegate=, nothing that could itself fail while trying to report a failure.
 create_failure_unit() {
-    local dest="${UNIT_DIR}/${SERVICE_NAME}-failure.service"
+    local user="$1" service_name="$2" repo_dir="$3"
+    validate_unit_name_part "user" "${user}"
+    validate_unit_name_part "service name" "${service_name}"
+    validate_repo_dir "${repo_dir}"
+    local dest="${UNIT_DIR}/${service_name}-failure.service"
     local content
     content="[Unit]
-Description=Report failure of ${SERVICE_NAME}.service to Discord
+Description=Report failure of ${service_name}.service to Discord
 
 [Service]
 Type=oneshot
-User=${CURRENT_USER}
+User=${user}
 # Bounded so a blackholed webhook host cannot leave this stuck in 'activating' forever. Without
 # it a hung notifier would coalesce every later OnFailure= activation into the existing job and
 # silently stop alerting — the same class of stall as #1098, reintroduced in the alerting path.
 TimeoutStartSec=${ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC}
 # No OnFailure= here: if reporting a failure itself fails there is nothing further to escalate
 # to, and a unit that triggered itself on failure would loop.
-ExecStart=${REPO_DIR}/notify-unit-failure ${SERVICE_NAME}.service
+ExecStart=${repo_dir}/notify-unit-failure ${service_name}.service
 # Hardening. Unlike the main unit — which must keep NoNewPrivileges=no and CAP_SETUID/CAP_SETGID
 # for rootless podman's newuidmap/newgidmap helpers (see its own comments) — this unit only runs
 # grep/journalctl/jq/curl, so it can take the strict settings. Do NOT propagate these back to the
@@ -335,75 +341,52 @@ LockPersonality=yes"
 }
 
 create_timer_unit() {
-    local dest="${UNIT_DIR}/${SERVICE_NAME}.timer"
+    local user="$1" service_name="$2"
+    validate_unit_name_part "user" "${user}"
+    validate_unit_name_part "service name" "${service_name}"
+    local dest="${UNIT_DIR}/${service_name}.timer"
     local content
     content="[Unit]
-Description=Credfeto Orchestrator Timer for ${CURRENT_USER}
+Description=Credfeto Orchestrator Timer for ${user}
 
 [Timer]
 OnBootSec=${ORCHESTRATOR_TIMER_INTERVAL}
 OnUnitActiveSec=${ORCHESTRATOR_TIMER_INTERVAL}
-Unit=${SERVICE_NAME}.service
+Unit=${service_name}.service
 
 [Install]
 WantedBy=timers.target"
     write_unit_file "${dest}" "${content}"
 }
 
-main() {
-    local owner_filter=""
+# Writes the service, failure-notifier and timer units for user (optionally filtered to
+# owner_filter) running from repo_dir, then reloads systemd and enables and starts the timer.
+# Must run as root; no sudo is used.
+install_systemd_units() {
+    local user="$1" repo_dir="$2" owner_filter="${3:-}"
+    local service_name
+    service_name=$(systemd_service_name "${user}" "${owner_filter}") || die "Failed to derive the systemd unit name for ${user}"
 
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --owner)
-                shift
-                [ -n "${1:-}" ] || die "--owner requires a value"
-                [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] \
-                    || die "--owner value contains invalid characters: $1"
-                owner_filter="$1"
-                shift
-                ;;
-            *)
-                die "Unknown argument: $1"
-                ;;
-        esac
-    done
+    info "Installing Credfeto Orchestrator systemd timer for user ${user}..."
+    info "Repository: ${repo_dir}"
 
-    [ "$(id -u)" -ne 0 ] || die "install-timer must not be run as root — run as yourself; it uses sudo internally"
-    is_ai_agent && die "install-timer must not be run inside a Claude Code session"
+    create_service_unit "${user}" "${service_name}" "${repo_dir}" "${owner_filter}"
+    info "Service unit written to ${UNIT_DIR}/${service_name}.service"
 
-    check_required_tools
+    create_failure_unit "${user}" "${service_name}" "${repo_dir}"
+    info "Failure-notifier unit written to ${UNIT_DIR}/${service_name}-failure.service"
 
-    if [ -n "${owner_filter}" ]; then
-        SERVICE_NAME="${SERVICE_NAME}-${owner_filter}"
-        [[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9._-]+$ ]] \
-            || die "install-timer: resulting SERVICE_NAME contains unsafe characters: ${SERVICE_NAME}"
-    fi
-
-    info "Installing Credfeto Orchestrator systemd timer for user ${CURRENT_USER}..."
-    info "Repository: ${REPO_DIR}"
-
-    create_service_unit "${owner_filter}"
-    info "Service unit written to ${UNIT_DIR}/${SERVICE_NAME}.service"
-
-    create_failure_unit
-    info "Failure-notifier unit written to ${UNIT_DIR}/${SERVICE_NAME}-failure.service"
-
-    create_timer_unit
-    info "Timer unit written to ${UNIT_DIR}/${SERVICE_NAME}.timer"
+    create_timer_unit "${user}" "${service_name}"
+    info "Timer unit written to ${UNIT_DIR}/${service_name}.timer"
 
     info "Reloading systemd daemon..."
-    sudo systemctl daemon-reload || die "Failed to reload systemd daemon"
+    systemctl daemon-reload || die "Failed to reload systemd daemon"
 
-    info "Enabling ${SERVICE_NAME}.timer..."
-    sudo systemctl enable "${SERVICE_NAME}.timer" || die "Failed to enable ${SERVICE_NAME}.timer"
+    info "Enabling ${service_name}.timer..."
+    systemctl enable "${service_name}.timer" || die "Failed to enable ${service_name}.timer"
 
-    info "Starting ${SERVICE_NAME}.timer..."
-    sudo systemctl start "${SERVICE_NAME}.timer" || die "Failed to start ${SERVICE_NAME}.timer"
+    info "Starting ${service_name}.timer..."
+    systemctl start "${service_name}.timer" || die "Failed to start ${service_name}.timer"
 
-    success "Credfeto Orchestrator timer installed and started for user ${CURRENT_USER}"
+    success "Credfeto Orchestrator timer installed and started for user ${user}"
 }
-
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    main "$@"
-fi

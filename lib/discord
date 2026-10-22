@@ -562,7 +562,7 @@ notify_discord_board_conversion_failed() {
 }
 
 # Sends a Discord embed notification when oneshot detects its OWN checkout is behind
-# origin/main — install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate
+# origin/main — the service unit's (lib/systemd-units) self-update ExecStartPre steps are '-'-prefixed (tolerate
 # failure, #1098), so a permanently wedged merge (e.g. a stale git lock left by a killed process,
 # #1298) is otherwise swallowed silently forever. Deduplicates per owner: at most one
 # notification per hour, same as notify_discord_low_disk_space.

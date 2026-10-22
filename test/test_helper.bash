@@ -126,16 +126,18 @@ source_loop() {
     source "${REPO_ROOT}/loop"
 }
 
-# Sources the install-timer script so its functions are defined without running main.
-source_install_timer() {
+# Sources lib/core and the lib/systemd-units library it depends on.
+source_systemd_units() {
     # shellcheck source=/dev/null
-    source "${REPO_ROOT}/install-timer"
+    source "${REPO_ROOT}/lib/core"
+    # shellcheck source=/dev/null
+    source "${REPO_ROOT}/lib/systemd-units"
 }
 
-# Sources the uninstall-timer script so its functions are defined without running main.
-source_uninstall_timer() {
+# Sources the teardown-owner script so its functions are defined without running main.
+source_teardown_owner() {
     # shellcheck source=/dev/null
-    source "${REPO_ROOT}/uninstall-timer"
+    source "${REPO_ROOT}/teardown-owner"
 }
 
 # Sources the install-claude-hooks script so its functions are defined without running main.

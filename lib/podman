@@ -549,8 +549,8 @@ prune_transcripts() {
 # left-over processes. Registered as an EXIT trap by main, and again by
 # prepare_claude_container_args (whose trap replaces main's), so it runs on any exit: success,
 # die, or signal, whether or not invoke_claude was called.
-# Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring install-timer's
-# ExecStartPre pkill) — an unscoped 'pkill ssh-agent' matches any process with that
+# Scoped to the agent bound to SSH_AUTH_SOCK's own socket (mirroring the service unit's
+# ExecStartPre pkill in lib/systemd-units) — an unscoped 'pkill ssh-agent' matches any process with that
 # name system-wide, including an unrelated interactive login agent (#1122).
 stop_ssh_agent() {
     [ -n "${SSH_AUTH_SOCK:-}" ] || return 0

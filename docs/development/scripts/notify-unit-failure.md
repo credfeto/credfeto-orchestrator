@@ -6,7 +6,7 @@ Back to the [development guide](../README.md).
 
 ## Purpose
 
-`notify-unit-failure` is the `OnFailure=` handler for the orchestrator service. It runs as a separate systemd unit so it can still report when `oneshot` is too broken to send its own notifications, which is the case that went unnoticed for 19.5 hours in #1361. systemd runs it; `install-timer` generates the unit that calls it (`ExecStart=<repo>/notify-unit-failure <service>.service`).
+`notify-unit-failure` is the `OnFailure=` handler for the orchestrator service. It runs as a separate systemd unit so it can still report when `oneshot` is too broken to send its own notifications, which is the case that went unnoticed for 19.5 hours in #1361. systemd runs it; `setup-owner` (via `create_failure_unit` in `lib/systemd-units`) generates the unit that calls it (`ExecStart=<repo>/notify-unit-failure <service>.service`).
 
 ## Running it
 
@@ -51,7 +51,7 @@ It sources nothing from `lib/` on purpose, because everything there assumes the 
 - [ ] `shellcheck notify-unit-failure test/notify-unit-failure.bats` is clean. The lists in `ai/local/*.instructions.md` do not include this script, so run it explicitly.
 - [ ] `bats test/notify-unit-failure.bats` passes.
 - [ ] Mutation-check any new test: for example remove one `sed -e` redaction line and confirm the matching test fails.
-- [ ] Update the "Unit-failure alerts" section of `README.md` if behaviour changes (`docs/discord-notifications.md` does not currently mention this script; consider whether it should). Also check the unit `install-timer` generates for it (`create_failure_unit`) and its `test/install-timer.bats` tests.
+- [ ] Update the "Unit-failure alerts" section of `README.md` if behaviour changes (`docs/discord-notifications.md` does not currently mention this script; consider whether it should). Also check the unit `lib/systemd-units` generates for it (`create_failure_unit`) and its `test/systemd-units.bats` tests.
 - [ ] Add a changelog entry with `dotnet changelog -f CHANGELOG.md -a <Type> -m "<message>"`. Never edit `CHANGELOG.md` by hand.
 - [ ] The pre-commit hooks run the whole bats suite, so commit and push take minutes; run them in the background.
 
@@ -63,7 +63,7 @@ It sources nothing from `lib/` on purpose, because everything there assumes the 
 - Truncation uses `${CONTEXT: -${MAX_CONTEXT_CHARS}}`; the space before the minus is required in bash.
 - The 900-character budget and the 5-second `--max-time` deliberately mirror `lib/discord`. Discord rejects an embed description over its cap with a 400 and the whole alert is lost.
 - The webhook line is parsed with a regex, so `export DISCORD_WEBHOOK=...` does not match, and only `DISCORD_WEBHOOK` is honoured, not the per-category keys.
-- The generated unit (`create_failure_unit` in `install-timer`) sets `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` and an empty `CapabilityBoundingSet`, and its comment says it only runs grep, journalctl, jq and curl. Any new tool or write location must work under those settings; the script cannot write under `/home` or the system directories.
+- The generated unit (`create_failure_unit` in `lib/systemd-units`) sets `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=yes` and an empty `CapabilityBoundingSet`, and its comment says it only runs grep, journalctl, jq and curl. Any new tool or write location must work under those settings; the script cannot write under `/home` or the system directories.
 - If you add a tool the script needs, also add it to the symlink list in the no-`jq` test, or that test will start failing for the wrong reason.
 - systemd behaviour: a hung `curl` would leave the unit `activating` and later `OnFailure=` activations would coalesce into it, hence `--max-time 5` here and `TimeoutStartSec` in the unit.
 - GitHub API behaviour (list lag, `gh project`, `-L` paging) does not apply: the script talks only to the Discord webhook, never to GitHub.

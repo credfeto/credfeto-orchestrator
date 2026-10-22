@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
 
-# Covers notify-unit-failure, the OnFailure= handler installed by install-timer (#1361).
+# Covers notify-unit-failure, the OnFailure= handler installed by lib/systemd-units (#1361).
 #
 # This script IS the last-resort alerting path: it runs as a separate unit precisely so it still
 # works when oneshot is too broken to report on itself. Every silent-failure mode here re-creates

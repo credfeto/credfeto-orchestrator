@@ -37,12 +37,9 @@ should only ever contain `main()`, its arg parsing, and the source block. When a
 touches more than one concern, put it where its dominant concern lives (e.g. `_build_wf_section`
 lives in `lib/prompts` because it emits prompt text, even though it reads Workflow-board state).
 
-`loop`, `create-project`, and `setup-owner` source `lib/core` for the shared output helpers
-(`die`/`success`/`info`/`warn`/`is_ai_agent`) rather than keeping their own copies — but only
-where the copy was byte-identical. `install-timer`'s `die`/`success`/`info` are a genuinely
-simpler variant (no TTY checks) and are deliberately left as local, separate definitions rather
-than silently coerced to match; do not "fix" that discrepancy without a considered behaviour
-decision. `create-project`'s own `check_required_tools` (a different tool list to `oneshot`'s)
+`loop`, `create-project`, `setup-owner`, and `teardown-owner` source `lib/core` for the shared
+output helpers (`die`/`success`/`info`/`warn`/`is_ai_agent`) rather than keeping their own
+copies. `create-project`'s own `check_required_tools` (a different tool list to `oneshot`'s)
 is likewise never deduped — same function name, intentionally different bodies per script.
 
 ## Source-Guard Convention
@@ -156,7 +153,7 @@ path.
 ## Static Analysis
 
 - `shellcheck` must pass for the top-level bash scripts (`shellcheck oneshot loop create-project
-  setup-owner install-timer`) and for any `*.bash` test helper. Lint the top-level scripts, not
+  setup-owner teardown-owner`) and for any `*.bash` test helper. Lint the top-level scripts, not
   the `lib/*` files directly — shellcheck follows a `source` line whose target has a
   `# shellcheck source=lib/x` directive automatically, so checking `oneshot` alone already
   covers every `lib/*` file it sources. Running shellcheck on a `lib/*` file standalone produces
@@ -174,7 +171,7 @@ path.
 - `checkbashisms` does not apply to the scripts that use `#!/bin/bash`; it does apply to `pre-commit-check`, which is a POSIX `/bin/sh` script.
 - The commit-time pre-commit hook lints staged `*.bats` files with `shellcheck` too, separately
   from the top-level-scripts invocation above — a plain `shellcheck oneshot loop create-project
-  setup-owner install-timer` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
+  setup-owner teardown-owner` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
   SC2314, "In Bats, `!` will not fail the test if it is not the last command") can pass local
   verification and only surface at commit time. Run `shellcheck test/*.bats` alongside the
   top-level-scripts check before committing a test change. Prefer the repo's existing bare
