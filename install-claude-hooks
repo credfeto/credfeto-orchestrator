@@ -165,10 +165,7 @@ install_user_files() {
     local target_claude_dir="$1" managed_installed="$2"
     if [ "${managed_installed}" -eq 1 ]; then
         remove_stale_hook_symlinks "${target_claude_dir}/hooks"
-        install_user_settings "${target_claude_dir}"
-        return 0
-    fi
-    if [ -f "${target_claude_dir}/settings.json" ]; then
+    elif [ -f "${target_claude_dir}/settings.json" ]; then
         info "Left ${target_claude_dir}/settings.json and ${target_claude_dir}/hooks as they were, because the managed settings that replace them were not installed"
         return 0
     fi

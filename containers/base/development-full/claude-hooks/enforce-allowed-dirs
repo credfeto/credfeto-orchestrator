@@ -400,7 +400,7 @@ names_config_tree() {
 # can only add a match. A `\u` escape is not decoded: block_unicode_escape
 # blocks it first.
 decode_backslash_escapes() {
-  local text="$1" hex_digits='{1,2}' code char
+  local text="$1" hex_digits='{1,2}' code char hex
   [ "$2" = 1 ] && hex_digits='+'
   DECODED_TEXT=""
   while [[ "$text" == *\\* ]]; do
@@ -419,7 +419,8 @@ decode_backslash_escapes() {
     fi
     code=$((code & 255))
     [ "$code" -eq 0 ] && return 0
-    printf -v char '%b' "\\x$(printf '%02x' "$code")"
+    printf -v hex '%02x' "$code"
+    printf -v char '%b' "\\x${hex}"
     DECODED_TEXT+="$char"
   done
   DECODED_TEXT+="$text"
@@ -845,7 +846,7 @@ check_git() {
       --exec-path | --exec-path=* | --git-dir | --git-dir=* | --work-tree | --work-tree=* | --namespace | --namespace=* | --super-prefix | --super-prefix=*)
         block "git ${tok%%=*} is not permitted - it redirects git to code or repository state outside the allowed directories"
         ;;
-      --) require_git_cwd_when_no_dash_c "$saw_C"; return 0 ;;
+      --) break ;;
       -*) : ;; # any other global option (--no-pager, --bare, -p, ...) is inert here
       *)
         # the subcommand - global options end here
@@ -853,8 +854,7 @@ check_git() {
         GIT_SUBCOMMAND_INDEX="$j"
         GIT_BASE="$base"
         GIT_RELATIVE_OK="$relative_ok"
-        require_git_cwd_when_no_dash_c "$saw_C"
-        return 0
+        break
         ;;
     esac
     j=$((j + 1))
@@ -996,7 +996,7 @@ check_operand() {
 
 check_rm_mv_cp() {
   local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 k
-  local -a operands=() operand_flags=()
+  local -a operands=() operand_flags=() operand_resolved=()
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     flags="${wflags[$j]}"
@@ -1026,13 +1026,15 @@ check_rm_mv_cp() {
     check_operand "$tok" "$flags" "${name} operand"
     operands+=("$tok")
     operand_flags+=("$flags")
+    # check_operand left this operand's resolution in RESOLVED.
+    operand_resolved+=("$RESOLVED")
     [ "$name" = "rm" ] && deny_root_operand rm "$tok" "$flags"
     j=$((j + 1))
   done
   # For mv every operand but the last is a source being moved away.
   if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
     for ((k = 0; k < ${#operands[@]} - 1; k++)); do
-      resolve_word "${operands[k]}" "${operand_flags[k]}" "mv operand"
+      RESOLVED="${operand_resolved[k]}"
       deny_root_operand mv "${operands[k]}" "${operand_flags[k]}"
     done
   fi
@@ -1109,7 +1111,7 @@ queue_all_arguments() {
         --) operands_only=1; j=$((j + 1)); continue ;;
         -) j=$((j + 1)); continue ;; # stdin/stdout
         -*)
-          if [ "${#TEXT_VALUE_OPTIONS[@]}" -gt 0 ] && in_list "${tok%%=*}" "${TEXT_VALUE_OPTIONS[@]}"; then
+          if in_list "${tok%%=*}" "${TEXT_VALUE_OPTIONS[@]}"; then
             [[ "$tok" == *=* ]] || j=$((j + 1))
             j=$((j + 1))
             continue
@@ -1211,7 +1213,7 @@ check_ln_target() {
 }
 
 ln_write_targets() {
-  local j tok flags symbolic=0 operands_only=0 last="" last_flags="" k sources
+  local j tok flags symbolic=0 operands_only=0 k sources
   local -a operands=() operand_flags=() target_dirs=() target_dir_flags=()
   # One pass, so the words taken as option values (-S/--suffix, -t/
   # --target-directory) are exactly the ones left out of the operands: a
@@ -1272,8 +1274,6 @@ ln_write_targets() {
     fi
     operands+=("$tok")
     operand_flags+=("$flags")
-    last="$tok"
-    last_flags="$flags"
   done
   if [ "$symbolic" -eq 0 ]; then
     queue_all_arguments $((i + 1))
@@ -1300,7 +1300,7 @@ ln_write_targets() {
   case "${#operands[@]}" in
     0) return 0 ;;
     1) queue_write_target "." "" "ln (implicit link in the working directory)" ;;
-    *) queue_write_target "$last" "$last_flags" "ln link" ;;
+    *) queue_write_target "${operands[-1]}" "${operand_flags[-1]}" "ln link" ;;
   esac
   return 0
 }
@@ -1528,7 +1528,7 @@ op_src=$(printf '%s' "$raw_cmd" | tr -c ' -~\t\n\r' '?')
 transport=$(printf '%s' "$ast" | jq -r \
   --argjson wrappers "$(to_json_array "${WRAPPERS[@]}")" \
   --argjson cd_names "$(to_json_array "${CD_NAMES[@]}")" \
-  --argjson redirects "$(to_json_array '>' '>>' '>|' '&>' '&>>' '<>')" \
+  --argjson redirects '[">",">>",">|","&>","&>>","<>"]' \
   --arg op_src "$op_src" '
   def part_info:
     if .Type == "Lit" then {ok: true, q: "u", t: .Value, v: (.Value | gsub("\\\\(?<c>.)"; "\(.c)"))}
@@ -1604,37 +1604,36 @@ require_ascii() {
 # here on (see header).
 first_call=1
 process_call() {
-  local tok base_name class positions=(0)
-  is_wrapper "${words[0]##*/}" && positions=(1)
-  for i in "${positions[@]}"; do
-    tok="${words[$i]:-}"
-    [ "$tok" = "$MARKER" ] && block 'a command name could not be verified (non-literal) - failing closed'
-    base_name="${tok##*/}"
-    class=""
-    [ -n "$base_name" ] && class="${COMMAND_CLASS[$base_name]:-}"
-    if [ -z "$class" ] && [ "$base_name" = "set" ] && [ "${#words[@]}" -eq $((i + 2)) ] && [ "${words[$((i + 1))]}" = "-e" ]; then
-      class="read-only"
-    fi
-    [ -n "$class" ] || block "${base_name:-(empty command name)} has no writer/read-only classification in ${COMMAND_ALLOWLIST##*/} - failing closed"
-    if [ "$class" = "writer" ] || in_list "$base_name" "${CHECKED_NAMES[@]}"; then
-      require_ascii
-    fi
-    case "$base_name" in
-      cd | pushd | popd) check_cd ;;
-      git) check_git ;;
-      npm) check_npm ;;
-      find) check_find ;;
-      rm | mv | cp) check_rm_mv_cp ;;
-    esac
-    [ "$class" = "writer" ] && queue_writer_targets "$base_name"
-    # Only after this call's own checks: a call cannot exploit a link it
-    # has not created yet.
-    if in_list "$base_name" "${LINK_CAPABLE_NAMES[@]}"; then
-      LINK_SEEN=1
-    elif [ "$base_name" = "git" ] && in_list "$GIT_SUBCOMMAND" "${GIT_MATERIALISING_SUBCOMMANDS[@]}"; then
-      LINK_SEEN=1
-    fi
-  done
+  local tok base_name class
+  i=0
+  is_wrapper "${words[0]##*/}" && i=1
+  tok="${words[$i]:-}"
+  [ "$tok" = "$MARKER" ] && block 'a command name could not be verified (non-literal) - failing closed'
+  base_name="${tok##*/}"
+  class=""
+  [ -n "$base_name" ] && class="${COMMAND_CLASS[$base_name]:-}"
+  if [ -z "$class" ] && [ "$base_name" = "set" ] && [ "${#words[@]}" -eq $((i + 2)) ] && [ "${words[$((i + 1))]}" = "-e" ]; then
+    class="read-only"
+  fi
+  [ -n "$class" ] || block "${base_name:-(empty command name)} has no writer/read-only classification in ${COMMAND_ALLOWLIST##*/} - failing closed"
+  if [ "$class" = "writer" ] || in_list "$base_name" "${CHECKED_NAMES[@]}"; then
+    require_ascii
+  fi
+  case "$base_name" in
+    cd | pushd | popd) check_cd ;;
+    git) check_git ;;
+    npm) check_npm ;;
+    find) check_find ;;
+    rm | mv | cp) check_rm_mv_cp ;;
+  esac
+  [ "$class" = "writer" ] && queue_writer_targets "$base_name"
+  # Only after this call's own checks: a call cannot exploit a link it
+  # has not created yet.
+  if in_list "$base_name" "${LINK_CAPABLE_NAMES[@]}"; then
+    LINK_SEEN=1
+  elif [ "$base_name" = "git" ] && in_list "$GIT_SUBCOMMAND" "${GIT_MATERIALISING_SUBCOMMANDS[@]}"; then
+    LINK_SEEN=1
+  fi
   if [ "$first_call" -eq 1 ]; then
     if [ "$cd_count" -eq 1 ] && [ "$first_is_cd" -eq 1 ]; then
       BASE_DIR="$CD_TARGET"
