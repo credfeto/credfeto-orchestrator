@@ -2,7 +2,7 @@
 
 # Posts a Discord alert when an orchestrator systemd unit enters the failed state.
 #
-# Installed by install-timer as the target of the service unit's OnFailure= directive, and run
+# Installed by lib/systemd-units (via setup-owner) as the target of the service unit's OnFailure= directive, and run
 # as a SEPARATE unit from the one that failed. That separation is the entire point: oneshot's
 # own notify_discord_* calls can only report problems oneshot is healthy enough to reach, so
 # every failure that stops it before (or instead of) those calls is invisible. A host reboot
@@ -19,7 +19,7 @@
 # explains itself on stderr (which systemd captures) rather than just returning 0.
 #
 # Usage: notify-unit-failure <failed-unit-name>
-#   install-timer wires this up as: ExecStart=<repo>/notify-unit-failure <service-name>.service
+#   lib/systemd-units wires this up as: ExecStart=<repo>/notify-unit-failure <service-name>.service
 
 set -e
 
@@ -115,7 +115,7 @@ if command -v jq > /dev/null 2>&1; then
 else
     printf 'notify-unit-failure: jq unavailable; sending alert without journal context\n' >&2
     # Hand-built JSON, so the interpolated values must be constrained to characters that cannot
-    # break the string. UNIT_NAME comes from the unit file install-timer generated and is already
+    # break the string. UNIT_NAME comes from the unit file lib/systemd-units generated and is already
     # validated there, but re-restrict it here rather than trusting the caller; journal context is
     # dropped entirely because it is arbitrary text that cannot be safely escaped without jq.
     SAFE_UNIT=$(printf '%s' "${UNIT_NAME}" | tr -cd 'A-Za-z0-9._@-')

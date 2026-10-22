@@ -10,17 +10,43 @@ SETUP_OWNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/core disable=SC1091
 source "${SETUP_OWNER_DIR}/lib/core" \
     || { printf 'setup-owner: FATAL: failed to source %s/lib/core\n' "${SETUP_OWNER_DIR}" >&2; exit 1; }
+# shellcheck source=lib/systemd-units disable=SC1091
+source "${SETUP_OWNER_DIR}/lib/systemd-units" \
+    || die "setup-owner: failed to source ${SETUP_OWNER_DIR}/lib/systemd-units"
+
+# The admin who invoked this script (via an elevation tool that records SUDO_USER) owns the
+# credentials being copied; root's own HOME and XDG_CONFIG_HOME hold none of them.
+invoked_by_admin() {
+    [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]
+}
+
+if invoked_by_admin; then
+    SOURCE_HOME="$(get_owner_home "${SUDO_USER}")"
+    SOURCE_CONFIG="${SOURCE_HOME}/.config"
+else
+    SOURCE_HOME="${HOME}"
+    SOURCE_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}"
+fi
 
 REPO_URL="git@github.com:credfeto/credfeto-orchestrator.git"
-SOURCE_HOME="${HOME}"
-SOURCE_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}"
 SUDOERS_DIR="${SUDOERS_DIR:-/etc/sudoers.d}"
+# Overridable so tests can redirect the rule write away from the real system directory.
+POLKIT_RULES_DIR="${POLKIT_RULES_DIR:-/etc/polkit-1/rules.d}"
+JOURNAL_GROUP="systemd-journal"
 
 check_required_tools() {
     local tool
-    for tool in id sudo useradd getent git loginctl; do
+    for tool in id useradd usermod passwd getent git loginctl runuser systemctl; do
         command -v "${tool}" >/dev/null 2>&1 || die "Required tool not found: ${tool}"
     done
+}
+
+# Runs a command as user with HOME set explicitly to home, so the command reads that user's own
+# git/gpg configuration rather than whatever HOME the root caller had.
+run_as() {
+    local user="$1" home="$2"
+    shift 2
+    runuser -u "${user}" -- env "HOME=${home}" "$@"
 }
 
 # Validates that all required source config files exist before we touch anything.
@@ -57,10 +83,6 @@ validate_source_config() {
     [ "${errors}" -eq 0 ] || die "Pre-flight checks failed — fix the above and re-run"
 }
 
-get_owner_home() {
-    getent passwd "$1" | cut -d: -f6
-}
-
 ensure_user_exists() {
     local owner="$1"
     if id "${owner}" >/dev/null 2>&1; then
@@ -68,15 +90,26 @@ ensure_user_exists() {
         return 0
     fi
     info "Creating user ${owner}..."
-    sudo useradd -m -s /bin/bash "${owner}" || die "Failed to create user ${owner}"
-    sudo passwd -l "${owner}" || die "Failed to lock password for ${owner}"
+    useradd -m -s /bin/bash "${owner}" || die "Failed to create user ${owner}"
+    passwd -l "${owner}" || die "Failed to lock password for ${owner}"
     success "User ${owner} created"
+}
+
+# Lets the owner read the unit logs of its own orchestrator service without elevated access.
+# Runs on every invocation so owners created before this step existed gain the membership too.
+ensure_journal_group() {
+    local owner="$1"
+    getent group "${JOURNAL_GROUP}" >/dev/null 2>&1 \
+        || die "Group ${JOURNAL_GROUP} does not exist on this machine — is systemd-journald installed?"
+    info "Adding ${owner} to the ${JOURNAL_GROUP} group..."
+    usermod -aG "${JOURNAL_GROUP}" "${owner}" || die "Failed to add ${owner} to the ${JOURNAL_GROUP} group"
+    success "${owner} is a member of ${JOURNAL_GROUP}"
 }
 
 enable_linger() {
     local owner="$1"
     info "Enabling linger for ${owner} (creates persistent systemd user session)..."
-    sudo loginctl enable-linger "${owner}" || die "Failed to enable linger for ${owner}"
+    loginctl enable-linger "${owner}" || die "Failed to enable linger for ${owner}"
     success "Linger enabled for ${owner}"
 }
 
@@ -88,7 +121,7 @@ revoke_sudoers() {
         return 0
     fi
     info "Revoking sudoers entry for ${owner}..."
-    sudo rm -f "${sudoers_file}" || die "Failed to remove ${sudoers_file}"
+    rm -f "${sudoers_file}" || die "Failed to remove ${sudoers_file}"
     success "Sudoers entry revoked for ${owner}"
 }
 
@@ -114,17 +147,17 @@ copy_dotdir() {
     local known_hosts_backup=""
     if [ "${name}" = ".ssh" ] && [ ! -f "${src}/known_hosts" ] && [ -f "${dst}/known_hosts" ]; then
         known_hosts_backup=$(mktemp) || die "Failed to create temp file for ${dst}/known_hosts backup"
-        sudo mv "${dst}/known_hosts" "${known_hosts_backup}" || die "Failed to back up ${dst}/known_hosts"
+        mv "${dst}/known_hosts" "${known_hosts_backup}" || die "Failed to back up ${dst}/known_hosts"
     fi
 
     info "Refreshing ${name}..."
-    if ! sudo rm -rf "${dst}"; then
+    if ! rm -rf "${dst}"; then
         if [ -n "${known_hosts_backup}" ]; then
             die "Failed to remove existing ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
         fi
         die "Failed to remove existing ${dst}"
     fi
-    if ! sudo cp -r "${src}" "${dst}"; then
+    if ! cp -r "${src}" "${dst}"; then
         if [ -n "${known_hosts_backup}" ]; then
             die "Failed to copy ${src} to ${dst} - known_hosts backup preserved at ${known_hosts_backup}, restore it manually"
         fi
@@ -132,15 +165,15 @@ copy_dotdir() {
     fi
 
     if [ -n "${known_hosts_backup}" ]; then
-        sudo mv "${known_hosts_backup}" "${dst}/known_hosts" \
+        mv "${known_hosts_backup}" "${dst}/known_hosts" \
             || die "Failed to restore known_hosts in ${dst} - backup still at ${known_hosts_backup}, restore it manually"
     fi
 
-    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
-    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
     if [ "${name}" = ".ssh" ]; then
-        sudo find "${dst}" -type f -name "*.pub" -exec chmod 644 {} + \
+        find "${dst}" -type f -name "*.pub" -exec chmod 644 {} + \
             || die "Failed to set .pub permissions in ${dst}"
     fi
     success "Refreshed ${name}"
@@ -162,9 +195,9 @@ copy_dotfile() {
         return 0
     fi
     info "Copying ${name}..."
-    sudo cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
-    sudo chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod 600 "${dst}" || die "Failed to set permissions on ${dst}"
+    cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    chmod 600 "${dst}" || die "Failed to set permissions on ${dst}"
     success "Copied ${name}"
 }
 
@@ -198,13 +231,13 @@ copy_config_file() {
         die "Expected source file ${src} is missing — this should have been caught by validate_source_config"
     fi
     info "Copying .config/${rel_path}..."
-    sudo mkdir -p "${dst_dir}" || die "Failed to create ${dst_dir}"
-    sudo chown -R "${owner}:${owner}" "${owner_config_dir}" || die "Failed to chown ${owner_config_dir}"
-    sudo chmod 700 "${owner_config_dir}" || die "Failed to set permissions on ${owner_config_dir}"
-    sudo chmod 700 "${dst_dir}" || die "Failed to set permissions on ${dst_dir}"
-    sudo cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
-    sudo chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod "${perms}" "${dst}" || die "Failed to set permissions on ${dst}"
+    mkdir -p "${dst_dir}" || die "Failed to create ${dst_dir}"
+    chown -R "${owner}:${owner}" "${owner_config_dir}" || die "Failed to chown ${owner_config_dir}"
+    chmod 700 "${owner_config_dir}" || die "Failed to set permissions on ${owner_config_dir}"
+    chmod 700 "${dst_dir}" || die "Failed to set permissions on ${dst_dir}"
+    cp "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    chown "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    chmod "${perms}" "${dst}" || die "Failed to set permissions on ${dst}"
     success "Copied .config/${rel_path}"
 }
 
@@ -222,13 +255,13 @@ copy_config_dir() {
         die "Expected source directory ${src} is missing — this should have been caught by validate_source_config"
     fi
     info "Copying .config/${rel_path}/..."
-    sudo mkdir -p "${owner_config_dir}" || die "Failed to create ${owner_config_dir}"
-    sudo rm -rf "${dst}" || die "Failed to remove existing ${dst}"
-    sudo cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
-    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
-    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
-    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    mkdir -p "${owner_config_dir}" || die "Failed to create ${owner_config_dir}"
+    rm -rf "${dst}" || die "Failed to remove existing ${dst}"
+    cp -r "${src}" "${dst}" || die "Failed to copy ${src} to ${dst}"
+    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
     success "Copied .config/${rel_path}/"
 }
 
@@ -241,6 +274,17 @@ copy_config_files() {
     copy_config_dir  "${owner}" "${owner_home}" "gh"
     copy_config_file "${owner}" "${owner_home}" "orchestrator/.env" "600"
     copy_config_file "${owner}" "${owner_home}" "orchestrator/tokens/${owner}" "600"
+}
+
+# Exports the key from the keyring that holds it: the invoking admin's when run via an elevation
+# tool, since root's own keyring does not have it, otherwise the current user's.
+export_signing_key() {
+    local key_id="$1"
+    if invoked_by_admin; then
+        run_as "${SUDO_USER}" "${SOURCE_HOME}" gpg --batch --no-tty --export-secret-keys "${key_id}"
+    else
+        gpg --batch --no-tty --export-secret-keys "${key_id}"
+    fi
 }
 
 sync_gnupg() {
@@ -259,40 +303,40 @@ sync_gnupg() {
         return 0
     fi
 
-    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
-    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
+    pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
 
     info "Importing GPG key ${key_id} for ${owner}..."
-    sudo rm -rf "${dst}" || die "Failed to remove ${dst}"
-    sudo mkdir -p "${dst}" || die "Failed to create ${dst}"
+    rm -rf "${dst}" || die "Failed to remove ${dst}"
+    mkdir -p "${dst}" || die "Failed to create ${dst}"
 
     # Empty common.conf ensures classic pubring.kbx mode regardless of system config
-    sudo touch "${dst}/common.conf" || die "Failed to create ${dst}/common.conf"
+    touch "${dst}/common.conf" || die "Failed to create ${dst}/common.conf"
 
-    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
 
     # Export secret key (includes public key) and import into owner's fresh keyring
-    gpg --batch --no-tty --export-secret-keys "${key_id}" \
-        | sudo -u "${owner}" gpg --homedir "${dst}" --batch --no-tty --import \
+    export_signing_key "${key_id}" \
+        | run_as "${owner}" "${owner_home}" gpg --homedir "${dst}" --batch --no-tty --import \
         || die "Failed to import GPG key ${key_id} for ${owner}"
 
     if [ -f "${src}/trustdb.gpg" ]; then
-        sudo cp "${src}/trustdb.gpg" "${dst}/" || die "Failed to copy trustdb.gpg"
+        cp "${src}/trustdb.gpg" "${dst}/" || die "Failed to copy trustdb.gpg"
     fi
     if [ -f "${src}/sshcontrol" ]; then
-        sudo cp "${src}/sshcontrol" "${dst}/" || die "Failed to copy sshcontrol"
+        cp "${src}/sshcontrol" "${dst}/" || die "Failed to copy sshcontrol"
     fi
 
-    sudo chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    sudo find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
-    sudo find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
+    find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
+    find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
 
-    sudo pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
-    sudo pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
+    pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
     # Remove socket files left behind by SIGKILL so oneshot does not mount a stale
     # socket when gpg-agent has moved to XDG_RUNTIME_DIR on the next service run.
-    sudo find "${dst}" -maxdepth 1 -type s -delete 2>/dev/null || true
+    find "${dst}" -maxdepth 1 -type s -delete 2>/dev/null || true
     success "GPG key ${key_id} imported for ${owner}"
 }
 
@@ -316,8 +360,8 @@ configure_git() {
 
     info "Configuring git for ${owner}..."
     local gitconfig="${owner_home}/.gitconfig"
-    # Write .gitconfig directly — sudo git config --global fails when invoked from a
-    # directory the owner cannot stat (git safe.directory check rejects non-owner dirs)
+    # Write .gitconfig directly — running git config --global as the owner fails when invoked
+    # from a directory the owner cannot stat (git safe.directory check rejects non-owner dirs)
     {
         printf '[user]\n'
         printf '\tname = %s\n' "${git_user_name}"
@@ -377,9 +421,9 @@ configure_git() {
         printf '[url "git@bitbucket.org:"]\n'
         printf '\tinsteadOf = https://bitbucket.org/\n'
         printf '\tpushInsteadOf = https://bitbucket.org/\n'
-    } | sudo tee "${gitconfig}" > /dev/null || die "Failed to write ${gitconfig}"
-    sudo chown "${owner}:${owner}" "${gitconfig}" || die "Failed to chown ${gitconfig}"
-    sudo chmod 644 "${gitconfig}" || die "Failed to set permissions on ${gitconfig}"
+    } > "${gitconfig}" || die "Failed to write ${gitconfig}"
+    chown "${owner}:${owner}" "${gitconfig}" || die "Failed to chown ${gitconfig}"
+    chmod 644 "${gitconfig}" || die "Failed to set permissions on ${gitconfig}"
     success "Git configured for ${owner}"
 }
 
@@ -417,9 +461,9 @@ configure_podman_storage() {
     fi
 
     info "Configuring Podman storage driver (${driver}) for ${owner}..."
-    sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
-    sudo chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
-    sudo chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
+    mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
+    chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
     {
         printf '[storage]\n'
         printf 'driver = "%s"\n' "${driver}"
@@ -428,9 +472,9 @@ configure_podman_storage() {
             printf '[storage.options.overlay]\n'
             printf 'mount_program = "%s"\n' "${mount_program}"
         fi
-    } | sudo tee "${storage_conf}" > /dev/null || die "Failed to write ${storage_conf}"
-    sudo chown "${owner}:${owner}" "${storage_conf}" || die "Failed to chown ${storage_conf}"
-    sudo chmod 600 "${storage_conf}" || die "Failed to set permissions on ${storage_conf}"
+    } > "${storage_conf}" || die "Failed to write ${storage_conf}"
+    chown "${owner}:${owner}" "${storage_conf}" || die "Failed to chown ${storage_conf}"
+    chmod 600 "${storage_conf}" || die "Failed to set permissions on ${storage_conf}"
     success "Podman storage configured with ${driver} driver for ${owner}"
 }
 
@@ -444,9 +488,9 @@ configure_podman_engine() {
     local containers_conf="${config_dir}/containers.conf"
 
     info "Configuring Podman engine (cgroupfs) for ${owner}..."
-    sudo mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
-    sudo chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
-    sudo chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
+    mkdir -p "${config_dir}" || die "Failed to create ${config_dir}"
+    chown "${owner}:${owner}" "${config_dir}" || die "Failed to chown ${config_dir}"
+    chmod 700 "${config_dir}" || die "Failed to set permissions on ${config_dir}"
     # Use cgroupfs instead of the systemd cgroup manager.  The systemd manager
     # requires runc to create libpod scope units via D-Bus; from inside a system
     # service this is denied even with Delegate=yes.  cgroupfs bypasses D-Bus
@@ -456,24 +500,31 @@ configure_podman_engine() {
     {
         printf '[engine]\n'
         printf 'cgroup_manager = "cgroupfs"\n'
-    } | sudo tee "${containers_conf}" > /dev/null || die "Failed to write ${containers_conf}"
-    sudo chown "${owner}:${owner}" "${containers_conf}" || die "Failed to chown ${containers_conf}"
-    sudo chmod 600 "${containers_conf}" || die "Failed to set permissions on ${containers_conf}"
+    } > "${containers_conf}" || die "Failed to write ${containers_conf}"
+    chown "${owner}:${owner}" "${containers_conf}" || die "Failed to chown ${containers_conf}"
+    chmod 600 "${containers_conf}" || die "Failed to set permissions on ${containers_conf}"
     success "Podman engine configured with cgroupfs for ${owner}"
 }
 
-clone_or_pull_repo() {
+owner_clone_dir() {
     local owner="$1"
     local owner_home
     owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
     [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
-    local clone_dir="${owner_home}/credfeto-orchestrator"
+    printf '%s\n' "${owner_home}/credfeto-orchestrator"
+}
 
-    if sudo -u "${owner}" test -d "${clone_dir}"; then
-        if sudo -u "${owner}" test -d "${clone_dir}/.git"; then
-            info "Repository already cloned — pulling..."
+clone_or_pull_repo() {
+    local owner="$1"
+    local clone_dir
+    clone_dir=$(owner_clone_dir "${owner}") || exit 1
+    local owner_home="${clone_dir%/credfeto-orchestrator}"
+
+    if [ -d "${clone_dir}" ]; then
+        if [ -d "${clone_dir}/.git" ]; then
+            info "Repository already cloned - pulling..."
             # A prior root-run git command against this checkout (e.g. a diagnostic
-            # `sudo git ... status`, whose optional index-refresh side effect reowns
+            # `git ... status` run as root, whose optional index-refresh side effect reowns
             # .git/index to root) can leave files owned by someone other than ${owner},
             # which then makes the pull below fail with "index file open failed:
             # Permission denied" (#1300). Detect and reassert ownership before every
@@ -482,37 +533,59 @@ clone_or_pull_repo() {
             # when nothing is wrong, so a healed checkout is distinguishable from one
             # that never drifted; and a chown failure only warns rather than dying, since
             # this can race a sibling --owner unit's concurrent git operations against
-            # the same shared checkout (#1300 review) — the pull immediately below
+            # the same shared checkout (#1300 review) - the pull immediately below
             # remains the real gate and dies with a clear error if ownership is still broken.
-            if [ -n "$(sudo find "${clone_dir}" \( -not -user "${owner}" -o -not -group "${owner}" \) -print -quit 2>/dev/null)" ]; then
-                warn "Ownership drift detected under ${clone_dir} — reasserting ${owner}:${owner} (#1300)"
-                sudo chown -R "${owner}:${owner}" "${clone_dir}" \
-                    || warn "Failed to fully reassert ownership of ${clone_dir} — continuing; the pull below will fail clearly if this is fatal"
+            if [ -n "$(find "${clone_dir}" \( -not -user "${owner}" -o -not -group "${owner}" \) -print -quit 2>/dev/null)" ]; then
+                warn "Ownership drift detected under ${clone_dir} - reasserting ${owner}:${owner} (#1300)"
+                chown -R "${owner}:${owner}" "${clone_dir}" \
+                    || warn "Failed to fully reassert ownership of ${clone_dir} - continuing; the pull below will fail clearly if this is fatal"
             fi
-            sudo -u "${owner}" git -C "${clone_dir}" pull --ff-only \
+            run_as "${owner}" "${owner_home}" git -C "${clone_dir}" pull --ff-only \
                 || die "Failed to pull repository in ${clone_dir}"
         else
-            die "${clone_dir} exists but is not a git repository — remove it and re-run"
+            die "${clone_dir} exists but is not a git repository - remove it and re-run"
         fi
     else
         info "Cloning orchestrator repository..."
-        sudo -u "${owner}" git clone "${REPO_URL}" "${clone_dir}" \
+        run_as "${owner}" "${owner_home}" git clone "${REPO_URL}" "${clone_dir}" \
             || die "Failed to clone ${REPO_URL} to ${clone_dir}"
     fi
     success "Repository ready at ${clone_dir}"
 }
 
-run_install_timer() {
+install_owner_units() {
     local owner="$1"
-    local owner_home
-    owner_home=$(get_owner_home "${owner}") || die "Failed to look up home directory for ${owner}"
-    [ -n "${owner_home}" ] || die "No home directory found for ${owner}"
-    local clone_dir="${owner_home}/credfeto-orchestrator"
+    local clone_dir
+    clone_dir=$(owner_clone_dir "${owner}") || exit 1
+    install_systemd_units "${owner}" "${clone_dir}" "${owner}"
+}
 
-    info "Running install-timer --owner ${owner}..."
-    sudo -u "${owner}" "${clone_dir}/install-timer" --owner "${owner}" \
-        || die "install-timer failed"
-    success "Timer installed for ${owner}"
+# Lets the owner start, stop or restart its own orchestrator service (but not the timer, nor any
+# other unit) without elevated access. Rewritten on every run so it always matches the unit name.
+write_polkit_rule() {
+    local owner="$1"
+    [ -d "${POLKIT_RULES_DIR}" ] \
+        || die "${POLKIT_RULES_DIR} does not exist - is polkit installed?"
+    local service_name
+    service_name=$(systemd_service_name "${owner}" "${owner}") || die "Failed to derive the systemd unit name for ${owner}"
+    local rule_file="${POLKIT_RULES_DIR}/50-credfeto-orchestrator-${owner}.rules"
+
+    info "Writing polkit rule ${rule_file}..."
+    {
+        printf 'polkit.addRule(function(action, subject) {\n'
+        printf '    if (action.id == "org.freedesktop.systemd1.manage-units" &&\n'
+        printf '        subject.user == "%s" &&\n' "${owner}"
+        printf '        action.lookup("unit") == "%s.service") {\n' "${service_name}"
+        printf '        var verb = action.lookup("verb");\n'
+        printf '        if (verb == "start" || verb == "stop" || verb == "restart") {\n'
+        printf '            return polkit.Result.YES;\n'
+        printf '        }\n'
+        printf '    }\n'
+        printf '});\n'
+    } > "${rule_file}" || die "Failed to write ${rule_file}"
+    chown root:root "${rule_file}" || die "Failed to chown ${rule_file}"
+    chmod 0644 "${rule_file}" || die "Failed to set permissions on ${rule_file}"
+    success "Polkit rule written for ${owner}"
 }
 
 main() {
@@ -536,7 +609,7 @@ main() {
 
     [ -n "${owner}" ] || die "Usage: $(basename "$0") --owner <name>"
 
-    [ "$(id -u)" -ne 0 ] || die "setup-owner must not be run as root — run as yourself; it uses sudo internally"
+    [ "$(id -u)" -eq 0 ] || die "setup-owner must be run as root"
     is_ai_agent && die "setup-owner must not be run inside a Claude Code session"
 
     check_required_tools
@@ -545,6 +618,7 @@ main() {
     info "Provisioning orchestrator for owner: ${owner}"
 
     ensure_user_exists "${owner}"
+    ensure_journal_group "${owner}"
     enable_linger "${owner}"
     revoke_sudoers "${owner}"
     copy_dotfiles "${owner}"
@@ -552,7 +626,8 @@ main() {
     configure_podman_storage "${owner}"
     configure_podman_engine "${owner}"
     clone_or_pull_repo "${owner}"
-    run_install_timer "${owner}"
+    install_owner_units "${owner}"
+    write_polkit_rule "${owner}"
 
     success "Setup complete for owner: ${owner}"
 }

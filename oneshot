@@ -187,7 +187,7 @@ main() {
     head_sha=$(git -C "${ONESHOT_DIR}" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
     info "oneshot version: ${head_sha}"
 
-    # install-timer's self-update ExecStartPre steps are '-'-prefixed (tolerate failure, #1098) so
+    # The service unit's (lib/systemd-units) self-update ExecStartPre steps are '-'-prefixed (tolerate failure, #1098) so
     # a bad network day never blocks a run — but that also means a permanently wedged merge (e.g.
     # a stale git lock left by a killed process) is swallowed silently forever, with nothing ever
     # surfacing it short of manually reading journalctl (#1298). A confirmed positive count here
@@ -200,7 +200,7 @@ main() {
     # to throw all of that away on this exit anyway.
     #
     # Scoped to the systemd path only, via ORCHESTRATOR_SELF_UPDATE_MANAGED (a variable
-    # install-timer's own generated unit declares explicitly, alongside its other Environment=
+    # the service unit lib/systemd-units generates declares explicitly, alongside its other Environment=
     # lines) — NOT systemd's generic INVOCATION_ID, which is set for ANY unit's main process and
     # would also wrongly catch a manual shell descended from an unrelated systemd --user session.
     # loop has its own, deliberately looser recovery policy for the same underlying condition: a
