@@ -55,7 +55,8 @@
 #     (`>& file` writes the file, like `&>`);
 #   - for a writer, its arguments: by default every non-option argument, the
 #     value of every `--option=value`, and every tail of a short-option word
-#     up to its first `/` (`-xo/etc/x` is checked as `o/etc/x` and `/etc/x`),
+#     up to its first `/`, an `=` in it being an ordinary character
+#     (`-xo/etc/x` is checked as `o/etc/x` and `/etc/x`),
 #     because a glued value cannot be told from a flag cluster without each
 #     tool's own option table; a word with too long a run before its first
 #     `/` is blocked. A few writers have their own rule instead:
@@ -87,7 +88,10 @@
 #                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), since its
 #                    other arguments are routinely issue and PR text;
 #       dotnet       every argument, except the message of `dotnet changelog
-#                    -m`/`--message`, which is text;
+#                    -m`/`--message`, which is text; an option word in
+#                    colon form (`-p:Name=value`, `--output:DIR`) is
+#                    checked as both the text after `:` and the text after
+#                    the `=` in that, not as short-option tails;
 #       mktemp       every argument (so the DIR of -p DIR, -pDIR and
 #                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
 #                    a bare --tmpdir, or no template and no DIR; a template
@@ -1109,6 +1113,20 @@ queue_git_clone_default_dirs() {
 # there).
 MAX_SHORT_OPTION_TAILS=256
 
+# A dotnet option word in colon form, $1 (flags $2), is not a getopt cluster:
+# its value is everything after the first `:` (System.CommandLine's
+# `-o:DIR`, `--output:DIR`), or, for an MSBuild switch (`-p:Name=value`,
+# `-property:Name=value`), the text after the first `=` in that. Both are
+# queued, relative to base $3 with relative paths permitted iff $4, so either
+# reading is checked as a path and as text, with no per-character tails.
+queue_dotnet_colon_option() {
+  local tok="$1" value="${1#*:}"
+  [ -n "$value" ] || return 0
+  queue_write_target "$value" "$2" "dotnet ${tok%%:*}" "$3" "$4"
+  [[ "$value" == *=?* ]] && queue_write_target "${value#*=}" "$2" "dotnet ${tok%%:*}" "$3" "$4"
+  return 0
+}
+
 # Queues the call's words from index $1 onwards as write targets, relative to
 # base $2 with relative paths permitted iff $3 (defaults as for
 # prepare_word): every non-option word, the value of `--option=value`, every
@@ -1130,10 +1148,19 @@ queue_all_arguments() {
             j=$((j + 1))
             continue
           fi
+          if [ "$name" = dotnet ] && [[ "$tok" =~ ^--?[A-Za-z][A-Za-z0-9-]*: ]]; then
+            queue_dotnet_colon_option "$tok" "$flags" "$base" "$relative_ok"
+            j=$((j + 1))
+            continue
+          fi
           case "$tok" in
-            *=*) queue_write_target "${tok#*=}" "$flags" "${name} ${tok%%=*}" "$base" "$relative_ok" ;;
+            --*=*) queue_write_target "${tok#*=}" "$flags" "${name} ${tok%%=*}" "$base" "$relative_ok" ;;
             --*) : ;; # a long option takes a glued value only after =
             *)
+              # A short option's glued value starts straight after the
+              # letter and may itself contain `=` (`-o../x=y`), so `=` is an
+              # ordinary character here: splitting at it would check only
+              # the text after it.
               # A tail is a possible glued value only while every character
               # before it could be a cluster letter, and `/` never is (any
               # other character can be: curl's -# in `-s#o/etc/x`), so the
