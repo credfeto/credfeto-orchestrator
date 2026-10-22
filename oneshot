@@ -104,15 +104,15 @@ source "${ONESHOT_DIR}/lib/podman" \
 
 # Workflow project cache globals (_WF_PROJECT_ID, _WF_STATUS_FIELD_ID, _WF_OPTION_IDS,
 # _WF_CACHED_REPO, _WF_CACHE, _WF_REPORTED_REPOS, _WF_CREATION_FAILED, _WF_APPROVED_ITEMS,
-# _WF_APPROVED_FETCHED, _WF_ITEM_STATUS_OPTION_ID, _WF_ITEM_STATUS_FETCHED, _WF_STATUS_ORDER,
-# PROJECT_CACHE_TTL) are declared in lib/globals — populated by discover_or_create_workflow_project
+# _WF_APPROVED_FETCHED, _WF_ITEM_STATUS_OPTION_ID, _WF_ITEM_STATUS_FETCHED, _WF_ITEM_BOARD_PRESENCE,
+# _WF_STATUS_ORDER, PROJECT_CACHE_TTL) are declared in lib/globals — populated by discover_or_create_workflow_project
 # (lib/workflow-board).
 
 # project_cache_file_path, load_project_cache, save_project_cache, invalidate_project_cache,
 # discover_or_create_workflow_project,
 # report_missing_workflow_project, _wf_invite_trusted_collaborators, _wf_create_project,
 # update_workflow_status, fetch_board_approved_items, fetch_board_item_statuses,
-# workflow_status_name_for_option_id, board_substatus_for_item,
+# workflow_status_name_for_option_id, _wf_lookup_item_on_board, board_substatus_for_item,
 # pr_review_pipeline_finished_without_auto_merge, fetch_single_item_workflow_status,
 # _wf_status_ordinal, sync_pr_workflow_status_from_linked_issues, coarse_status_for_substatus, and
 # priority_for_labels are declared in lib/workflow-board.

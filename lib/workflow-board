@@ -719,6 +719,12 @@ fetch_board_item_statuses() {
         pagination=$(printf '%s' "${page_json}" | \
             jq -r '(.data.node.items.pageInfo.hasNextPage // "false"), (.data.node.items.pageInfo.endCursor // "")' 2>/dev/null)
         has_next_page=$(printf '%s' "${pagination}" | head -1)
+        # An empty page after the first, or an empty page that claims more follow, means the
+        # listing is short (#1688). Misses are then read per item by board_substatus_for_item.
+        if [ "$(printf '%s' "${page_json}" | jq -r '.data.node.items.nodes | length' 2>/dev/null)" = "0" ] \
+            && { [ -n "${cursor}" ] || [ "${has_next_page}" = "true" ]; }; then
+            warn "fetch_board_item_statuses: board listing for ${REPO_FULL} returned an empty page — falling back to per-item reads for misses"
+        fi
         cursor=$(printf '%s' "${pagination}" | tail -1)
         [ "${has_next_page}" = "true" ] || break
         [ -n "${cursor}" ] || break
@@ -736,6 +742,50 @@ workflow_status_name_for_option_id() {
             return 0
         fi
     done
+}
+
+# Reads one Issue or PR's own card on the configured Workflow board straight from the item, with
+# no board walk and no write, and records the result in _WF_ITEM_BOARD_PRESENCE (and, when the
+# card has a status, in _WF_ITEM_STATUS_OPTION_ID) under the same "owner/repo/number" key the
+# board cache uses. The board's items listing is not a reliable negative: during GitHub incidents
+# it has returned empty or short pages, and has left out a card that the item itself reports
+# (#1688), so a cache miss must not be read as "not on the board". Presence is one of:
+#   present - the item has a card on this board (its status may still be unset)
+#   absent  - the item was read and has no card on this board
+#   unknown - the read failed or returned something unexpected
+# Prints the presence. Only the first lookup per item per process calls gh; callers running it
+# in a command substitution lose the record with the subshell, which costs one more read, not a
+# wrong answer. No-op printing "unknown" when the board isn't configured.
+_wf_lookup_item_on_board() {
+    local item_id="$1" key repo_owner repo_name response presence opt_id
+    key="${REPO_FULL}/${item_id}"
+    if [ -n "${_WF_ITEM_BOARD_PRESENCE["${key}"]:-}" ]; then
+        printf '%s' "${_WF_ITEM_BOARD_PRESENCE["${key}"]}"
+        return 0
+    fi
+    [ -n "${_WF_PROJECT_ID}" ] || { printf 'unknown'; return 0; }
+    repo_owner="${REPO_FULL%%/*}"
+    repo_name="${REPO_FULL#*/}"
+    presence="unknown"
+    opt_id=""
+    if response=$(gh api graphql \
+        -f query="query(\$o:String!,\$n:String!,\$i:Int!){repository(owner:\$o,name:\$n){issueOrPullRequest(number:\$i){...on Issue{projectItems(first:50){nodes{project{id} fieldValueByName(name:\"Status\"){...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}...on PullRequest{projectItems(first:50){nodes{project{id} fieldValueByName(name:\"Status\"){...on ProjectV2ItemFieldSingleSelectValue{optionId}}}}}}}}" \
+        -f o="${repo_owner}" -f n="${repo_name}" -F i="${item_id}" 2>/dev/null); then
+        presence=$(printf '%s' "${response}" | jq -r --arg p "${_WF_PROJECT_ID}" '
+            (.data.repository.issueOrPullRequest.projectItems.nodes? // null) as $nodes
+            | if $nodes == null then "unknown"
+              elif any($nodes[]; .project.id? == $p) then "present"
+              else "absent" end' 2>/dev/null) || presence="unknown"
+        [ -n "${presence}" ] || presence="unknown"
+        if [ "${presence}" = "present" ]; then
+            opt_id=$(printf '%s' "${response}" | jq -r --arg p "${_WF_PROJECT_ID}" '
+                [.data.repository.issueOrPullRequest.projectItems.nodes[]
+                 | select(.project.id? == $p) | .fieldValueByName.optionId? // empty][0] // empty' 2>/dev/null) || opt_id=""
+        fi
+    fi
+    _WF_ITEM_BOARD_PRESENCE["${key}"]="${presence}"
+    [ -n "${opt_id}" ] && _WF_ITEM_STATUS_OPTION_ID["${key}"]="${opt_id}"
+    printf '%s' "${presence}"
 }
 
 # Returns the current fine-grained Workflow-board sub-status name for an item — "Unknown" when
@@ -757,6 +807,12 @@ board_substatus_for_item() {
     discover_or_create_workflow_project
     fetch_board_item_statuses
     opt_id="${_WF_ITEM_STATUS_OPTION_ID["${REPO_FULL}/${item_id}"]:-}"
+    # A miss in the board listing is not proof the item has no card (#1688): read the item's
+    # own card before reporting Unknown. Called directly (not in $(...)) so the record survives.
+    if [ -z "${opt_id}" ] && [ -n "${_WF_PROJECT_ID}" ]; then
+        _wf_lookup_item_on_board "${item_id}" > /dev/null
+        opt_id="${_WF_ITEM_STATUS_OPTION_ID["${REPO_FULL}/${item_id}"]:-}"
+    fi
     substatus=$(workflow_status_name_for_option_id "${opt_id}")
     if [ -n "${substatus}" ]; then
         printf '%s' "${substatus}"
@@ -884,9 +940,18 @@ sync_pr_workflow_status_from_linked_issues() {
         [ "${issue_ord}" -gt "${best_ord}" ] && best_ord="${issue_ord}"
     done <<< "${linked_issues}"
 
-    local pr_ord
+    local pr_ord presence
     pr_ord=$(_wf_status_ordinal "$(board_substatus_for_item "${pr_number}")")
-    # Empty pr_ord means the PR isn't on the board yet at all ("Unknown") — always add it.
+    if [ -z "${pr_ord}" ]; then
+        # No recognised status. Only write when the PR's own card was read and it is either not
+        # on the board or on it with no status: an unreadable card may be further along, and
+        # writing the floor would lower it and loop the agent through the phases again (#1688).
+        presence=$(_wf_lookup_item_on_board "${pr_number}")
+        if [ "${presence}" = "unknown" ]; then
+            info "Workflow: could not read PullRequest #${pr_number}'s card — leaving its board status unchanged this tick"
+            return 0
+        fi
+    fi
     if [ -z "${pr_ord}" ] || [ "${best_ord}" -gt "${pr_ord}" ]; then
         update_workflow_status "PullRequest" "${pr_number}" "${_WF_STATUS_ORDER[${best_ord}]}"
     fi

@@ -14346,6 +14346,7 @@ STUBEOF
             412) printf 'Unknown' ;;
         esac
     }
+    _wf_lookup_item_on_board() { printf 'absent'; }
     local status_log="${TEST_TMP}/status_calls"
     update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
     make_stub gh 'printf "383\n"'
@@ -14378,6 +14379,7 @@ STUBEOF
             412) printf 'Unknown' ;;
         esac
     }
+    _wf_lookup_item_on_board() { printf 'absent'; }
     local status_log="${TEST_TMP}/status_calls"
     update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
     make_stub gh 'printf "383\n"'
@@ -14412,6 +14414,181 @@ STUBEOF
     make_stub gh "printf 'called\n' >> ${call_log}"
     sync_pr_workflow_status_from_linked_issues 412 "false"
     [ ! -f "${call_log}" ]
+}
+
+@test "sync_pr_workflow_status_from_linked_issues leaves the card alone when the PR's own card cannot be read (#1688)" {
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'Development' ;;
+            412) printf 'Unknown' ;;
+        esac
+    }
+    _wf_lookup_item_on_board() { printf 'unknown'; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf "383\n"'
+
+    run sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ "${status}" -eq 0 ]
+    [ ! -f "${status_log}" ]
+    [[ "${output}" == *"could not read PullRequest #412's card"* ]]
+}
+
+@test "sync_pr_workflow_status_from_linked_issues sets the floor on a card that is on the board with no status (#1688)" {
+    _WF_PROJECT_ID="PVT_test"
+    board_substatus_for_item() {
+        case "$1" in
+            383) printf 'Development' ;;
+            412) printf 'Unknown' ;;
+        esac
+    }
+    _wf_lookup_item_on_board() { printf 'present'; }
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    make_stub gh 'printf "383\n"'
+
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    grep -q 'PullRequest 412 Development' "${status_log}"
+}
+
+@test "sync_pr_workflow_status_from_linked_issues never lowers a card the board listing left out (#1688)" {
+    # End to end through the real board_substatus_for_item: the listing is empty, but the PR's
+    # own card reads AI Review, so nothing may be written.
+    set_repo_context "org/repo"
+    _WF_CACHED_REPO="org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS[Development]="opt_dev"
+    _WF_OPTION_IDS["AI Review"]="opt_review"
+    local status_log="${TEST_TMP}/status_calls"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${status_log}"; }
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *closingIssuesReferences*) printf '383\n' ;;
+    *issueOrPullRequest*)
+        if [[ "$*" == *"i=412"* ]]; then
+            printf '%s\n' '{"data":{"repository":{"issueOrPullRequest":{"projectItems":{"nodes":[{"project":{"id":"PVT_test"},"fieldValueByName":{"optionId":"opt_review"}}]}}}}}'
+        else
+            printf '%s\n' '{"data":{"repository":{"issueOrPullRequest":{"projectItems":{"nodes":[{"project":{"id":"PVT_test"},"fieldValueByName":{"optionId":"opt_dev"}}]}}}}}'
+        fi ;;
+    *) printf '%s\n' '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}' ;;
+esac
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+
+    sync_pr_workflow_status_from_linked_issues 412 "false"
+    [ ! -f "${status_log}" ]
+}
+
+# --- _wf_lookup_item_on_board (#1688) -------------------------------------------
+
+@test "_wf_lookup_item_on_board reports present and records the card's status" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh "printf '%s\n' '{\"data\":{\"repository\":{\"issueOrPullRequest\":{\"projectItems\":{\"nodes\":[{\"project\":{\"id\":\"PVT_other\"},\"fieldValueByName\":null},{\"project\":{\"id\":\"PVT_test\"},\"fieldValueByName\":{\"optionId\":\"opt_review\"}}]}}}}}'"
+    _wf_lookup_item_on_board 42 > "${TEST_TMP}/out"
+    [ "$(cat "${TEST_TMP}/out")" = "present" ]
+    [ "${_WF_ITEM_STATUS_OPTION_ID["org/repo/42"]:-}" = "opt_review" ]
+    [ "${_WF_ITEM_BOARD_PRESENCE["org/repo/42"]:-}" = "present" ]
+}
+
+@test "_wf_lookup_item_on_board reports present for a card with no status and records no option" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh "printf '%s\n' '{\"data\":{\"repository\":{\"issueOrPullRequest\":{\"projectItems\":{\"nodes\":[{\"project\":{\"id\":\"PVT_test\"},\"fieldValueByName\":null}]}}}}}'"
+    run _wf_lookup_item_on_board 42
+    [ "${output}" = "present" ]
+}
+
+@test "_wf_lookup_item_on_board reports absent when only other boards hold the item" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh "printf '%s\n' '{\"data\":{\"repository\":{\"issueOrPullRequest\":{\"projectItems\":{\"nodes\":[{\"project\":{\"id\":\"PVT_other\"},\"fieldValueByName\":null}]}}}}}'"
+    run _wf_lookup_item_on_board 42
+    [ "${output}" = "absent" ]
+}
+
+@test "_wf_lookup_item_on_board reports unknown when the read fails" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh 'exit 1'
+    run _wf_lookup_item_on_board 42
+    [ "${output}" = "unknown" ]
+}
+
+@test "_wf_lookup_item_on_board reports unknown for an unexpected response" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh "printf '%s\n' '{\"data\":{\"repository\":null}}'"
+    run _wf_lookup_item_on_board 42
+    [ "${output}" = "unknown" ]
+}
+
+@test "_wf_lookup_item_on_board reports unknown without calling gh when the board is not configured" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID=""
+    local call_log="${TEST_TMP}/gh_calls"
+    make_stub gh "printf 'called\n' >> ${call_log}"
+    run _wf_lookup_item_on_board 42
+    [ "${output}" = "unknown" ]
+    [ ! -f "${call_log}" ]
+}
+
+@test "_wf_lookup_item_on_board reads each item once per process" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    local call_log="${TEST_TMP}/gh_calls"
+    cat > "${STUB_BIN}/gh" << STUBEOF
+#!/usr/bin/env bash
+printf 'called\n' >> "${call_log}"
+printf '%s\n' '{"data":{"repository":{"issueOrPullRequest":{"projectItems":{"nodes":[]}}}}}'
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    _wf_lookup_item_on_board 42 > /dev/null
+    _wf_lookup_item_on_board 42 > /dev/null
+    [ "$(wc -l < "${call_log}")" -eq 1 ]
+}
+
+@test "board_substatus_for_item reads the item's own card when the board listing leaves it out (#1688)" {
+    set_repo_context "org/repo"
+    _WF_CACHED_REPO="org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    _WF_OPTION_IDS["AI Review"]="opt_review"
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *issueOrPullRequest*) printf '%s\n' '{"data":{"repository":{"issueOrPullRequest":{"projectItems":{"nodes":[{"project":{"id":"PVT_test"},"fieldValueByName":{"optionId":"opt_review"}}]}}}}}' ;;
+    *) printf '%s\n' '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}' ;;
+esac
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run board_substatus_for_item 1050
+    [ "${output}" = "AI Review" ]
+}
+
+@test "fetch_board_item_statuses warns when a page after the first comes back empty (#1688)" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    cat > "${STUB_BIN}/gh" << 'STUBEOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"cursor="* ]]; then
+    printf '%s\n' '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}'
+else
+    printf '%s\n' '{"data":{"node":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[{"content":{"number":1,"repository":{"nameWithOwner":"org/repo"}},"fieldValues":{"nodes":[{"optionId":"opt_dev","field":{"name":"Status"}}]}}]}}}}'
+fi
+STUBEOF
+    chmod +x "${STUB_BIN}/gh"
+    run fetch_board_item_statuses
+    [[ "${output}" == *"returned an empty page"* ]]
+}
+
+@test "fetch_board_item_statuses does not warn for an empty board" {
+    set_repo_context "org/repo"
+    _WF_PROJECT_ID="PVT_test"
+    make_stub gh "printf '%s\n' '{\"data\":{\"node\":{\"items\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":[]}}}}'"
+    run fetch_board_item_statuses
+    [[ "${output}" != *"returned an empty page"* ]]
 }
 
 # --- coarse_status_for_substatus (#1136) ----------------------------------------
