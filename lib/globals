@@ -594,6 +594,9 @@ declare -gA _WF_APPROVED_FETCHED
 declare -gA _WF_ITEM_STATUS_OPTION_ID
 # Per-repo fetch guard: value "1" means fetch_board_item_statuses has already run for that repo.
 declare -gA _WF_ITEM_STATUS_FETCHED
+# Per-item card presence read by _wf_lookup_item_on_board (#1688): keys "owner/repo/number",
+# values present / absent / unknown. Filled lazily, only for items the board listing missed.
+declare -gA _WF_ITEM_BOARD_PRESENCE
 
 # Ordered Workflow Status option names, earliest first. Defines the ordinal used by
 # sync_pr_workflow_status_from_linked_issues (lib/workflow-board) to compare a PR's card
