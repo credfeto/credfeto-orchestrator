@@ -1465,10 +1465,11 @@ awk_write_targets() {
         -F?* | --field-separator=*) continue ;;
         -b | -c | -C | -g | -h | -k | -M | -n | -N | -O | -P | -r | -s | -S | -t | -V) continue ;;
         --characters-as-bytes | --traditional | --copyright | --gen-pot | --help | --csv | --bignum | --non-decimal-data | --use-lc-numeric | --optimize | --posix | --re-interval | --no-optimize | --sandbox | --lint-old | --version) continue ;;
-        -*)
+        -?*)
           # Anything else may write a file of its own (gawk's -d/-o/-p and
           # their long forms, -W <long option>, an abbreviated long option
-          # such as --inc), so every argument is a write target.
+          # such as --inc), so every argument is a write target. A bare -
+          # (standard input) is an operand, not an option.
           queue_all_arguments $((i + 1))
           return 0
           ;;
