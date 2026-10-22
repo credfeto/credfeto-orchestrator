@@ -553,6 +553,32 @@ EOF'
         "gh run download 1 -D ${TEST_TMP}/outside"
 }
 
+@test "a short-option word's tails stop at its first '/', so a glued absolute path under a root is allowed" {
+    assert_each 0 '' \
+        "sort -o${TEST_TMP}/repo/out in.txt" \
+        "curl -sSo${TEST_TMP}/repo/dir/file.txt https://example.com/x" \
+        "curl -sS -d{\"a\":\"b\"} https://example.com/x"
+}
+
+@test "a short-option word's tails up to its first '/' are still each checked as a path and as text" {
+    assert_each 2 'outside the allowed directories' \
+        "curl -o/etc/x https://example.com/x" \
+        "curl -s#o/etc/x https://example.com/x" \
+        "curl -sS -odir/file.txt https://example.com/x"
+    assert_each_config_write \
+        "curl -o.claude/settings.json https://example.com/x" \
+        "curl -xo.claude/settings.json https://example.com/x" \
+        "curl -o${TEST_TMP}/repo/x/../.claude/settings.json https://example.com/x" \
+        "curl -osub/x.claude.json https://example.com/x"
+}
+
+@test "a short-option word with a very long run before any '/' is blocked with a clear message" {
+    local long
+    long=$(printf 'x%.0s' {1..2500})
+    assert_each 2 'separate the option value from the option' "curl -sS -d${long} https://example.com/x"
+    assert_each 0 '' "curl -sS -d$(printf 'x%.0s' {1..250}) https://example.com/x"
+}
+
 @test "/dev/null, /dev/stdout and /dev/stderr are always allowed write targets" {
     assert_each 0 '' "ls > /dev/null 2>&1" "echo x 2>/dev/null" "echo x | tee /dev/stderr" "cat x > /dev/stdout"
 }
