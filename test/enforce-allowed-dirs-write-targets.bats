@@ -919,6 +919,12 @@ EOF'
     assert_each 0 '' "awk --posix '{print}' /etc/hosts" "awk -P -F: '{print \$1}' /etc/passwd" "awk --field-separator=: '{print}' /etc/hosts"
 }
 
+@test "a bare - (standard input) is an awk operand, not an unknown option" {
+    assert_each 0 '' "awk '/^x/ {print \$1}' -" "awk -i inplace '{print}' -"
+    assert_each 2 'outside the allowed directories' "awk -i inplace '{print}' - ${TEST_TMP}/outside/x"
+    assert_each_config_write "awk 'BEGIN{print 1 > \".claude/settings.json\"}' -"
+}
+
 # --- fail closed ------------------------------------------------------------
 
 @test "an unrecognised tool_name is blocked (fail closed)" {
