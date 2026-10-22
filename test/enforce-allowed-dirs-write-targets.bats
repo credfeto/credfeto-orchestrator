@@ -68,6 +68,16 @@ assert_each() {
     done
 }
 
+# assert_each_config_write <command>... - runs each command in the sandbox repo and checks it is
+# blocked as a write to Claude Code configuration.
+assert_each_config_write() {
+    local cmd
+    for cmd in "$@"; do
+        run_in_repo "${cmd}"
+        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
+    done
+}
+
 # --- Edit / Write / NotebookEdit --------------------------------------------
 
 @test "Edit, Write and NotebookEdit of the user's ~/.claude/settings.json are blocked" {
@@ -148,8 +158,7 @@ assert_each() {
 # --- Bash: protected paths ----------------------------------------------------
 
 @test "each Bash write form into a protected file is blocked" {
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "sed -i 's/a/b/' .claude/settings.json" \
         "sed -ni 's/a/b/p' .mcp.json" \
         "sed --in-place=.bak 's/a/b/' .mcp.json" \
@@ -160,15 +169,11 @@ assert_each() {
         "echo '{}' > .claude/settings.json" \
         "echo '{}' >> ${HOME}/.claude.json" \
         "echo '{}' &> sub/.claude/settings.json" \
-        "nice tee .claude/settings.json"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "nice tee .claude/settings.json"
 }
 
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "touch .claude/settings.json" \
         "rm -f ${HOME}/.claude/settings.json" \
         "mkdir -p .claude/hooks" \
@@ -225,20 +230,13 @@ assert_each() {
         "python3 build.py --out .claude/settings.json" \
         "dotnet build -o ${HOME}/.claude/hooks" \
         "dotnet changelog -f .claude/settings.json -a Fixed -m x" \
-        "npm run build -- --outDir=.claude/skills"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "npm run build -- --outDir=.claude/skills"
 }
 
 @test "a sed or awk program that only mentions a protected name is blocked by design (use the Edit tool)" {
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "sed -i 's|~/.claude/hooks/|/etc/claude-code/hooks/|g' README.md" \
-        "awk '{ sub(\"~/.claude.json\", \"x\"); print }' notes.txt"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "awk '{ sub(\"~/.claude.json\", \"x\"); print }' notes.txt"
     run_file_tool Edit "${TEST_TMP}/repo/README.md"
     [ "${status}" -eq 0 ]
 }
@@ -280,30 +278,22 @@ assert_each() {
 
 @test "a copy, move or link whose destination is a .claude directory is blocked" {
     mkdir -p "${TEST_TMP}/repo/.claude"
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "cp ${SRC}/settings.local.json .claude/" \
         "cp ${SRC}/settings.local.json ${HOME}/.claude/" \
         "cp -t .claude ${SRC}/settings.local.json" \
         "mv ${SRC}/evil .claude" \
         "cp -r ${SRC}/evil sub/.claude" \
         "ln -s ${SRC}/fake .claude" \
-        "ln -s -t .claude ${SRC}/fake"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "ln -s -t .claude ${SRC}/fake"
 }
 
 @test "a write into a protected directory reached through a leading cd or pushd is blocked" {
     mkdir -p "${TEST_TMP}/repo/.claude"
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "cd .claude && cp ${SRC}/x settings.local.json" \
         "pushd .claude && echo '{}' > settings.local.json" \
-        "cd ${TEST_TMP}/repo/sub && cp ${SRC}/x ../.claude/settings.local.json"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "cd ${TEST_TMP}/repo/sub && cp ${SRC}/x ../.claude/settings.local.json"
 }
 
 @test "a cd this hook cannot follow is blocked before anything is written through it" {
@@ -361,14 +351,10 @@ assert_each() {
 @test "a cd is checked where bash's logical cd lands: a .. after a link out of .claude stays in .claude" {
     mkdir -p "${TEST_TMP}/repo/.claude"
     ln -s "${TEST_TMP}/repo/sub" "${TEST_TMP}/repo/.claude/x"
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "cd .claude/x/.. && curl -O https://example.com/settings.json" \
         "pushd .claude/x/.. && sed -n 'w settings.json' ${SRC}/payload" \
-        "cd .claude/x/.. && echo '{}' > settings.json"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "cd .claude/x/.. && echo '{}' > settings.json"
     assert_each 0 '' "cd .claude/x/.. && ls" "cd .claude/x && curl -O https://example.com/x.json"
 }
 
@@ -425,17 +411,13 @@ assert_each() {
 }
 
 @test "git clone with no directory is checked against the directory git names after the repository" {
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "git -C . clone https://github.com/x/.claude.git" \
         "git -C . clone https://github.com/x/.claude/" \
         "git -C . clone https://github.com/x/.claude/.git" \
         "git -C . clone git@github.com:x/.claude.git" \
         "git -C . clone host:.mcp.json.git" \
-        "git -C . clone --depth 1 https://github.com/x/.claude.bundle"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "git -C . clone --depth 1 https://github.com/x/.claude.bundle"
     assert_each 0 '' "git -C . clone https://github.com/x/y.git" "git -C . clone git@github.com:x/y"
 }
 
@@ -467,11 +449,7 @@ assert_each() {
     mkdir -p "${TEST_TMP}/repo/.claude"
     printf '{}' > "${TEST_TMP}/repo/.claude/settings.json"
     ln -s "${TEST_TMP}/repo/.claude/settings.json" "${TEST_TMP}/repo/innocent.json"
-    local cmd
-    for cmd in "echo x > innocent.json" "cp x.json sub/../innocent.json" "echo x > .claude/./settings.json"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+    assert_each_config_write "echo x > innocent.json" "cp x.json sub/../innocent.json" "echo x > .claude/./settings.json"
 }
 
 @test "an unquoted glob that matches a protected file is blocked" {
@@ -871,8 +849,7 @@ EOF'
 }
 
 @test "an awk option outside the known non-writing set makes every argument a write target" {
-    local cmd
-    for cmd in \
+    assert_each_config_write \
         "awk --dump-variables=.claude/settings.json 1 /dev/null" \
         "awk -d.claude/settings.json 1 /dev/null" \
         "awk -o.claude/hooks/x '{print}' /dev/null" \
@@ -881,10 +858,7 @@ EOF'
         "awk --profile=.claude/skills/x '{print}' /dev/null" \
         "awk --inc inplace '{print}' .claude/settings.json" \
         "awk -W include=inplace '{print}' .claude/settings.json" \
-        "awk -W dump-variables=.claude/settings.json 1 /dev/null"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "awk -W dump-variables=.claude/settings.json 1 /dev/null"
     assert_each 2 'outside the allowed directories' "awk -D '{print}' ${TEST_TMP}/outside/x"
     assert_each 0 '' "awk --posix '{print}' /etc/hosts" "awk -P -F: '{print \$1}' /etc/passwd" "awk --field-separator=: '{print}' /etc/hosts"
 }
@@ -979,23 +953,16 @@ EOF'
 }
 
 @test "ln -S takes the rest of its word: an s after it is not -s, and a t after it is not -t" {
-    local cmd
-    for cmd in "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json" \
+    assert_each_config_write "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json" \
         "ln -sf ${SRC}/payload .claude/settings.json -S .bak" "ln -sfS .bak ${SRC}/payload .claude/settings.json" \
         "ln -sf ${SRC}/payload .claude/settings.json --suffix .bak" "ln -sf ${SRC}/payload .claude/settings.json --suf .bak" \
         "ln -sf -S -tx ${SRC}/payload .claude/settings.json" "ln -sf --suffix -tx ${SRC}/payload .claude/settings.json" \
-        "ln -sf -S --target-directory=x ${SRC}/payload .claude/settings.json" "ln -s -t x -t .claude/skills ${SRC}/payload"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "ln -sf -S --target-directory=x ${SRC}/payload .claude/settings.json" "ln -s -t x -t .claude/skills ${SRC}/payload"
     assert_each 0 '' "ln -sS.bak ${TEST_TMP}/outside/x link" "ln -s --suffix=.bak ${TEST_TMP}/outside/x link"
     # A separate-word -S/--suffix value is skipped, so the real link name is still the last operand.
-    for cmd in "ln -s -S .bak ${TEST_TMP}/outside/x .claude/settings.json" \
+    assert_each_config_write "ln -s -S .bak ${TEST_TMP}/outside/x .claude/settings.json" \
         "ln -s --suffix .bak ${TEST_TMP}/outside/x .claude/settings.json" \
-        "ln -sf ${SRC}/payload .claude/settings.json --suffix=.bak"; do
-        run_in_repo "${cmd}"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "ln -sf ${SRC}/payload .claude/settings.json --suffix=.bak"
     assert_each 0 '' "ln -s -S .bak ${TEST_TMP}/outside/x link" "ln -s --suffix .bak ${TEST_TMP}/outside/x link" \
         "ln -s ${TEST_TMP}/outside/x link --suffix=.bak"
     # cp/mv share the -t parser: a t inside a -S suffix is not -t, so no operand is taken as the
@@ -1016,7 +983,7 @@ path_with_only() {
 }
 
 run_payload_with_path() {
-    run bash -c 'printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ "$1" "$2" "${HOOK}"
+    run bash -c 'cd "$4" && printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ "$1" "$2" "${HOOK}" "${3:-${PWD}}"
 }
 
 @test "missing realpath is blocked for the file tools (fail closed)" {
@@ -1041,15 +1008,13 @@ run_payload_with_path() {
     # shellcheck disable=SC2016  # literal $1 - the stub script reads its own arguments
     printf '#!/bin/sh\n[ "$1" = "-ms" ] && exit 1\nexec %s "$@"\n' "${real}" > "${dir}/realpath"
     chmod +x "${dir}/realpath"
-    run bash -c 'cd "$4" && printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ \
-        '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${HOOK}" "${TEST_TMP}/repo"
+    run_payload_with_path '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${TEST_TMP}/repo"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"cd target 'sub' could not be resolved"* ]] || { echo "got: ${output}" >&2; return 1; }
     # Fails only the landing resolution, the one realpath -m call made on exactly <repo>/sub.
     # shellcheck disable=SC2016  # literal $1/$3 - the stub script reads its own arguments
     printf '#!/bin/sh\n[ "$1" = "-m" ] && [ "$3" = "%s" ] && exit 1\nexec %s "$@"\n' "${TEST_TMP}/repo/sub" "${real}" > "${dir}/realpath"
-    run bash -c 'cd "$4" && printf "%s" "$1" | PATH="$2" "$(command -v bash)" "$3"' _ \
-        '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${HOOK}" "${TEST_TMP}/repo"
+    run_payload_with_path '{"tool_input":{"command":"cd sub && ls"}}' "${dir}" "${TEST_TMP}/repo"
     [ "${status}" -eq 2 ]
     [[ "${output}" == *"cd target 'sub' could not be resolved"* ]] || { echo "got: ${output}" >&2; return 1; }
 }
