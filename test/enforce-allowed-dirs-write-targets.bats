@@ -822,6 +822,13 @@ EOF'
     assert_each 0 '' "awk -v n=1 '{print n}' /etc/hosts" "awk '{print n}' n=1 /etc/hosts"
 }
 
+@test "awk --source= program text is quoted in the block message without the --source= prefix" {
+    run_in_repo "awk --source='print > \".claude/settings.json\"' x"
+    assert_blocked_config_write
+    [[ "${output}" == *"('print > \".claude/settings.json\"')"* ]] || { echo "program not quoted as given: ${output}" >&2; return 1; }
+    [[ "${output}" != *'--source='* ]] || { echo "message still carries the --source= prefix: ${output}" >&2; return 1; }
+}
+
 @test "awk -l/--load/--include in every spelling makes the operands write targets, and -F and other options are skipped" {
     local opt
     for opt in "-l x" "--load x" "--include x" "-linplace" "--load=x" "--include=inplace" "-iinplace"; do
