@@ -1516,10 +1516,20 @@ to_json_array() {
 # or word 1 when word 0 is a known wrapper - the same two positions the
 # per-call loop below checks. See enforce-ssh-host-and-key for the transport
 # rationale.
+#
+# A redirection's operator is read from the command text at its OpPos byte
+# offset rather than from its Op field, because shfmt before 3.14 encodes Op
+# as an integer token whose value shifts between releases (the image's Debian
+# shfmt is one of those) and only 3.14 onwards encodes it as its text. jq
+# indexes a string by codepoint, so it is given op_src, a copy of the command
+# with every byte outside printable ASCII replaced by `?`, keeping each byte
+# offset a valid index. An operator that cannot be read counts as writing.
+op_src=$(printf '%s' "$raw_cmd" | tr -c ' -~\t\n\r' '?')
 transport=$(printf '%s' "$ast" | jq -r \
   --argjson wrappers "$(to_json_array "${WRAPPERS[@]}")" \
   --argjson cd_names "$(to_json_array "${CD_NAMES[@]}")" \
-  --argjson redirects "$(to_json_array '>' '>>' '>|' '&>' '&>>' '<>')" '
+  --argjson redirects "$(to_json_array '>' '>>' '>|' '&>' '&>>' '<>')" \
+  --arg op_src "$op_src" '
   def part_info:
     if .Type == "Lit" then {ok: true, q: "u", t: .Value, v: (.Value | gsub("\\\\(?<c>.)"; "\(.c)"))}
     elif .Type == "SglQuoted" and ((.Dollar // false) | not) then {ok: true, q: "s", t: .Value, v: .Value}
@@ -1548,11 +1558,15 @@ transport=$(printf '%s' "$ast" | jq -r \
   def name_at($n): if (.[$n].lit // false) then (.[$n].t | basename) else "" end;
   def cmdname: name_at(0) as $n0 | if ($wrappers | index($n0)) != null then name_at(1) else $n0 end;
   def fd_word: ((.Parts // []) | length) == 1 and .Parts[0].Type == "Lit" and (.Parts[0].Value | test("^([0-9]+|-)$"));
+  def redir_op:
+    (.OpPos.Offset // 0) as $at
+    | ($op_src[$at:($at + 3)] | capture("^(?<op>&>>|&>|>>|>[|]|>&|<>|<<<|<<-|<<|<&|>|<)").op) // "?";
   [ .. | objects
     | if .Type? == "CallExpr" and ((.Args // []) | length) > 0 then {call: [.Args[] | word_info]}
       elif (.Redirs? | type) == "array" then
         (.Redirs[]
-         | select((.Op as $op | $redirects | index($op) != null) or (.Op == ">&" and (.Word | fd_word | not)))
+         | redir_op as $op
+         | select($op == "?" or ($redirects | index($op) != null) or ($op == ">&" and (.Word | fd_word | not)))
          | {redir: (.Word | word_info)})
       else empty end
   ] as $items
