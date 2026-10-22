@@ -835,6 +835,18 @@ EOF'
     [[ "${output}" != *'--source='* ]] || { echo "message still carries the --source= prefix: ${output}" >&2; return 1; }
 }
 
+@test "awk -v/--assign glued assignment is quoted in the block message without the option prefix" {
+    run_in_repo "awk -vx='.claude/settings.json' 'BEGIN{print 1 > x}'"
+    assert_blocked_config_write
+    [[ "${output}" == *"('x=.claude/settings.json')"* ]] || { echo "assignment not quoted as given: ${output}" >&2; return 1; }
+    [[ "${output}" != *'-vx='* ]] || { echo "message still carries the -v prefix: ${output}" >&2; return 1; }
+
+    run_in_repo "awk --assign=x='.claude/settings.json' 'BEGIN{print 1 > x}'"
+    assert_blocked_config_write
+    [[ "${output}" == *"('x=.claude/settings.json')"* ]] || { echo "assignment not quoted as given: ${output}" >&2; return 1; }
+    [[ "${output}" != *'--assign='* ]] || { echo "message still carries the --assign= prefix: ${output}" >&2; return 1; }
+}
+
 @test "awk -l/--load/--include in every spelling makes the operands write targets, and -F and other options are skipped" {
     local opt
     for opt in "-l x" "--load x" "--include x" "-linplace" "--load=x" "--include=inplace" "-iinplace"; do
