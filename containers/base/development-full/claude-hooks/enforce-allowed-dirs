@@ -326,10 +326,6 @@ GIT_SUBCOMMAND=""
 GIT_SUBCOMMAND_INDEX=0
 GIT_BASE=""
 GIT_RELATIVE_OK=1
-# Option names whose value is text, not a path, for the writer being checked
-# (see queue_all_arguments); empty here, and a writer with such options
-# (dotnet) declares its own local copy for its call only.
-TEXT_VALUE_OPTIONS=()
 
 is_wrapper() { in_list "$1" "${WRAPPERS[@]}"; }
 
@@ -672,14 +668,6 @@ queue_write_target() {
   queue_glob_matches "$3" "$1"
 }
 
-# Queues word $1 (flags $2) for the protected-path check only - for operands
-# a dedicated check has already held to the roots.
-queue_protected() {
-  prepare_word "$@"
-  queue_path "$PREPARED_ABS" "$3" "$1" p 0
-  queue_glob_matches "$3" "$1"
-}
-
 # Checks word $1 (flags $2), program text labelled $3, against the protected
 # names only. Non-literal program text could name anything, so it blocks.
 check_program_text() {
@@ -981,9 +969,9 @@ target_directory_option() {
 # a glob under a root (`rm -rf <root>/*`) empties it but leaves it in place,
 # and mv's last operand is a destination, into which moving is fine.
 deny_root_operand() {
-  local name="$1" word="$2" flags="$3"
+  local name="$1" word="$2" flags="$3" resolved="$4"
   [[ "$flags" == *g* ]] && return 0
-  is_root "$RESOLVED" && block "${name} may not target an allowed root directory itself ('${word}' resolves to '${RESOLVED}')"
+  is_root "$resolved" && block "${name} may not target an allowed root directory itself ('${word}' resolves to '${resolved}')"
   return 0
 }
 
@@ -991,7 +979,10 @@ deny_root_operand() {
 # protected-path check.
 check_operand() {
   require_under_root "$1" "$2" "$3"
-  queue_protected "$1" "$2" "$3"
+  # require_under_root's prepare_word left this word's PREPARED_ABS and
+  # PREPARED_GLOB set.
+  queue_path "$PREPARED_ABS" "$3" "$1" p 0
+  queue_glob_matches "$3" "$1"
 }
 
 check_rm_mv_cp() {
@@ -1028,14 +1019,13 @@ check_rm_mv_cp() {
     operand_flags+=("$flags")
     # check_operand left this operand's resolution in RESOLVED.
     operand_resolved+=("$RESOLVED")
-    [ "$name" = "rm" ] && deny_root_operand rm "$tok" "$flags"
+    [ "$name" = "rm" ] && deny_root_operand rm "$tok" "$flags" "$RESOLVED"
     j=$((j + 1))
   done
   # For mv every operand but the last is a source being moved away.
   if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
     for ((k = 0; k < ${#operands[@]} - 1; k++)); do
-      RESOLVED="${operand_resolved[k]}"
-      deny_root_operand mv "${operands[k]}" "${operand_flags[k]}"
+      deny_root_operand mv "${operands[k]}" "${operand_flags[k]}" "${operand_resolved[k]}"
     done
   fi
   return 0
@@ -1100,9 +1090,10 @@ queue_git_clone_default_dirs() {
 # base $2 with relative paths permitted iff $3 (defaults as for
 # prepare_word): every non-option word, the value of `--option=value`, every
 # tail of a short-option word (see header), and every word after `--`. The
-# value of an option in TEXT_VALUE_OPTIONS is skipped.
+# value of an option named in $4 onwards is text, not a path, and is skipped.
 queue_all_arguments() {
   local j="$1" base="${2:-$BASE_DIR}" relative_ok="${3:-$RELATIVE_OK}" name="${words[$i]##*/}" tok flags k operands_only=0
+  local -a text_value_options=("${@:4}")
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     flags="${wflags[$j]}"
@@ -1111,7 +1102,7 @@ queue_all_arguments() {
         --) operands_only=1; j=$((j + 1)); continue ;;
         -) j=$((j + 1)); continue ;; # stdin/stdout
         -*)
-          if in_list "${tok%%=*}" "${TEXT_VALUE_OPTIONS[@]}"; then
+          if in_list "${tok%%=*}" "${text_value_options[@]}"; then
             [[ "$tok" == *=* ]] || j=$((j + 1))
             j=$((j + 1))
             continue
@@ -1164,16 +1155,15 @@ gh_write_targets() {
 
 dotnet_write_targets() {
   local j
-  # Local, so queue_all_arguments sees it for this call only.
-  local -a TEXT_VALUE_OPTIONS=()
+  local -a text_value_options=()
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     case "${words[$j]}" in
       -*) continue ;;
-      changelog) TEXT_VALUE_OPTIONS=(-m --message) ;;
+      changelog) text_value_options=(-m --message) ;;
     esac
     break
   done
-  queue_all_arguments $((i + 1))
+  queue_all_arguments $((i + 1)) "" "" "${text_value_options[@]}"
 }
 
 mktemp_write_targets() {
@@ -1212,6 +1202,21 @@ check_ln_target() {
   return 0
 }
 
+# Adds ln's target directory to ln_write_targets' target_dirs: the value $1
+# attached to option word $3 (flags $2), or the next word when nothing is
+# attached, advancing the caller's j past it.
+add_ln_target_dir() {
+  if [ -n "$1" ]; then
+    target_dirs+=("$1")
+    target_dir_flags+=("$2")
+    return 0
+  fi
+  j=$((j + 1))
+  [ "$j" -lt "${#words[@]}" ] || block "ln ${3} requires a directory"
+  target_dirs+=("${words[$j]}")
+  target_dir_flags+=("${wflags[$j]}")
+}
+
 ln_write_targets() {
   local j tok flags symbolic=0 operands_only=0 k sources
   local -a operands=() operand_flags=() target_dirs=() target_dir_flags=()
@@ -1230,17 +1235,7 @@ ln_write_targets() {
         # "last operand" it would hide the real link name.
         --su*) j=$((j + 1)); continue ;;
         --*)
-          if target_directory_option "$tok"; then
-            if [ -n "$TARGET_DIR_VALUE" ]; then
-              target_dirs+=("$TARGET_DIR_VALUE")
-              target_dir_flags+=("$flags")
-            else
-              j=$((j + 1))
-              [ "$j" -lt "${#words[@]}" ] || block "ln ${tok} requires a directory"
-              target_dirs+=("${words[$j]}")
-              target_dir_flags+=("${wflags[$j]}")
-            fi
-          fi
+          target_directory_option "$tok" && add_ln_target_dir "$TARGET_DIR_VALUE" "$flags" "$tok"
           continue
           ;;
         -*)
@@ -1254,15 +1249,7 @@ ln_write_targets() {
                 break
                 ;;
               t)
-                if [ "$k" -lt $((${#tok} - 1)) ]; then
-                  target_dirs+=("${tok:k+1}")
-                  target_dir_flags+=("$flags")
-                else
-                  j=$((j + 1))
-                  [ "$j" -lt "${#words[@]}" ] || block "ln ${tok} requires a directory"
-                  target_dirs+=("${words[$j]}")
-                  target_dir_flags+=("${wflags[$j]}")
-                fi
+                add_ln_target_dir "${tok:k+1}" "$flags" "$tok"
                 break
                 ;;
               s) symbolic=1 ;;
@@ -1458,8 +1445,7 @@ check_file_tool() {
   path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // ""') || block 'tool payload could not be parsed by jq - failing closed'
   [ -z "$path" ] && block "${tool_name} payload has no file path - failing closed"
   case "$path" in
-    \~) PREPARED_ABS="$HOME" ;;
-    \~/*) PREPARED_ABS="${HOME}${path#\~}" ;;
+    \~ | \~/*) PREPARED_ABS="${HOME}${path#\~}" ;;
     /*) PREPARED_ABS="$path" ;;
     *) PREPARED_ABS="${PWD}/${path}" ;;
   esac

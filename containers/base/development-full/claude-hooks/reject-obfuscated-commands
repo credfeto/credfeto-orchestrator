@@ -315,12 +315,8 @@ NAME_RE='^(\[|[A-Za-z0-9_./][A-Za-z0-9_./-]*)$'
 
 # Loaded once, not re-read from disk per CallExpr.
 mapfile -t command_blocklist_lines < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_BLOCKLIST" 2> /dev/null)
-mapfile -t command_allowlist < <(grep -vE '^[[:space:]]*(#|$)' "$COMMAND_ALLOWLIST" 2> /dev/null)
 # Each line is "<name> <classification>"; keep only the name.
-for idx in "${!command_allowlist[@]}"; do
-  entry="${command_allowlist[$idx]#"${command_allowlist[$idx]%%[![:space:]]*}"}"
-  command_allowlist[idx]="${entry%%[[:space:]]*}"
-done
+mapfile -t command_allowlist < <(sed -nE '/^[[:space:]]*(#|$)/d; s/^[[:space:]]*([^[:space:]]+).*/\1/p' "$COMMAND_ALLOWLIST" 2> /dev/null)
 
 is_allowlisted() {
   local w
