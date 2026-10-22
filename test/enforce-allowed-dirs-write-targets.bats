@@ -43,7 +43,7 @@ run_file_tool() {
 }
 
 run_payload() {
-    run bash -c 'printf "%s" "$1" | "$2"' _ "$1" "${HOOK}"
+    run bash -c 'printf "%s" "$1" | bash "$2"' _ "$1" "${HOOK}"
 }
 
 run_in_repo() {
