@@ -443,6 +443,18 @@ teardown() {
     [ ! -e "${HOME}/.claude/settings.json" ]
 }
 
+@test "dies before installing anything when the user settings are not valid JSON" {
+    allow_sudo
+    printf '{ not json' > "${TEST_TMP}/broken.json"
+    SOURCE_USER_SETTINGS="${TEST_TMP}/broken.json"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"User settings are not valid JSON"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+    [ ! -e "${HOME}/.claude/settings.json" ]
+    [ ! -e "${CFWF_BIN_DIR}/cfwf" ]
+}
+
 # --- cfwf ------------------------------------------------------------------------
 
 @test "main installs cfwf into the shared bin directory, executable by everyone" {
