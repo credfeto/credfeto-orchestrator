@@ -152,7 +152,9 @@ install_managed_files() {
         info "Installed managed settings and hooks into ${CLAUDE_MANAGED_DIR}"
         return 0
     fi
-    info "Could not install the managed settings and hooks as root - no guardrails are active until you run:$(printf '\n  %s' "${PENDING_ROOT_COMMANDS[@]}")"
+    local pending
+    printf -v pending '\n  %s' "${PENDING_ROOT_COMMANDS[@]}"
+    info "Could not install the managed settings and hooks as root - no guardrails are active until you run:${pending}"
     return 1
 }
 
