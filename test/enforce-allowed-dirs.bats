@@ -70,6 +70,17 @@ assert_blocked() {
     assert_blocked "cd -P ${ROOT}" 'exactly one argument'
 }
 
+@test "cd or pushd with an extra empty argument is blocked, since bash rejects it as too many arguments and stays put" {
+    mkdir -p "${ROOT}/sub/deep"
+    assert_blocked 'cd sub/deep ""; tee ../../x' 'exactly one argument'
+    assert_blocked 'pushd sub/deep ""; tee ../../x' 'exactly one argument'
+}
+
+@test "cd or pushd to an empty directory name is blocked, since bash rejects a null directory" {
+    assert_blocked 'cd ""' 'target is empty'
+    assert_blocked 'pushd ""' 'target is empty'
+}
+
 @test "popd is blocked - its target is invisible to static parsing" {
     assert_blocked "popd"
 }
