@@ -88,8 +88,10 @@
 #                    other arguments are routinely issue and PR text;
 #       dotnet       every argument, except the message of `dotnet changelog
 #                    -m`/`--message`, which is text;
-#       mktemp       every argument, plus $TMPDIR (default /tmp) when no
-#                    template is given or -t/--tmpdir names no directory;
+#       mktemp       every argument (so the DIR of -p DIR, -pDIR and
+#                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
+#                    a bare --tmpdir, or no template and no DIR; a template
+#                    containing `/` beside a directory option blocks;
 #       sed, awk     the program text (sed's script, awk's program and -v
 #                    assignments) is checked as text against the protected
 #                    names only, since a program routinely names paths it does
@@ -1203,19 +1205,51 @@ dotnet_write_targets() {
   queue_all_arguments $((i + 1)) "" "" "${text_value_options[@]}"
 }
 
+# GNU mktemp writes into the directory named by -p DIR, -pDIR or --tmpdir=DIR
+# (any abbreviation from --t, its only long option starting with t), which
+# queue_all_arguments already queues. It writes into $TMPDIR (default /tmp)
+# only for -t (where a set $TMPDIR beats DIR), when the last of -p and
+# --tmpdir is a bare --tmpdir or an empty DIR, or with no template and no
+# DIR. A template is joined to that directory, so one containing `/` could
+# climb out of it and blocks. --suffix's separate value is not a template.
 mktemp_write_targets() {
-  local j template=0 implicit_dir=0
+  local j k tok opt template="" operands_only=0 dir_option=0 t_option=0 last_dir=""
   for ((j = i + 1; j < ${#words[@]}; j++)); do
-    case "${words[$j]}" in
-      -t | --tmpdir) implicit_dir=1 ;;
-      -p) j=$((j + 1)) ;;
-      -*) : ;;
-      *) template=1 ;;
-    esac
+    tok="${words[$j]}"
+    if [ "$operands_only" -eq 1 ] || [[ "$tok" != -?* ]]; then
+      template="$tok"
+      continue
+    fi
+    opt="${tok%%=*}"
+    if [ "$tok" = -- ]; then
+      operands_only=1
+    elif [[ ${#opt} -ge 3 && "--tmpdir" == "${opt}"* ]]; then
+      dir_option=1
+      if [[ "$tok" == *=?* ]]; then last_dir=named; else last_dir=implicit; fi
+    elif [[ ${#opt} -ge 3 && "--suffix" == "${opt}"* ]]; then
+      [[ "$tok" == *=* ]] || j=$((j + 1))
+    elif [[ "$tok" != --* ]]; then
+      for ((k = 1; k < ${#tok}; k++)); do
+        case "${tok:k:1}" in
+          t) dir_option=1 t_option=1 ;;
+          p)
+            dir_option=1
+            if [ $((k + 1)) -lt "${#tok}" ]; then
+              last_dir=named
+            else
+              j=$((j + 1))
+              if [ -n "${words[$j]:-}" ]; then last_dir=named; else last_dir=implicit; fi
+            fi
+            break
+            ;;
+        esac
+      done
+    fi
   done
-  [ "$template" -eq 0 ] && implicit_dir=1
+  [ -z "$template" ] && [ "$last_dir" != named ] && last_dir=implicit
+  [ "$dir_option" -eq 1 ] && [[ "$template" == */* ]] && block "mktemp template '${template}' contains '/' but is joined to a directory option (-p, -t or --tmpdir), so it could climb out of that directory - name the directory in the template instead"
   queue_all_arguments $((i + 1))
-  [ "$implicit_dir" -eq 1 ] && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
+  { [ "$t_option" -eq 1 ] || [ "$last_dir" = implicit ]; } && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
   return 0
 }
 

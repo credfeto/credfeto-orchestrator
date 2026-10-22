@@ -795,12 +795,34 @@ EOF'
         "dotnet changelog -f CHANGELOG.md -a Fixed -m x && dotnet build --message ~/.claude/settings.json"
 }
 
-@test "mktemp -t, --tmpdir and -p DIR also write into TMPDIR, and -p's directory is checked" {
+@test "mktemp -t, a bare --tmpdir and no template write into TMPDIR, which must be under a root" {
     printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
-    assert_each 2 "implicit \$TMPDIR" "mktemp -t x.XXXXXX" "mktemp --tmpdir x.XXXXXX" "mktemp -p sub"
+    assert_each 2 "implicit \$TMPDIR" "mktemp" "mktemp -t x.XXXXXX" "mktemp --tmpdir x.XXXXXX" "mktemp --tmp x.XXXXXX" \
+        "mktemp -dt x.XXXXXX" "mktemp -t -p sub x.XXXXXX" "mktemp -p sub --tmpdir" "mktemp --tmpdir= x.XXXXXX" \
+        "mktemp --suffix .txt" "mktemp --suf=.txt" "mktemp -p" "mktemp -p ''" "mktemp --quiet" "mktemp --=x"
     printf '%s\n' "${TEST_TMP}/repo" "${TMPDIR}" > "${HOOK_DIR}/allowed-dirs"
-    assert_each 0 '' "mktemp -t x.XXXXXX" "mktemp --tmpdir x.XXXXXX" "mktemp -p sub"
-    assert_each 2 'outside the allowed directories' "mktemp -p ${TEST_TMP}/outside"
+    assert_each 0 '' "mktemp" "mktemp -t x.XXXXXX" "mktemp --tmpdir x.XXXXXX" "mktemp --suffix .txt"
+}
+
+@test "mktemp -p DIR, -pDIR and --tmpdir=DIR write into DIR only, which must be under a root" {
+    printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
+    assert_each 0 '' "mktemp -p sub" "mktemp -psub" "mktemp -dpsub" "mktemp --tmpdir=sub" "mktemp --t=sub" "mktemp --dry-run -p sub" \
+        "mktemp -p sub x.XXXXXX" "mktemp -d --tmpdir=sub x.XXXXXX" "mktemp --tmpdir -p sub x.XXXXXX"
+    assert_each 2 'outside the allowed directories' "mktemp -p ${TEST_TMP}/outside" \
+        "mktemp --tmpdir=${TEST_TMP}/outside" "mktemp -p${TEST_TMP}/outside x.XXXXXX"
+    assert_each_config_write "mktemp -p .claude" "mktemp --tmpdir=${HOME}/.claude/agents XXXX.md"
+}
+
+@test "an mktemp template containing / beside a directory option is blocked" {
+    printf '%s\n' "${TEST_TMP}/repo" "${TMPDIR}" > "${HOOK_DIR}/allowed-dirs"
+    assert_each 2 "contains '/' but is joined to a directory option" "mktemp -p sub ../x.XXXXXX" \
+        "mktemp --tmpdir ../x.XXXXXX" "mktemp -t sub/x.XXXXXX" "mktemp --tmpdir=sub a/x.XXXXXX"
+    assert_each 0 '' "mktemp sub/x.XXXXXX" "mktemp -d -- sub/x.XXXXXX"
+}
+
+@test "an mktemp word after -- is a template even when it starts with a dash" {
+    printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
+    assert_each 0 '' "mktemp -d -- -x.XXXXXX" "mktemp -- -tx.XXXXXX" "mktemp -p sub -- -x.XXXXXX"
 }
 
 @test "ln option forms: --, long options, --target-directory (glued or separate), a missing -t/--target-directory directory, no or one operand" {
