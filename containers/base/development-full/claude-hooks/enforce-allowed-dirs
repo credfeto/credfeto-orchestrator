@@ -1309,10 +1309,11 @@ ln_write_targets() {
           target_directory_option "$tok" && add_ln_target_dir "$TARGET_DIR_VALUE" "$flags" "$tok"
           continue
           ;;
-        -*)
+        -?*)
           # -S (backup suffix) and -t (target directory) take the rest of
           # the word as their value, or the next word when nothing follows
-          # them, so an `s` after either is not -s.
+          # them, so an `s` after either is not -s. A bare - is a file
+          # name, not an option.
           for ((k = 1; k < ${#tok}; k++)); do
             case "${tok:k:1}" in
               S)
