@@ -942,7 +942,10 @@ check_find() {
 # `--target-directory`, any unique abbreviation of it (`--t` onwards - no
 # other cp/mv/ln long option starts with t), with or without `=value`.
 # Short: `-t`, or a bundled cluster containing t (`-rt`, `-rt/etc`):
-# everything after the first t is the attached value.
+# everything after the first t is the attached value. An explicitly empty
+# long value (`--target-directory=`) is blocked here, since the command uses
+# "" as the directory rather than the next word, so "" in TARGET_DIR_VALUE
+# always means the value is the next word.
 TARGET_DIR_VALUE=""
 target_directory_option() {
   local tok="$1" name k
@@ -953,7 +956,10 @@ target_directory_option() {
       name="${name%%=*}"
       [ -n "$name" ] || return 1
       [[ "target-directory" == "$name"* ]] || return 1
-      case "$tok" in *=*) TARGET_DIR_VALUE="${tok#*=}" ;; esac
+      case "$tok" in
+        *=) block "${tok} names an empty target directory - name the directory exactly" ;;
+        *=*) TARGET_DIR_VALUE="${tok#*=}" ;;
+      esac
       return 0
       ;;
     -[A-Za-z]*)

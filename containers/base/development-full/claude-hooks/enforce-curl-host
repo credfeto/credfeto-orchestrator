@@ -289,6 +289,7 @@ while IFS= read -r call_line; do
     [ "$tok" = "curl" ] || [[ "$tok" == */curl ]] || continue
 
     url=""
+    url_count=0
     skip_next=0
     for ((j = i + 1; j < ${#words[@]}; j++)); do
       arg="${words[$j]}"
@@ -314,11 +315,14 @@ while IFS= read -r call_line; do
         -*) block "curl flag '${arg}' is not on the allowed flag list - extend ALLOWED_NOARG_FLAGS/ALLOWED_ARG_FLAGS in this hook if it is legitimately required" ;;
       esac
 
-      [ -n "$url" ] && block 'curl with more than one URL argument is not permitted'
+      # Count the URL words rather than test the last one's content: a
+      # quoted "" is still a URL argument to curl.
+      url_count=$((url_count + 1))
+      [ "$url_count" -gt 1 ] && block 'curl with more than one URL argument is not permitted'
       url="$arg"
     done
 
-    [ -n "$url" ] || block 'curl requires exactly one literal http(s):// URL argument'
+    [ "$url_count" -eq 1 ] || block 'curl requires exactly one literal http(s):// URL argument'
     case "$url" in
       http://* | https://*) ;;
       *) block 'the curl URL argument must start with http:// or https://' ;;
