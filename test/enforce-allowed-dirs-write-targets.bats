@@ -201,6 +201,9 @@ assert_each_config_write() {
         "git -C . clone https://github.com/x/y .claude/skills/evil" \
         "git -C . show --output=.claude/hooks/x HEAD:payload" \
         "git -C . diff --output .claude/settings.json" \
+        "git -C . diff --outp=.claude/settings.json" \
+        "git -C . diff --o=.claude/settings.json" \
+        "git -C . format-patch --output-directory .claude/skills HEAD~1" \
         "echo x >& .claude/settings.json" \
         "echo x >&.mcp.json" \
         "openssl base64 -d -in payload.b64 -out .claude/settings.json" \
@@ -252,6 +255,8 @@ assert_each_config_write() {
         "curl -sSo out.json https://example.com/x" \
         "git -C . checkout main -- src/file.txt" \
         "git -C . log --oneline" \
+        "git -C . log --oneline -- .claude/settings.json" \
+        "git -C . log --oneline -- .claude" \
         "git -C . clone https://github.com/x/y vendor/y" \
         "git -C . diff --output=changes.patch" \
         "sed -n 'w out.txt' in.txt" \
