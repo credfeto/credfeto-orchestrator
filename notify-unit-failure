@@ -121,8 +121,8 @@ else
     SAFE_UNIT=$(printf '%s' "${UNIT_NAME}" | tr -cd 'A-Za-z0-9._@-')
     SAFE_HOST=$(printf '%s' "${HOSTNAME:-unknown-host}" | tr -cd 'A-Za-z0-9._-')
     # shellcheck disable=SC2016  # the backticks are literal Discord markdown, not substitutions
-    PAYLOAD=$(printf '{"embeds":[{"title":"Orchestrator unit failed","description":"`%s` entered the failed state on `%s`. jq was unavailable so no journal context is included - check the host.","color":15158332}]}' \
-        "${SAFE_UNIT}" "${SAFE_HOST}")
+    printf -v PAYLOAD '{"embeds":[{"title":"Orchestrator unit failed","description":"`%s` entered the failed state on `%s`. jq was unavailable so no journal context is included - check the host.","color":15158332}]}' \
+        "${SAFE_UNIT}" "${SAFE_HOST}"
 fi
 
 # --max-time matches lib/discord's own 5s budget on every webhook call: a hung POST here would
