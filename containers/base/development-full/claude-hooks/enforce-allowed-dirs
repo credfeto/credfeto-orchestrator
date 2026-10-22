@@ -738,10 +738,14 @@ resolve_queued_paths() {
 # Set by check_cd for the main loop's base-directory tracking.
 CD_TARGET=""
 check_cd() {
-  local name="${words[$i]}" arg="${words[$((i + 1))]:-}" extra="${words[$((i + 2))]:-}"
+  local name="${words[$i]}" arg="${words[$((i + 1))]:-}" argc=$((${#words[@]} - i - 1))
   [ "$name" = "popd" ] && block 'popd changes to a directory this hook cannot see - use cd <absolute dir>'
-  [ -z "$arg" ] && block "${name} requires a directory - a bare ${name} goes to \$HOME, which is not an allowed directory"
-  [ -n "$extra" ] && block "${name} takes exactly one argument (no flags)"
+  # Count words rather than test their content: a quoted "" is still an
+  # argument to bash, which rejects `cd DIR ""` as too many arguments and
+  # `cd ""` as a null directory, staying where it is in both cases.
+  [ "$argc" -eq 0 ] && block "${name} requires a directory - a bare ${name} goes to \$HOME, which is not an allowed directory"
+  [ "$argc" -gt 1 ] && block "${name} takes exactly one argument (no flags)"
+  [ -z "$arg" ] && block "${name} target is empty - bash rejects a null directory, so the cd would fail and leave the working directory unknown"
   case "$arg" in
     -*) block "${name} flags (including 'cd -') are not permitted - use ${name} <absolute dir>" ;;
   esac
