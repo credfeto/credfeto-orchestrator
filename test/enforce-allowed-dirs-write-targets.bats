@@ -215,6 +215,16 @@ assert_each_config_write() {
         "gh run download 123 -D .claude/skills" \
         "gh repo clone x/y .claude/agents" \
         "gh release download v1 --output .claude/settings.json" \
+        "gh x --output .claude/settings.json" \
+        "gh x --output=.claude/settings.json" \
+        "gh x --dir .claude/skills" \
+        "gh x --dir=.claude/skills" \
+        "gh x -O .claude/settings.json" \
+        "gh x -O.claude/settings.json" \
+        "gh x -O=.claude/settings.json" \
+        "gh x -D .claude/skills" \
+        "gh x -D.claude/skills" \
+        "gh x -D=.claude/skills" \
         "flake8 --format=x --output-file=.claude/settings.local.json x.py" \
         "pylint --output=${HOME}/.claude/agents/x.md x.py" \
         "ruff check -o .claude/settings.json ." \
@@ -273,6 +283,9 @@ assert_each_config_write() {
         "shfmt -w containers/base/development-full/claude-hooks/enforce-allowed-dirs" \
         "gh pr create --title fix --body 'blocks writes to .claude/settings.json'" \
         "gh issue comment 1 --body 'see ~/.claude/hooks'" \
+        "gh x --output-format json --body 'see .claude/settings.json'" \
+        "gh x --directory-listing --body 'see .claude/settings.json'" \
+        "gh x --outputs --body 'see .claude/settings.json'" \
         "dotnet changelog -f CHANGELOG.md -a Fixed -m 'blocks writes to ~/.claude/settings.json'" \
         "dotnet test --filter 'FullyQualifiedName~Foo' -p:CollectCoverage=true"
 }
