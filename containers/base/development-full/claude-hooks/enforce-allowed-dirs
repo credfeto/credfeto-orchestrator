@@ -74,10 +74,11 @@
 #                    hard link names an existing file to share, so every
 #                    operand is checked as a path;
 #       git          only for a subcommand in GIT_PATH_WRITERS (checkout,
-#                    restore, mv, rm, clone) or a call with `--output`, an
-#                    abbreviation of it (`--o`, `--outp`; not `--oneline`,
-#                    `--onto`, `--ours`) or a longer option starting with it
-#                    (`--output-directory`), and then every
+#                    restore, mv, rm, clone) or a call with `--output`,
+#                    `--output-directory` or an abbreviation of either
+#                    (`--o`, `--outp`, `--output-dir`; not `--oneline`,
+#                    `--onto`, `--ours`, nor the read-only
+#                    `--output-indicator-*`), and then every
 #                    argument after the subcommand, relative to the last -C,
 #                    plus, for clone, the directory git names after the
 #                    repository when none is given;
@@ -1147,11 +1148,14 @@ git_write_targets() {
   [ -n "$GIT_SUBCOMMAND" ] || return 0
   in_list "$GIT_SUBCOMMAND" "${GIT_PATH_WRITERS[@]}" && writes=1
   for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
-    # Only --output, its abbreviations and its longer forms
-    # (--output-directory) write; a bare --o* glob also caught read-only
-    # options such as --oneline, --onto, --ours and --others.
+    # Only --output and --output-directory write, so only their
+    # abbreviations count (every prefix of --output is also one of
+    # --output-directory): a bare --o* glob caught read-only options such
+    # as --oneline, --onto, --ours and --others, and an --output* glob
+    # caught the read-only --output-indicator-new/-old/-context. The
+    # ambiguous --output- stays a writer, failing closed (git rejects it).
     opt="${words[$j]%%=*}"
-    [[ ${#opt} -ge 3 && ("--output" == "${opt}"* || "${opt}" == --output*) ]] && writes=1
+    [[ ${#opt} -ge 3 && "--output-directory" == "${opt}"* ]] && writes=1
   done
   [ "$writes" -eq 1 ] || return 0
   note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
