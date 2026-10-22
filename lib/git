@@ -276,7 +276,7 @@ find_ai_instructions() {
 
 # Returns the number of commits `upstream` has that `ref` doesn't (git rev-list --count
 # ref..upstream) on stdout. Used by oneshot to detect its OWN checkout falling behind
-# origin/main — install-timer's ExecStartPre self-update steps are deliberately '-'-prefixed
+# origin/main — the service unit's (lib/systemd-units) ExecStartPre self-update steps are deliberately '-'-prefixed
 # (tolerate failure, #1098), so a merge that gets permanently wedged (e.g. a stale lock file left
 # by a killed git process, #1298) is otherwise swallowed silently forever with nothing surfacing
 # it. Returns 1 with no output if the count could not be determined — e.g. `upstream` doesn't

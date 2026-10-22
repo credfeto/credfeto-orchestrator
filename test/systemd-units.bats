@@ -6,14 +6,13 @@ setup() {
     setup_isolated_env
 
     mkdir -p "${TEST_TMP}/units"
-    make_stub systemctl 'exit 0'
+    make_stub systemctl "printf 'systemctl %s\\n' \"\$*\" >> '${TEST_TMP}/systemctl.log'"
 
-    # Override id as a bash function so CURRENT_USER and current_uid resolve to
-    # predictable test values when install-timer is sourced.  Both functions must
-    # be exported so command substitution subshells in the script see them.
+    # Override id as a bash function so the unit user's uid resolves to a predictable test value.
+    # It must be exported so command substitution subshells in the library see it.
     # shellcheck disable=SC2329
     id() {
-        case "$*" in
+        case "$1" in
             -un) echo "testuser" ;;
             -u)  echo "1001" ;;
             *)   echo "testuser" ;;
@@ -22,8 +21,8 @@ setup() {
     export -f id
 
     # Override getent so get_owner_home resolves to a deterministic, test-controlled home
-    # directory regardless of which user is looked up (some tests override CURRENT_USER directly
-    # to "root" or the real test-runner account to exercise the ownership-heal ExecStartPre lines
+    # directory regardless of which user is looked up (some tests pass "root" or the real
+    # test-runner account as the unit user to exercise the ownership-heal ExecStartPre lines
     # — see ownership_heal_cmd_for/local_ownership_heal_cmd_for below).
     # shellcheck disable=SC2329
     getent() {
@@ -31,27 +30,11 @@ setup() {
     }
     export -f getent
 
-    unset CLAUDECODE
+    # shellcheck disable=SC2034 # read by the sourced lib/systemd-units
+    UNIT_DIR="${TEST_TMP}/units"
+    export UNIT_DIR
 
-    source_install_timer
-
-    # Override sudo as a bash function to record calls and handle tee in-process.
-    # The tee case rewrites the destination from /etc/systemd/system/ to the
-    # test-controlled units directory so no real root writes occur.
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            tee)
-                shift
-                local dest="$1"
-                local redirected="${TEST_TMP}/units/${dest##*/}"
-                tee "${redirected}"
-                ;;
-        esac
-    }
-    export -f sudo
-
+    source_systemd_units
 }
 
 teardown() {
@@ -71,7 +54,7 @@ assert_selfupdate_execstartpre() {
 # regardless of the unit's User=) combined with '-' (tolerate failure), and detect-then-chown the
 # whole REPO_DIR tree using absolute /usr/bin/find and /usr/bin/chown paths, mirroring
 # setup-owner's clone_or_pull_repo pattern. Repeats '-print -quit' on each side of -o rather than
-# grouping with a \( -o \) (see install-timer) so this line never depends on how systemd's own
+# grouping with a \( -o \) (see lib/systemd-units) so this line never depends on how systemd's own
 # Exec line parser handles an escape sequence it doesn't recognise.
 assert_ownership_heal_execstartpre() {
     local svc="$1"
@@ -110,45 +93,11 @@ assert_local_ownership_heal_is_first_execstartpre() {
     grep -m1 -E '^ExecStartPre=' "${svc}" | grep -qF -- '-+/bin/sh -c'
 }
 
-@test "sourcing install-timer defines main without executing it" {
-    run declare -F main
-    [ "${status}" -eq 0 ]
-    run declare -F is_ai_agent
-    [ "${status}" -eq 0 ]
-}
-
-@test "is_ai_agent returns true when CLAUDECODE=1 and false otherwise" {
-    CLAUDECODE=1 run is_ai_agent
-    [ "${status}" -eq 0 ]
-    CLAUDECODE=0 run is_ai_agent
-    [ "${status}" -ne 0 ]
-}
-
-@test "install-timer dies when run inside a Claude Code session" {
-    CLAUDECODE=1 run main
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"must not be run inside a Claude Code session"* ]]
-}
-
-@test "check_required_tools dies when a required tool is missing" {
-    # Override the shell builtin used for presence checks so that git
-    # reports as absent, deterministically and without altering the real system.
-    command() {
-        if [ "$1" = "-v" ] && [ "$2" = "git" ]; then
-            return 1
-        fi
-        builtin command "$@"
-    }
-    run check_required_tools
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"Required tool not found"* ]]
-}
-
 # Extracts a single-quoted /bin/sh -c '...' command embedded in a generated unit file, given a
 # grep marker unique to the target ExecStartPre line. Shared by selfupdate_retry_cmd_for and
 # ownership_heal_cmd_for below, which differ only in how they configure the unit before
 # generating it and which line's marker they pass in. Returns non-zero on a broken extraction
-# (e.g. the grep stops matching after an install-timer change) rather than printing an empty
+# (e.g. the grep stops matching after a lib/systemd-units change) rather than printing an empty
 # string - callers must not embed this directly in `run /bin/sh -c "$(...)"`, since a command
 # substitution's exit status is discarded there and an empty result would silently become
 # `/bin/sh -c ""`, which always exits 0 and makes a no-drift-style test pass vacuously regardless
@@ -163,14 +112,15 @@ extract_execstartpre_cmd() {
     printf '%s' "${cmd}"
 }
 
-# Regenerates the systemd unit from whatever REPO_DIR/CURRENT_USER globals the caller has already
-# set, then extracts the ExecStartPre command matching marker. Shared by selfupdate_retry_cmd_for
-# and ownership_heal_cmd_for below, which differ only in which globals they override beforehand
-# and which line's marker they pass in.
+# Regenerates the systemd service unit for user running from repo_dir, then extracts the
+# ExecStartPre command matching marker. Shared by selfupdate_retry_cmd_for and
+# ownership_heal_cmd_for below, which differ only in which user/repo_dir they pass and which
+# line's marker they pass in.
 generated_execstartpre_cmd() {
-    local marker="$1"
-    main >/dev/null
-    local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
+    local marker="$1" user="$2" repo_dir="$3"
+    local service_name="credfeto-orchestrator-testuser"
+    create_service_unit "${user}" "${service_name}" "${repo_dir}" >/dev/null || return 1
+    local svc="${TEST_TMP}/units/${service_name}.service"
     extract_execstartpre_cmd "${svc}" "${marker}"
 }
 
@@ -185,16 +135,14 @@ run_execstartpre_cmd() {
 }
 
 # Extracts the merge-retry ExecStartPre command for repo_dir as a plain string, ready for
-# `run /bin/sh -c "$(...)"`. Shared by the two regression tests below. REPO_DIR is a plain global
-# create_service_unit reads, so overriding it here means the extracted line already targets
-# repo_dir directly, no text-surgery/retargeting needed.
+# `run /bin/sh -c "$(...)"`. Shared by the two regression tests below. repo_dir is passed straight
+# to create_service_unit, so the extracted line already targets it directly, no
+# text-surgery/retargeting needed.
 selfupdate_retry_cmd_for() {
     local repo_dir="$1"
-    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
-    REPO_DIR="${repo_dir}"
     # "timeout 30 /bin/sh -c '" is unique to the merge-retry line — the unrelated gpg-agent socket
     # step a few lines below also matches a bare "/bin/sh -c '".
-    generated_execstartpre_cmd "timeout 30 /bin/sh -c '"
+    generated_execstartpre_cmd "timeout 30 /bin/sh -c '" "testuser" "${repo_dir}"
 }
 
 @test "the merge ExecStartPre retry actually recovers from a stale nested lock file (#1298 regression, real repro)" {
@@ -247,18 +195,13 @@ selfupdate_retry_cmd_for() {
 }
 
 # Extracts the ownership-heal ExecStartPre command for repo_dir/current_user as a plain string,
-# ready for `run /bin/sh -c "$(...)"`. CURRENT_USER is overridden as a plain global the same way
-# selfupdate_retry_cmd_for overrides REPO_DIR above; this bypasses the file-level `id` stub
-# (which returns the unresolvable name "testuser") so the extracted command's `find -user`/
-# `-group` arguments name a real, resolvable account, since a nonexistent username makes find
-# itself error out rather than exercise the detect logic.
+# ready for `run /bin/sh -c "$(...)"`. current_user is passed as the unit user rather than the
+# unresolvable "testuser", so the extracted command's `find -user`/`-group` arguments name a
+# real, resolvable account, since a nonexistent username makes find itself error out rather than
+# exercise the detect logic.
 ownership_heal_cmd_for() {
     local repo_dir="$1" current_user="$2"
-    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
-    REPO_DIR="${repo_dir}"
-    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
-    CURRENT_USER="${current_user}"
-    generated_execstartpre_cmd "ExecStartPre=+-/bin/sh -c '"
+    generated_execstartpre_cmd "ExecStartPre=+-/bin/sh -c '" "${current_user}" "${repo_dir}"
 }
 
 # Creates a minimal repo checkout (just enough for the ownership-heal find/chown command to have
@@ -271,7 +214,7 @@ make_fake_repo() {
 
 @test "the ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1300/#1302, real repro)" {
     # command bypasses the file-level `id` shell-function stub to get the real account running
-    # this test, so the extracted find/chown command's CURRENT_USER matches the temp repo's
+    # this test, so the extracted find/chown command's unit user matches the temp repo's
     # actual on-disk owner and genuinely exercises the no-drift path, not a forced pass.
     local real_user
     real_user=$(command id -un)
@@ -285,13 +228,13 @@ make_fake_repo() {
 
 @test "the ownership-heal ExecStartPre detects drift and attempts to reassert ownership (#1300/#1302, real repro)" {
     # Every file under repo is genuinely owned by the account running this test, not by root, so
-    # naming "root" as CURRENT_USER reproduces real drift (analogous to #1300's root-run
+    # naming "root" as the unit user reproduces real drift (analogous to #1300's root-run
     # diagnostic command reowning .git/index) without needing privilege to actually chown a file
     # away from its real owner. The chown this triggers then genuinely fails with "Operation not
     # permitted": this test is run unprivileged deliberately, so it proves the detect-then-chown
     # branch was taken (the exact command the '+' prefix lets systemd run as root in production)
     # without asserting on privileged behaviour this suite cannot grant itself. If the suite itself
-    # is somehow run as root (e.g. a container-based CI runner), naming "root" as CURRENT_USER
+    # is somehow run as root (e.g. a container-based CI runner), naming "root" as the unit user
     # would never look like drift and the chown would genuinely succeed, so skip rather than fail.
     if [ "$(command id -u)" -eq 0 ]; then
         skip "requires an unprivileged test runner to reproduce ownership drift"
@@ -311,24 +254,21 @@ make_fake_repo() {
 }
 
 # Extracts the .local ownership-heal ExecStartPre command for owner_home_dir/current_user as a
-# plain string, ready for `run /bin/sh -c "$(...)"`. Unlike REPO_DIR (a plain global
-# ownership_heal_cmd_for above overrides directly), owner_home is resolved inside
-# create_service_unit via get_owner_home/getent, so this also redefines getent itself to return
-# owner_home_dir regardless of current_user - bypassing the file-level getent stub the same way
-# ownership_heal_cmd_for bypasses the file-level `id` stub.
+# plain string, ready for `run /bin/sh -c "$(...)"`. Unlike repo_dir (passed straight to
+# create_service_unit), owner_home is resolved inside create_service_unit via
+# get_owner_home/getent, so this also redefines getent itself to return owner_home_dir regardless
+# of current_user, bypassing the file-level getent stub.
 local_ownership_heal_cmd_for() {
     local owner_home_dir="$1" current_user="$2"
-    # shellcheck disable=SC2034 # consumed by create_service_unit, sourced from install-timer
-    CURRENT_USER="${current_user}"
     # shellcheck disable=SC2329
     getent() { printf '%s:x:1001:1001:Test User:%s:/bin/bash\n' "$1" "${owner_home_dir}"; }
     export -f getent
-    generated_execstartpre_cmd "ExecStartPre=-+/bin/sh -c '"
+    generated_execstartpre_cmd "ExecStartPre=-+/bin/sh -c '" "${current_user}" "${REPO_ROOT}"
 }
 
 @test "the .local ownership-heal ExecStartPre is a no-op when nothing is owned by a different user (#1232, real repro)" {
     # command bypasses the file-level `id` shell-function stub to get the real account running
-    # this test, so the extracted find/chown command's CURRENT_USER matches the temp home's actual
+    # this test, so the extracted find/chown command's unit user matches the temp home's actual
     # on-disk owner and genuinely exercises the no-drift path, not a forced pass.
     local real_user
     real_user=$(command id -un)
@@ -355,13 +295,13 @@ local_ownership_heal_cmd_for() {
 
 @test "the .local ownership-heal ExecStartPre detects drift and attempts to reassert ownership (#1232, real repro)" {
     # Every file under .local is genuinely owned by the account running this test, not by root, so
-    # naming "root" as CURRENT_USER reproduces real drift (analogous to the #1232 incident) without
+    # naming "root" as the unit user reproduces real drift (analogous to the #1232 incident) without
     # needing privilege to actually chown a directory away from its real owner. The chown this
     # triggers then genuinely fails with "Operation not permitted": this test is run unprivileged
     # deliberately, so it proves the detect-then-chown branch was taken (the exact command the
     # '-+' prefix lets systemd run as root in production) without asserting on privileged
     # behaviour this suite cannot grant itself. If the suite itself is somehow run as root (e.g. a
-    # container-based CI runner), naming "root" as CURRENT_USER would never look like drift and
+    # container-based CI runner), naming "root" as the unit user would never look like drift and
     # the chown would genuinely succeed, so skip rather than fail.
     if [ "$(command id -u)" -eq 0 ]; then
         skip "requires an unprivileged test runner to reproduce ownership drift"
@@ -380,8 +320,8 @@ local_ownership_heal_cmd_for() {
     [ -z "${output}" ]
 }
 
-@test "install-timer creates unit files and invokes systemctl correctly" {
-    run main
+@test "install_systemd_units creates unit files and invokes systemctl correctly" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -414,14 +354,14 @@ local_ownership_heal_cmd_for() {
     grep -q "OnUnitActiveSec=${ORCHESTRATOR_TIMER_INTERVAL}" "${tmr}"
     grep -q "OnBootSec=${ORCHESTRATOR_TIMER_INTERVAL}" "${tmr}"
 
-    [ -f "${TEST_TMP}/sudo.log" ]
-    grep -q "systemctl daemon-reload" "${TEST_TMP}/sudo.log"
-    grep -q "systemctl enable credfeto-orchestrator-testuser.timer" "${TEST_TMP}/sudo.log"
-    grep -q "systemctl start credfeto-orchestrator-testuser.timer" "${TEST_TMP}/sudo.log"
+    [ -f "${TEST_TMP}/systemctl.log" ]
+    grep -q "systemctl daemon-reload" "${TEST_TMP}/systemctl.log"
+    grep -q "systemctl enable credfeto-orchestrator-testuser.timer" "${TEST_TMP}/systemctl.log"
+    grep -q "systemctl start credfeto-orchestrator-testuser.timer" "${TEST_TMP}/systemctl.log"
 }
 
-@test "install-timer service unit includes security hardening directives" {
-    run main
+@test "install_systemd_units service unit includes security hardening directives" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -442,8 +382,8 @@ local_ownership_heal_cmd_for() {
     grep -q "MemoryDenyWriteExecute=no" "${svc}"
 }
 
-@test "install-timer service unit wires up OnFailure (#1361)" {
-    run main
+@test "install_systemd_units service unit wires up OnFailure (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -453,8 +393,8 @@ local_ownership_heal_cmd_for() {
     grep -q "OnFailure=credfeto-orchestrator-testuser-failure.service" "${svc}"
 }
 
-@test "install-timer does NOT set systemd start rate limiting (#1361)" {
-    run main
+@test "install_systemd_units does NOT set systemd start rate limiting (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -468,8 +408,8 @@ local_ownership_heal_cmd_for() {
     [ "$(grep -c '^StartLimitBurst=' "${svc}")" -eq 0 ]
 }
 
-@test "install-timer service unit removes the agent container on stop (#1361)" {
-    run main
+@test "install_systemd_units service unit removes the agent container on stop (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -485,21 +425,21 @@ local_ownership_heal_cmd_for() {
     [ "$(grep -c '^KillMode=' "${svc}")" -eq 0 ]
 }
 
-@test "install-timer --owner ExecStop targets the OWNER container name, not the unix user (#1361)" {
-    run main --owner myorg
+@test "install_systemd_units --owner ExecStop targets the OWNER container name, not the unix user (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}" myorg
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
     [ -f "${svc}" ]
     # lib/podman names the container orchestrator-${OWNER} (the GitHub owner), NOT the host unix
     # user. They coincide only when setup-owner's naming convention is followed; using
-    # CURRENT_USER here would remove the wrong name and silently fail to prevent the orphan.
+    # the unit user here would remove the wrong name and silently fail to prevent the orphan.
     grep -q "ExecStop=-/usr/bin/podman rm -f orchestrator-myorg" "${svc}"
     [ "$(grep -c 'rm -f orchestrator-testuser' "${svc}")" -eq 0 ]
 }
 
-@test "install-timer creates the failure-notifier unit (#1361)" {
-    run main
+@test "install_systemd_units creates the failure-notifier unit (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
@@ -510,8 +450,8 @@ local_ownership_heal_cmd_for() {
     [ "$(grep -c '^OnFailure=' "${failure_unit}")" -eq 0 ]
 }
 
-@test "install-timer --owner scopes the failure-notifier unit to the owner (#1361)" {
-    run main --owner myorg
+@test "install_systemd_units --owner scopes the failure-notifier unit to the owner (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}" myorg
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
@@ -521,12 +461,12 @@ local_ownership_heal_cmd_for() {
     grep -qE "ExecStart=.*/notify-unit-failure credfeto-orchestrator-testuser-myorg\.service$" "${failure_unit}"
 }
 
-@test "install-timer respects stop-timeout and notifier-timeout overrides (#1361)" {
-    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+@test "install_systemd_units respects stop-timeout and notifier-timeout overrides (#1361)" {
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced lib/systemd-units
     ORCHESTRATOR_TIMEOUT_STOP_SEC=42
-    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_failure_unit in the sourced install-timer
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_failure_unit in the sourced lib/systemd-units
     ORCHESTRATOR_NOTIFY_TIMEOUT_START_SEC=7
-    run main
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -536,8 +476,8 @@ local_ownership_heal_cmd_for() {
     grep -q "TimeoutStartSec=7" "${failure_unit}"
 }
 
-@test "install-timer failure unit is bounded and hardened (#1361)" {
-    run main
+@test "install_systemd_units failure unit is bounded and hardened (#1361)" {
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local failure_unit="${TEST_TMP}/units/credfeto-orchestrator-testuser-failure.service"
@@ -552,10 +492,10 @@ local_ownership_heal_cmd_for() {
     grep -qE "^CapabilityBoundingSet=$" "${failure_unit}"
 }
 
-@test "install-timer respects ORCHESTRATOR_TIMEOUT_START_SEC override (#1098)" {
-    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced install-timer
+@test "install_systemd_units respects ORCHESTRATOR_TIMEOUT_START_SEC override (#1098)" {
+    # shellcheck disable=SC2030,SC2031,SC2034  # read by create_service_unit in the sourced lib/systemd-units
     ORCHESTRATOR_TIMEOUT_START_SEC=1234
-    run main
+    run install_systemd_units testuser "${REPO_ROOT}"
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser.service"
@@ -563,8 +503,8 @@ local_ownership_heal_cmd_for() {
     grep -q "TimeoutStartSec=1234" "${svc}"
 }
 
-@test "install-timer --owner creates owner-scoped unit files with --owner in ExecStart" {
-    run main --owner myorg
+@test "install_systemd_units --owner creates owner-scoped unit files with --owner in ExecStart" {
+    run install_systemd_units testuser "${REPO_ROOT}" myorg
     [ "${status}" -eq 0 ]
 
     local svc="${TEST_TMP}/units/credfeto-orchestrator-testuser-myorg.service"
@@ -596,25 +536,47 @@ local_ownership_heal_cmd_for() {
     [ -f "${tmr}" ]
     grep -q "Unit=credfeto-orchestrator-testuser-myorg.service" "${tmr}"
 
-    [ -f "${TEST_TMP}/sudo.log" ]
-    grep -q "systemctl enable credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
-    grep -q "systemctl start credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/sudo.log"
+    [ -f "${TEST_TMP}/systemctl.log" ]
+    grep -q "systemctl enable credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/systemctl.log"
+    grep -q "systemctl start credfeto-orchestrator-testuser-myorg.timer" "${TEST_TMP}/systemctl.log"
 }
 
-@test "install-timer --owner with no value dies" {
-    run main --owner
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"--owner requires a value"* ]]
+@test "systemd_service_name prints the per-user unit name" {
+    run systemd_service_name testuser
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "credfeto-orchestrator-testuser" ]
 }
 
-@test "install-timer with an unknown argument dies" {
-    run main --unknown-flag
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"Unknown argument"* ]]
+@test "systemd_service_name appends the owner filter" {
+    run systemd_service_name testuser myorg
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "credfeto-orchestrator-testuser-myorg" ]
 }
 
-@test "install-timer --owner with invalid characters dies" {
-    run main --owner "evil;cmd"
+@test "install_systemd_units with an empty user dies without writing units" {
+    run install_systemd_units "" "${REPO_ROOT}"
     [ "${status}" -ne 0 ]
-    [[ "${output}" == *"invalid characters"* ]]
+    [[ "${output}" == *"user must not be empty"* ]]
+    [ -z "$(ls -A "${TEST_TMP}/units")" ]
+    [ ! -f "${TEST_TMP}/systemctl.log" ]
+}
+
+@test "install_systemd_units with an invalid owner filter dies without writing units" {
+    run install_systemd_units testuser "${REPO_ROOT}" "evil;cmd"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"owner contains invalid characters"* ]]
+    [ -z "$(ls -A "${TEST_TMP}/units")" ]
+    [ ! -f "${TEST_TMP}/systemctl.log" ]
+}
+
+@test "install_systemd_units with an empty repo dir dies without invoking systemctl" {
+    run install_systemd_units testuser ""
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Repository directory must not be empty"* ]]
+    [ ! -f "${TEST_TMP}/systemctl.log" ]
+}
+
+@test "lib/systemd-units does not invoke sudo" {
+    run bash -c "grep -v '^[[:space:]]*#' '${REPO_ROOT}/lib/systemd-units' | grep -n 'sudo'"
+    [ "${status}" -ne 0 ]
 }

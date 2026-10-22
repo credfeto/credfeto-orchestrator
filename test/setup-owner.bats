@@ -24,26 +24,39 @@ setup() {
     }
     export -f id
 
-    make_stub useradd 'exit 0'
+    # Privileged tools are stubbed to record their invocation in calls.log, so no test
+    # touches real accounts, ownership or systemd state. File tools (cp, rm, mkdir, tee,
+    # chmod, find) stay real and operate inside TEST_TMP.
+    local tool
+    for tool in chown useradd passwd usermod loginctl systemctl pkill; do
+        # shellcheck disable=SC2016  # stub body: $0/$* must stay literal and expand at stub runtime
+        make_stub "${tool}" 'printf "%s\n" "$(basename "$0") $*" >> "${TEST_TMP}/calls.log"'
+    done
     make_stub getent 'exit 1'
     make_stub git 'exit 0'
-    make_stub loginctl 'exit 0'
+
+    # runuser must always be handed an explicit HOME, because runuser -u keeps root's
+    # environment and the owner's git/gpg would otherwise read root's configuration.
+    # shellcheck disable=SC2016  # stub body: $*/$#/$1/$@ must stay literal and expand at stub runtime
+    make_stub_multiline runuser \
+        'printf "%s\n" "runuser $*" >> "${TEST_TMP}/calls.log"' \
+        'case "$*" in' \
+        '    "-u "*" -- env HOME="*) ;;' \
+        '    *) echo "runuser called without an explicit HOME: $*" >&2; exit 97 ;;' \
+        'esac' \
+        'while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done' \
+        'shift' \
+        'exec "$@"'
+
+    # Redirect unit and polkit writes to the test tree; setup-owner reads both at source time.
+    export UNIT_DIR="${TEST_TMP}/units"
+    export POLKIT_RULES_DIR="${TEST_TMP}/polkit"
+    mkdir -p "${UNIT_DIR}" "${POLKIT_RULES_DIR}"
 
     unset CLAUDECODE
+    unset SUDO_USER
 
     source_setup_owner
-
-    # Override sudo as a bash function to record calls and redirect writes into
-    # the test tree. The rm case performs the actual deletion so file-existence
-    # assertions in revoke_sudoers tests work correctly.
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm) shift; /bin/rm "$@" ;;
-        esac
-    }
-    export -f sudo
 }
 
 teardown() {
@@ -70,11 +83,12 @@ teardown() {
     [[ "${output}" == *"Required tool not found"* ]]
 }
 
-@test "check_required_tools does not require visudo" {
-    # visudo was previously required for ensure_sudoers; it must no longer be.
+@test "check_required_tools requires neither visudo nor sudo" {
+    # visudo was previously required for ensure_sudoers, and sudo for every privileged
+    # step; setup-owner now runs as root and must need neither.
     # shellcheck disable=SC2329
     command() {
-        if [ "$1" = "-v" ] && [ "$2" = "visudo" ]; then
+        if [ "$1" = "-v" ] && { [ "$2" = "visudo" ] || [ "$2" = "sudo" ]; }; then
             return 1
         fi
         builtin command "$@"
@@ -83,18 +97,170 @@ teardown() {
     [ "${status}" -eq 0 ]
 }
 
+@test "check_required_tools dies when runuser is missing" {
+    # shellcheck disable=SC2329
+    command() {
+        if [ "$1" = "-v" ] && [ "$2" = "runuser" ]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    run check_required_tools
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"runuser"* ]]
+}
+
+@test "no provisioning script invokes sudo outside comments" {
+    local script
+    for script in setup-owner teardown-owner lib/systemd-units; do
+        run bash -c 'sed "s/#.*//" "$1" | grep -qw sudo' _ "${REPO_ROOT}/${script}"
+        [ "${status}" -ne 0 ] || { echo "${script} invokes sudo" >&2; return 1; }
+    done
+}
+
+@test "main dies when not run as root" {
+    run main --owner testowner
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"must be run as root"* ]]
+    [ ! -f "${TEST_TMP}/calls.log" ]
+}
+
+@test "main dies with usage when no owner is given" {
+    run main
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Usage:"* ]]
+}
+
 @test "enable_linger invokes loginctl enable-linger for the owner" {
     run enable_linger "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Linger enabled for testowner"* ]]
-    grep -q "loginctl enable-linger testowner" "${TEST_TMP}/sudo.log"
+    grep -qxF "loginctl enable-linger testowner" "${TEST_TMP}/calls.log"
+}
+
+@test "ensure_user_exists creates and locks a new user" {
+    # shellcheck disable=SC2329
+    id() { return 1; }
+    run ensure_user_exists "testowner"
+    [ "${status}" -eq 0 ]
+    grep -qxF "useradd -m -s /bin/bash testowner" "${TEST_TMP}/calls.log"
+    grep -qxF "passwd -l testowner" "${TEST_TMP}/calls.log"
+}
+
+@test "ensure_journal_group adds a newly created user to systemd-journal" {
+    # shellcheck disable=SC2329
+    id() { return 1; }
+    # shellcheck disable=SC2329
+    getent() { [ "$1" = "group" ] && [ "$2" = "systemd-journal" ]; }
+    run ensure_user_exists "testowner"
+    [ "${status}" -eq 0 ]
+    run ensure_journal_group "testowner"
+    [ "${status}" -eq 0 ]
+    grep -qxF "usermod -aG systemd-journal testowner" "${TEST_TMP}/calls.log"
+
+    local useradd_line usermod_line
+    useradd_line=$(grep -nF "useradd " "${TEST_TMP}/calls.log" | head -1 | cut -d: -f1)
+    usermod_line=$(grep -nF "usermod " "${TEST_TMP}/calls.log" | head -1 | cut -d: -f1)
+    [ "${useradd_line}" -lt "${usermod_line}" ]
+}
+
+@test "ensure_journal_group adds an already existing user to systemd-journal" {
+    # shellcheck disable=SC2329
+    getent() { [ "$1" = "group" ] && [ "$2" = "systemd-journal" ]; }
+    run ensure_user_exists "testowner"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"already exists"* ]]
+    run ensure_journal_group "testowner"
+    [ "${status}" -eq 0 ]
+    run grep -qF "useradd" "${TEST_TMP}/calls.log"
+    [ "${status}" -ne 0 ]
+    grep -qxF "usermod -aG systemd-journal testowner" "${TEST_TMP}/calls.log"
+}
+
+@test "ensure_journal_group dies when the systemd-journal group does not exist" {
+    run ensure_journal_group "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Group systemd-journal does not exist"* ]]
+    [ ! -f "${TEST_TMP}/calls.log" ]
+}
+
+@test "ensure_journal_group dies when usermod fails" {
+    # shellcheck disable=SC2329
+    getent() { [ "$1" = "group" ] && [ "$2" = "systemd-journal" ]; }
+    make_stub usermod 'exit 1'
+    run ensure_journal_group "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to add testowner to the systemd-journal group"* ]]
+}
+
+@test "write_polkit_rule allows only start, stop and restart of the owner's own service" {
+    run write_polkit_rule "testowner"
+    [ "${status}" -eq 0 ]
+
+    local service_name rule_file
+    service_name=$(systemd_service_name "testowner" "testowner")
+    rule_file="${POLKIT_RULES_DIR}/50-credfeto-orchestrator-testowner.rules"
+    [ -f "${rule_file}" ]
+    grep -qF 'subject.user == "testowner"' "${rule_file}"
+    grep -qF "action.lookup(\"unit\") == \"${service_name}.service\"" "${rule_file}"
+    grep -qF 'org.freedesktop.systemd1.manage-units' "${rule_file}"
+    grep -qF '"start"' "${rule_file}"
+    grep -qF '"stop"' "${rule_file}"
+    grep -qF '"restart"' "${rule_file}"
+    grep -qF 'polkit.Result.YES' "${rule_file}"
+    run grep -qE '"(reload|enable|disable|kill|mask)"' "${rule_file}"
+    [ "${status}" -ne 0 ]
+    run grep -c 'lookup("unit")' "${rule_file}"
+    [ "${output}" -eq 1 ]
+}
+
+@test "write_polkit_rule sets root ownership and mode 0644" {
+    run write_polkit_rule "testowner"
+    [ "${status}" -eq 0 ]
+
+    local rule_file="${POLKIT_RULES_DIR}/50-credfeto-orchestrator-testowner.rules"
+    grep -qxF "chown root:root ${rule_file}" "${TEST_TMP}/calls.log"
+    [ "$(stat -c '%a' "${rule_file}")" = "644" ]
+}
+
+@test "write_polkit_rule rewrites a stale rule on every run" {
+    local rule_file="${POLKIT_RULES_DIR}/50-credfeto-orchestrator-testowner.rules"
+    printf 'stale-rule-content\n' > "${rule_file}"
+    chmod 0600 "${rule_file}"
+
+    run write_polkit_rule "testowner"
+    [ "${status}" -eq 0 ]
+
+    run grep -qF 'stale-rule-content' "${rule_file}"
+    [ "${status}" -ne 0 ]
+    grep -qF 'subject.user == "testowner"' "${rule_file}"
+    [ "$(stat -c '%a' "${rule_file}")" = "644" ]
+}
+
+@test "write_polkit_rule dies when the polkit rules directory is missing" {
+    rm -rf "${POLKIT_RULES_DIR}"
+    run write_polkit_rule "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${POLKIT_RULES_DIR} does not exist"* ]]
+    [ ! -d "${POLKIT_RULES_DIR}" ]
+}
+
+@test "install_owner_units installs the owner's units against its own clone" {
+    local test_home="${TEST_TMP}/owner_home"
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    # shellcheck disable=SC2329
+    install_systemd_units() { printf '%s\n' "install_systemd_units $*" >> "${TEST_TMP}/calls.log"; }
+
+    run install_owner_units "testowner"
+    [ "${status}" -eq 0 ]
+    grep -qxF "install_systemd_units testowner ${test_home}/credfeto-orchestrator testowner" "${TEST_TMP}/calls.log"
 }
 
 @test "revoke_sudoers is a no-op when the sudoers file does not exist" {
     run revoke_sudoers "testowner"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"nothing to revoke"* ]]
-    [ ! -f "${TEST_TMP}/sudo.log" ]
 }
 
 @test "revoke_sudoers removes the sudoers file when it exists" {
@@ -102,8 +268,7 @@ teardown() {
     run revoke_sudoers "testowner"
     [ "${status}" -eq 0 ]
     [ ! -f "${SUDOERS_DIR}/testowner" ]
-    [ -f "${TEST_TMP}/sudo.log" ]
-    grep -q "rm -f ${SUDOERS_DIR}/testowner" "${TEST_TMP}/sudo.log"
+    [[ "${output}" == *"Sudoers entry revoked for testowner"* ]]
 }
 
 @test "ensure_sudoers is not defined (regression: old grant removed)" {
@@ -120,17 +285,6 @@ teardown() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            mkdir) shift; mkdir "$@" ;;
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     run configure_podman_storage "testowner"
     [ "${status}" -eq 0 ]
@@ -153,17 +307,6 @@ teardown() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            mkdir) shift; mkdir "$@" ;;
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
     # shellcheck disable=SC2329
@@ -195,17 +338,6 @@ teardown() {
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            mkdir) shift; mkdir "$@" ;;
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
-
     # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
     # shellcheck disable=SC2329
     command() {
@@ -234,17 +366,6 @@ teardown() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            mkdir) shift; mkdir "$@" ;;
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     # Make fuse-overlayfs unavailable so the storage driver falls back to vfs.
     # shellcheck disable=SC2329
@@ -277,16 +398,6 @@ teardown() {
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
-
     run configure_git "testowner" "${test_home}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"Git configured for testowner"* ]]
@@ -309,16 +420,6 @@ teardown() {
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
-
     run configure_git "testowner" "${test_home}"
     [ "${status}" -eq 0 ]
 
@@ -340,16 +441,6 @@ teardown() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     run configure_git "testowner" "${test_home}"
     [ "${status}" -eq 0 ]
@@ -383,16 +474,6 @@ teardown() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     run configure_git "testowner" "${test_home}"
     [ "${status}" -eq 0 ]
@@ -429,23 +510,6 @@ teardown() {
     [ ! -f "${gitconfig}" ]
 }
 
-# shellcheck disable=SC2329
-stub_sudo_for_copy_dotdir() {
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   shift; /bin/rm "$@" ;;
-            cp)   shift; /bin/cp "$@" ;;
-            mv)   shift; /bin/mv "$@" ;;
-            cat)  shift; /bin/cat "$@" ;;
-            tee)  shift; tee "$@" ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
-}
-
 @test "copy_dotdir refreshes an existing .ssh directory instead of skipping it" {
     local src_ssh="${HOME}/.ssh"
     local dst_home="${TEST_TMP}/owner_home"
@@ -454,7 +518,6 @@ stub_sudo_for_copy_dotdir() {
     printf 'new-key-material\n' > "${src_ssh}/id_ed25519"
     printf 'old-key-material\n' > "${dst_ssh}/id_ed25519"
 
-    stub_sudo_for_copy_dotdir
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
     [ "${status}" -eq 0 ]
@@ -474,7 +537,6 @@ stub_sudo_for_copy_dotdir() {
     printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
     # Source does not ship its own known_hosts.
 
-    stub_sudo_for_copy_dotdir
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
     [ "${status}" -eq 0 ]
@@ -494,20 +556,14 @@ stub_sudo_for_copy_dotdir() {
     printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
     # Source does not ship its own known_hosts.
 
+    # Fail only the copy into the owner's .ssh; anything else (e.g. teardown) is untouched.
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   shift; /bin/rm "$@" ;;
-            cp)   return 1 ;;
-            mv)   shift; /bin/mv "$@" ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
+    cp() { case "$*" in *"${dst_ssh}"*) return 1 ;; *) command cp "$@" ;; esac; }
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f cp
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Failed to copy"* ]]
     [[ "${output}" == *"known_hosts backup preserved at"* ]]
@@ -528,20 +584,14 @@ stub_sudo_for_copy_dotdir() {
     printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
     # Source does not ship its own known_hosts.
 
+    # Fail only the removal of the owner's .ssh; teardown's own rm calls must still work.
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   return 1 ;;
-            cp)   shift; /bin/cp "$@" ;;
-            mv)   shift; /bin/mv "$@" ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
+    rm() { case "$*" in *"${dst_ssh}"*) return 1 ;; *) command rm "$@" ;; esac; }
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f rm
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Failed to remove existing"* ]]
     [[ "${output}" == *"known_hosts backup preserved at"* ]]
@@ -562,27 +612,14 @@ stub_sudo_for_copy_dotdir() {
     printf 'accumulated-host-key\n' > "${dst_ssh}/known_hosts"
     # Source does not ship its own known_hosts.
 
+    # Let the backup-out mv succeed; fail only the final restore-in mv.
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            rm)   shift; /bin/rm "$@" ;;
-            cp)   shift; /bin/cp "$@" ;;
-            mv)
-                shift
-                # Let the backup-out mv succeed; fail only the final restore-in mv.
-                case "$*" in
-                    *"${dst_ssh}/known_hosts") return 1 ;;
-                    *) /bin/mv "$@" ;;
-                esac
-                ;;
-            find) shift; /usr/bin/find "$@" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
+    mv() { case "$*" in *"${dst_ssh}/known_hosts") return 1 ;; *) command mv "$@" ;; esac; }
 
     run copy_dotdir "testowner" "${dst_home}" ".ssh"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f mv
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"Failed to restore known_hosts"* ]]
     [[ "${output}" == *"backup still at"* ]]
@@ -596,91 +633,117 @@ stub_sudo_for_copy_dotdir() {
 
 @test "clone_or_pull_repo reasserts ownership before pulling an already-cloned checkout" {
     local test_home="${TEST_TMP}/owner_home"
-    mkdir -p "${test_home}/credfeto-orchestrator/.git"
+    local clone_dir="${test_home}/credfeto-orchestrator"
+    mkdir -p "${clone_dir}/.git"
 
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            -u)    shift; shift; "$@" ;;
-            find)  echo "drift-detected" ;;
-            chown) true ;;
-        esac
-    }
-    export -f sudo
+    find() { case "$1" in "${clone_dir}") echo "drift-detected" ;; *) command find "$@" ;; esac; }
 
     run clone_or_pull_repo "testowner"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f find
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Repository ready at ${test_home}/credfeto-orchestrator"* ]]
+    [[ "${output}" == *"Repository ready at ${clone_dir}"* ]]
 
-    local clone_dir="${test_home}/credfeto-orchestrator"
-    grep -qF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/sudo.log"
-    grep -qF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log"
+    local pull_call="runuser -u testowner -- env HOME=${test_home} git -C ${clone_dir} pull --ff-only"
+    grep -qxF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/calls.log"
+    grep -qxF "${pull_call}" "${TEST_TMP}/calls.log"
 
     # The chown must run before the pull, so a root-owned .git/index left by an
     # earlier diagnostic command (#1300) is fixed before git needs to open it.
     local chown_line pull_line
-    chown_line=$(grep -nF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/sudo.log" | head -1 | cut -d: -f1)
-    pull_line=$(grep -nF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log" | head -1 | cut -d: -f1)
+    chown_line=$(grep -nxF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/calls.log" | head -1 | cut -d: -f1)
+    pull_line=$(grep -nxF "${pull_call}" "${TEST_TMP}/calls.log" | head -1 | cut -d: -f1)
     [ "${chown_line}" -lt "${pull_line}" ]
 }
 
 @test "clone_or_pull_repo skips the ownership reassert when no drift is detected" {
     local test_home="${TEST_TMP}/owner_home"
-    mkdir -p "${test_home}/credfeto-orchestrator/.git"
+    local clone_dir="${test_home}/credfeto-orchestrator"
+    mkdir -p "${clone_dir}/.git"
 
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
+    # No output: nothing under the checkout is owned by anyone else.
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            -u)   shift; shift; "$@" ;;
-            find) : ;; # no output - nothing owned by anyone else
-        esac
-    }
-    export -f sudo
+    find() { case "$1" in "${clone_dir}") : ;; *) command find "$@" ;; esac; }
 
     run clone_or_pull_repo "testowner"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f find
     [ "${status}" -eq 0 ]
 
-    local clone_dir="${test_home}/credfeto-orchestrator"
-    run grep -qF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/sudo.log"
+    run grep -qF "chown -R testowner:testowner ${clone_dir}" "${TEST_TMP}/calls.log"
     [ "${status}" -ne 0 ]
-    grep -qF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log"
+    grep -qxF "runuser -u testowner -- env HOME=${test_home} git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/calls.log"
 }
 
 @test "clone_or_pull_repo still pulls when reasserting ownership fails" {
     local test_home="${TEST_TMP}/owner_home"
-    mkdir -p "${test_home}/credfeto-orchestrator/.git"
+    local clone_dir="${test_home}/credfeto-orchestrator"
+    mkdir -p "${clone_dir}/.git"
 
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
 
     # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            -u)    shift; shift; "$@" ;;
-            find)  echo "drift-detected" ;;
-            chown) return 1 ;;
-        esac
-    }
-    export -f sudo
+    find() { case "$1" in "${clone_dir}") echo "drift-detected" ;; *) command find "$@" ;; esac; }
+    # shellcheck disable=SC2016  # stub body: $* must stay literal and expand at stub runtime
+    make_stub chown 'printf "%s\n" "chown $*" >> "${TEST_TMP}/calls.log"; exit 1'
+
+    run clone_or_pull_repo "testowner"
+    # Drop the override at once: it reads a test-local variable, so left in place it would
+    # match every call once that variable is out of scope and break bats' own cleanup.
+    unset -f find
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to fully reassert ownership"* ]]
+    [[ "${output}" == *"Repository ready at ${clone_dir}"* ]]
+
+    grep -qxF "runuser -u testowner -- env HOME=${test_home} git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/calls.log"
+}
+
+@test "clone_or_pull_repo clones as the owner with an explicit HOME when no checkout exists" {
+    local test_home="${TEST_TMP}/owner_home"
+    local clone_dir="${test_home}/credfeto-orchestrator"
+    mkdir -p "${test_home}"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
 
     run clone_or_pull_repo "testowner"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"Repository ready at ${test_home}/credfeto-orchestrator"* ]]
+    grep -qxF "runuser -u testowner -- env HOME=${test_home} git clone ${REPO_URL} ${clone_dir}" "${TEST_TMP}/calls.log"
+}
 
+@test "clone_or_pull_repo dies when the pull fails" {
+    local test_home="${TEST_TMP}/owner_home"
     local clone_dir="${test_home}/credfeto-orchestrator"
-    grep -qF -- "-u testowner git -C ${clone_dir} pull --ff-only" "${TEST_TMP}/sudo.log"
+    mkdir -p "${clone_dir}/.git"
+
+    # shellcheck disable=SC2329
+    getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
+    export -f getent
+    make_stub git 'exit 1'
+
+    run clone_or_pull_repo "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to pull repository in ${clone_dir}"* ]]
+}
+
+@test "the runuser stub rejects a call without an explicit HOME" {
+    run runuser -u testowner -- git status
+    [ "${status}" -eq 97 ]
+    [[ "${output}" == *"without an explicit HOME"* ]]
 }
 
 @test "configure_podman_engine writes containers.conf with cgroupfs manager only" {
@@ -690,17 +753,6 @@ stub_sudo_for_copy_dotdir() {
     # shellcheck disable=SC2329
     getent() { echo "testowner:x:1001:1001:Test Owner:${test_home}:/bin/bash"; }
     export -f getent
-
-    # shellcheck disable=SC2329
-    sudo() {
-        printf '%s\n' "$*" >> "${TEST_TMP}/sudo.log"
-        case "$1" in
-            mkdir) shift; mkdir "$@" ;;
-            tee)   shift; tee "$1" ;;
-            chown|chmod) true ;;
-        esac
-    }
-    export -f sudo
 
     run configure_podman_engine "testowner"
     [ "${status}" -eq 0 ]
