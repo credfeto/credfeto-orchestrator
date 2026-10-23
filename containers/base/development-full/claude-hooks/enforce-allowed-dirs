@@ -1019,7 +1019,9 @@ check_rm_mv_cp() {
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
         --no-preserve-root) block 'rm --no-preserve-root is not permitted' ;;
-        -*)
+        -?*)
+          # A bare - is a file name to rm/mv/cp, not an option, so it is
+          # checked as an operand below.
           # mv/cp write into a directory named by --target-directory, which
           # getopt also accepts as any unique abbreviation (--t, --target,
           # --target-dir), and as -t inside a bundled short cluster with the
@@ -1153,7 +1155,7 @@ queue_all_arguments() {
     if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
-        -) j=$((j + 1)); continue ;; # stdin/stdout
+        -) j=$((j + 1)); continue ;; # stdin/stdout (rm/mv/cp and a hard ln check their own -)
         -*)
           if in_list "${tok%%=*}" "${text_value_options[@]}"; then
             [[ "$tok" == *=* ]] || j=$((j + 1))
@@ -1375,6 +1377,14 @@ ln_write_targets() {
   done
   if [ "$symbolic" -eq 0 ]; then
     queue_all_arguments $((i + 1))
+    # queue_all_arguments skips a bare - as stdin/stdout, but a hard link's
+    # - (an operand or the --target-directory) is a file name.
+    for ((k = 0; k < ${#operands[@]}; k++)); do
+      [ "${operands[k]}" = - ] && queue_write_target - "${operand_flags[k]}" "ln operand"
+    done
+    for ((k = 0; k < ${#target_dirs[@]}; k++)); do
+      [ "${target_dirs[k]}" = - ] && queue_write_target - "${target_dir_flags[k]}" "ln --target-directory"
+    done
     return 0
   fi
   # Symbolic: what each link points to is text, resolved only when something
