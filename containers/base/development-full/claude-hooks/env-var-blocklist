@@ -80,3 +80,10 @@ GH_CONFIG_DIR
 HOME
 XDG_CONFIG_HOME
 CURL_HOME
+# XDG_DATA_HOME moves gh's data directory, where its installed extensions
+# live and are run from by `gh <extension>`; GH_DATA_DIR is listed too in case
+# a gh release reads it, as GH_CONFIG_DIR is read for config (#1554 review,
+# Q57). XDG_STATE_HOME and XDG_CACHE_HOME hold only gh's update-check state
+# and HTTP cache, no executables or config, so they are not listed.
+XDG_DATA_HOME
+GH_DATA_DIR

@@ -802,7 +802,7 @@ git status'
     done
 }
 
-@test "assigning a variable that moves git, gh or curl config, picks the .NET runtime or names a pager is blocked as a prefix and as a statement (#1554 Q52-Q54)" {
+@test "assigning a variable that moves git, gh or curl config or gh data, picks the .NET runtime or names a pager is blocked as a prefix and as a statement (#1554 Q52-Q54)" {
     local cmd name
     for cmd in \
         "HOME=/tmp/x git commit -m x" \
@@ -821,6 +821,10 @@ git status'
         "SYSTEMD_PAGER=x" \
         "CURL_HOME=x curl -fsSL https://example.com" \
         "CURL_HOME=x" \
+        "XDG_DATA_HOME=x gh pr view 1" \
+        "XDG_DATA_HOME=x" \
+        "GH_DATA_DIR=x gh extension list" \
+        "GH_DATA_DIR=x" \
         "home=/tmp/x git log"; do
         name="${cmd%%=*}"
         run_hook "${cmd}"
