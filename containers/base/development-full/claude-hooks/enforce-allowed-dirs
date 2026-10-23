@@ -197,6 +197,8 @@
 #   <config>/git, <config>/gh        the directories and everything under them,
 #                                    for <config> ~/.config and
 #                                    $XDG_CONFIG_HOME when set
+#   <config>/curlrc                  curl's XDG config file (curl 7.73+ reads
+#                                    it before ~/.curlrc)
 #   <data>/gh                        gh's data directory and everything under
 #                                    it (installed extensions, which gh runs),
 #                                    for <data> ~/.local/share and
@@ -595,12 +597,12 @@ names_config_tree() {
 # `.local/` and `share/`) and the name, so an `x/../gh` detour still matches.
 names_home_config() {
   case "$1" in
-    *.curlrc* | *.gitconfig* | *.config/*git | *.config/*git/* | *.config/*gh | *.config/*gh/*) return 0 ;;
+    *.curlrc* | *.gitconfig* | *.config/*git | *.config/*git/* | *.config/*gh | *.config/*gh/* | *.config/*curlrc*) return 0 ;;
     *.local/*share/*gh | *.local/*share/*gh/*) return 0 ;;
   esac
   if [ -n "${XDG_CONFIG_HOME:-}" ]; then
     case "$1" in
-      *"${XDG_CONFIG_HOME%/}"/*git* | *"${XDG_CONFIG_HOME%/}"/*gh*) return 0 ;;
+      *"${XDG_CONFIG_HOME%/}"/*git* | *"${XDG_CONFIG_HOME%/}"/*gh* | *"${XDG_CONFIG_HOME%/}"/*curlrc*) return 0 ;;
     esac
   fi
   [ -n "${XDG_DATA_HOME:-}" ] || return 1
@@ -807,7 +809,7 @@ is_protected_home_path() {
   done
   for dir in "${CONFIG_HOME_FORMS[@]}"; do
     case "$1" in
-      "${dir}/git" | "${dir}/git/"* | "${dir}/gh" | "${dir}/gh/"*) return 0 ;;
+      "${dir}/git" | "${dir}/git/"* | "${dir}/gh" | "${dir}/gh/"* | "${dir}/curlrc") return 0 ;;
     esac
   done
   for dir in "${DATA_HOME_FORMS[@]}"; do
