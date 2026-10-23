@@ -139,6 +139,13 @@ RUN : "${CREDFETO_AI_SKILLS_CACHE_BUST}"; \
 # The duplicate check's `exit 1` runs in the `find | while` subshell, so the
 # pipeline's status is checked after each root; otherwise a duplicate under
 # any root but the last would be ignored.
+# Root ownership of ~/.claude only stops developer writing into it directly:
+# developer owns /home/developer, so a process running as developer can
+# rename ~/.claude away and recreate it. The guarantee that matters is the
+# root-owned /etc/claude-code (with root-owned ancestors), whose
+# allowManaged*Only locks still stop permissions, hooks and MCP servers being
+# added; a replaced ~/.claude could still add skills or agents, which is the
+# accepted "code run by a writer" gap.
 # hadolint ignore=DL3059,SC3045
 RUN mkdir -p /home/developer/.claude/skills \
     && chown root:root /home/developer/.claude \
@@ -209,8 +216,11 @@ RUN mkdir -p /home/developer/.claude/agents \
 # settings file, and its allowManaged*Only locks stop a repo's
 # .claude/settings*.json adding permissions, hooks or MCP servers. Only the
 # preferences half stays in ~/.claude/settings.json. All root:root so the
-# developer user cannot tamper with them at runtime; oneshot does not (and must
-# not) bind-mount over these paths - see containers/agent/Dockerfile.
+# developer user cannot write to them directly at runtime; /etc/claude-code
+# and its ancestors are root-owned, so that is the real guarantee, whereas the
+# ~/.claude copies can be replaced along with ~/.claude itself (see the skills
+# link step above). oneshot does not (and must not) bind-mount over these
+# paths - see containers/agent/Dockerfile.
 COPY --chown=root:root --chmod=0444 claude-user-settings.json /home/developer/.claude/settings.json
 COPY --chown=root:root --chmod=0444 claude-policy-limits.json /home/developer/.claude/policy-limits.json
 COPY --chown=root:root --chmod=0444 claude-managed-settings.json /etc/claude-code/managed-settings.json
