@@ -1052,13 +1052,21 @@ assert_protected_git_path() {
         "gh --force=true extension install owner/gh-x" \
         "gh extension --pin v1 install owner/gh-x" \
         "gh extension -p v1 install owner/gh-x" \
-        "gh extension --force install owner/gh-x"
+        "gh extension --force install owner/gh-x" \
+        "gh - extension install o/x" \
+        "gh extension - install o/x"
     assert_each 2 'defines a command whose writes appear on no command line' \
+        "gh - alias import" \
+        "gh alias - import" \
+        "gh - alias set co x" \
+        "gh alias - set co x" \
+        "gh alias import -" \
         "gh alias --clobber=true set co 'pr checkout'" \
         "gh --clobber=true alias set co 'pr checkout'" \
         "gh -R o/r alias set x y" \
         "gh --repo o/r alias import aliases.yml"
-    assert_each 0 '' "gh pr --repo o/r view 1" "gh extension list" "gh pr view 1 --repo o/r"
+    assert_each 0 '' "gh pr --repo o/r view 1" "gh extension list" "gh pr view 1 --repo o/r" \
+        "gh pr view 1 --json x" "gh pr checks 1 --required"
     mkdir -p "${TEST_TMP}/repo/.claude"
     assert_each_config_write_in_dir "${TEST_TMP}/repo/.claude" \
         "gh pr --repo=o/r view 1" \
