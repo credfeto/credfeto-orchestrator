@@ -115,7 +115,9 @@
 #                    word) is a writer under the default rule, plus the
 #                    directory gh names after the repository for repo
 #                    clone/fork/create/new; gh alias set and import block
-#                    (see GH_BLOCKED_COMMANDS);
+#                    (see GH_BLOCKED_COMMANDS), and so do gh extension
+#                    install, upgrade, remove and browse (see
+#                    GH_EXTENSION_BLOCKED_COMMANDS);
 #       dotnet       every argument, except the message of `dotnet changelog
 #                    -m`/`--message`, which is text; an option word in
 #                    colon form (`-p:Name=value`, `--output:DIR`) is
@@ -448,8 +450,8 @@ GIT_WORKTREE_TEXT_VALUE_OPTIONS=(-b -B --reason)
 # entry was checked against `gh <command> --help` (gh 2.102.0) for an option
 # naming a local path to write. Deliberately absent, so writers: pr checkout
 # and issue develop (they check out a branch, also into a --worktree path),
-# every clone, download, fork, create, codespace, extension and alias
-# command, any command more than two words deep, and any unknown command (an
+# every clone, download, fork, create, codespace and alias command, every
+# extension command but list (and its ls alias), any command more than two words deep, and any unknown command (an
 # alias or extension). A leaf command with no subcommand is matched by its
 # one word; any other by its first two.
 GH_READ_ONLY_LEAF_COMMANDS=(api status)
@@ -468,6 +470,7 @@ GH_READ_ONLY_COMMANDS=(
   "project list" "project view" "project item-list" "project field-list"
   "project item-add" "project item-edit"
   "cache list" "secret list" "variable list" "variable get"
+  "extension list" "extension ls" "ext list" "ext ls" "extensions list" "extensions ls"
 )
 # pr merge and pr close delete the local branch with -d/--delete-branch,
 # which can also check out another branch, so either is a writer with it:
@@ -482,6 +485,21 @@ GH_DELETE_BRANCH_VALUE_OPTIONS=(-R --repo -c --comment -b --body -t --subject -F
 # writes, appear on neither their own command line nor that of the later
 # call that runs the alias, so neither can be checked.
 GH_BLOCKED_COMMANDS=("alias set" "alias import")
+# gh extension install, upgrade, remove (and its alias uninstall) and browse
+# (which installs and removes interactively) write gh's data directory
+# (~/.local/share/gh or $XDG_DATA_HOME/gh, see is_protected_home_path), where
+# the extensions gh later runs live, without naming it on the command line,
+# so none can be checked. Each is listed under every spelling of the group
+# (extension, extensions, ext); gh matches no abbreviation of either word.
+# create writes the local directory it names, so it stays an ordinary writer,
+# and exec and running an installed extension by name are left alone.
+GH_EXTENSION_BLOCKED_COMMANDS=()
+for gh_extension_group in extension extensions ext; do
+  for gh_extension_command in install upgrade remove uninstall browse; do
+    GH_EXTENSION_BLOCKED_COMMANDS+=("${gh_extension_group} ${gh_extension_command}")
+  done
+done
+unset gh_extension_group gh_extension_command
 # The gh commands that clone into a directory named after the repository
 # when none is given (fork and create only with --clone, but checking them
 # regardless can only over-check).
@@ -1797,6 +1815,9 @@ gh_write_targets() {
   [ -n "$group" ] && [ "${wflags[$((i + 2))]:-}" != N ] && pair="${group} ${words[$((i + 2))]:-}"
   if [ -n "$pair" ] && in_list "$pair" "${GH_BLOCKED_COMMANDS[@]}"; then
     block "gh ${pair} defines a command whose writes appear on no command line this hook sees, so it cannot be checked - run the gh command itself instead"
+  fi
+  if [ -n "$pair" ] && in_list "$pair" "${GH_EXTENSION_BLOCKED_COMMANDS[@]}"; then
+    block "gh ${pair} changes the extensions gh runs, in gh's data directory, which is named on no command line this hook sees - stop and report the extension you needed; extensions are installed by a human"
   fi
   [ -n "$group" ] && in_list "$group" "${GH_READ_ONLY_LEAF_COMMANDS[@]}" && return 0
   if [ -n "$pair" ] && in_list "$pair" "${GH_READ_ONLY_COMMANDS[@]}"; then
