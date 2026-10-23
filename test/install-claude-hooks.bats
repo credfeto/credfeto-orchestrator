@@ -353,16 +353,18 @@ teardown() {
     done
 }
 
-@test "the user's and any project's .claude skills, agents, commands, plugins, rules, output-styles and CLAUDE.md are denied to Edit" {
-    local denies dir prefix entry
+@test "the user's and any project's .claude skills, agents, commands, plugins, rules, output-styles, sessions, CLAUDE.md, .credentials.json and history.jsonl are denied to Edit" {
+    local denies dir file prefix entry
     denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
     for prefix in '~' '*'; do
-        for dir in skills agents commands plugins rules output-styles; do
+        for dir in skills agents commands plugins rules output-styles sessions; do
             entry="Edit(${prefix}/.claude/${dir}/**)"
             printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
         done
-        entry="Edit(${prefix}/.claude/CLAUDE.md)"
-        printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+        for file in CLAUDE.md .credentials.json history.jsonl; do
+            entry="Edit(${prefix}/.claude/${file})"
+            printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+        done
     done
 }
 
