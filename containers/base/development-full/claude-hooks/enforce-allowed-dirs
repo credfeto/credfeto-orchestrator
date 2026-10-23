@@ -117,7 +117,12 @@
 #                    clone/fork/create/new; gh alias set and import block
 #                    (see GH_BLOCKED_COMMANDS), and so do gh extension
 #                    install, upgrade, remove and browse (see
-#                    GH_EXTENSION_BLOCKED_COMMANDS);
+#                    GH_EXTENSION_BLOCKED_COMMANDS); gh finds its command by
+#                    skipping option words, so this hook does too, a call
+#                    with an option before its command is never read-only,
+#                    and when such an option has no `=` (it may take the
+#                    next word) any ordered pair of later words that names
+#                    a blocked command blocks (see gh_locate_command);
 #       dotnet       every argument, except the message of `dotnet changelog
 #                    -m`/`--message`, which is text; an option word in
 #                    colon form (`-p:Name=value`, `--output:DIR`) is
@@ -1806,28 +1811,84 @@ git_write_targets() {
   return 0
 }
 
-# The gh command a call runs: its first word and its first two words, each
-# empty when a word in it is not literal (see GH_READ_ONLY_COMMANDS).
+# Locates the gh command a call runs. gh (cobra) finds the group and its
+# subcommand by skipping option words, so an option can sit before either
+# (`gh extension --force=true install x`, `gh --clobber=true alias set ...`).
+# Sets GH_GROUP and GH_PAIR to the first one and two non-option words (each
+# empty when a word before or in it is not literal, or after `--`),
+# GH_OPTION_BEFORE_GROUP and GH_OPTION_BEFORE_SUBCOMMAND to 1 when an option
+# word precedes that word, and GH_AMBIGUOUS to 1 when one of those options has
+# no `=`, so it may take the next word as its value and gh's subcommand cannot
+# be told from the words. GH_POSITIONALS holds every literal non-option word
+# before `--`, for the fail-closed checks under GH_AMBIGUOUS.
+gh_locate_command() {
+  local j word found=0
+  GH_GROUP="" GH_PAIR="" GH_OPTION_BEFORE_GROUP=0 GH_OPTION_BEFORE_SUBCOMMAND=0 GH_AMBIGUOUS=0
+  GH_POSITIONALS=()
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    word="${words[$j]}"
+    if [ "${wflags[$j]}" = N ]; then
+      [ "$found" -lt 2 ] && found=3
+      continue
+    fi
+    [ "$word" = -- ] && { [ "$found" -lt 2 ] && found=3; break; }
+    if [[ "$word" == -?* ]]; then
+      if [ "$found" -lt 2 ]; then
+        [ "$found" -eq 0 ] && GH_OPTION_BEFORE_GROUP=1
+        GH_OPTION_BEFORE_SUBCOMMAND=1
+        [[ "$word" == *=* ]] || GH_AMBIGUOUS=1
+      fi
+      continue
+    fi
+    GH_POSITIONALS+=("$word")
+    case "$found" in
+      0) GH_GROUP="$word" found=1 ;;
+      1) GH_PAIR="${GH_GROUP} ${word}" found=2 ;;
+    esac
+  done
+  [ "$found" -eq 3 ] && [ -z "$GH_PAIR" ] && GH_AMBIGUOUS=1
+  return 0
+}
+
+# Whether the call may run a gh command on list $1..: the located pair, or,
+# when the subcommand is ambiguous (see gh_locate_command), any pair of its
+# literal non-option words in order, failing closed.
+gh_may_run() {
+  local a b
+  [ -n "$GH_PAIR" ] && in_list "$GH_PAIR" "$@" && return 0
+  [ "$GH_AMBIGUOUS" -eq 1 ] || return 1
+  for ((a = 0; a < ${#GH_POSITIONALS[@]}; a++)); do
+    for ((b = a + 1; b < ${#GH_POSITIONALS[@]}; b++)); do
+      in_list "${GH_POSITIONALS[a]} ${GH_POSITIONALS[b]}" "$@" && return 0
+    done
+  done
+  return 1
+}
+
+# The gh command a call runs (see gh_locate_command). It is read-only only
+# when no option word precedes the words that name it, since an option there
+# could hide which command gh runs.
 gh_write_targets() {
-  local group="" pair=""
   GH_WRITES=0
-  [ "${wflags[$((i + 1))]:-}" = N ] || group="${words[$((i + 1))]:-}"
-  [ -n "$group" ] && [ "${wflags[$((i + 2))]:-}" != N ] && pair="${group} ${words[$((i + 2))]:-}"
-  if [ -n "$pair" ] && in_list "$pair" "${GH_BLOCKED_COMMANDS[@]}"; then
-    block "gh ${pair} defines a command whose writes appear on no command line this hook sees, so it cannot be checked - run the gh command itself instead"
+  gh_locate_command
+  if gh_may_run "${GH_BLOCKED_COMMANDS[@]}"; then
+    block "gh ${GH_PAIR:-${GH_POSITIONALS[*]}} defines a command whose writes appear on no command line this hook sees, so it cannot be checked - run the gh command itself instead"
   fi
-  if [ -n "$pair" ] && in_list "$pair" "${GH_EXTENSION_BLOCKED_COMMANDS[@]}"; then
-    block "gh ${pair} changes the extensions gh runs, in gh's data directory, which is named on no command line this hook sees - stop and report the extension you needed; extensions are installed by a human"
+  if gh_may_run "${GH_EXTENSION_BLOCKED_COMMANDS[@]}"; then
+    block "gh ${GH_PAIR:-${GH_POSITIONALS[*]}} changes the extensions gh runs, in gh's data directory, which is named on no command line this hook sees - stop and report the extension you needed; extensions are installed by a human"
   fi
-  [ -n "$group" ] && in_list "$group" "${GH_READ_ONLY_LEAF_COMMANDS[@]}" && return 0
-  if [ -n "$pair" ] && in_list "$pair" "${GH_READ_ONLY_COMMANDS[@]}"; then
-    in_list "$pair" "${GH_DELETE_BRANCH_COMMANDS[@]}" || return 0
+  if [ -n "$GH_GROUP" ] && [ "$GH_OPTION_BEFORE_GROUP" -eq 0 ] && [ "${wflags[$((i + 1))]:-}" != N ] \
+    && in_list "$GH_GROUP" "${GH_READ_ONLY_LEAF_COMMANDS[@]}"; then
+    return 0
+  fi
+  if [ "$GH_OPTION_BEFORE_SUBCOMMAND" -eq 0 ] && [ -n "$GH_PAIR" ] && in_list "$GH_PAIR" "${GH_READ_ONLY_COMMANDS[@]}"; then
+    in_list "$GH_PAIR" "${GH_DELETE_BRANCH_COMMANDS[@]}" || return 0
     gh_deletes_branch || return 0
   fi
   GH_WRITES=1
   note_writer gh "$BASE_DIR" "$RELATIVE_OK"
   queue_all_arguments $((i + 1))
-  [ -n "$pair" ] && in_list "$pair" "${GH_CLONE_COMMANDS[@]}" && gh_queue_clone_default_dirs
+  gh_may_run "${GH_CLONE_COMMANDS[@]}" && gh_queue_clone_default_dirs
   return 0
 }
 
