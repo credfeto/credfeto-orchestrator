@@ -398,6 +398,126 @@ assert_protected_home_file() {
         "ln -s sub/.gitconfig ${SRC}/link"
 }
 
+# assert_protected_git_path <path relative to the sandbox repo> - checks a write to a repository's
+# git configuration or hooks is blocked for every write form, and reading it is allowed.
+assert_protected_git_path() {
+    local rel="$1" tool path
+    mkdir -p "$(dirname "${TEST_TMP}/repo/${rel}")"
+    printf '[core]\n' > "${TEST_TMP}/repo/${rel}"
+    for tool in Edit Write NotebookEdit; do
+        for path in "${rel}" "${TEST_TMP}/repo/${rel}"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > ${rel}" \
+        "printf '[core]\n\thooksPath = x\n' >> ${rel}" \
+        "printf x >> ${TEST_TMP}/repo/${rel}" \
+        "echo x | tee ${rel}" \
+        "echo x | tee -a ${rel}" \
+        "cp ${SRC}/x.md ${rel}" \
+        "mv ${SRC}/x.md ${rel}" \
+        "ln -s ${SRC}/x.md ${rel}" \
+        "ln -s ${rel} ${SRC}/link" \
+        "ln -s ${TEST_TMP}/repo/${rel} ${SRC}/link" \
+        "sed -i 's/a/b/' ${rel}" \
+        "sed -n 'w ${rel}' ${SRC}/payload" \
+        "sed 's/^//w ${rel}' ${SRC}/payload" \
+        "awk '{print > \"${rel}\"}' ${SRC}/x" \
+        "touch ${rel}" \
+        "rm -f ${rel}" || return 1
+    assert_each 0 '' "cat ${rel}" "cat ${TEST_TMP}/repo/${rel}"
+}
+
+@test "a write to a repo's .git/config is blocked for every write form; reading it is allowed (#1554 Q56)" {
+    assert_protected_git_path .git/config
+}
+
+@test "a write to a repo's .git/hooks/pre-commit is blocked for every write form; reading it is allowed (#1554 Q56)" {
+    assert_protected_git_path .git/hooks/pre-commit
+}
+
+@test "a write to a nested repo's .git/config is blocked for every write form; reading it is allowed (#1554 Q56)" {
+    assert_protected_git_path sub/.git/config
+}
+
+@test "a write to a submodule's .git/modules/x/config is blocked for every write form; reading it is allowed (#1554 Q56)" {
+    assert_protected_git_path .git/modules/x/config
+}
+
+@test "every other git configuration and code-execution location is protected, at any depth (#1554 Q56)" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in .git .git/config.worktree .git/commondir .git/hooks .git/hooks/post-checkout \
+            .git/modules .git/modules/x/hooks/pre-commit .git/modules/x/modules/y/config \
+            .git/worktrees/w/config.worktree .git/worktrees/w/commondir \
+            sub/.git sub/deep/.git/hooks/pre-push "${HOME}/other/.git/config" \
+            .git/x/../config .git/hooks/../config; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    mkdir -p "${TEST_TMP}/repo/.git/objects" "${TEST_TMP}/repo/sub/x"
+    ln -s "${TEST_TMP}/repo/.git/config" "${TEST_TMP}/repo/sub/x/gitconfig-link"
+    assert_each_config_write \
+        "printf 'gitdir: /tmp/evil\n' > sub/.git" \
+        "mkdir -p .git/hooks" \
+        "mkdir -p sub/.git" \
+        "mv ${SRC}/evil-gitdir .git/modules/x" \
+        "rm -rf .git" \
+        "printf x > sub/x/gitconfig-link" \
+        "sed -n 'w .git/x/../config' ${SRC}/payload" \
+        "sed -n 'w.git/config' ${SRC}/payload" \
+        "sed -n 'w sub/.git' ${SRC}/payload" \
+        "awk '{print > \"sub/.git\"}' ${SRC}/x" \
+        "awk '{print > \".git\\057config\"}' ${SRC}/x" \
+        "ln -s .git ${SRC}/g" \
+        "ln -s ${TEST_TMP}/repo/.git/objects ${SRC}/g" \
+        "sqlite3 :memory: '.once .git/hooks/pre-commit' 'select 1;'" \
+        "dotnet test --logger 'trx;LogFileName=.git/hooks/pre-commit'" \
+        "cd .git && touch x" \
+        "cd .git/objects && sed -n 'w ../config' ${SRC}/payload" || return 1
+    assert_each_in_dir "${TEST_TMP}/repo/.git" 2 'writing to Claude Code, git, gh or curl configuration' "touch x" || return 1
+    assert_each 0 '' "cat .git/config" "cd .git && ls" "ls .git/hooks" "grep -r core .git/config"
+}
+
+@test "files beside a .git directory, in .github/ or in a bare repository named x.git stay writable (#1554 Q56)" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in .github/workflows/ci.yml .github/config .gitignore .gitattributes .gitmodules .gitconfig \
+            x.git/config x.git/hooks/pre-commit sub/x.git .git/info/exclude .git/info/attributes .git/COMMIT_EDITMSG; do
+            run_file_tool "${tool}" "${path}"
+            [ "${status}" -eq 0 ] || { echo "blocked ${tool} ${path}: ${output}" >&2; return 1; }
+        done
+    done
+    assert_each 0 '' \
+        "printf x > .github/config" \
+        "printf x > .gitignore" \
+        "printf x >> x.git/config" \
+        "echo x | tee -a x.git/hooks/pre-commit" \
+        "cp ${SRC}/x.md .github/hooks" \
+        "sed -i 's/a/b/' .gitmodules" \
+        "sed -n 'w .github/config' ${SRC}/payload" \
+        "ln -s ../x.git ${SRC}/bare" \
+        "ln -s .github ${SRC}/gh-dir" \
+        "sqlite3 :memory: '.once x.git/config' 'select 1;'" \
+        "printf x > .git/info/exclude"
+}
+
+@test "git's own commands still write inside .git: ordinary git subcommands are unaffected (#1554 Q56)" {
+    assert_each 0 '' \
+        "git -C . status" \
+        "git -C . commit -m x" \
+        "git -C . fetch origin" \
+        "git -C . checkout -b feature" \
+        "git -C . add ." \
+        "git -C . submodule update --init" \
+        "git -C . worktree add sub/wt" \
+        "git -C sub status" \
+        "git -C . config --get core.hooksPath"
+}
+
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
     assert_each_config_write \
         "touch .claude/settings.json" \
