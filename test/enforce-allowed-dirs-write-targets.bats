@@ -330,9 +330,9 @@ assert_each_config_write() {
         "shfmt -w containers/base/development-full/claude-hooks/enforce-allowed-dirs" \
         "gh pr create --title fix --body 'blocks writes to .claude/settings.json'" \
         "gh issue comment 1 --body 'see ~/.claude/hooks'" \
-        "gh x --output-format json --body 'see .claude/settings.json'" \
-        "gh x --directory-listing --body 'see .claude/settings.json'" \
-        "gh x --outputs --body 'see .claude/settings.json'" \
+        "gh pr edit 1 --body 'see .claude/settings.json'" \
+        "gh api repos/o/r/issues/1/comments -f body='see .claude/settings.json'" \
+        "gh issue create --title x --body-file ${SRC}/notes.md" \
         "dotnet changelog -f CHANGELOG.md -a Fixed -m 'blocks writes to ~/.claude/settings.json'" \
         "dotnet test --filter 'FullyQualifiedName~Foo' -p:CollectCoverage=true"
 }
@@ -518,21 +518,112 @@ assert_each_config_write() {
         "gh \"\$G\" \"\$S\" x -c"
 }
 
-@test "gh repo fork and create that do not clone, and -c of other gh subcommands, are allowed" {
-    mkdir -p "${TEST_TMP}/repo/.claude"
+@test "gh repo fork and create from repo cwd that clone into an ordinary directory or not at all are allowed" {
     assert_each 0 '' \
         "gh repo fork o/r --clone" \
         "gh repo fork o/r --clone=false" \
-        "gh repo fork o/r --clone=0" \
         "gh repo fork o/r" \
         "gh repo create x --public" \
         "gh repo create x --public --clone" \
         "gh repo create x -c=false" \
         "gh repo fork o/r -- --depth 1" \
+        "gh repo clone o/r" \
+        "gh repo clone o/r checkout-dir"
+}
+
+@test "a gh command not on the read-only table is a writer: H1-H6 sweep hits are blocked" {
+    mkdir -p "${TEST_TMP}/repo/.claude/skills/y"
+    # H1: gh repo clone's default directory; H2: pr checkout --worktree; H4: repo create --source;
+    # H5: codespace cp to a local path; an unknown command (an alias or extension).
+    assert_each_config_write \
+        "gh repo clone https://github.com/x/.claude.git" \
+        "gh repo clone x/.claude" \
+        "gh pr checkout 1 --worktree .claude/skills/x" \
+        "gh issue develop 1 --worktree .claude/skills/x" \
+        "gh repo create x --source=.claude/skills/y --remote=evil" \
+        "gh repo create x --source .claude/skills/y --push" \
+        "gh codespace cp remote:x .claude/settings.json" \
+        "gh some-extension .claude/settings.json" \
+        "gh pr --repo o/r checkout 1 .claude/skills/x"
+    assert_each 2 'outside the allowed directories' \
+        "gh pr checkout 1 --worktree=../outside/x" \
+        "gh codespace cp remote:x ${TEST_TMP}/outside/x"
+    # H3: pr checkout, and H6: repo fork --remote, write into a .claude working directory's repo.
+    assert_each 2 'through a cd into it' \
+        "cd .claude && gh pr checkout 1" \
+        "cd .claude/skills/y && gh repo fork o/r --remote" \
         "cd .claude && gh repo fork o/r --clone=false" \
         "cd .claude && gh repo create x --private" \
-        "cd .claude && gh pr review 1 -c -b 'see .claude/settings.json'" \
-        "gh pr review 1 -c -b 'see .claude/settings.json'"
+        "cd .claude && gh some-extension" \
+        "cd .claude && gh pr merge 1 -d" \
+        "cd .claude && gh pr merge 1 --squash --delete-branch" \
+        "cd .claude && gh pr merge 1 -sd" \
+        "cd .claude && gh pr close 1 --delete-branch=true"
+    assert_each_config_write_in_dir "${TEST_TMP}/repo/.claude/skills/y" \
+        "gh pr checkout 1" "gh repo fork o/r --remote"
+}
+
+@test "gh alias set and import block, and a non-literal gh command word fails closed" {
+    assert_each 2 'defines a command whose writes appear on no command line' \
+        "gh alias set rf 'repo fork attacker/.claude --clone'" \
+        "gh alias set --shell x 'touch y'" \
+        "gh alias import aliases.yml"
+    assert_each 2 'non-literal argument' \
+        "gh \"\$G\" view 1" \
+        "gh pr \"\$S\" 1" \
+        "gh pr merge 1 --auto \"\$FLAG\""
+}
+
+@test "the agents' read-only and remote-only gh workflows are allowed from the repo and from .claude, with text naming config" {
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    local cmd
+    for cmd in \
+        "gh pr create --repo o/r --draft --title fix --body 'blocks writes to .claude/settings.json'" \
+        "gh pr comment 1 --repo o/r --body 'see .claude/settings.json'" \
+        "gh pr comment 1 --repo o/r --body \"\$(cat ${SRC}/body.md)\"" \
+        "gh pr edit 1 --repo o/r --body 'see .claude/settings.json'" \
+        "gh pr view 1 --repo o/r --json comments,reviews" \
+        "gh pr checks 1 --repo o/r" \
+        "gh pr review 1 --repo o/r -c -b 'see .claude/settings.json'" \
+        "gh pr ready 1 --repo o/r --undo" \
+        "gh pr merge 1 --repo o/r --auto --squash" \
+        "gh pr merge 1 --repo o/r --disable-auto" \
+        "gh pr merge 1 --repo o/r --squash --subject '-d .claude/x' --body \"\$(cat ${SRC}/body.md)\"" \
+        "gh pr close 1 --repo o/r --comment 'see .claude/settings.json'" \
+        "gh pr close 1 --repo o/r -c \"\$(cat ${SRC}/body.md)\"" \
+        "gh issue create --repo o/r --title x --body 'see .claude/settings.json'" \
+        "gh issue comment 1 --repo o/r --body 'see ~/.claude/hooks'" \
+        "gh issue edit 1 --repo o/r --add-label bug" \
+        "gh issue view 1 --repo o/r" \
+        "gh api repos/o/r/pulls/1/comments -X POST -f body='see .claude/settings.json' -F in_reply_to=1" \
+        "gh api \"repos/o/r/issues/\$N\"" \
+        "gh run view 1 --repo o/r --log-failed" \
+        "gh search issues .claude --repo o/r" \
+        "gh repo edit o/r --description 'see .claude/settings.json'" \
+        "gh project item-edit --id x --field-id y --project-id z --text '.claude/settings.json'" \
+        "gh status"; do
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/repo"
+        [ "${status}" -eq 0 ] || { echo "blocked from repo: ${cmd}: ${output}" >&2; return 1; }
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/repo/.claude"
+        [ "${status}" -eq 0 ] || { echo "blocked from .claude: ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "a gh writer can materialise a symlink, so a later write to a path that does not exist yet is blocked" {
+    # The same as a git clone.
+    assert_each 2 'does not exist' \
+        "gh repo clone o/r && echo x > r/new.txt" \
+        "gh run download 1 -D art && echo x > art/new.txt" \
+        "git -C . clone https://github.com/o/r && echo x > r/new.txt"
+    assert_each 0 '' "gh pr view 1 && echo x > new.txt"
+}
+
+@test "gh pr merge or close deleting the local branch is a writer, allowed from the repo with ordinary arguments" {
+    assert_each 0 '' \
+        "gh pr merge 1 --repo o/r --squash -d" \
+        "gh pr merge 1 --repo o/r --squash --delete-branch --subject fix" \
+        "gh pr close 1 --repo o/r -d"
+    assert_each_config_write "gh pr merge 1 --repo o/r -d --body 'see .claude/settings.json'"
 }
 
 @test "a write target held in a variable is blocked, protected suffix or not" {
