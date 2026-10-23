@@ -298,6 +298,51 @@ assert_each_config_write() {
         "git -C . log --oneline -- list.txt"
 }
 
+@test "git stash push checks every pathspec, named or assumed, and blocks pathspecs read from a file or stdin" {
+    assert_each_config_write \
+        'git -C . stash push -- .claude/settings.json' \
+        'git -C . stash push .claude/settings.json' \
+        'git -C . stash "push" -u -m why -- .claude/settings.json' \
+        'git -C . stash -- .claude/settings.json' \
+        'git -C . stash -p .claude/settings.json' \
+        'git -C . stash push --message=why .claude/agents'
+    assert_each 2 'outside the allowed directories' \
+        'git -C . stash push -- ../outside/x' \
+        'git -C sub stash -- ../../outside/x'
+    assert_each 2 'reads paths from a file or stdin, which this hook cannot check' \
+        'git -C . stash push --pathspec-from-file=list.txt' \
+        'echo .claude/settings.json | git -C . stash push --pathspec-from-file=-' \
+        'echo .claude/settings.json | git -C . stash --pathspec-from-file=-' \
+        'git -C . stash push --pathspec-fr=list.txt' \
+        'git -C . stash -u --pathspec-file-nul --pathspec-from-file list.txt'
+}
+
+@test "git stash with an unknown or non-literal action fails closed" {
+    assert_each 2 'could not be verified (non-literal argument)' "git -C . stash \"\$sub\" -- .claude/settings.json"
+    assert_each 2 'failing closed' 'git -C . stash frobnicate .claude/settings.json'
+}
+
+@test "git stash with no pathspec, a message naming a protected path, and the stash actions that name no path are allowed" {
+    assert_each 0 '' \
+        'git -C . stash' \
+        'git -C . stash push' \
+        'git -C . stash -u' \
+        'git -C . stash push -m "see .claude/settings.json"' \
+        'git -C . stash push --message "see .claude/settings.json" -- ok.txt' \
+        'git -C . stash save "see .claude/settings.json"' \
+        'git -C . stash push -- ok.txt' \
+        'git -C . stash -u -- ok.txt' \
+        'git -C sub stash push -- ../ok.txt' \
+        'git -C . stash list' \
+        'git -C . stash show -p stash@{0}' \
+        'git -C . stash drop' \
+        'git -C . stash pop' \
+        'git -C . stash apply --index' \
+        'git -C . stash branch topic' \
+        'git -C . stash create "see .claude/settings.json"' \
+        'git -C . stash -h'
+}
+
 @test "the same writing commands on ordinary paths are allowed" {
     assert_each 0 '' \
         "touch out.txt" \
