@@ -88,8 +88,13 @@
 #                    `--output-directory` or an abbreviation of either
 #                    (`--o`, `--outp`, `--output-dir`; not `--oneline`,
 #                    `--onto`, `--ours`, nor the read-only
-#                    `--output-indicator-*`), and then every
-#                    argument after the subcommand, relative to the last -C,
+#                    `--output-indicator-*`), or for worktree add, move,
+#                    remove and repair (see GIT_WORKTREE_WRITERS; any
+#                    other worktree action but list, prune, lock, unlock
+#                    and -h blocks, as does repair with no path), and then
+#                    every argument after the subcommand (for worktree,
+#                    after the action, skipping the branch name or text of
+#                    -b, -B and --reason), relative to the last -C,
 #                    plus, for clone, the directory git names after the
 #                    repository when none is given; checkout, restore and rm
 #                    block `--pathspec-from-file` and `--pathspec-file-nul`
@@ -351,15 +356,27 @@ CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
 LINK_CAPABLE_NAMES=(ln cp mv tar unzip rsync)
 GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase cherry-pick revert am apply stash reset worktree submodule archive read-tree)
 # git subcommands that write paths named on the command line (clone writes a
-# whole tree at its destination). restore, mv and rm are not on
-# enforce-git-dash-c's subcommand allowlist today; they stay here so allowing
-# them there cannot silently skip this check.
+# whole tree at its destination; worktree has its own per-action table,
+# GIT_WORKTREE_WRITERS, since its list and prune write nothing). restore, mv
+# and rm are not on enforce-git-dash-c's subcommand allowlist today; they
+# stay here so allowing them there cannot silently skip this check.
 GIT_PATH_WRITERS=(checkout restore mv rm clone)
 # The GIT_PATH_WRITERS that also read pathspecs from a file or stdin
 # (--pathspec-from-file, with --pathspec-file-nul for NUL-separated input).
 # The hook cannot read that file or stdin, so the paths could not be checked
 # and both options block in every form (mv and clone take neither).
 GIT_PATHSPEC_FILE_WRITERS=(checkout restore rm)
+# git worktree actions, checked against `git worktree -h` (git 2.56.0): add
+# creates <path>, move writes <new-path>, remove deletes <worktree> and
+# repair rewrites the .git file in each <path>, so these four are writers
+# with every argument checked; list, prune, lock and unlock only read or
+# write the repository's own $GIT_DIR/worktrees metadata, and -h only prints
+# usage. Any other action word, a missing one or a non-literal one blocks.
+GIT_WORKTREE_WRITERS=(add move remove repair)
+GIT_WORKTREE_READ_ONLY=(list prune lock unlock -h)
+# The worktree add options whose value is a branch name or text, not a path
+# (--orphan takes no value, so its next word is still checked).
+GIT_WORKTREE_TEXT_VALUE_OPTIONS=(-b -B --reason)
 # gh's write surface keeps growing (clones, downloads, worktrees, checkouts,
 # codespace copies, extensions, aliases), so a gh call is a writer unless its
 # command is on one of these tables: commands that write no local file, only
@@ -1439,9 +1456,38 @@ queue_all_arguments() {
   return 0
 }
 
+# A git worktree call: see GIT_WORKTREE_WRITERS.
+git_worktree_write_targets() {
+  local k=$((GIT_SUBCOMMAND_INDEX + 1)) action j has_path=0 operands_only=0
+  action="${words[$k]:-}"
+  { [ "$action" = "$MARKER" ] || [ "${wflags[$k]:-}" = N ]; } && block 'git worktree subcommand could not be verified (non-literal argument)'
+  in_list "$action" "${GIT_WORKTREE_READ_ONLY[@]}" && return 0
+  in_list "$action" "${GIT_WORKTREE_WRITERS[@]}" || block "git worktree '${action}' is not a worktree subcommand this hook can check - failing closed"
+  if [ "$action" = repair ]; then
+    # With no path, repair rewrites the .git file of every registered
+    # worktree, wherever it is, without naming one.
+    for ((j = k + 1; j < ${#words[@]}; j++)); do
+      if [ "$operands_only" -eq 0 ] && [ "${wflags[$j]}" != N ]; then
+        case "${words[$j]}" in
+          --) operands_only=1; continue ;;
+          -*) continue ;;
+        esac
+      fi
+      has_path=1
+    done
+    [ "$has_path" -eq 1 ] || block 'git worktree repair with no path rewrites every registered worktree, which this hook cannot check - name each worktree path'
+  fi
+  note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
+  queue_all_arguments $((k + 1)) "$GIT_BASE" "$GIT_RELATIVE_OK" "${GIT_WORKTREE_TEXT_VALUE_OPTIONS[@]}"
+}
+
 git_write_targets() {
   local j opt writes=0
   [ -n "$GIT_SUBCOMMAND" ] || return 0
+  if [ "$GIT_SUBCOMMAND" = worktree ]; then
+    git_worktree_write_targets
+    return 0
+  fi
   in_list "$GIT_SUBCOMMAND" "${GIT_PATH_WRITERS[@]}" && writes=1
   for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
     # Only --output and --output-directory write, so only their
