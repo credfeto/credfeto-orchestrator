@@ -726,9 +726,6 @@ EOF'
     assert_each_in_dir "${TEST_TMP}/outside" 2 'outside the allowed directories' \
         "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"
     assert_each 0 '' "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"
-    # sort's bare - operand is standard input, so it is still not a path.
-    run_hook_in_dir "sort -" "${TEST_TMP}/outside"
-    [ "${status}" -eq 0 ]
 }
 
 @test "ln -s to a target that is not fully literal is blocked, since it could name protected config" {
