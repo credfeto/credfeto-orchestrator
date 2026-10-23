@@ -59,7 +59,10 @@
 #     (`-xo/etc/x` is checked as `o/etc/x` and `/etc/x`),
 #     because a glued value cannot be told from a flag cluster without each
 #     tool's own option table; a word with too long a run before its first
-#     `/` is blocked. A few writers have their own rule instead:
+#     `/` is blocked. A bare `-` is standard input or output and skipped,
+#     except where the command names a file `-` with it: a tee or mkdir
+#     operand, git clone's destination, and sort's -o/--output value.
+#     A few writers have their own rule instead:
 #       rm, mv, cp   every operand and --target-directory (see below), which
 #                    must also be under a root before anything else runs;
 #       ln           with -s/--symbolic the link being created (the last
@@ -1141,6 +1144,20 @@ queue_dotnet_colon_option() {
   return 0
 }
 
+# Returns 0 when the bare - at word $1 of the current call is a file name
+# rather than stdin/stdout: every tee and mkdir operand, git clone's
+# destination, and the value of sort's -o/--output (any abbreviation, or a
+# short cluster ending in o, which can only over-check).
+dash_names_file() {
+  local prev="${words[$(($1 - 1))]}"
+  case "${words[$i]##*/}" in
+    tee | mkdir) return 0 ;;
+    git) [ "$GIT_SUBCOMMAND" = clone ] ;;
+    sort) [[ "$prev" =~ ^-[^-]*o$ ]] || [[ ${#prev} -ge 3 && "--output" == "${prev}"* ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 # Queues the call's words from index $1 onwards as write targets, relative to
 # base $2 with relative paths permitted iff $3 (defaults as for
 # prepare_word): every non-option word, the value of `--option=value`, every
@@ -1155,7 +1172,12 @@ queue_all_arguments() {
     if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
-        -) j=$((j + 1)); continue ;; # stdin/stdout (rm/mv/cp and a hard ln check their own -)
+        -)
+          # Usually stdin/stdout (rm/mv/cp and a hard ln check their own -).
+          dash_names_file "$j" && queue_write_target - "$flags" "$name" "$base" "$relative_ok"
+          j=$((j + 1))
+          continue
+          ;;
         -*)
           if in_list "${tok%%=*}" "${text_value_options[@]}"; then
             [[ "$tok" == *=* ]] || j=$((j + 1))
