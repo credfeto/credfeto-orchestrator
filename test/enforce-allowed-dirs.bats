@@ -306,6 +306,15 @@ assert_blocked() {
     assert_blocked "rm -- /etc/x"
 }
 
+@test "a bare - is an rm/mv/cp operand (a file name in the working directory), not an option" {
+    assert_blocked "rm -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_blocked "mv ${ROOT}/a -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_blocked "cp ${ROOT}/a -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_allowed "rm -"
+    assert_allowed "mv ${ROOT}/a -"
+    assert_allowed "cp ${ROOT}/a -"
+}
+
 @test "mv within the root is allowed, out of it or of a root itself is blocked" {
     assert_allowed "mv sub/a sub/b"
     assert_blocked "mv sub ${OUTSIDE}/sub"
