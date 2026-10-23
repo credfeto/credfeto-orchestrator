@@ -6,7 +6,7 @@
 # key is available, rather than falling back to password auth.
 # Exit 2 = blocked, 0 = allowed.
 #
-# ssh is on claude-settings.json's blanket Bash(ssh *) permissions.allow,
+# ssh is on claude-managed-settings.json's blanket Bash(ssh *) permissions.allow,
 # and the danger it poses is in the *destination*, not the verb - a
 # permissions.json prefix pattern cannot express "except this host", so the
 # restriction lives here instead (see issue #1315). scp was originally

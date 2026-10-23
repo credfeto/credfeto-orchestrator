@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Restricts curl to a closed grammar: a small, exact-spelling allowlist of flags plus exactly
 # one literal https://... (or http://...) URL argument, whose host must not be one of a fixed
-# denied set matching this repo's own claude-settings.json WebFetch(domain:...) deny entries:
+# denied set matching this repo's own claude-managed-settings.json WebFetch(domain:...) deny entries:
 # api.github.com, github.com, registry.npmjs.org, raw.githubusercontent.com, api.nuget.org.
 # Exit 2 = blocked, 0 = allowed.
 #
-# curl is on claude-settings.json's blanket Bash(curl *) permissions.allow, and its danger is
+# curl is on claude-managed-settings.json's blanket Bash(curl *) permissions.allow, and its danger is
 # in the *destination*, not the verb - a permissions.allow prefix pattern cannot express
 # "except this host" (see issue #1318, split from #1315).
 #
@@ -103,7 +103,7 @@ is_wrapper() {
 
 MARKER='(non-literal)'
 
-# Reused verbatim from claude-settings.json's WebFetch(domain:...) deny entries. Kept in sync
+# Reused verbatim from claude-managed-settings.json's WebFetch(domain:...) deny entries. Kept in sync
 # with that file by test/enforce-curl-host.bats's own parity test, mirroring how
 # test/command-allowlist-parity.bats already keeps command-allowlist and permissions.allow
 # from drifting apart.
