@@ -1133,7 +1133,10 @@ DASH_FILE_COMMANDS=(
     "curl -so - https://example.com" "openssl dgst -" "xmllint --schema - a.xml"
     "xmllint -relaxng - a.xml" "awk -d '{print}' -" "gh release download v1 -O -"
     "git clone https://github.com/x/y.git -" "git -C . checkout HEAD -" "git -C . checkout -b x -"
-    "git -C . restore -"
+    "git -C . restore -" "python3 a.py -" "python3 -c x -" "python3 -ccode -" "python3 -mjson.tool -"
+    "python3 -Bc x -" "python3 -X -" "python3 -W -" "python3 --check-hash-based-pycs -" "node - -"
+    "node -r x -" "node --redirect-warnings -" "node --eval=x -" "bun run -" "bun --silent a.js -"
+    "flake8 --output-file -" "flake8 --out -" "flake8 -j -" "flake8 -vq -"
 )
 
 # Commands whose bare - is standard input or output, or option text, so it is not a path.
@@ -1145,6 +1148,9 @@ DASH_STREAM_COMMANDS=(
     "curl --output - https://example.com" "openssl base64 -in - -out -" "openssl base64 --in - --out -"
     "xmllint -" "xmllint -o - -" "xmllint --output - a.xml" "shfmt -" "shfmt -i 2 -"
     "git -C . checkout -" "git -C . checkout -q -" "awk '{print}' -"
+    "python3 -" "python3 -B -" "python3 -I -" "python3 -Wignore -" "node -" "node --no-warnings -"
+    "bun -" "bun --silent -" "flake8 -" "flake8 a.py -" "flake8 - -" "flake8 --count -"
+    "flake8 --output-file out -" "flake8 --output-file=out -"
 )
 
 @test "a bare - is checked as the file ./- unless dash_is_stream lists it as stdin/stdout" {
@@ -1182,7 +1188,8 @@ DASH_STREAM_COMMANDS=(
 @test "a bare - that is standard input or output is not a path" {
     assert_each_in_dir "${TEST_TMP}/outside" 0 '' \
         "sort ${SRC}/a -" "sort -" "sort -s -" "sort -o ${SRC}/out ${SRC}/a -" "sort --files0-from -" "touch -" \
-        "uniq -" "uniq - -" "file -" "file -f -" "file -F - ${SRC}/a" "xmllint -" "xmllint -o - -" "shfmt -"
+        "uniq -" "uniq - -" "file -" "file -f -" "file -F - ${SRC}/a" "xmllint -" "xmllint -o - -" "shfmt -" \
+        "python3 -" "node -" "bun -" "flake8 -"
     # Inside the repo a ./- linking into configuration shows none of these resolves its -.
     mkdir -p "${TEST_TMP}/repo/.claude/agents"
     ln -s .claude/settings.json "${TEST_TMP}/repo/-"
@@ -1190,6 +1197,13 @@ DASH_STREAM_COMMANDS=(
     rm "${TEST_TMP}/repo/-"
     ln -s .claude/agents "${TEST_TMP}/repo/-"
     assert_each 0 '' "${DASH_STREAM_COMMANDS[@]}"
+}
+
+@test "a program read from stdin is not a path after a link-capable call" {
+    # python3, node and bun read a bare - as their program, so a heredoc program run after an
+    # ln -s or git checkout in the same command is not checked as the file ./-.
+    assert_each 0 '' "ln -s a b && python3 -" "ln -s a b && node -" "ln -s a b && bun -" \
+        "ln -s a b && flake8 -" "git -C . checkout main && python3 -"
 }
 
 @test "ln -t with a glued value starting with s is a hard link, not a symbolic one" {
