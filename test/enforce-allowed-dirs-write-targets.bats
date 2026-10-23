@@ -52,7 +52,7 @@ run_in_repo() {
 
 assert_blocked_config_write() {
     [ "${status}" -eq 2 ] || { echo "expected a block, got status ${status}: ${output}" >&2; return 1; }
-    [[ "${output}" == *'writing to Claude Code configuration'* ]] || { echo "wrong message: ${output}" >&2; return 1; }
+    [[ "${output}" == *'writing to Claude Code, git, gh or curl configuration'* ]] || { echo "wrong message: ${output}" >&2; return 1; }
     [[ "${output}" == *'command did not run'* ]] || { echo "missing 'command did not run': ${output}" >&2; return 1; }
 }
 
@@ -324,6 +324,78 @@ assert_protected_config_file() {
 
 @test "a write to .claude/history.jsonl, the repo's or the user's, is blocked for every write form; reading it is allowed" {
     assert_protected_config_file history.jsonl
+}
+
+# assert_protected_home_file <name> - checks a write to the user's ~/<name> is blocked for every
+# write form, and reading it is allowed. A Bash word with a leading `~` is already blocked as an
+# expansion, so only the file tools are given the `~` spelling.
+assert_protected_home_file() {
+    local name="$1" tilde='~' tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in "${HOME}/${name}" "${tilde}/${name}"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > ${HOME}/${name}" \
+        "printf x >> ${HOME}/${name}" \
+        "echo x | tee ${HOME}/${name}" \
+        "echo x | tee -a ${HOME}/${name}" \
+        "cp ${SRC}/x.md ${HOME}/${name}" \
+        "mv ${SRC}/x.md ${HOME}/${name}" \
+        "ln -s ${SRC}/x.md ${HOME}/${name}" \
+        "ln -s ${HOME}/${name} ${SRC}/link.md" \
+        "sed -i 's/a/b/' ${HOME}/${name}" \
+        "sed -n 'w ${HOME}/${name}' ${SRC}/payload" || return 1
+    assert_each 0 '' "cat ${HOME}/${name}"
+}
+
+@test "a write to the user's ~/.curlrc is blocked for every write form; reading it is allowed (#1554 Q55)" {
+    assert_protected_home_file .curlrc
+}
+
+@test "a write to the user's ~/.gitconfig is blocked for every write form; reading it is allowed (#1554 Q55)" {
+    assert_protected_home_file .gitconfig
+}
+
+@test "a write into the user's gh or git config directory, under ~/.config or \$XDG_CONFIG_HOME, is blocked; reading it is allowed (#1554 Q55)" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in "${HOME}/.config/gh/hosts.yml" "${HOME}/.config/gh" "${HOME}/.config/git/config" \
+            "${XDG_CONFIG_HOME}/gh/config.yml" "${XDG_CONFIG_HOME}/git/config"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    mkdir -p "${HOME}/.config/other"
+    assert_each_config_write \
+        "printf x > ${HOME}/.config/gh/config.yml" \
+        "echo x | tee -a ${HOME}/.config/git/config" \
+        "cp ${SRC}/x.md ${HOME}/.config/gh/hosts.yml" \
+        "sed -n 'w ${HOME}/.config/gh/config.yml' ${SRC}/payload" \
+        "sed -n 'w ${HOME}/.config/other/../gh/config.yml' ${SRC}/payload" \
+        "sed -n 'w ${XDG_CONFIG_HOME}/gh/config.yml' ${SRC}/payload" \
+        "ln -s ${HOME}/.config ${SRC}/c" \
+        "ln -s ${HOME}/.config/other ${SRC}/c" \
+        "ln -s ${XDG_CONFIG_HOME} ${SRC}/c" \
+        "cd ${HOME}/.config/other && touch x" || return 1
+    assert_each 0 '' "cat ${HOME}/.config/gh/config.yml" "cd ${HOME}/.config && ls"
+}
+
+@test "a repo's own .gitconfig or .curlrc is writable as a resolved path, but blocked in text that is never resolved (#1554 Q55)" {
+    local tool
+    for tool in Edit Write NotebookEdit; do
+        run_file_tool "${tool}" "sub/.gitconfig"
+        [ "${status}" -eq 0 ] || { echo "blocked ${tool} sub/.gitconfig: ${output}" >&2; return 1; }
+    done
+    assert_each 0 '' \
+        "printf x > sub/.gitconfig" \
+        "echo x | tee sub/.curlrc" \
+        "cp ${SRC}/x.md sub/.gitconfig"
+    assert_each_config_write \
+        "sed -n 'w sub/.gitconfig' ${SRC}/payload" \
+        "ln -s sub/.gitconfig ${SRC}/link"
 }
 
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
@@ -846,7 +918,7 @@ assert_protected_config_file() {
 }
 
 @test "a protected path spelled with quote splices is blocked; a backslash in a write target is blocked" {
-    assert_each 2 'writing to Claude Code configuration' \
+    assert_each 2 'writing to Claude Code, git, gh or curl configuration' \
         'echo x > .cla"ude"/settings.json' \
         "echo x > .cla'ude'/settings.json" \
         'echo x > .cl\aude/settings.json' \
@@ -1400,7 +1472,7 @@ EOF'
     for op in '>' '>>' '>|' '&>' '&>>' '<>' '>&'; do
         assert_each 2 'outside the allowed directories' "echo x ${op} ${TEST_TMP}/outside/f" "echo x 2${op} ${TEST_TMP}/outside/f"
     done
-    assert_each 2 'writing to Claude Code configuration' "echo '{}' > .claude/settings.json"
+    assert_each 2 'writing to Claude Code, git, gh or curl configuration' "echo '{}' > .claude/settings.json"
     assert_each 2 'non-ASCII' "echo x > ‘out.txt’" "echo ‘x’ > out.txt"
     assert_each 0 '' "echo x 2>&1" "echo x >&-" "cat < ${TEST_TMP}/outside/f" "cat <<< x" "echo x > out.txt"
 }
@@ -1417,7 +1489,7 @@ EOF'
     assert_each 0 '' \
         "dotnet changelog -f CHANGELOG.md -a Fixed --message 'see ~/.claude/settings.json'" \
         "dotnet changelog -f CHANGELOG.md -a Fixed --message='see ~/.claude/settings.json'"
-    assert_each 2 'writing to Claude Code configuration' "dotnet build --message ~/.claude/settings.json" \
+    assert_each 2 'writing to Claude Code, git, gh or curl configuration' "dotnet build --message ~/.claude/settings.json" \
         "dotnet changelog -f CHANGELOG.md -a Fixed -m x && dotnet build --message ~/.claude/settings.json"
 }
 
@@ -1578,7 +1650,7 @@ EOF'
 }
 
 @test "sed script options: --expression in both spellings, a glued -e, and --file/-f/-l values are skipped" {
-    assert_each 2 'writing to Claude Code configuration' \
+    assert_each 2 'writing to Claude Code, git, gh or curl configuration' \
         "sed --expression='w .claude/settings.json' x.txt" \
         "sed --expression 'w .claude/settings.json' x.txt" \
         "sed -e'w .claude/settings.json' x.txt"
@@ -1601,7 +1673,7 @@ EOF'
 }
 
 @test "awk -e/--source program text and -v/--assign or name=value assignments are checked as text" {
-    assert_each 2 'writing to Claude Code configuration' \
+    assert_each 2 'writing to Claude Code, git, gh or curl configuration' \
         "awk -e 'print > \".claude/settings.json\"' x" \
         "awk --source 'print > \".claude/settings.json\"' x" \
         "awk -e'print > \".claude/settings.json\"' x" \
