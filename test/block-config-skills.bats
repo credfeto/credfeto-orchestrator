@@ -25,6 +25,13 @@ run_skill() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "${payload}" "${HOOK}"
 }
 
+# As run_skill, for a SlashCommand call, whose input carries the whole `/name args` line.
+run_slash_command() {
+    local payload
+    payload=$(jq -n --arg command "$1" '{tool_name: "SlashCommand", tool_input: {command: $command}}')
+    run bash -c 'printf "%s" "$1" | "$2"' _ "${payload}" "${HOOK}"
+}
+
 @test "each config-editing skill is blocked, naming it and stating it never ran" {
     local skill
     for skill in "${CONFIG_SKILLS[@]}"; do
@@ -43,9 +50,36 @@ run_skill() {
     done
 }
 
+@test "a config-editing skill is blocked however its name is spelt (slash, whitespace, case, prefix)" {
+    local skill
+    for skill in '/update-config' ' update-config ' 'p:/update-config' 'Update-Config' '/p:update-config' \
+        'Anthropic-Skills:Skill-Creator' '//update-config' 'update-config extra args'; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'skill changes Claude Code configuration'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a SlashCommand naming a config-editing skill is blocked" {
+    local command
+    for command in '/update-config foo' '/update-config' ' /Init ' '/anthropic-skills:skill-creator make one'; do
+        run_slash_command "${command}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${command}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'skill changes Claude Code configuration'* ]] || { echo "wrong message for '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "an unrelated SlashCommand is allowed" {
+    local command
+    for command in '/commit msg' '/review' '/update-configuration now'; do
+        run_slash_command "${command}"
+        [ "${status}" -eq 0 ] || { echo "did not allow '${command}': ${output}" >&2; return 1; }
+    done
+}
+
 @test "ordinary skills are allowed" {
     local skill
-    for skill in credfeto-git-commit credfeto-code-style anthropic-skills:pdf update-configuration initialise; do
+    for skill in credfeto-git-commit credfeto-code-style anthropic-skills:pdf update-configuration initialise Update-Configuration; do
         run_skill "${skill}"
         [ "${status}" -eq 0 ] || { echo "did not allow ${skill}: ${output}" >&2; return 1; }
     done
@@ -60,8 +94,8 @@ run_skill() {
     jq -r '.permissions.deny[]' "${MANAGED_SETTINGS}" | grep -qxF 'Agent(statusline-setup)'
 }
 
-@test "the managed settings register this hook against the Skill matcher" {
-    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Skill") | .hooks[] | .command' "${MANAGED_SETTINGS}"
+@test "the managed settings register this hook against the Skill and SlashCommand matcher" {
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Skill|SlashCommand") | .hooks[] | .command' "${MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
     [ "${output}" = '/etc/claude-code/hooks/block-config-skills' ]
 }
@@ -70,6 +104,24 @@ run_skill() {
     run_skill ""
     [ "${status}" -eq 2 ]
     [[ "${output}" == *'no skill name'* ]]
+}
+
+@test "a skill name that is empty once normalised is blocked (fail closed)" {
+    local skill
+    for skill in '   ' '/' 'p:' 'p:/'; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'no skill name'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+    run_slash_command ''
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'no skill name'* ]]
+}
+
+@test "a skill name that is not a string is blocked (fail closed)" {
+    run bash -c 'printf "%s" "{\"tool_input\":{\"skill\":[\"update-config\"]}}" | "$1"' _ "${HOOK}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
 }
 
 @test "a payload with no skill field is blocked (fail closed)" {

@@ -429,7 +429,7 @@
         ]
       },
       {
-        "matcher": "Skill",
+        "matcher": "Skill|SlashCommand",
         "hooks": [
           {
             "type": "command",

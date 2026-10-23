@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 # Blocks the skills that edit Claude Code's own settings, permissions, hooks,
 # keybindings or skill definitions. Registered (in claude-managed-settings.json)
-# against the `Skill` matcher. Exit 2 = blocked, 0 = allowed.
+# against the `Skill|SlashCommand` matcher. Exit 2 = blocked, 0 = allowed.
 #
 # The hooks and allowlists guard Bash commands and file paths, but a skill can
 # run as a forked agent with its own file-editing tools, so a role that was
 # never given Edit or Write can still change settings through one. The
 # Skill(...) entries in permissions.deny cover the same names; this hook is a
 # second layer that does not depend on how Claude Code matches those rules.
-# The denial applies to every caller, a human typing the slash command
-# included: configuration changes are made by editing the tracked source files
-# and reinstalling or rebuilding.
+# Configuration changes are made by editing the tracked source files and
+# reinstalling or rebuilding. PreToolUse fires only when Claude calls the tool;
+# a human typing `/skillname` directly bypasses it (Claude Code's hooks
+# reference), so this hook does not cover that path.
 #
-# A skill name may carry a plugin or directory prefix (`plugin:skill`), so both
-# the full name and the part after the last `:` are matched, which stops a
-# re-prefixed invocation of a listed skill from slipping past.
+# Claude Code 2.1.3 merged slash commands into skills and the SlashCommand tool
+# is no longer listed; the matcher still covers it so an older Claude Code
+# fails closed rather than open.
 #
-# Fails closed: jq missing, the payload not parsing as JSON, or a missing/empty
-# skill name all block.
+# The name is read from `.tool_input.skill` (Skill) or `.tool_input.command`
+# (SlashCommand, whose value is the whole `/name args` line) and normalised
+# before it is compared, so a spelling Claude Code would still resolve to a
+# listed skill cannot slip past: surrounding whitespace and any arguments are
+# dropped (first word only), a leading `/` is stripped, a plugin or directory
+# prefix (`plugin:skill`) is reduced to the part after the last `:`, a `/`
+# after that prefix is stripped again, and the result is lower-cased.
+#
+# Fails closed: jq missing, the payload not parsing as JSON, a name that is not
+# a string, or a name that is missing or empty once normalised all block.
 
 # Byte-exact pattern semantics regardless of the host locale.
 export LC_ALL=C
@@ -42,11 +51,19 @@ is_config_skill() {
 
 command -v jq > /dev/null 2>&1 || block 'jq is not available to parse the tool payload - failing closed'
 
-skill_name=$(jq -r '.tool_input.skill // ""') || block 'tool payload could not be parsed by jq - failing closed'
+skill_name=$(jq -r '
+  (.tool_input.skill // .tool_input.command // "")
+  | if type == "string" then . else error("skill name is not a string") end
+  | ([splits("[[:space:]]+") | select(length > 0)] | first // "")
+  | sub("^/+"; "")
+  | (split(":") | last // "")
+  | sub("^/+"; "")
+  | ascii_downcase
+') || block 'tool payload could not be parsed by jq, or its skill name is not a string - failing closed'
 
 [ -z "$skill_name" ] && block 'tool payload has no skill name - failing closed'
 
-if is_config_skill "$skill_name" || is_config_skill "${skill_name##*:}"; then
+if is_config_skill "$skill_name"; then
   block "the ${skill_name} skill changes Claude Code configuration, which is not permitted here - stop and report what you needed instead; configuration is changed by a human editing the tracked source files and reinstalling"
 fi
 
