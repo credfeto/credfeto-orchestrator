@@ -12,7 +12,7 @@
 
 ## Rules
 
-- Before changing a script, read the development guide and that script's guide. Before changing a `lib/*` module, read `lib.md`; before changing a hook, the allowlist or `claude-settings.json`, read `claude-hooks.md`.
+- Before changing a script, read the development guide and that script's guide. Before changing a `lib/*` module, read `lib.md`; before changing a hook, the allowlist or `claude-managed-settings.json`, read `claude-hooks.md`.
 - Update the guide in the same PR as any change to what the script does, how it is run, what it depends on, or how it is tested. A guide that no longer matches the code is a bug in the PR that made it stale.
 - A new script needs its guide, added to the list in `docs/development/README.md`, in the same PR. `test/development-guides.bats` fails when a script has no guide or a link in `docs/development/` is broken.
 - New agent-facing rules go in `ai/local`, not in the guides; the guides describe how the code works and how to change it, and link to the instruction files that hold the rules.

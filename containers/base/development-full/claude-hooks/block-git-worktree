@@ -4,7 +4,7 @@
 # unlock/move/repair/...) are inspection or cleanup of worktrees that
 # already exist and are left alone.
 #
-# Also registered (in claude-settings.json) against Claude Code's native
+# Also registered (in claude-managed-settings.json) against Claude Code's native
 # EnterWorktree tool, a first-class tool that performs the equivalent of
 # `git worktree add` directly — no shell command string involved, so the
 # usual shfmt/AST parsing below does not apply to it. That call shape is

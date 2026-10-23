@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Blocks the GitHub MCP server's write tools outright. Registered (in
-# claude-settings.json) against the `mcp__github__.*` matcher.
+# claude-managed-settings.json) against the `mcp__github__.*` matcher.
 # Exit 2 = blocked, 0 = allowed.
 #
 # These tools write through the GitHub API directly, bypassing every local

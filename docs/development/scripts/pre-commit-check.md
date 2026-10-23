@@ -39,7 +39,7 @@ Exit codes: 0 when the hook passes; 1 for every failure (fetch failed, behind, n
 
 External tools: `git`, `sed`, and a `pre-commit` hook file that accepts `--all-files`. A branch only being ahead of its upstream is fine; only "behind" is an error.
 
-Shipping: the Dockerfile in `containers/base/development-full/` copies it to `/usr/local/bin/pre-commit-check` (root:root, 0755) and the sanity loop checks presence and the executable bit only. In the container `/etc/gitconfig` sets `core.hooksPath = /opt/git-global-hooks`, so the system level is normally what resolves when the repo has no hook of its own. It is on `claude-hooks/command-allowlist`, `Bash(pre-commit-check *)` is in `claude-settings.json` (`test/command-allowlist-parity.bats` keeps the two in step), and `enforce-background-for-long-running-commands` blocks it unless `run_in_background: true` (tests "pre-commit-check without run_in_background is blocked" and "a path-qualified pre-commit-check invocation is blocked" in `test/enforce-background-for-long-running-commands.bats`). `install-claude-hooks` does not install it on a host.
+Shipping: the Dockerfile in `containers/base/development-full/` copies it to `/usr/local/bin/pre-commit-check` (root:root, 0755) and the sanity loop checks presence and the executable bit only. In the container `/etc/gitconfig` sets `core.hooksPath = /opt/git-global-hooks`, so the system level is normally what resolves when the repo has no hook of its own. It is on `claude-hooks/command-allowlist`, `Bash(pre-commit-check *)` is in `claude-managed-settings.json` (`test/command-allowlist-parity.bats` keeps the two in step), and `enforce-background-for-long-running-commands` blocks it unless `run_in_background: true` (tests "pre-commit-check without run_in_background is blocked" and "a path-qualified pre-commit-check invocation is blocked" in `test/enforce-background-for-long-running-commands.bats`). `install-claude-hooks` does not install it on a host.
 
 ## Tests
 
@@ -61,7 +61,7 @@ bats test/pre-commit-check.bats
 - Run `bats test/pre-commit-check.bats`.
 - Mutation-check any new test: break the code (for example remove the `-x` test in `hook_in` or the `die` after a failed hook) and confirm the test fails, then restore it.
 - Update `containers/base/development-full/README.md` (the `pre-commit-check` bullet), `ai/global/git.instructions.md` and any other doc that describes the check order. The script has no help text.
-- If it is renamed, update `Dockerfile`, `claude-hooks/command-allowlist`, `claude-settings.json` and `enforce-background-for-long-running-commands`.
+- If it is renamed, update `Dockerfile`, `claude-hooks/command-allowlist`, `claude-managed-settings.json` and `enforce-background-for-long-running-commands`.
 - Add a changelog entry with `dotnet changelog -f CHANGELOG.md -a <Type> -m "<message>"`. Never edit `CHANGELOG.md` by hand.
 - The pre-commit hooks run the whole bats suite, so commits and pushes take minutes. Run them in the background. Running this script itself is just as slow, which is why the hook requires `run_in_background`.
 

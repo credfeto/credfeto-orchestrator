@@ -38,7 +38,7 @@
 #     dedicated handling. Hardcoded here (not a data file like
 #     command-allowlist) since this hook is its only consumer and the real
 #     enforcement is this hook's own AST-based parse - unlike
-#     claude-settings.json's permissions.allow, which does plain text
+#     claude-managed-settings.json's permissions.allow, which does plain text
 #     matching and can't reliably identify "the real subcommand" for a tool
 #     whose subcommand follows a wildcarded -C <dir>, so that layer is kept
 #     coarse (bare Bash(git -C *)) and this hook is the sole place that
