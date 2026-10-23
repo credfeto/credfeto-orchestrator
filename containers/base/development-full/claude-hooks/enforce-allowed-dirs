@@ -190,11 +190,16 @@
 #   <config>/git, <config>/gh        the directories and everything under them,
 #                                    for <config> ~/.config and
 #                                    $XDG_CONFIG_HOME when set
+#   <data>/gh                        gh's data directory and everything under
+#                                    it (installed extensions, which gh runs),
+#                                    for <data> ~/.local/share and
+#                                    $XDG_DATA_HOME when set
 # A repo's own `.gitconfig` or `.curlrc` (a test fixture) is not protected as
 # a path, so a write target resolved to one stays allowed. Program text and
 # link targets are never resolved, so for them the names are matched as text
 # wherever they point (names_home_config), and a link target or working
-# directory anywhere inside a config home blocks, as for a `.claude` tree.
+# directory anywhere inside a config home, ~/.local or $XDG_DATA_HOME blocks,
+# as for a `.claude` tree.
 # Also protected, for a `.git` directory at any depth in any repository
 # (is_protected_git_path), since git runs code named there on its next
 # command: the `.git` entry itself, .git/config, .git/config.worktree,
@@ -545,10 +550,16 @@ names_config_tree() {
   case "$1" in
     *.claude/* | */claude-code | claude-code) return 0 ;;
     */.config | .config | */.config/* | .config/*) return 0 ;;
+    */.local | .local | */.local/* | .local/*) return 0 ;;
   esac
-  [ -n "${XDG_CONFIG_HOME:-}" ] || return 1
+  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    case "$1" in
+      *"${XDG_CONFIG_HOME%/}" | *"${XDG_CONFIG_HOME%/}"/*) return 0 ;;
+    esac
+  fi
+  [ -n "${XDG_DATA_HOME:-}" ] || return 1
   case "$1" in
-    *"${XDG_CONFIG_HOME%/}" | *"${XDG_CONFIG_HOME%/}"/*) return 0 ;;
+    *"${XDG_DATA_HOME%/}" | *"${XDG_DATA_HOME%/}"/*) return 0 ;;
   esac
   return 1
 }
@@ -557,15 +568,21 @@ names_config_tree() {
 # targets): the user's git, gh and curl configuration, wherever it points,
 # since the text cannot be resolved against $HOME. Not used for a write
 # target that is resolved, so a repo's own `.gitconfig` fixture stays
-# writable. As for `.claude/`, anything may sit between `.config/` and the
-# name, so an `x/../gh` detour still matches.
+# writable. As for `.claude/`, anything may sit between `.config/` (or
+# `.local/` and `share/`) and the name, so an `x/../gh` detour still matches.
 names_home_config() {
   case "$1" in
     *.curlrc* | *.gitconfig* | *.config/*git | *.config/*git/* | *.config/*gh | *.config/*gh/*) return 0 ;;
+    *.local/*share/*gh | *.local/*share/*gh/*) return 0 ;;
   esac
-  [ -n "${XDG_CONFIG_HOME:-}" ] || return 1
+  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    case "$1" in
+      *"${XDG_CONFIG_HOME%/}"/*git* | *"${XDG_CONFIG_HOME%/}"/*gh*) return 0 ;;
+    esac
+  fi
+  [ -n "${XDG_DATA_HOME:-}" ] || return 1
   case "$1" in
-    *"${XDG_CONFIG_HOME%/}"/*git* | *"${XDG_CONFIG_HOME%/}"/*gh*) return 0 ;;
+    *"${XDG_DATA_HOME%/}"/*gh*) return 0 ;;
   esac
   return 1
 }
@@ -714,11 +731,17 @@ is_protected_git_path() {
   return 1
 }
 
-# The user's $HOME and config homes (~/.config, and $XDG_CONFIG_HOME when
-# set), each in its `realpath -ms` and `realpath -m` form, to match the two
-# resolutions resolve_queued_paths checks. Computed once, on first use.
+# The user's $HOME, config homes (~/.config, and $XDG_CONFIG_HOME when set)
+# and data homes (~/.local/share, and $XDG_DATA_HOME when set), each in its
+# `realpath -ms` and `realpath -m` form, to match the two resolutions
+# resolve_queued_paths checks. LOCAL_TREE_FORMS holds ~/.local and
+# $XDG_DATA_HOME, the trees a writer may not run in or link into, since from
+# ~/.local a `share/gh` in unresolved text names nothing protected. Computed
+# once, on first use.
 HOME_FORMS=()
 CONFIG_HOME_FORMS=()
+DATA_HOME_FORMS=()
+LOCAL_TREE_FORMS=()
 HOME_FORMS_READY=0
 init_home_forms() {
   local dir
@@ -729,6 +752,8 @@ init_home_forms() {
       [ -n "$dir" ] || continue
       HOME_FORMS+=("${dir%/}")
       CONFIG_HOME_FORMS+=("${dir%/}/.config")
+      DATA_HOME_FORMS+=("${dir%/}/.local/share")
+      LOCAL_TREE_FORMS+=("${dir%/}/.local")
     done
   fi
   if [ -n "${XDG_CONFIG_HOME:-}" ]; then
@@ -736,11 +761,19 @@ init_home_forms() {
       [ -n "$dir" ] && CONFIG_HOME_FORMS+=("${dir%/}")
     done
   fi
+  if [ -n "${XDG_DATA_HOME:-}" ]; then
+    for dir in "$(realpath -ms -- "$XDG_DATA_HOME" 2>/dev/null)" "$(realpath -m -- "$XDG_DATA_HOME" 2>/dev/null)"; do
+      [ -n "$dir" ] || continue
+      DATA_HOME_FORMS+=("${dir%/}")
+      LOCAL_TREE_FORMS+=("${dir%/}")
+    done
+  fi
   return 0
 }
 
 # Path check, for a fully resolved absolute path: the user's git, gh and curl
-# configuration under their own $HOME and config homes only.
+# configuration and gh's data directory under their own $HOME, config homes
+# and data homes only.
 is_protected_home_path() {
   local dir
   init_home_forms
@@ -754,16 +787,22 @@ is_protected_home_path() {
       "${dir}/git" | "${dir}/git/"* | "${dir}/gh" | "${dir}/gh/"*) return 0 ;;
     esac
   done
+  for dir in "${DATA_HOME_FORMS[@]}"; do
+    case "$1" in
+      "${dir}/gh" | "${dir}/gh/"*) return 0 ;;
+    esac
+  done
   return 1
 }
 
 # Working-directory and link-target check, for a fully resolved absolute
-# path: anywhere inside one of the user's config homes, from where a `..` in
-# text that is never resolved reaches gh's or git's configuration.
+# path: anywhere inside one of the user's config homes, ~/.local or
+# $XDG_DATA_HOME, from where a `..` (or a bare `share/gh`) in text that is
+# never resolved reaches gh's or git's configuration or gh's extensions.
 is_in_config_home() {
   local dir
   init_home_forms
-  for dir in "${CONFIG_HOME_FORMS[@]}"; do
+  for dir in "${CONFIG_HOME_FORMS[@]}" "${LOCAL_TREE_FORMS[@]}"; do
     case "$1" in
       "$dir" | "${dir}/"*) return 0 ;;
     esac
