@@ -76,7 +76,7 @@ agent definitions but cannot add, remove, or retarget entries directly. See
 copied into the image at `/home/developer/.claude/{settings.json,policy-limits.json}` (the preferences
 half only) and
 `/etc/claude-code/{managed-settings.json,hooks/{reject-obfuscated-commands,enforce-allowed-dirs,block-config-skills,enforce-git-identity,enforce-git-dash-c,block-git-worktree,block-dotnet-tool-install,block-github-mcp-write-tools,enforce-ssh-host-and-key,enforce-curl-host,enforce-background-for-long-running-commands,cache-gh-lookups,command-allowlist,command-blocklist,env-var-blocklist,allowed-dirs}}` as root:root
-0444 (files) / 0755 (hook scripts and directories) — read-only for `developer`. Claude Code reads
+0444 (files) / 0755 (hook scripts and directories), read-only for `developer`. Claude Code reads
 `/etc/claude-code/managed-settings.json` ahead of every user and project settings file, and its
 `allowManagedPermissionRulesOnly`/`allowManagedHooksOnly`/`allowManagedMcpServersOnly` locks stop a repo's
 `.claude/settings*.json` adding permissions, hooks or MCP servers. `reject-obfuscated-commands`
@@ -195,7 +195,7 @@ Standalone scripts maintained in this repo (`containers/base/development-full/sc
 - `querydb`: runs `sqlcmd` with the connection settings from `.database` files. See [querydb](../../../docs/development/scripts/querydb.md).
 - `cfwf` (Credfeto WorkFlow): one flat command for each recurring multi-step `gh` pattern, such as moving an item on the Workflow board, creating an issue, reading an issue's details or whether its plan has been answered, reading a repository's default branch, visibility, allowed merge methods and description (`cfwf repo view`), listing its collaborators and their roles (`cfwf repo collaborators`), probing the authenticated login, the host and the `gh` version without ever printing a token (`cfwf auth status`), adding a comment to a PR or an issue, judging the checks on a PR's head (with exit codes that keep a failed check apart from a failed read), reading a PR's state and metadata as fixed `key<TAB>value` lines (`cfwf pr view`, with no `--json` or `--jq`), listing a repository's open pull requests (`cfwf pr list`), listing a repository's open issues by priority (`cfwf issue list`), searching one repository's issues (`cfwf issue search`), creating a draft pull request and putting it on the Workflow board as Development in one step, or getting the existing one when the branch already has one (`cfwf pr create`), reading a pull request's comments, reviews and review threads (`cfwf pr comments`), replying to an inline review comment (`cfwf pr reply`), or looking up a repository's latest release (`cfwf release view`), its releases (`cfwf release list`) or the commit a tag points to (`cfwf tag view`), as when pinning a GitHub Action, or listing the status checks a branch requires, from its protection and rulesets (`cfwf branch required-checks`), and checks every body, title and label it posts for leaks (tokens, host paths, private repository names) first, and that an issue title in a repository owned by `credfeto` or `funfair-tech` has the shape `prefix: text` or `prefix(name): text` with a lower-case prefix. See [cfwf](../../../docs/development/scripts/cfwf.md).
 
-Every name is registered on `claude-hooks/command-allowlist` and `claude-managed-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly) — see `claude-hooks.instructions.md`.
+Every name is registered on `claude-hooks/command-allowlist` and `claude-managed-settings.json`'s `permissions.allow` (`command-allowlist-parity.bats` keeps those two in step), and `pre-commit-check` is one of the commands `enforce-background-for-long-running-commands` requires `run_in_background: true` for (its `pre-commit` run has the same unbounded duration as invoking `pre-commit` directly); see `claude-hooks.instructions.md`.
 
 ---
 
@@ -303,7 +303,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 - `/opt/pre-commit/src/.pre-commit-config.yaml` must exist.
 - `/opt/git-global-hooks/pre-commit` must be executable.
 
-**Claude Code settings/policy-limits/hooks wiring** — `/home/developer/.claude/settings.json`,
+**Claude Code settings/policy-limits/hooks wiring**: `/home/developer/.claude/settings.json`,
 `/home/developer/.claude/policy-limits.json` and `/etc/claude-code/managed-settings.json` must be root:root
 0444, and `/etc/claude-code` and `/etc/claude-code/hooks` root:root 0755; `managed-settings.json` must set
 the `allowManaged*Only` locks and disable bypass-permissions mode, `~/.claude/settings.json` must hold no
