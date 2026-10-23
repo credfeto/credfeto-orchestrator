@@ -685,6 +685,19 @@ EOF'
     assert_each 2 'outside the allowed directories' "ln -s - ${TEST_TMP}/outside/link"
 }
 
+@test "a bare - is a hard ln operand or target directory (a file name), not stdin/stdout" {
+    local cmd
+    for cmd in "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"; do
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
+        [ "${status}" -eq 2 ] || { echo "status ${status}, want 2: ${cmd}: ${output}" >&2; return 1; }
+        [[ "${output}" == *'outside the allowed directories'* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
+    done
+    assert_each 0 '' "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"
+    # sort's bare - operand is standard input, so it is still not a path.
+    run_hook_in_dir "sort -" "${TEST_TMP}/outside"
+    [ "${status}" -eq 0 ]
+}
+
 @test "ln -s to a target that is not fully literal is blocked, since it could name protected config" {
     assert_each 2 'a symbolic link target must be a literal path' \
         "ln -s \"\$HOME/.claude\" c" "ln -s \"\${HOME}/.claude/settings.json\" foo" \
