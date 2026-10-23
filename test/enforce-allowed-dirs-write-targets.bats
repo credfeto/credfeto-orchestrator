@@ -1006,6 +1006,26 @@ assert_protected_git_path() {
         "gh pr merge 1 --auto \"\$FLAG\""
 }
 
+@test "gh extension install, upgrade, remove and browse block under every spelling of the group; list is read-only and a non-literal subcommand fails closed (#1554 Q57 sweep)" {
+    local group
+    for group in extension extensions ext; do
+        assert_each 2 "changes the extensions gh runs" \
+            "gh ${group} install owner/gh-evil" \
+            "gh ${group} install ." \
+            "gh ${group} upgrade gh-evil" \
+            "gh ${group} upgrade --all" \
+            "gh ${group} remove gh-evil" \
+            "gh ${group} uninstall gh-evil" \
+            "gh ${group} browse" || return 1
+        assert_each 0 '' "gh ${group} list" "gh ${group} ls" || return 1
+    done
+    assert_each 2 'non-literal argument' \
+        "gh extension \"\$X\" owner/gh-evil" \
+        "gh \"\$G\" install owner/gh-evil"
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each_config_write "gh extension create .claude/skills/gh-x"
+}
+
 @test "the agents' read-only and remote-only gh workflows are allowed from the repo and from .claude, with text naming config" {
     mkdir -p "${TEST_TMP}/repo/.claude"
     local cmd
