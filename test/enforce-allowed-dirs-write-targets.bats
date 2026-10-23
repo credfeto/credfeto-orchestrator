@@ -383,6 +383,24 @@ assert_protected_home_file() {
     assert_each 0 '' "cat ${HOME}/.config/gh/config.yml" "cd ${HOME}/.config && ls"
 }
 
+@test "a write to curl's XDG config file curlrc, under ~/.config or \$XDG_CONFIG_HOME, is blocked; reading it is allowed (#1554 SEC-R4-2)" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in "${HOME}/.config/curlrc" "${XDG_CONFIG_HOME}/curlrc"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > ${HOME}/.config/curlrc" \
+        "printf x >> ${HOME}/.config/curlrc" \
+        "echo x | tee ${HOME}/.config/curlrc" \
+        "cp ${SRC}/x.md ${HOME}/.config/curlrc" \
+        "sed -n 'w ${HOME}/.config/curlrc' ${SRC}/payload" \
+        "sed -n 'w ${XDG_CONFIG_HOME}/curlrc' ${SRC}/payload"
+    assert_each 0 '' "cat ${HOME}/.config/curlrc"
+}
+
 @test "a write into gh's data directory (its extensions), under ~/.local/share or \$XDG_DATA_HOME, is blocked; reading it is allowed (#1554 Q57)" {
     local tool path ext="${HOME}/.local/share/gh/extensions/gh-x/gh-x"
     export XDG_DATA_HOME="${TEST_TMP}/data"
