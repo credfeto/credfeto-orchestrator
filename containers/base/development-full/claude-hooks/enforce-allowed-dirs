@@ -90,7 +90,11 @@
 #                    `--output-indicator-*`), and then every
 #                    argument after the subcommand, relative to the last -C,
 #                    plus, for clone, the directory git names after the
-#                    repository when none is given;
+#                    repository when none is given; checkout, restore and rm
+#                    block `--pathspec-from-file` and `--pathspec-file-nul`
+#                    in every form (see GIT_PATHSPEC_FILE_WRITERS), since
+#                    the paths they read from a file or stdin cannot be
+#                    checked;
 #       gh           only when it downloads or clones or is given an output
 #                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), since its
 #                    other arguments are routinely issue and PR text;
@@ -336,6 +340,11 @@ GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase c
 # enforce-git-dash-c's subcommand allowlist today; they stay here so allowing
 # them there cannot silently skip this check.
 GIT_PATH_WRITERS=(checkout restore mv rm clone)
+# The GIT_PATH_WRITERS that also read pathspecs from a file or stdin
+# (--pathspec-from-file, with --pathspec-file-nul for NUL-separated input).
+# The hook cannot read that file or stdin, so the paths could not be checked
+# and both options block in every form (mv and clone take neither).
+GIT_PATHSPEC_FILE_WRITERS=(checkout restore rm)
 # gh writes a named path only when it downloads or clones, or is given an
 # output option: its other arguments are routinely issue and PR text that may
 # well name these paths without writing them. gh (cobra/pflag) does not
@@ -1335,6 +1344,14 @@ git_write_targets() {
     # ambiguous --output- stays a writer, failing closed (git rejects it).
     opt="${words[$j]%%=*}"
     [[ ${#opt} -ge 3 && "--output-directory" == "${opt}"* ]] && writes=1
+    # git takes any unambiguous prefix; none shorter than --pathspec-fr or
+    # --pathspec-fi is (git rejects --p to --pathspec-f as ambiguous between
+    # these two), and none of --patch or --progress is a prefix of either,
+    # so every prefix from 3 characters blocks, failing closed.
+    if in_list "$GIT_SUBCOMMAND" "${GIT_PATHSPEC_FILE_WRITERS[@]}" && [ "${#opt}" -ge 3 ] \
+      && [[ "--pathspec-from-file" == "${opt}"* || "--pathspec-file-nul" == "${opt}"* ]]; then
+      block "git ${GIT_SUBCOMMAND} ${opt} reads paths from a file or stdin, which this hook cannot check - name each path on the command line instead"
+    fi
   done
   [ "$writes" -eq 1 ] || return 0
   note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
