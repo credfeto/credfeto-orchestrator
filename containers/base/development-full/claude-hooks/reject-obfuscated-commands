@@ -52,7 +52,7 @@
 #      classification, is enforce-allowed-dirs' concern.
 #
 # Deliberate residual gaps (accepted, ~1%): a listed command doing damage
-# via plain arguments (the claude-settings.json allow/deny layer covers
+# via plain arguments (the claude-managed-settings.json allow/deny layer covers
 # that), and writing a script file then executing it under an allowlisted
 # basename — no command-string filter can close that class.
 #
