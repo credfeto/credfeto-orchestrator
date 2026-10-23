@@ -368,6 +368,19 @@ teardown() {
     done
 }
 
+@test "any repository's git config and hooks are denied to Edit, by relative path and at any depth (#1554 Q56)" {
+    local denies prefix path entry
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
+    for prefix in '' '*/'; do
+        entry="Edit(${prefix}.git)"
+        printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+        for path in config config.worktree commondir 'hooks/**' 'modules/**' 'worktrees/**'; do
+            entry="Edit(${prefix}.git/${path})"
+            printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+        done
+    done
+}
+
 @test "every code-execution/destructive flag is denied in both the first and a later argument position (#1385)" {
     # `*` matches one-or-more characters, so `Bash(rm * --no-preserve-root*)` alone does not
     # match `rm --no-preserve-root -rf /` - each flag needs the pair. Pinned here so a new deny
