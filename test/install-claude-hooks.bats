@@ -368,6 +368,14 @@ teardown() {
     done
 }
 
+@test "the user's git, gh and curl configuration and gh's extension directory are denied to Edit (#1554 Q55, Q57)" {
+    local denies entry
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
+    for entry in 'Edit(~/.curlrc)' 'Edit(~/.gitconfig)' 'Edit(~/.config/git/**)' 'Edit(~/.config/gh/**)' 'Edit(~/.local/share/gh/**)'; do
+        printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+    done
+}
+
 @test "any repository's git config and hooks are denied to Edit, by relative path and at any depth (#1554 Q56)" {
     local denies prefix path entry
     denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
