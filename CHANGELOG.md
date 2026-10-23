@@ -10,6 +10,19 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+
+## [0.0.5] - 2026-10-23
+### Security
 - Fixed several fail-open bugs in the block-git-worktree Claude Code hook: a word-extraction transport that could desync on embedded tab bytes or non-literal arguments, unguarded jq calls that silently disabled the hook on failure, an EnterWorktree tool_name dispatch with no fail-closed default, and an empty-string EnterWorktree name treated the same as an absent one
 - Extend enforce-git-dash-c to block git-hook-bypass flags (long and short form, scoped correctly per subcommand) and the HUSKY=0 environment override on git commands (#1399)
 - Added a repo-owned block-github-mcp-write-tools Claude Code hook that blocks GitHub MCP write tools (create/update/delete file, push files, merge pull request, update pull request branch), so they cannot bypass local git hooks
@@ -94,15 +107,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Generated issue and pull request CLAUDE.md files now give the agent the Workflow status names and the exact cfwf workflow-status --set and --check commands for its item, inline at every step that moves the board, instead of raw project, field and option ids it had to turn into GraphQL itself, and say never to update the board with gh project or gh api graphql; an idle-exhausted pull request's Blocked comment now also gives its board status and the phase that was due next (#1650)
 - oneshot now sends the GitHub login it is authenticated as, URL-encoded, as the optional user query parameter on the priorities request so the feed can leave out items assigned to other users, and fetches without it when the login cannot be resolved (#1570)
 - Owner provisioning and removal now run as root via 'sudo ./setup-owner' and 'sudo ./teardown-owner'; the scripts no longer call sudo internally, install-timer/uninstall-timer are replaced by shared systemd unit handling, the owner joins the systemd-journal group and gets a per-owner polkit rule (#1649)
-### Deprecated
 ### Removed
 - src/FunFair.props, which only applies to funfair-tech repositories; the global pre-commit hook forbids it outside funfair-tech repos
 - Removed the interactive script with its tests, documentation and utilities, transcripts/_shared directory handling, and the PRUNE_DANGLING_IMAGES and PODMAN_REPLACE_CONTAINER settings; dangling-image pruning and podman run --replace are now unconditional, and all agent container launches require a work item
-### Deployment Changes
-
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
 
 ## [0.0.4] - 2026-09-17
 ### Security
