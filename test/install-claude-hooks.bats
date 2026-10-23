@@ -353,6 +353,17 @@ teardown() {
     done
 }
 
+@test "the user's and any project's .claude skills, agents and commands are denied to Edit" {
+    local denies dir prefix entry
+    denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
+    for dir in skills agents commands; do
+        for prefix in '~' '*'; do
+            entry="Edit(${prefix}/.claude/${dir}/**)"
+            printf '%s\n' "${denies}" | grep -qxF "${entry}" || { echo "missing deny ${entry}" >&2; return 1; }
+        done
+    done
+}
+
 @test "every code-execution/destructive flag is denied in both the first and a later argument position (#1385)" {
     # `*` matches one-or-more characters, so `Bash(rm * --no-preserve-root*)` alone does not
     # match `rm --no-preserve-root -rf /` - each flag needs the pair. Pinned here so a new deny
