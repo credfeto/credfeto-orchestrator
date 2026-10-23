@@ -802,6 +802,33 @@ git status'
     done
 }
 
+@test "assigning a variable that moves git or gh config, picks the .NET runtime or names a pager is blocked as a prefix and as a statement (#1554 Q52-Q54)" {
+    local cmd name
+    for cmd in \
+        "HOME=/tmp/x git commit -m x" \
+        "HOME=/tmp/x" \
+        "XDG_CONFIG_HOME=x gh pr view 1" \
+        "XDG_CONFIG_HOME=x" \
+        "DOTNET_ROOT=x dotnet build" \
+        "DOTNET_ROOT=x" \
+        "DOTNET_ADDITIONAL_DEPS=x dotnet build" \
+        "DOTNET_ADDITIONAL_DEPS=x" \
+        "DOTNET_SHARED_STORE=x dotnet build" \
+        "DOTNET_SHARED_STORE=x" \
+        "MANPAGER=x echo y" \
+        "MANPAGER=x" \
+        "SYSTEMD_PAGER=x echo y" \
+        "SYSTEMD_PAGER=x" \
+        "home=/tmp/x git log"; do
+        name="${cmd%%=*}"
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ] || { echo "did not block: ${cmd}" >&2; return 1; }
+        [[ "${output}" == *"assignment to ${name} is not permitted"* ]] || { echo "wrong message for: ${cmd}: ${output}" >&2; return 1; }
+    done
+    run_hook "FOO=1 echo x"
+    [ "${status}" -eq 0 ]
+}
+
 @test "assigning DOTNET_STARTUP_HOOKS is blocked, other DOTNET_ switches are not (#1554 Q49)" {
     run_hook "DOTNET_STARTUP_HOOKS=/tmp/evil.dll dotnet build"
     [ "${status}" -eq 2 ]
