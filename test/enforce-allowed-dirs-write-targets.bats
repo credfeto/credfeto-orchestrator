@@ -1090,8 +1090,33 @@ EOF'
     [ "${status}" -eq 0 ]
 }
 
-@test "a writer's bare - operand (stdin or stdout) is not a path" {
-    assert_each 0 '' "cp a.txt b.txt && tee -"
+@test "a bare - that tee, mkdir, sort -o or git clone writes as a file is checked as ./-" {
+    local cmd
+    for cmd in "tee -" "echo x | tee -a -" "sort -o - ${SRC}/a" "sort -ro - ${SRC}/a" "sort --output=- ${SRC}/a" \
+        "sort --output - ${SRC}/a" "sort --o - ${SRC}/a" "mkdir -" "mkdir -p -" "git clone https://github.com/x/y.git -"; do
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
+        [ "${status}" -eq 2 ] || { echo "status ${status}, want 2: ${cmd}: ${output}" >&2; return 1; }
+        [[ "${output}" == *'outside the allowed directories'* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
+    done
+    assert_each 0 '' "tee -" "sort -o - a.txt" "sort --output=- a.txt" "sort --output - a.txt" "mkdir -" \
+        "git clone https://github.com/x/y.git -"
+}
+
+@test "a bare - that is standard input or output is not a path" {
+    local cmd
+    for cmd in "sort ${SRC}/a -" "sort -" "sort -o ${SRC}/out ${SRC}/a -" "touch -" "uniq -"; do
+        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
+        [ "${status}" -eq 0 ] || { echo "status ${status}, want 0: ${cmd}: ${output}" >&2; return 1; }
+    done
+    # curl's URL is itself checked as a path, so curl runs inside a root, where a ./- linking to
+    # configuration shows its -o - is not resolved, while tee's - is.
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    ln -s .claude/settings.json "${TEST_TMP}/repo/-"
+    assert_each 0 '' "curl -o - https://example.com"
+    assert_each_config_write "tee -"
+    # git checkout - switches to the previous branch, so its - is not ./- either; clone's is.
+    assert_each 0 '' "git -C . checkout -"
+    assert_each_config_write "git -C . clone https://github.com/x/y.git -"
 }
 
 @test "ln -t with a glued value starting with s is a hard link, not a symbolic one" {
