@@ -96,10 +96,15 @@
 #                    after the action, skipping the branch name or text of
 #                    -b, -B and --reason), relative to the last -C,
 #                    plus, for clone, the directory git names after the
-#                    repository when none is given; checkout, restore and rm
-#                    block `--pathspec-from-file` and `--pathspec-file-nul`
-#                    in every form (see GIT_PATHSPEC_FILE_WRITERS), since
-#                    the paths they read from a file or stdin cannot be
+#                    repository when none is given; stash push (named, or
+#                    assumed when stash's first argument is an option or
+#                    `--`) checks every pathspec, skipping the text of -m
+#                    and --message (see GIT_STASH_NO_PATH_ACTIONS for the other
+#                    stash actions; a non-literal or unknown one blocks);
+#                    checkout, restore, rm and stash block
+#                    `--pathspec-from-file` and `--pathspec-file-nul` in
+#                    every form (see GIT_PATHSPEC_FILE_WRITERS), since the
+#                    paths they read from a file or stdin cannot be
 #                    checked;
 #       gh           none for a command on GH_READ_ONLY_COMMANDS or
 #                    GH_READ_ONLY_LEAF_COMMANDS (pr merge/close only
@@ -185,9 +190,9 @@
 #     with -f is not read, so for those only a protected name spelled out in
 #     the program text is caught.
 #   - git subcommands that write the working tree from commit content
-#     (merge, cherry-pick, reset --hard, stash, pull, switch, checkout
-#     <branch>, rebase) can write a protected path with nothing protected on
-#     the command line. Blocking them would break normal work; the managed
+#     (merge, cherry-pick, reset --hard, stash with no pathspec, stash pop,
+#     apply and branch, pull, switch, checkout <branch>, rebase) can write a
+#     protected path with nothing protected on the command line. Blocking them would break normal work; the managed
 #     settings locks, the root-owned /etc/claude-code and the agent
 #     entrypoint's refusal of a repo whose `.claude/settings*.json` or
 #     `.mcp.json` differs from origin/main are what hold against them.
@@ -361,11 +366,26 @@ GIT_MATERIALISING_SUBCOMMANDS=(checkout switch restore clone pull merge rebase c
 # and rm are not on enforce-git-dash-c's subcommand allowlist today; they
 # stay here so allowing them there cannot silently skip this check.
 GIT_PATH_WRITERS=(checkout restore mv rm clone)
-# The GIT_PATH_WRITERS that also read pathspecs from a file or stdin
+# The git subcommands that write the pathspecs they are given and can also
+# read them from a file or stdin
 # (--pathspec-from-file, with --pathspec-file-nul for NUL-separated input).
 # The hook cannot read that file or stdin, so the paths could not be checked
-# and both options block in every form (mv and clone take neither).
-GIT_PATHSPEC_FILE_WRITERS=(checkout restore rm)
+# and both options block in every form (mv and clone take neither). stash
+# takes them only for push, but they block in every stash action, which
+# fails closed for the actions that reject them anyway.
+GIT_PATHSPEC_FILE_WRITERS=(checkout restore rm stash)
+# git stash actions, checked against `git stash -h`. push (also
+# assumed when the first argument is an option or `--`, or when there is
+# none) resets each pathspec it names to HEAD, and with -u/--include-untracked
+# or -a/--all removes untracked ones, so every argument is checked but the
+# text of the options below. save's arguments are its message, not
+# pathspecs. These only read or write the stash refs and reflog: list, show,
+# drop, clear, create, store, export and import; pop, apply and branch
+# write the working tree from the stash's own content without naming a path
+# (branch checks out the stash's base commit first), the accepted gap that
+# checkout <branch> is. Any other action word, or a non-literal one, blocks.
+GIT_STASH_NO_PATH_ACTIONS=(list show drop clear create store export import pop apply branch)
+GIT_STASH_TEXT_VALUE_OPTIONS=(-m --message)
 # git worktree actions, checked against `git worktree -h` (git 2.56.0): add
 # creates <path>, move writes <new-path>, remove deletes <worktree> and
 # repair rewrites the .git file in each <path>, so these four are writers
@@ -1456,6 +1476,22 @@ queue_all_arguments() {
   return 0
 }
 
+# A git stash call: see GIT_STASH_NO_PATH_ACTIONS.
+git_stash_write_targets() {
+  local k=$((GIT_SUBCOMMAND_INDEX + 1)) action
+  action="${words[$k]:-}"
+  { [ "$action" = "$MARKER" ] || [ "${wflags[$k]:-}" = N ]; } && block 'git stash subcommand could not be verified (non-literal argument)'
+  in_list "$action" "${GIT_STASH_NO_PATH_ACTIONS[@]}" && return 0
+  case "$action" in
+    push) k=$((k + 1)) ;;
+    save) note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"; return 0 ;;
+    "" | -*) : ;;
+    *) block "git stash '${action}' is not a stash subcommand this hook can check - failing closed" ;;
+  esac
+  note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
+  queue_all_arguments "$k" "$GIT_BASE" "$GIT_RELATIVE_OK" "${GIT_STASH_TEXT_VALUE_OPTIONS[@]}"
+}
+
 # A git worktree call: see GIT_WORKTREE_WRITERS.
 git_worktree_write_targets() {
   local k=$((GIT_SUBCOMMAND_INDEX + 1)) action j has_path=0 operands_only=0
@@ -1507,6 +1543,10 @@ git_write_targets() {
       block "git ${GIT_SUBCOMMAND} ${opt} reads paths from a file or stdin, which this hook cannot check - name each path on the command line instead"
     fi
   done
+  if [ "$GIT_SUBCOMMAND" = stash ] && [ "$writes" -eq 0 ]; then
+    git_stash_write_targets
+    return 0
+  fi
   [ "$writes" -eq 1 ] || return 0
   note_writer git "$GIT_BASE" "$GIT_RELATIVE_OK"
   queue_all_arguments $((GIT_SUBCOMMAND_INDEX + 1)) "$GIT_BASE" "$GIT_RELATIVE_OK"
