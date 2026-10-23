@@ -1251,6 +1251,51 @@ EOF'
         "TMPDIR=.claude/hooks mktemp sub/x.XXXX"
 }
 
+# The builtins below are unclassified in the shipped allowlist, which would block them on its own;
+# classifying them here makes the variable-setting count the check under test.
+@test "every way bash sets a variable counts as an assignment for mktemp and dotnet, not only NAME=value" {
+    printf '%s\n' 'read read-only' 'mapfile read-only' 'readarray read-only' 'getopts read-only' 'unset read-only' \
+        'wait read-only' ': read-only' 'source read-only' '. read-only' >> "${HOOK_DIR}/command-allowlist"
+    assert_each 2 'in a command that assigns a variable' \
+        "printf -v TMPDIR .claude/hooks; mktemp -d" \
+        "printf -vTMPDIR .claude/hooks; mktemp -d" \
+        "printf \"\$f\" x; mktemp -d" \
+        "read TMPDIR <<< x; mktemp -d" \
+        "IFS= read -r TMPDIR <<< x; mktemp -d" \
+        "mapfile TMPDIR < f; mktemp -d" \
+        "readarray TMPDIR < f; mktemp -d" \
+        "getopts a TMPDIR; mktemp -d" \
+        "unset TMPDIR; mktemp -d" \
+        "wait -p TMPDIR; mktemp -d" \
+        "source f; mktemp -d" \
+        ". f; mktemp -d" \
+        "export TMPDIR=.claude/hooks; mktemp -d" \
+        "export TMPDIR; mktemp -d" \
+        "declare -x TMPDIR=x; mktemp -d" \
+        "typeset TMPDIR; mktemp -d" \
+        "local TMPDIR=x; mktemp -d" \
+        "readonly TMPDIR=x; mktemp -d" \
+        "for TMPDIR in x; do mktemp -d; done" \
+        "for ((i = 0; i < 1; i++)); do mktemp -d; done" \
+        ": \${TMPDIR:=x}; mktemp -d" \
+        ": \"\${TMPDIR=x}\"; mktemp -d" \
+        "echo \$((TMPDIR = 5)); mktemp -d" \
+        "echo \${a[x=1]}; mktemp -d" \
+        "echo \${x:y=1}; mktemp -d" \
+        "[[ 1 -eq TMPDIR=5 ]]; mktemp -d" \
+        "[[ -v a[x=1] ]]; mktemp -d" \
+        "[ -v 'a[x=1]' ]; mktemp -d" \
+        "echo x {fd}> f; mktemp -d"
+    assert_each 2 'MSBuild reads environment variables as properties' \
+        "printf -v OutputPath x; dotnet build" \
+        "let x=1; dotnet build" \
+        "((x = 1)); dotnet build" \
+        "read OutputPath <<< x; dotnet build"
+    assert_each 0 '' "mktemp -d" "printf '%s' x; mktemp -d" "printf '%s' \"\${x}\"; mktemp -d" "echo \${x:-y}; mktemp -d" \
+        "echo \${a[0]} \${a[@]} \${x:1:2}; mktemp -d" "[[ -f x ]] && mktemp -d" "[[ a == b ]] && mktemp -d" \
+        "[ -f x ] && mktemp -d" "cd sub && mktemp -d" "dotnet build" "cd sub && dotnet build"
+}
+
 @test "mktemp -p DIR, -pDIR and --tmpdir=DIR write into DIR only, which must be under a root" {
     printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
     assert_each 0 '' "mktemp -p sub" "mktemp -psub" "mktemp -dpsub" "mktemp --tmpdir=sub" "mktemp --t=sub" "mktemp --dry-run -p sub" \
