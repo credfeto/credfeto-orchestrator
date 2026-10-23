@@ -282,6 +282,50 @@ assert_protected_config_dir() {
     assert_each 0 '' "cat .claude/CLAUDE.md" "cd .claude && ls"
 }
 
+@test "a write into .claude/sessions, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_dir sessions
+}
+
+# assert_protected_config_file <name> - checks a write to the protected file name directly under
+# .claude, the repo's or the user's, is blocked for every write form, and reading it is allowed.
+assert_protected_config_file() {
+    local name="$1" tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in ".claude/${name}" "${HOME}/.claude/${name}" "${TEST_TMP}/repo/.claude/${name}"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > .claude/${name}" \
+        "printf x > ${HOME}/.claude/${name}" \
+        "printf x >> .claude/${name}" \
+        "printf x >> ${HOME}/.claude/${name}" \
+        "echo x | tee .claude/${name}" \
+        "echo x | tee -a ${HOME}/.claude/${name}" \
+        "cp ${SRC}/x.md .claude/${name}" \
+        "cp ${SRC}/x.md ${HOME}/.claude/${name}" \
+        "mv ${SRC}/x.md .claude/${name}" \
+        "mv ${SRC}/x.md ${HOME}/.claude/${name}" \
+        "ln -s ${SRC}/x.md .claude/${name}" \
+        "ln -s .claude/${name} ${SRC}/link.md" \
+        "ln -s ${HOME}/.claude/${name} ${SRC}/link.md" \
+        "sed -i 's/a/b/' .claude/${name}" \
+        "sed -i 's/a/b/' ${HOME}/.claude/${name}" \
+        "sed -n 'w .claude/${name}' ${SRC}/payload" || return 1
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each 2 '' "cd .claude && touch ${name}" || return 1
+    assert_each 0 '' "cat .claude/${name}" "cat ${HOME}/.claude/${name}" "cd .claude && ls"
+}
+
+@test "a write to .claude/.credentials.json, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_file .credentials.json
+}
+
+@test "a write to .claude/history.jsonl, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_file history.jsonl
+}
+
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
     assert_each_config_write \
         "touch .claude/settings.json" \
