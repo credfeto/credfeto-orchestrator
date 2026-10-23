@@ -1235,6 +1235,22 @@ EOF'
     assert_each 0 '' "mktemp" "mktemp -t x.XXXXXX" "mktemp --tmpdir x.XXXXXX" "mktemp --suffix .txt"
 }
 
+@test "a variable assignment anywhere in a command where mktemp uses TMPDIR blocks, since the hook checks its own TMPDIR" {
+    assert_each 2 'in a command that assigns a variable' \
+        "TMPDIR=.claude/hooks mktemp -t xXXXX" \
+        "TMPDIR=.claude/skills mktemp -d" \
+        "TMPDIR=../outside mktemp -d" \
+        "TMPDIR=.claude/hooks; mktemp -t x" \
+        "TMPDIR=.claude/hooks && mktemp -d" \
+        "TMPDIR= mktemp -d" \
+        "mktemp -d && TMPDIR=x" \
+        "TMPDIR=x mktemp -t -p sub x.XXXXXX" \
+        "TMPDIR=x mktemp --tmpdir x.XXXXXX" \
+        "TMP=x mktemp"
+    assert_each 0 '' "mktemp -d" "TMPDIR=x echo y" "TMPDIR=x mktemp -p sub" "TMPDIR=x mktemp --tmpdir=sub x.XXXXXX" \
+        "TMPDIR=.claude/hooks mktemp sub/x.XXXX"
+}
+
 @test "mktemp -p DIR, -pDIR and --tmpdir=DIR write into DIR only, which must be under a root" {
     printf '%s\n' "${TEST_TMP}/repo" > "${HOOK_DIR}/allowed-dirs"
     assert_each 0 '' "mktemp -p sub" "mktemp -psub" "mktemp -dpsub" "mktemp --tmpdir=sub" "mktemp --t=sub" "mktemp --dry-run -p sub" \
