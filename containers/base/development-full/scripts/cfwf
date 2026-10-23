@@ -315,7 +315,7 @@ Commands:
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
-  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused)
+  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)
   help [command]           Show this help, or the help for one command
 
 Run 'cfwf help <command>' for the options of a command.
