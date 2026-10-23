@@ -184,6 +184,34 @@ assert_each_config_write() {
         "nice tee .claude/settings.json"
 }
 
+@test "a write into .claude/commands, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in ".claude/commands/x.md" "${HOME}/.claude/commands/x.md" "${TEST_TMP}/repo/.claude/commands"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > .claude/commands/evil.md" \
+        "printf x > ${HOME}/.claude/commands/evil.md" \
+        "echo x | tee .claude/commands/x.md" \
+        "echo x | tee ${HOME}/.claude/commands/x.md" \
+        "cp ${SRC}/x.md .claude/commands/x.md" \
+        "cp ${SRC}/x.md ${HOME}/.claude/commands/x.md" \
+        "mv ${SRC}/x.md .claude/commands/x.md" \
+        "mv ${SRC}/x.md ${HOME}/.claude/commands/x.md" \
+        "ln -s ${SRC}/x.md .claude/commands/x.md" \
+        "ln -s .claude/commands/x.md ${SRC}/link.md" \
+        "ln -s ${HOME}/.claude/commands/x.md ${SRC}/link.md" \
+        "sed -i 's/a/b/' .claude/commands/x.md" \
+        "sed -i 's/a/b/' ${HOME}/.claude/commands/x.md" \
+        "sed -n 'w .claude/commands/x.md' ${SRC}/payload"
+    mkdir -p "${TEST_TMP}/repo/.claude/commands"
+    assert_each 2 '' "cd .claude/commands && touch x.md"
+    assert_each 0 '' "cat .claude/commands/x.md" "cd .claude/commands && ls"
+}
+
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
     assert_each_config_write \
         "touch .claude/settings.json" \
