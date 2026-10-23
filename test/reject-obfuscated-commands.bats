@@ -776,7 +776,37 @@ git status'
 # ---- environment-variable assignment blocklist -------------------------------
 
 @test "a benign per-command assignment prefix is allowed" {
-    run_hook "GH_PAGER= gh pr view 1"
+    run_hook "FOO=1 echo x"
+    [ "${status}" -eq 0 ]
+}
+
+@test "assigning a variable that makes gh, git or less run another program, or moves gh's config, is blocked (#1554 Q49)" {
+    local cmd name
+    for cmd in \
+        "GH_PAGER=x gh pr view 1" \
+        "GH_PAGER= gh pr view 1" \
+        "PAGER=x git log" \
+        "LESSOPEN=x git log" \
+        "LESSCLOSE=x git log" \
+        "BROWSER=x gh pr view --web" \
+        "GH_BROWSER=x gh pr view --web" \
+        "GH_EDITOR=x gh pr create" \
+        "EDITOR=x gh pr create" \
+        "VISUAL=x git commit" \
+        "GH_CONFIG_DIR=.claude/skills gh pr view 1" \
+        "browser=x gh pr view --web"; do
+        name="${cmd%%=*}"
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ] || { echo "did not block: ${cmd}" >&2; return 1; }
+        [[ "${output}" == *"assignment to ${name} is not permitted"* ]] || { echo "wrong message for: ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "assigning DOTNET_STARTUP_HOOKS is blocked, other DOTNET_ switches are not (#1554 Q49)" {
+    run_hook "DOTNET_STARTUP_HOOKS=/tmp/evil.dll dotnet build"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to DOTNET_STARTUP_HOOKS is not permitted'* ]]
+    run_hook "DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet build"
     [ "${status}" -eq 0 ]
 }
 
