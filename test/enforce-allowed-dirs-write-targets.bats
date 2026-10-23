@@ -383,6 +383,35 @@ assert_protected_home_file() {
     assert_each 0 '' "cat ${HOME}/.config/gh/config.yml" "cd ${HOME}/.config && ls"
 }
 
+@test "a write into gh's data directory (its extensions), under ~/.local/share or \$XDG_DATA_HOME, is blocked; reading it is allowed (#1554 Q57)" {
+    local tool path ext="${HOME}/.local/share/gh/extensions/gh-x/gh-x"
+    export XDG_DATA_HOME="${TEST_TMP}/data"
+    for tool in Edit Write NotebookEdit; do
+        for path in "${ext}" "${HOME}/.local/share/gh" "${XDG_DATA_HOME}/gh/extensions/gh-x/gh-x"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    mkdir -p "${HOME}/.local/share/other" "${HOME}/.local/share/gh/extensions/gh-x"
+    assert_each_config_write \
+        "printf x > ${ext}" \
+        "printf x >> ${ext}" \
+        "echo x | tee ${ext}" \
+        "cp ${SRC}/x.md ${ext}" \
+        "mv ${SRC}/x.md ${ext}" \
+        "ln -s ${SRC}/x.md ${ext}" \
+        "ln -s ${ext} ${SRC}/link" \
+        "sed -i 's/a/b/' ${ext}" \
+        "sed -n 'w ${ext}' ${SRC}/payload" \
+        "sed -n 'w ${HOME}/.local/share/other/../gh/extensions/gh-x/gh-x' ${SRC}/payload" \
+        "sed -n 'w ${XDG_DATA_HOME}/gh/extensions/gh-x/gh-x' ${SRC}/payload" \
+        "ln -s ${HOME}/.local ${SRC}/l" \
+        "ln -s ${HOME}/.local/share/other ${SRC}/l" \
+        "ln -s ${XDG_DATA_HOME} ${SRC}/l" \
+        "cd ${HOME}/.local && touch x" || return 1
+    assert_each 0 '' "cat ${ext}" "cd ${HOME}/.local/share && ls"
+}
+
 @test "a repo's own .gitconfig or .curlrc is writable as a resolved path, but blocked in text that is never resolved (#1554 Q55)" {
     local tool
     for tool in Edit Write NotebookEdit; do
