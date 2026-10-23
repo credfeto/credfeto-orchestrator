@@ -22,6 +22,11 @@ LD_AUDIT
 PYTHONPATH
 PYTHONSTARTUP
 NODE_OPTIONS
+# .NET loads every assembly named here into the process before Main runs, the
+# same loader hijack as NODE_OPTIONS/PYTHONSTARTUP for the dotnet writer. Only
+# this name: a DOTNET_* glob would also block harmless switches such as
+# DOTNET_CLI_TELEMETRY_OPTOUT.
+DOTNET_STARTUP_HOOKS
 GIT_*
 # npm reads any option from the environment as npm_config_<option>, so a
 # prefixed assignment (npm_config_script_shell=/evil npm run x) is the same
@@ -40,3 +45,18 @@ http_proxy
 https_proxy
 all_proxy
 ftp_proxy
+# gh and git run whatever program these name, as a pager, editor or browser,
+# instead of the command on the line, and less (their default pager) runs the
+# LESSOPEN/LESSCLOSE preprocessor; GH_CONFIG_DIR moves gh's config, aliases and
+# extensions to a directory the agent chose. git's own GIT_PAGER/GIT_EDITOR/
+# GIT_SEQUENCE_EDITOR are already covered by GIT_* (#1554 review, Q49).
+GH_PAGER
+PAGER
+LESSOPEN
+LESSCLOSE
+BROWSER
+GH_BROWSER
+GH_EDITOR
+EDITOR
+VISUAL
+GH_CONFIG_DIR
