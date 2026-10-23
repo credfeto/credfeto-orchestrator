@@ -335,6 +335,7 @@
       "Edit(*/.git/modules/**)",
       "Edit(*/.git/worktrees/**)",
       "Edit(~/.curlrc)",
+      "Edit(~/.config/curlrc)",
       "Edit(~/.gitconfig)",
       "Edit(~/.config/git/**)",
       "Edit(~/.config/gh/**)",
