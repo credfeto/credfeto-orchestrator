@@ -269,6 +269,35 @@ assert_each_config_write() {
     [ "${status}" -eq 0 ]
 }
 
+@test "git checkout, restore and rm block reading pathspecs from a file or stdin in every form" {
+    assert_each 2 'reads paths from a file or stdin, which this hook cannot check' \
+        "echo .claude/settings.json | git checkout --pathspec-from-file -" \
+        "echo .claude/settings.json | git checkout --pathspec-from-file=-" \
+        "echo .claude/settings.json | git restore --pathspec-from-file=-" \
+        "git restore --pathspec-from-file=list.txt" \
+        "git -C . checkout --pathspec-from-file list.txt" \
+        "git -C . checkout --pathspec-fr=list.txt" \
+        "git -C . checkout main --pathspec-from-file=list.txt --pathspec-file-nul" \
+        "git -C . checkout --pathspec-fi --pathspec-from-file=list.txt" \
+        "git -C . checkout --pathspec-f=list.txt" \
+        "git -C . checkout --pat=list.txt" \
+        "git -C . restore --pathspec-from=list.txt" \
+        "git rm --pathspec-from-file=list.txt" \
+        "git rm --pathspec-file-nul --pathspec-from-file list.txt"
+}
+
+@test "ordinary git checkouts and options that only share a prefix with --pathspec-from-file are allowed" {
+    assert_each 0 '' \
+        "git -C . checkout -- ok.txt" \
+        "git -C . checkout main" \
+        "git -C . checkout --patch -- ok.txt" \
+        "git -C . checkout --patc -- ok.txt" \
+        "git -C . checkout --progress main" \
+        "git -C . checkout --prog main" \
+        "git -C . checkout --no-pathspec-from-file -- ok.txt" \
+        "git -C . log --oneline -- list.txt"
+}
+
 @test "the same writing commands on ordinary paths are allowed" {
     assert_each 0 '' \
         "touch out.txt" \
