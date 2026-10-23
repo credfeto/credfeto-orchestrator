@@ -73,6 +73,10 @@ GH_CONFIG_DIR
 # (~/.gitconfig, $XDG_CONFIG_HOME/git/config, $XDG_CONFIG_HOME/gh), so pointing
 # either at a directory the agent wrote lets that config set gpg.program,
 # core.pager, gh aliases and the like - the GH_CONFIG_DIR bypass by another
-# name, and a way round enforce-git-identity (#1554 review, Q52).
+# name, and a way round enforce-git-identity (#1554 review, Q52). CURL_HOME is
+# the same for curl: it reads $CURL_HOME/.curlrc first, and a .curlrc can add
+# a `url =` enforce-curl-host never sees and an `output =` path no write check
+# sees (#1554 review, SEC-R3-1).
 HOME
 XDG_CONFIG_HOME
+CURL_HOME
