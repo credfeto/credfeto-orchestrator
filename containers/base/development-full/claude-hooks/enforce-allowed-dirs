@@ -2013,7 +2013,7 @@ to_json_array() {
 }
 
 # One jq pass over the AST. Line 1 is a header:
-#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1><TAB><count of calls with a variable assignment>
+#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1><TAB><count of constructs that can set a variable>
 # then, in document order, a line "C" per CallExpr followed by one line per
 # word, and a line "R" per writing redirection followed by its word (a
 # statement's redirections come before its command, as they are applied
@@ -2032,6 +2032,19 @@ to_json_array() {
 # or word 1 when word 0 is a known wrapper - the same two positions the
 # per-call loop below checks. See enforce-ssh-host-and-key for the transport
 # rationale.
+#
+# The variable-setting count covers every way bash sets a variable, not only
+# a `NAME=value` assignment: declare/typeset/local/export/readonly, let,
+# ((...)) and $((...)) (arithmetic can assign, also through a variable or
+# substitution whose text it evaluates), for/select loops, coproc, a
+# ${NAME=...}/${NAME:=...} expansion, a non-numeric array index or slice
+# (both arithmetic), a [[ ]] arithmetic comparison (-eq ...), a -v/-R test
+# (an array subscript is arithmetic), a {NAME}> redirection, printf -v (or a
+# non-literal first argument), wait -p, and read, mapfile, readarray,
+# getopts, unset, source, . and eval. An operator is read from the command
+# text, as for redirections below, and one that cannot be read counts. cd,
+# pushd and popd set only PWD, OLDPWD and DIRSTACK, which no checked
+# command reads as a directory, so they do not count.
 #
 # A redirection's operator is read from the command text at its OpPos byte
 # offset rather than from its Op field, because shfmt before 3.14 encodes Op
@@ -2074,6 +2087,30 @@ transport=$(printf '%s' "$ast" | jq -r \
   def name_at($n): if (.[$n].lit // false) then (.[$n].t | basename) else "" end;
   def cmdname: name_at(0) as $n0 | if ($wrappers | index($n0)) != null then name_at(1) else $n0 end;
   def fd_word: ((.Parts // []) | length) == 1 and .Parts[0].Type == "Lit" and (.Parts[0].Value | test("^([0-9]+|-)$"));
+  def src_between($from; $to):
+    if ($from | type) == "number" and ($to | type) == "number" then $op_src[$from:$to] else null end;
+  def plain_number_word: ((.Parts // []) | length) == 1 and .Parts[0].Type == "Lit" and (.Parts[0].Value | test("^ *-?[0-9]+$"));
+  def arg_after_name($w): if ($wrappers | index($w | name_at(0))) != null then $w[2] else $w[1] end;
+  def sets_variable:
+    if .Type? == "CallExpr" then
+      ((.Assigns // []) | length) > 0
+      or ([(.Args // [])[] | word_info] as $w
+          | ($w | cmdname) as $n
+          | (["read", "mapfile", "readarray", "getopts", "unset", "let", "declare", "typeset", "local", "export", "readonly", "source", ".", "eval"] | index($n)) != null
+            or ($n == "printf" and ((arg_after_name($w) // {lit: true, t: ""}) | (.lit | not) or (.t | startswith("-v"))))
+            or ($n == "wait" and any($w[]; (.lit | not) or (.t | test("^-[^-]*p"))))
+            or (($n == "[" or $n == "test") and any($w[]; .lit and (.t == "-v" or .t == "-R"))))
+    elif (.Type? | IN("DeclClause", "LetClause", "ForClause", "ArithmCmd", "ArithmExp", "CoprocClause")) then true
+    elif .Type? == "ParamExp" then
+      (.Exp != null and ((src_between(.Param.ValueEnd.Offset?; (.Exp.Word.Pos.Offset? // .Rbrace.Offset?)) // "=") | contains("=")))
+      or (.Index != null and ((.Index | plain_number_word or (((.Parts // []) | length) == 1 and .Parts[0].Type == "Lit" and (.Parts[0].Value | IN("@", "*")))) | not))
+      or (.Slice != null and any((.Slice.Offset, .Slice.Length) | select(. != null); plain_number_word | not))
+    elif .Type? == "BinaryTest" then
+      (src_between(.OpPos.Offset?; ((.OpPos.Offset? // 0) + 3)) // "-eq") | test("^-(eq|ne|lt|le|gt|ge)")
+    elif .Type? == "UnaryTest" then
+      (src_between(.OpPos.Offset?; ((.OpPos.Offset? // 0) + 3)) // "-v ") | test("^-[vR][^A-Za-z]")
+    elif (.Redirs? | type) == "array" then any(.Redirs[]; (.N.Value? // "") | startswith("{"))
+    else false end;
   def redir_op:
     (.OpPos.Offset // 0) as $at
     | ($op_src[$at:($at + 3)] | capture("^(?<op>&>>|&>|>>|>[|]|>&|<>|<<<|<<-|<<|<&|>|<)").op) // "?";
@@ -2089,7 +2126,7 @@ transport=$(printf '%s' "$ast" | jq -r \
   | [$items[] | select(.call) | .call | cmdname] as $names
   | "H\t" + ([$names[] | select(. as $n | $cd_names | index($n) != null)] | length | tostring)
     + "\t" + (if ($names | length) > 0 and ($cd_names | index($names[0])) != null then "1" else "0" end)
-    + "\t" + ([.. | objects | select(.Type? == "CallExpr" and ((.Assigns // []) | length) > 0)] | length | tostring),
+    + "\t" + ([.. | objects | select(sets_variable)] | length | tostring),
     ( $items[] | if .call then "C", (.call[] | word_line) else "R", (.redir | word_line) end )
 ') || block 'command structure could not be analyzed - failing closed'
 
