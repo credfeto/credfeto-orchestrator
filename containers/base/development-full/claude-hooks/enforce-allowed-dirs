@@ -1815,7 +1815,8 @@ git_write_targets() {
 
 # Locates the gh command a call runs. gh (cobra) finds the group and its
 # subcommand by skipping option words, so an option can sit before either
-# (`gh extension --force=true install x`, `gh --clobber=true alias set ...`).
+# (`gh extension --force=true install x`, `gh --clobber=true alias set ...`),
+# and it skips a lone `-` the same way (`gh - alias import`).
 # Sets GH_GROUP and GH_PAIR to the first one and two non-option words (each
 # empty when a word before or in it is not literal, or after `--`),
 # GH_OPTION_BEFORE_GROUP and GH_OPTION_BEFORE_SUBCOMMAND to 1 when an option
@@ -1834,7 +1835,9 @@ gh_locate_command() {
       continue
     fi
     [ "$word" = -- ] && { [ "$found" -lt 2 ] && found=3; break; }
-    if [[ "$word" == -?* ]]; then
+    # A lone `-` counts as an option too: cobra skips it when locating the
+    # command (`gh alias - import` runs alias import, reading stdin).
+    if [[ "$word" == -* ]]; then
       if [ "$found" -lt 2 ]; then
         [ "$found" -eq 0 ] && GH_OPTION_BEFORE_GROUP=1
         GH_OPTION_BEFORE_SUBCOMMAND=1
