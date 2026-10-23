@@ -915,6 +915,52 @@ EOF'
     assert_each 2 'unknowable' "ls && cd sub && echo x > out.txt"
 }
 
+@test "git worktree add, move, remove and repair are checked on every path, quoted action word or not" {
+    assert_each_config_write \
+        'git -C . worktree "add" .claude/skills/evil main' \
+        'git -C . worktree "add" .claude/agents main' \
+        'git -C . worktree "add" -b x .claude/skills/evil' \
+        'git -C . worktree add -B x .claude/skills/evil main' \
+        'git -C . worktree add --orphan .claude/skills/evil' \
+        'git -C . worktree add --lock --reason why .claude/skills/evil' \
+        'git -C . worktree move wt .claude/skills/evil' \
+        'git -C . worktree remove .claude/skills/evil' \
+        'git -C . worktree repair .claude/skills/evil'
+    assert_each 2 'outside the allowed directories' \
+        'git -C . worktree "add" ../outside/wt main' \
+        'git -C . worktree move wt ../outside/wt' \
+        'git -C . worktree remove ../outside/wt' \
+        'git -C sub worktree add ../../outside/wt main'
+}
+
+@test "git worktree with an unknown or non-literal action, or repair naming no path, fails closed" {
+    assert_each 2 'could not be verified (non-literal argument)' \
+        "git -C . worktree \"\$sub\" .claude/skills/evil" \
+        "git -C . worktree add \"\$p\" main" \
+        "git -C . worktree move wt \"\$p\""
+    assert_each 2 'failing closed' 'git -C . worktree' 'git -C . worktree frobnicate .claude/skills/evil'
+    assert_each 2 'name each worktree path' 'git -C . worktree repair' 'git -C . worktree repair --relative-paths'
+}
+
+@test "git worktree list, prune, lock and unlock, and worktrees added under a root, are allowed" {
+    assert_each 0 '' \
+        'git -C . worktree list' \
+        'git -C . worktree list --porcelain' \
+        'git -C . worktree prune' \
+        'git -C . worktree prune -n --expire now' \
+        'git -C . worktree lock --reason .claude/settings.json wt' \
+        'git -C . worktree unlock wt' \
+        'git -C . worktree -h' \
+        'git -C . worktree add wt main' \
+        'git -C . worktree add -b .claude/agents wt main' \
+        "git -C . worktree add ../src/wt main" \
+        "git -C . worktree add ${SRC}/wt main" \
+        "git -C . worktree add ${TMPDIR}/wt main" \
+        'git -C . worktree move wt sub/wt' \
+        'git -C . worktree remove wt' \
+        'git -C . worktree repair wt'
+}
+
 @test "git path writers resolve relative to the last -C, not the hook's cwd" {
     mkdir -p "${TEST_TMP}/repo/sub/.claude"
     run_in_repo "git -C sub checkout main -- .claude/settings.json"
