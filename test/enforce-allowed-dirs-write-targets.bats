@@ -857,6 +857,34 @@ EOF'
     assert_each_config_write "dotnet build \"-p:A=1%3B;OutputPath=.claude/hooks\""
 }
 
+@test "a dotnet response-file argument blocks in every position, since MSBuild reads switches from it" {
+    assert_each 2 'names a response file, whose switches this check cannot see' \
+        "dotnet build @x.rsp" \
+        "dotnet @x.rsp" \
+        "dotnet build \"@x.rsp\"" \
+        "dotnet build -c Release @${TEST_TMP}/repo/x.rsp" \
+        "dotnet run -- @x.rsp"
+    assert_each 0 '' "dotnet build -p:Owner=a@b" "mkdir @x"
+}
+
+@test "a variable assignment anywhere in a command with a dotnet call blocks, since MSBuild reads the environment as properties" {
+    assert_each 2 'MSBuild reads environment variables as properties' \
+        "OutputPath=.claude/hooks/ dotnet build" \
+        "BaseOutputPath=../outside/ dotnet build" \
+        "PublishDir=.claude/skills/x/ dotnet publish" \
+        "MSBuildExtensionsPath=../outside dotnet build" \
+        "DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet build" \
+        "OutputPath=.claude/hooks/; dotnet build" \
+        "OutputPath=.claude/hooks/ && dotnet build" \
+        "dotnet build && Configuration=Release" \
+        "echo \$(OutputPath=x) && dotnet build"
+    assert_each 0 '' "OutputPath=bin echo x" "dotnet build -p:Configuration=Release"
+}
+
+@test "an MSBuild slash-form switch is checked as an absolute path, so it never names a write inside the repo" {
+    assert_each 2 '' "dotnet build /p:OutputPath=.claude/hooks/" "dotnet build /p:OutputPath=bin"
+}
+
 @test "a dotnet argument without a %XX escape, or for another command, is not blocked as one" {
     assert_each 0 '' \
         "dotnet build -p:Configuration=Release" \
