@@ -5,7 +5,8 @@
 # argument of the directory-changing and path-taking commands below must sit
 # inside those roots. Also denies the flags on those commands that turn a
 # "path argument" into arbitrary code execution, and blocks Edit, Write and
-# NotebookEdit calls on Claude Code's configuration.
+# NotebookEdit calls on Claude Code's configuration, the user's git, gh and
+# curl configuration, and any repository's git configuration and hooks.
 # Exit 2 = blocked, 0 = allowed.
 #
 # Registered (in claude-managed-settings.json) twice: second in the Bash
@@ -194,6 +195,18 @@
 # link targets are never resolved, so for them the names are matched as text
 # wherever they point (names_home_config), and a link target or working
 # directory anywhere inside a config home blocks, as for a `.claude` tree.
+# Also protected, for a `.git` directory at any depth in any repository
+# (is_protected_git_path), since git runs code named there on its next
+# command: the `.git` entry itself, .git/config, .git/config.worktree,
+# .git/commondir, .git/hooks and everything under it, and the whole
+# .git/modules and .git/worktrees trees. Anchored on `/.git`, so `.github/`
+# and a bare repository named `x.git` stay writable, as do .git/info/exclude
+# and .git/info/attributes. Program text matches the names as text
+# (names_git_config, unanchored: sed reads `w.git/config`), an ln -s target
+# anywhere inside a `.git` tree blocks (names_git_tree), and so does a
+# writer's working directory anywhere inside a `.git` directory. git's own
+# commands still write there: they are not write targets, and `git config`
+# writes are enforce-git-dash-c's to block.
 # The tracked sources under containers/base/development-full/ have no
 # `.claude/` path segment, so they stay editable for normal hook development:
 # they take effect only once a human reinstalls or rebuilds.
@@ -215,7 +228,9 @@
 #     entrypoint's refusal of a repo whose `.claude/settings*.json` or
 #     `.mcp.json` differs from origin/main are what hold against them.
 #   - A recursive copy of a directory whose contents include a `.claude`
-#     entry (`cp -r /tmp/d/. .`) names nothing protected.
+#     entry or a `.git` tree (`cp -r /tmp/d/. .`) names nothing protected.
+#   - A git directory that is not under a `.git` path (a bare repository,
+#     or a `--separate-git-dir` target) is not protected.
 # Accepted false positives: a sed or awk program, or any other writer
 # argument, that merely mentions a protected path (`sed -i
 # 's|~/.claude/hooks/|...|' README.md`) is blocked; make such a text edit with
@@ -225,6 +240,10 @@
 # repo named claude-code), and an `ln -s` target anywhere inside a `.claude`
 # tree; a bare `claude-code` (`npm install @anthropic-ai/claude-code`, `gh repo
 # clone anthropics/claude-code`) stays allowed outside an `ln -s` target.
+# Likewise sed or awk text naming `x.git/config` (a bare repository's file),
+# an `ln -s` target anywhere inside a `.git` tree, a writer run from inside a
+# `.git` directory, and an rm/mv/cp operand that is a protected git path even
+# as a source (`cp .git/config /tmp/x`; read it with cat instead).
 #
 # ---- Path-taking commands --------------------------------------------------
 #
@@ -351,7 +370,7 @@ block_not_yet_existing() {
 }
 
 block_config_write() {
-  block "writing to Claude Code, git, gh or curl configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md, credentials, session history and MCP config are changed by a human editing the tracked source files and reinstalling, and the user's git, gh and curl configuration by a human directly"
+  block "writing to Claude Code, git, gh or curl configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md, credentials, session history and MCP config are changed by a human editing the tracked source files and reinstalling, and the user's git, gh and curl configuration and a repository's .git config and hooks by a human directly (git's own commands still write inside .git as normal)"
 }
 
 in_list() {
@@ -557,6 +576,49 @@ names_unresolved_config() {
   names_protected_config "$1" || names_home_config "$1"
 }
 
+# Text check, for sed and awk program text: a repository's git configuration
+# and hooks (is_protected_git_path), wherever the `.git` sits. Not anchored
+# to a `/` before `.git`, since sed reads `w.git/config` as `w .git/config`,
+# so the text `x.git/config` in a program is blocked too. As for `.claude/`,
+# anything may sit between `.git/` and the name, so `.git/x/../config` and
+# `.git/modules/x/config` still match. The `.git` entry itself (a
+# submodule's or worktree's `gitdir:` pointer file) matches at the end of the
+# text or of a line, where sed's `w` name ends, or quoted after a `/`, as an
+# awk redirection names it.
+names_git_config() {
+  case "$1" in
+    *.git/*config* | *.git/*hooks* | *.git/*commondir*) return 0 ;;
+    *.git | *.git$'\n'* | */.git\"* | *\".git\"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Text check, for a word that is resolved as a path but may also carry a
+# path inside it (sqlite3's `.once FILE`, `--logger "trx;LogFileName=FILE"`):
+# names_git_config, but only where `.git` starts a path component (the start
+# of the text or after a character that cannot be part of a file name
+# component, such as `/`, `=`, `;` or a space), so a write target named
+# `x.git/config` (a bare repository's name) stays writable, as its resolved
+# path is not protected either.
+names_git_config_embedded() {
+  local text="$1"
+  while [[ "$text" =~ ^(.*[A-Za-z0-9_.+~-])\.git(.*)$ ]]; do
+    text="${BASH_REMATCH[1]}_git${BASH_REMATCH[2]}"
+  done
+  names_git_config "$text"
+}
+
+# Text check, for symbolic link targets: anywhere inside a `.git` tree, or
+# the `.git` entry itself. A link target is one path, so `.git` is anchored
+# to a component boundary and a link to a bare repository (`../x.git`) stays
+# allowed.
+names_git_tree() {
+  case "$1" in
+    .git | */.git | .git/* | */.git/*) return 0 ;;
+  esac
+  return 1
+}
+
 # Sets DECODED_TEXT to $1 with its backslash escapes decoded the way awk
 # decodes its string literals and -v/name=value values, and sqlite3 its
 # double-quoted dot-command arguments: 1-3 octal digits are one byte (masked,
@@ -625,7 +687,31 @@ is_protected_path() {
     */.claude/sessions | */.claude/sessions/* | */.claude/.credentials.json | */.claude/history.jsonl) return 0 ;;
     */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
   esac
-  is_protected_home_path "$1"
+  is_protected_git_path "$1" || is_protected_home_path "$1"
+}
+
+# Path check, for a fully resolved absolute path: a repository's git
+# configuration and hooks, for a `.git` directory at any depth, since git
+# runs code named there on its next command (core.hooksPath, core.fsmonitor,
+# core.pager, aliases, filter drivers, include.path, and every hook). The
+# `.git` entry itself is protected because a submodule's or worktree's `.git`
+# is a `gitdir:` pointer file, and replacing it (or the directory) points git
+# at configuration written elsewhere; `commondir` likewise redirects where git
+# reads its configuration and hooks from. A submodule's git directory under
+# `.git/modules/` and a linked worktree's under `.git/worktrees/` each carry
+# their own config, config.worktree, commondir or hooks, so both trees are
+# protected whole. `.git/info/attributes` is not: attributes only select a
+# filter, diff or merge driver, whose command is defined in the protected
+# config, and the work tree's own `.gitattributes` already selects them.
+# Anchored on `/.git`, so `.github/` and a bare repository named `x.git` do
+# not match. git itself still writes here through its own commands, which
+# are not write targets.
+is_protected_git_path() {
+  case "$1" in
+    */.git | */.git/config | */.git/config.worktree | */.git/commondir | */.git/hooks | */.git/hooks/*) return 0 ;;
+    */.git/modules | */.git/modules/* | */.git/worktrees | */.git/worktrees/*) return 0 ;;
+  esac
+  return 1
 }
 
 # The user's $HOME and config homes (~/.config, and $XDG_CONFIG_HOME when
@@ -688,11 +774,13 @@ is_in_config_home() {
 # Working-directory check, for a fully resolved absolute path: anywhere inside
 # a `.claude` tree, not only its protected entries, because a writer there
 # can reach one with a `..` in text that is never resolved (`sed -n 'w
-# ../settings.json'` from `.claude/x`), and likewise anywhere inside one of
-# the user's config homes (is_in_config_home).
+# ../settings.json'` from `.claude/x`), and likewise anywhere inside a `.git`
+# directory (`sed -n 'w config'` from `.git`) or one of the user's config
+# homes (is_in_config_home).
 is_in_claude_config_tree() {
   case "$1" in
     */.claude | */.claude/* | /etc/claude-code | /etc/claude-code/*) return 0 ;;
+    */.git | */.git/*) return 0 ;;
   esac
   is_in_config_home "$1"
 }
@@ -894,6 +982,7 @@ queue_write_target() {
   if [ "$2" != N ]; then
     block_unicode_escape "$1" "${3} argument"
     { names_protected_config "$1" || names_protected_config_once_decoded "$1"; } && block_config_write "$1"
+    { names_git_config_embedded "$1" || names_protected_config_once_decoded "$1" names_git_config_embedded; } && block_config_write "$1"
   fi
   prepare_word "$@"
   queue_path "$PREPARED_ABS" "$3" "$1" w "$LINK_SEEN"
@@ -904,7 +993,7 @@ queue_write_target() {
 # names only. Non-literal program text could name anything, so it blocks.
 check_program_text() {
   [ "$2" = N ] && block "${3} could not be verified (non-literal) - a program can name files it writes"
-  names_unresolved_config "$1" && block_config_write "$1"
+  { names_unresolved_config "$1" || names_git_config "$1"; } && block_config_write "$1"
   return 0
 }
 
@@ -915,7 +1004,7 @@ check_program_text() {
 check_awk_text() {
   check_program_text "$@"
   block_unicode_escape "$1" "$3"
-  names_protected_config_once_decoded "$1" names_unresolved_config && block_config_write "$1"
+  { names_protected_config_once_decoded "$1" names_unresolved_config || names_protected_config_once_decoded "$1" names_git_config; } && block_config_write "$1"
   return 0
 }
 
@@ -1824,7 +1913,7 @@ mktemp_write_targets() {
 check_ln_target() {
   local word="$1" flags="$2"
   [ "$flags" = N ] && block "ln target could not be verified (non-literal argument) - a symbolic link target must be a literal path"
-  { names_unresolved_config "$word" || names_config_tree "$word"; } && block_config_write "$word"
+  { names_unresolved_config "$word" || names_config_tree "$word" || names_git_tree "$word"; } && block_config_write "$word"
   [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
   if [[ "$flags" == *g* ]]; then
     prepare_word "$word" "$flags" "ln target"
