@@ -98,8 +98,10 @@
 #                    property list), not as short-option tails;
 #       mktemp       every argument (so the DIR of -p DIR, -pDIR and
 #                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
-#                    a bare --tmpdir, or no template and no DIR; a template
-#                    containing `/` beside a directory option blocks;
+#                    when the last -p or --tmpdir is a bare --tmpdir or has
+#                    an empty DIR (`-p ""`, `--tmpdir=`), or with no template
+#                    and no -p or --tmpdir; a template containing `/` beside
+#                    a directory option blocks;
 #       sed, awk     the program text (sed's script, awk's program and -v
 #                    assignments) is checked as text against the protected
 #                    names only, since a program routinely names paths it does
