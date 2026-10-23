@@ -56,26 +56,38 @@ assert_blocked_config_write() {
     [[ "${output}" == *'command did not run'* ]] || { echo "missing 'command did not run': ${output}" >&2; return 1; }
 }
 
-# assert_each <expected status> <message substring or ''> <command>... - runs each command in
-# the sandbox repo and checks the status and, when given, the message.
-assert_each() {
-    local want="$1" message="$2" cmd
-    shift 2
+# assert_each_in_dir <dir> <expected status> <message substring or ''> <command>... - runs each
+# command from dir and checks the status and, when given, the message.
+assert_each_in_dir() {
+    local dir="$1" want="$2" message="$3" cmd
+    shift 3
     for cmd in "$@"; do
-        run_in_repo "${cmd}"
+        run_hook_in_dir "${cmd}" "${dir}"
         [ "${status}" -eq "${want}" ] || { echo "status ${status}, want ${want}: ${cmd}: ${output}" >&2; return 1; }
         [ -z "${message}" ] || [[ "${output}" == *"${message}"* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
     done
 }
 
-# assert_each_config_write <command>... - runs each command in the sandbox repo and checks it is
+# assert_each <expected status> <message substring or ''> <command>... - assert_each_in_dir from
+# the sandbox repo.
+assert_each() {
+    assert_each_in_dir "${TEST_TMP}/repo" "$@"
+}
+
+# assert_each_config_write_in_dir <dir> <command>... - runs each command from dir and checks it is
 # blocked as a write to Claude Code configuration.
-assert_each_config_write() {
-    local cmd
+assert_each_config_write_in_dir() {
+    local dir="$1" cmd
+    shift
     for cmd in "$@"; do
-        run_in_repo "${cmd}"
+        run_hook_in_dir "${cmd}" "${dir}"
         assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
     done
+}
+
+# assert_each_config_write <command>... - assert_each_config_write_in_dir from the sandbox repo.
+assert_each_config_write() {
+    assert_each_config_write_in_dir "${TEST_TMP}/repo" "$@"
 }
 
 # --- Edit / Write / NotebookEdit --------------------------------------------
@@ -416,13 +428,9 @@ assert_each_config_write() {
     run_hook_in_dir "sed -n 'w ../settings.json' ${SRC}/payload" "${TEST_TMP}/repo/.claude/x"
     assert_blocked_config_write
     # A later cd makes the working directory unknowable, but the writer can run before it.
-    local cmd
-    for cmd in \
+    assert_each_config_write_in_dir "${TEST_TMP}/repo/.claude" \
         "ls; true || cd ${TEST_TMP}/repo; sed -n 'w settings.json' ${SRC}/payload" \
-        "for x in a; do ls; sed -n 'w settings.json' ${SRC}/payload; cd ${TEST_TMP}/repo; done"; do
-        run_hook_in_dir "${cmd}" "${TEST_TMP}/repo/.claude"
-        assert_blocked_config_write || { echo "did not block: ${cmd}" >&2; return 1; }
-    done
+        "for x in a; do ls; sed -n 'w settings.json' ${SRC}/payload; cd ${TEST_TMP}/repo; done"
     # The same, from a working directory that reaches .claude only through a symlink.
     ln -s "${TEST_TMP}/repo/.claude" "${TEST_TMP}/repo/innocent"
     run_hook_in_dir "ls; true || cd ${TEST_TMP}/repo; sed -n 'w settings.json' ${SRC}/payload" "${TEST_TMP}/repo/innocent"
@@ -686,12 +694,8 @@ EOF'
 }
 
 @test "a bare - is a hard ln operand or target directory (a file name), not stdin/stdout" {
-    local cmd
-    for cmd in "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"; do
-        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
-        [ "${status}" -eq 2 ] || { echo "status ${status}, want 2: ${cmd}: ${output}" >&2; return 1; }
-        [[ "${output}" == *'outside the allowed directories'* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
-    done
+    assert_each_in_dir "${TEST_TMP}/outside" 2 'outside the allowed directories' \
+        "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"
     assert_each 0 '' "ln ${TEST_TMP}/repo/a -" "ln -t - ${TEST_TMP}/repo/a" "ln -s ${TEST_TMP}/repo/a -"
     # sort's bare - operand is standard input, so it is still not a path.
     run_hook_in_dir "sort -" "${TEST_TMP}/outside"
@@ -1115,17 +1119,13 @@ DASH_STREAM_COMMANDS=(
 )
 
 @test "a bare - is checked as the file ./- unless dash_is_stream lists it as stdin/stdout" {
-    local cmd
     # From outside every root: in the ${SRC} cases only the - is outside, while the others also
     # name an outside operand, so the in-repo checks below are what isolate the -.
-    for cmd in "tee -" "echo x | tee -a -" "mkdir -" "mkdir -p -" "chmod 600 -" "sort -o - ${SRC}/a" \
+    assert_each_in_dir "${TEST_TMP}/outside" 2 'outside the allowed directories' \
+        "tee -" "echo x | tee -a -" "mkdir -" "mkdir -p -" "chmod 600 -" "sort -o - ${SRC}/a" \
         "sort -ro - ${SRC}/a" "sort --output=- ${SRC}/a" "sort --output - ${SRC}/a" "sort --o - ${SRC}/a" \
         "sort -T - ${SRC}/a" "touch -r - ${SRC}/a" "dotnet build -o -" \
-        "mktemp -p - x.XXXX" "git clone https://github.com/x/y.git -"; do
-        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
-        [ "${status}" -eq 2 ] || { echo "status ${status}, want 2: ${cmd}: ${output}" >&2; return 1; }
-        [[ "${output}" == *'outside the allowed directories'* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
-    done
+        "mktemp -p - x.XXXX" "git clone https://github.com/x/y.git -"
     # Inside the repo an ordinary ./- is allowed; a ./- linking into configuration is not, so
     # each of these shows the - itself is resolved, every other operand being inside the repo.
     assert_each 0 '' "${DASH_FILE_COMMANDS[@]}"
@@ -1151,12 +1151,9 @@ DASH_STREAM_COMMANDS=(
 }
 
 @test "a bare - that is standard input or output is not a path" {
-    local cmd
-    for cmd in "sort ${SRC}/a -" "sort -" "sort -s -" "sort -o ${SRC}/out ${SRC}/a -" "sort --files0-from -" "touch -" \
-        "uniq -" "uniq - -" "file -" "file -f -" "file -F - ${SRC}/a" "xmllint -" "xmllint -o - -" "shfmt -"; do
-        run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
-        [ "${status}" -eq 0 ] || { echo "status ${status}, want 0: ${cmd}: ${output}" >&2; return 1; }
-    done
+    assert_each_in_dir "${TEST_TMP}/outside" 0 '' \
+        "sort ${SRC}/a -" "sort -" "sort -s -" "sort -o ${SRC}/out ${SRC}/a -" "sort --files0-from -" "touch -" \
+        "uniq -" "uniq - -" "file -" "file -f -" "file -F - ${SRC}/a" "xmllint -" "xmllint -o - -" "shfmt -"
     # Inside the repo a ./- linking into configuration shows none of these resolves its -.
     mkdir -p "${TEST_TMP}/repo/.claude/agents"
     ln -s .claude/settings.json "${TEST_TMP}/repo/-"
