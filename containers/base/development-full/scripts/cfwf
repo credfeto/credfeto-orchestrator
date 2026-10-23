@@ -4302,7 +4302,7 @@ read_timeline_target() {
         die "gh returned an unexpected result for ${REPO}#${TARGET_NUMBER}"
     fi
     if [ "${TARGET_TYPE}" = PullRequest ]; then
-        [ "${kind}" = pull ] || discussion_not_found "the pull request ${REPO}#${TARGET_NUMBER} was not found"
+        [ "${kind}" = pull ] || pr_not_found "the pull request ${REPO}#${TARGET_NUMBER} was not found"
     else
         [ "${kind}" = issue ] || issue_not_found "${REPO}#${TARGET_NUMBER} is a pull request, not an issue"
     fi
