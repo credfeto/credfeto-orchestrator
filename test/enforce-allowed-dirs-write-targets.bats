@@ -212,6 +212,76 @@ assert_each_config_write() {
     assert_each 0 '' "cat .claude/commands/x.md" "cd .claude/commands && ls"
 }
 
+# assert_protected_config_dir <dir> - checks a write into the protected directory dir (relative to
+# .claude), the repo's or the user's, is blocked for every write form, and reading it is allowed.
+assert_protected_config_dir() {
+    local dir="$1" tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in ".claude/${dir}/x.md" "${HOME}/.claude/${dir}/x.md" "${TEST_TMP}/repo/.claude/${dir}"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > .claude/${dir}/evil.md" \
+        "printf x > ${HOME}/.claude/${dir}/evil.md" \
+        "echo x | tee .claude/${dir}/x.md" \
+        "echo x | tee ${HOME}/.claude/${dir}/x.md" \
+        "cp ${SRC}/x.md .claude/${dir}/x.md" \
+        "cp ${SRC}/x.md ${HOME}/.claude/${dir}/x.md" \
+        "mv ${SRC}/x.md .claude/${dir}/x.md" \
+        "mv ${SRC}/x.md ${HOME}/.claude/${dir}/x.md" \
+        "ln -s ${SRC}/x.md .claude/${dir}/x.md" \
+        "ln -s .claude/${dir}/x.md ${SRC}/link.md" \
+        "ln -s ${HOME}/.claude/${dir}/x.md ${SRC}/link.md" \
+        "sed -i 's/a/b/' .claude/${dir}/x.md" \
+        "sed -i 's/a/b/' ${HOME}/.claude/${dir}/x.md" \
+        "sed -n 'w .claude/${dir}/x.md' ${SRC}/payload" || return 1
+    mkdir -p "${TEST_TMP}/repo/.claude/${dir}"
+    assert_each 2 '' "cd .claude/${dir} && touch x.md" || return 1
+    assert_each 0 '' "cat .claude/${dir}/x.md" "cd .claude/${dir} && ls"
+}
+
+@test "a write into .claude/plugins, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_dir plugins
+}
+
+@test "a write into .claude/rules, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_dir rules
+}
+
+@test "a write into .claude/output-styles, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    assert_protected_config_dir output-styles
+}
+
+@test "a write to .claude/CLAUDE.md, the repo's or the user's, is blocked for every write form; reading it is allowed" {
+    local tool path
+    for tool in Edit Write NotebookEdit; do
+        for path in ".claude/CLAUDE.md" "${HOME}/.claude/CLAUDE.md" "${TEST_TMP}/repo/.claude/CLAUDE.md"; do
+            run_file_tool "${tool}" "${path}"
+            assert_blocked_config_write || { echo "did not block ${tool} ${path}" >&2; return 1; }
+        done
+    done
+    assert_each_config_write \
+        "printf x > .claude/CLAUDE.md" \
+        "printf x > ${HOME}/.claude/CLAUDE.md" \
+        "echo x | tee .claude/CLAUDE.md" \
+        "echo x | tee ${HOME}/.claude/CLAUDE.md" \
+        "cp ${SRC}/x.md .claude/CLAUDE.md" \
+        "cp ${SRC}/x.md ${HOME}/.claude/CLAUDE.md" \
+        "mv ${SRC}/x.md .claude/CLAUDE.md" \
+        "mv ${SRC}/x.md ${HOME}/.claude/CLAUDE.md" \
+        "ln -s ${SRC}/x.md .claude/CLAUDE.md" \
+        "ln -s .claude/CLAUDE.md ${SRC}/link.md" \
+        "ln -s ${HOME}/.claude/CLAUDE.md ${SRC}/link.md" \
+        "sed -i 's/a/b/' .claude/CLAUDE.md" \
+        "sed -i 's/a/b/' ${HOME}/.claude/CLAUDE.md" \
+        "sed -n 'w .claude/CLAUDE.md' ${SRC}/payload"
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each 2 '' "cd .claude && touch CLAUDE.md"
+    assert_each 0 '' "cat .claude/CLAUDE.md" "cd .claude && ls"
+}
+
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
     assert_each_config_write \
         "touch .claude/settings.json" \
