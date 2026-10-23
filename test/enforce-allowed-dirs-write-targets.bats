@@ -371,6 +371,30 @@ assert_each_config_write() {
         'git -C . stash -h'
 }
 
+@test "git stash with the default action or -u, and stash show --output, block a protected path in every spelling" {
+    assert_each_config_write \
+        'git -C . stash -- .claude/skills/x' \
+        'git -C . stash push -u -- .claude/agents/x.md' \
+        'git -C . stash show --output=.claude/settings.json' \
+        'git -C . stash show --output .claude/settings.json' \
+        'git -C . stash show -p stash@{0} --output=.claude/hooks/x'
+    assert_each 2 'outside the allowed directories' 'git -C . stash show -p --output=../outside/x'
+    assert_each 2 'reads paths from a file or stdin, which this hook cannot check' \
+        'git -C . stash push --pathspec-from-file=-' \
+        'git -C . stash save --pathspec-from-file=-'
+}
+
+# git stash save takes no pathspec: git joins every word after its options, -- included, into the
+# stash message, so these are a bare git stash with a message.
+@test "git stash save words after -- are its message, and stash show --output to an ordinary file is allowed" {
+    assert_each 0 '' \
+        'git -C . stash save -- .claude/settings.json' \
+        'git -C . stash save .claude/settings.json' \
+        "git -C . stash push -m 'see .claude/settings.json'" \
+        'git -C . stash list' \
+        'git -C . stash show --output=ok.txt'
+}
+
 @test "the same writing commands on ordinary paths are allowed" {
     assert_each 0 '' \
         "touch out.txt" \
@@ -735,6 +759,35 @@ assert_each_config_write() {
     printf '{}' > "${TEST_TMP}/repo/.claude/settings.json"
     run_in_repo "sed -i 's/a/b/' .cl*/sett*"
     assert_blocked_config_write
+}
+
+@test "a glob in a dotnet output path, a cp destination or a redirection that matches a protected directory is blocked" {
+    mkdir -p "${TEST_TMP}/repo/.claude/hooks"
+    : > "${TEST_TMP}/repo/.claude/hooks/x"
+    assert_each_config_write \
+        'dotnet build -p:OutDir=.cla*de/hooks/' \
+        'dotnet build -p:OutDir=.claude/hoo?s/' \
+        'dotnet build -p:OutDir=.cl[a]ude/hooks/' \
+        'dotnet build -o .cla*de/hooks' \
+        'cp x .cla*de/hooks/' \
+        'printf x > .cla*de/hooks/x'
+}
+
+# Bash passes a glob that matches nothing through as the literal word, so these write a directory
+# literally named .cla*de, not .claude. A glob in the protected entry's own name under a literal
+# .claude stays blocked whatever exists.
+@test "a glob write target that matches nothing is literal and allowed, with or without a .claude directory" {
+    local state
+    for state in absent present; do
+        [ "${state}" = present ] && mkdir -p "${TEST_TMP}/repo/.claude"
+        assert_each 0 '' \
+            'dotnet build -p:OutDir=.cla*de/hooks/' \
+            'dotnet build -p:OutDir=.cl[a]ude/hooks/' \
+            'dotnet build -o .cla*de/hooks' \
+            'cp x .cla*de/hooks/' \
+            'printf x > .cla*de/hooks/x' || { echo ".claude ${state}" >&2; return 1; }
+        assert_each_config_write 'dotnet build -p:OutDir=.claude/hoo?s/' || { echo ".claude ${state}" >&2; return 1; }
+    done
 }
 
 @test "an unquoted brace expansion in a write target is blocked; a quoted brace is literal" {
@@ -1322,6 +1375,57 @@ EOF'
     assert_each 0 '' "mktemp -d" "printf '%s' x; mktemp -d" "printf '%s' \"\${x}\"; mktemp -d" "echo \${x:-y}; mktemp -d" \
         "echo \${a[0]} \${a[@]} \${x:1:2}; mktemp -d" "[[ -f x ]] && mktemp -d" "[[ a == b ]] && mktemp -d" \
         "[ -f x ] && mktemp -d" "cd sub && mktemp -d" "dotnet build" "cd sub && dotnet build"
+}
+
+# As above, : is classified so the assignment check, not the missing classification, is what blocks.
+@test "an assignment in a loop, arithmetic, +=, an array element, a group, a case branch or a substitution blocks mktemp and dotnet" {
+    printf '%s\n' ': read-only' >> "${HOOK_DIR}/command-allowlist"
+    local form forms=(
+        "X=1;"
+        "for X in a; do :; done;"
+        "printf -v TMPDIR x;"
+        ": \${TMPDIR:=x};"
+        ": \${TMPDIR=x};"
+        "(( X = 1 ));"
+        "echo \$(( X = 1 ));"
+        "X+=1;"
+        "arr[0]=x;"
+        "( X=1 );"
+        "{ X=1; };"
+        "case a in a) X=1 ;; esac;"
+        "cat <<< \"\$(X=1)\";"
+        "cat <(X=1);"
+    )
+    for form in "${forms[@]}"; do
+        assert_each 2 'in a command that assigns a variable' "${form} mktemp -d" || return 1
+        assert_each 2 'MSBuild reads environment variables as properties' "${form} dotnet build" || return 1
+    done
+    assert_each 0 '' "echo x; mktemp -d" "cd sub && mktemp -d" "echo x; dotnet build" "cd sub && dotnet build"
+}
+
+@test "a -v test blocks mktemp and dotnet, since a -v operand's array subscript is arithmetic that can assign" {
+    local form
+    for form in "[[ -v TMPDIR ]] &&" "[ -v TMPDIR ] &&" "test -v TMPDIR &&"; do
+        assert_each 2 'in a command that assigns a variable' "${form} mktemp -d" || return 1
+        assert_each 2 'MSBuild reads environment variables as properties' "${form} dotnet build" || return 1
+    done
+}
+
+@test "a function definition assigns nothing, but an assignment, cd or write in its body is checked" {
+    printf '%s\n' ': read-only' >> "${HOOK_DIR}/command-allowlist"
+    mkdir -p "${TEST_TMP}/repo/.claude/hooks"
+    assert_each 0 '' "f() { :; }; mktemp -d" "f() { :; }; dotnet build" "f() { echo; }; mktemp -d"
+    assert_each 2 'in a command that assigns a variable' \
+        "echo() { TMPDIR=.claude/hooks; }; echo; mktemp -d" \
+        "echo() { export TMPDIR=.claude/hooks; }; echo; mktemp -d"
+    assert_each 2 'MSBuild reads environment variables as properties' "echo() { OutputPath=.claude/hooks/; }; echo; dotnet build"
+    assert_each_config_write \
+        "echo() { cp x .claude/settings.json; }; echo" \
+        "mktemp() { cp x .claude/settings.json; }; mktemp -d" \
+        "echo() { cd .claude/hooks; }; echo; printf x > y" \
+        "echo() { cd .claude/hooks; }; echo; mktemp -p . -d"
+    assert_each 2 'outside the allowed directories' "echo() { cd ../outside; }; echo; mktemp -d x.XXXXXX"
+    assert_each 2 'has no writer/read-only classification' "f() { TMPDIR=x; }; f; mktemp -d"
 }
 
 @test "mktemp -p DIR, -pDIR and --tmpdir=DIR write into DIR only, which must be under a root" {
