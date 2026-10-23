@@ -1276,7 +1276,7 @@ dotnet_write_targets() {
 # DIR. A template is joined to that directory, so one containing `/` could
 # climb out of it and blocks. --suffix's separate value is not a template.
 mktemp_write_targets() {
-  local j k tok opt template="" operands_only=0 dir_option=0 t_option=0 last_dir=""
+  local j k tok opt template="" operands_only=0 t_option=0 last_dir=""
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     tok="${words[$j]}"
     if [ "$operands_only" -eq 1 ] || [[ "$tok" != -?* ]]; then
@@ -1287,16 +1287,14 @@ mktemp_write_targets() {
     if [ "$tok" = -- ]; then
       operands_only=1
     elif [[ ${#opt} -ge 3 && "--tmpdir" == "${opt}"* ]]; then
-      dir_option=1
       if [[ "$tok" == *=?* ]]; then last_dir=named; else last_dir=implicit; fi
     elif [[ ${#opt} -ge 3 && "--suffix" == "${opt}"* ]]; then
       [[ "$tok" == *=* ]] || j=$((j + 1))
     elif [[ "$tok" != --* ]]; then
       for ((k = 1; k < ${#tok}; k++)); do
         case "${tok:k:1}" in
-          t) dir_option=1 t_option=1 ;;
+          t) t_option=1 ;;
           p)
-            dir_option=1
             if [ $((k + 1)) -lt "${#tok}" ]; then
               last_dir=named
             else
@@ -1309,10 +1307,9 @@ mktemp_write_targets() {
       done
     fi
   done
-  [ -z "$template" ] && [ "$last_dir" != named ] && last_dir=implicit
-  [ "$dir_option" -eq 1 ] && [[ "$template" == */* ]] && block "mktemp template '${template}' contains '/' but is joined to a directory option (-p, -t or --tmpdir), so it could climb out of that directory - name the directory in the template instead"
+  { [ "$t_option" -eq 1 ] || [ -n "$last_dir" ]; } && [[ "$template" == */* ]] && block "mktemp template '${template}' contains '/' but is joined to a directory option (-p, -t or --tmpdir), so it could climb out of that directory - name the directory in the template instead"
   queue_all_arguments $((i + 1))
-  { [ "$t_option" -eq 1 ] || [ "$last_dir" = implicit ]; } && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
+  { [ "$t_option" -eq 1 ] || [ "$last_dir" = implicit ] || { [ -z "$template" ] && [ -z "$last_dir" ]; }; } && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
   return 0
 }
 
