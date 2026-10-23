@@ -32,6 +32,12 @@ run_slash_command() {
     run bash -c 'printf "%s" "$1" | "$2"' _ "${payload}" "${HOOK}"
 }
 
+# Pipes a raw JSON payload into the hook, so JSON escapes reach jq as written rather than being
+# decoded first by run_skill's jq --arg.
+run_raw_payload() {
+    run bash -c 'printf "%s" "$1" | "$2"' _ "$1" "${HOOK}"
+}
+
 @test "each config-editing skill is blocked, naming it and stating it never ran" {
     local skill
     for skill in "${CONFIG_SKILLS[@]}"; do
@@ -66,6 +72,47 @@ run_slash_command() {
         run_slash_command "${command}"
         [ "${status}" -eq 2 ] || { echo "did not block '${command}': ${output}" >&2; return 1; }
         [[ "${output}" == *'skill changes Claude Code configuration'* ]] || { echo "wrong message for '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a raw JSON payload naming a config-editing skill is blocked in every spelling, escapes and control whitespace included" {
+    local skill
+    for skill in 'update-config' '/update-config' 'UPDATE-CONFIG' ' update-config' 'update-config ' '\tupdate-config' \
+        'plugin:update-config' 'a:b:update-config' '//update-config' 'update-config\n' 'update-config\r' \
+        '\u0075pdate-config' '\u00a0update-config' 'update-config\u00a0'; do
+        run_raw_payload "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"${skill}\"}}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'the update-config skill changes Claude Code configuration'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a raw SlashCommand payload naming a config-editing skill is blocked whatever separates its arguments" {
+    local command
+    for command in '/update-config x' '/update-config\tx' '/update-config\nx'; do
+        run_raw_payload "{\"tool_name\":\"SlashCommand\",\"tool_input\":{\"command\":\"${command}\"}}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${command}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'the update-config skill changes Claude Code configuration'* ]] || { echo "wrong message for '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+# jq, like JavaScript's JSON.parse, keeps the last of duplicate keys, so the hook checks the value
+# Claude Code itself reads.
+@test "with a duplicate skill key the last value is the one checked" {
+    run_raw_payload '{"tool_name":"Skill","tool_input":{"skill":"x","skill":"update-config"}}'
+    [ "${status}" -eq 2 ]
+    run_raw_payload '{"tool_name":"Skill","tool_input":{"skill":"update-config","skill":"x"}}'
+    [ "${status}" -eq 0 ]
+}
+
+# The hook folds only ASCII case, ASCII whitespace at the ends, leading '/' and a ':' prefix. A
+# confusable hyphen, an inner non-breaking space, a zero-width character, a non-ASCII capital or a
+# trailing '/' leaves a different name, which is allowed unless Claude Code resolves it to a listed
+# skill.
+@test "a name that differs from a config-editing skill by a confusable, invisible or non-ASCII character or a trailing / is not matched" {
+    local skill
+    for skill in 'update\u2010config' 'update\u00a0config' '\u200bupdate-config' 'UPDATE-CONF\u0130G' 'p:/update-config/'; do
+        run_raw_payload "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"${skill}\"}}"
+        [ "${status}" -eq 0 ] || { echo "status ${status} for '${skill}': ${output}" >&2; return 1; }
     done
 }
 
