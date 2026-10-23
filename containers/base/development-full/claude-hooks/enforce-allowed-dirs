@@ -242,7 +242,10 @@
 #     entrypoint's refusal of a repo whose `.claude/settings*.json` or
 #     `.mcp.json` differs from origin/main are what hold against them.
 #   - A recursive copy of a directory whose contents include a `.claude`
-#     entry or a `.git` tree (`cp -r /tmp/d/. .`) names nothing protected.
+#     entry, a `.git` tree or any other protected name (`cp -r /tmp/d/. .`)
+#     names nothing protected. What cp, mv or ln creates directly inside a
+#     destination directory is checked (queue_source_in_directory), but not
+#     the entries below a copied directory.
 #   - A git directory that is not under a `.git` path (a bare repository,
 #     or a `--separate-git-dir` target) is not protected.
 # Accepted false positives: a sed or awk program, or any other writer
@@ -1380,9 +1383,50 @@ check_operand() {
   queue_glob_matches "$3" "$1"
 }
 
+# Queues, as a path to check against the protected paths, what cp, mv or ln
+# creates inside destination directory $1 (flags $2) for source $3 (flags $4),
+# labelled $5: the destination joined with the source's last component, since
+# copying `x/.gitconfig` into `~/` writes `~/.gitconfig` though neither word
+# names it. Each current match of an unquoted glob in either word is used
+# (cp copies only what exists). Applied whenever the destination may be a
+# directory, which can only over-check: when it is a file, the joined path is
+# just never written. A recursive copy's deeper entries are not followed.
+queue_source_in_directory() {
+  local dest="$1" dflags="$2" src="$3" sflags="$4" label="$5" match base dir
+  local -a bases=() dirs=()
+  { [ "$dflags" = N ] || [ "$sflags" = N ]; } && block "${label} argument could not be verified (non-literal argument)"
+  if [[ "$sflags" == *g* ]]; then
+    prepare_word "$src" "$sflags" "$label"
+    while IFS= read -r match; do
+      match="${match%"${match##*[!/]}"}"
+      [ -n "$match" ] && bases+=("${match##*/}")
+    done < <(compgen -G "$PREPARED_GLOB")
+  else
+    base="${src%"${src##*[!/]}"}"
+    bases+=("${base##*/}")
+  fi
+  prepare_word "$dest" "$dflags" "$label"
+  if [ -n "$PREPARED_GLOB" ]; then
+    while IFS= read -r match; do
+      [ -n "$match" ] && dirs+=("$match")
+    done < <(compgen -G "$PREPARED_GLOB")
+  else
+    dirs+=("$PREPARED_ABS")
+  fi
+  for dir in "${dirs[@]}"; do
+    for base in "${bases[@]}"; do
+      case "$base" in
+        "" | . | ..) continue ;;
+      esac
+      queue_path "${dir%/}/${base}" "$label" "${dest%/}/${base}" p 0
+    done
+  done
+  return 0
+}
+
 check_rm_mv_cp() {
-  local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 k
-  local -a operands=() operand_flags=() operand_resolved=()
+  local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 k t
+  local -a operands=() operand_flags=() operand_resolved=() target_dirs=() target_dir_flags=()
   while [ "$j" -lt "${#words[@]}" ]; do
     tok="${words[$j]}"
     flags="${wflags[$j]}"
@@ -1400,9 +1444,13 @@ check_rm_mv_cp() {
           if [ "$name" != "rm" ] && target_directory_option "$tok"; then
             if [ -n "$TARGET_DIR_VALUE" ]; then
               check_operand "$TARGET_DIR_VALUE" "$flags" "${name} --target-directory"
+              target_dirs+=("$TARGET_DIR_VALUE")
+              target_dir_flags+=("$flags")
             else
               [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a directory"
               check_operand "${words[$((j + 1))]}" "${wflags[$((j + 1))]}" "${name} --target-directory"
+              target_dirs+=("${words[$((j + 1))]}")
+              target_dir_flags+=("${wflags[$((j + 1))]}")
               j=$((j + 1))
             fi
           fi
@@ -1423,6 +1471,20 @@ check_rm_mv_cp() {
   if [ "$name" = "mv" ] && [ "${#operands[@]}" -ge 2 ]; then
     for ((k = 0; k < ${#operands[@]} - 1; k++)); do
       deny_root_operand mv "${operands[k]}" "${operand_flags[k]}" "${operand_resolved[k]}"
+    done
+  fi
+  [ "$name" = "rm" ] && return 0
+  # What mv and cp create inside a destination directory: each
+  # --target-directory, else the last of two or more operands.
+  if [ "${#target_dirs[@]}" -gt 0 ]; then
+    for ((t = 0; t < ${#target_dirs[@]}; t++)); do
+      for ((k = 0; k < ${#operands[@]}; k++)); do
+        queue_source_in_directory "${target_dirs[t]}" "${target_dir_flags[t]}" "${operands[k]}" "${operand_flags[k]}" "${name} destination"
+      done
+    done
+  elif [ "${#operands[@]}" -ge 2 ]; then
+    for ((k = 0; k < ${#operands[@]} - 1; k++)); do
+      queue_source_in_directory "${operands[-1]}" "${operand_flags[-1]}" "${operands[k]}" "${operand_flags[k]}" "${name} destination"
     done
   fi
   return 0
@@ -2063,6 +2125,28 @@ add_ln_target_dir() {
   target_dir_flags+=("${wflags[$j]}")
 }
 
+# What ln_write_targets' ln creates inside a directory (its caller's
+# operands and target_dirs): each --target-directory, else the last of two or
+# more operands, else (one operand) the working directory, each holding a link
+# named after its target's last component.
+ln_queue_links_in_directory() {
+  local k s
+  if [ "${#target_dirs[@]}" -gt 0 ]; then
+    for ((k = 0; k < ${#target_dirs[@]}; k++)); do
+      for ((s = 0; s < ${#operands[@]}; s++)); do
+        queue_source_in_directory "${target_dirs[k]}" "${target_dir_flags[k]}" "${operands[s]}" "${operand_flags[s]}" "ln link"
+      done
+    done
+  elif [ "${#operands[@]}" -ge 2 ]; then
+    for ((k = 0; k < ${#operands[@]} - 1; k++)); do
+      queue_source_in_directory "${operands[-1]}" "${operand_flags[-1]}" "${operands[k]}" "${operand_flags[k]}" "ln link"
+    done
+  elif [ "${#operands[@]}" -eq 1 ]; then
+    queue_source_in_directory "." "" "${operands[0]}" "${operand_flags[0]}" "ln link"
+  fi
+  return 0
+}
+
 ln_write_targets() {
   local j tok flags symbolic=0 operands_only=0 k sources
   local -a operands=() operand_flags=() target_dirs=() target_dir_flags=()
@@ -2111,6 +2195,7 @@ ln_write_targets() {
   done
   if [ "$symbolic" -eq 0 ]; then
     queue_all_arguments $((i + 1))
+    ln_queue_links_in_directory
     return 0
   fi
   # Symbolic: what each link points to is text, resolved only when something
@@ -2129,6 +2214,7 @@ ln_write_targets() {
     for ((k = 0; k < ${#target_dirs[@]}; k++)); do
       queue_write_target "${target_dirs[k]}" "${target_dir_flags[k]}" "ln --target-directory"
     done
+    ln_queue_links_in_directory
     return 0
   fi
   case "${#operands[@]}" in
@@ -2136,6 +2222,7 @@ ln_write_targets() {
     1) queue_write_target "." "" "ln (implicit link in the working directory)" ;;
     *) queue_write_target "${operands[-1]}" "${operand_flags[-1]}" "ln link" ;;
   esac
+  ln_queue_links_in_directory
   return 0
 }
 
