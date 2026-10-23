@@ -59,9 +59,13 @@
 #     (`-xo/etc/x` is checked as `o/etc/x` and `/etc/x`),
 #     because a glued value cannot be told from a flag cluster without each
 #     tool's own option table; a word with too long a run before its first
-#     `/` is blocked. A bare `-` is standard input or output and skipped,
-#     except where the command names a file `-` with it: a tee or mkdir
-#     operand, git clone's destination, and sort's -o/--output value.
+#     `/` is blocked. A bare `-` is checked as the file `./-` unless its
+#     command and position are on dash_is_stream's list of places where it
+#     is standard input or output (or option text), each checked against the
+#     real tool: a sort, uniq, touch, file or xmllint operand, any shfmt
+#     `-`, the first operand of git checkout (the previous branch), and the
+#     value of a few options (sort -t/--files0-from, file -f/-F, curl
+#     -o/--output, openssl -in/-out, xmllint -o/--output).
 #     A few writers have their own rule instead:
 #       rm, mv, cp   every operand and --target-directory (see below), which
 #                    must also be under a root before anything else runs;
@@ -1146,16 +1150,110 @@ queue_dotnet_colon_option() {
   return 0
 }
 
-# Returns 0 when the bare - at word $1 of the current call is a file name
-# rather than stdin/stdout: every tee and mkdir operand, git clone's
-# destination, and the value of sort's -o/--output (any abbreviation, or a
-# short cluster ending in o, which can only over-check).
-dash_names_file() {
-  local prev="${words[$(($1 - 1))]}"
+# Sets DASH_VALUE_OF to every option that word $1, the word before a bare -,
+# names when it takes that - as its value, or leaves it empty when the - is an
+# operand. Short options taking a value are the letters in $2: a cluster
+# counts only when its first such letter is its last character (an earlier
+# one takes the rest of the cluster instead). Long options taking a value are
+# $3 onwards, given in full: any prefix of three or more characters counts as
+# each option it abbreviates, so an ambiguous prefix names them all.
+dash_value_of() {
+  local prev="$1" letters="$2" k opt
+  shift 2
+  DASH_VALUE_OF=()
+  case "$prev" in
+    - | --*=*) : ;;
+    --?*)
+      for opt in "$@"; do
+        [[ "$opt" == "$prev"* ]] && DASH_VALUE_OF+=("$opt")
+      done
+      ;;
+    -?*)
+      for ((k = 1; k < ${#prev}; k++)); do
+        [[ "$letters" == *"${prev:k:1}"* ]] || continue
+        [ "$k" -eq $((${#prev} - 1)) ] && DASH_VALUE_OF+=("-${prev:k:1}")
+        break
+      done
+      ;;
+  esac
+  return 0
+}
+
+# Returns 0 when every option in DASH_VALUE_OF is one of $@, which is true
+# when it is empty (the - is an operand).
+dash_values_within() {
+  local opt
+  for opt in "${DASH_VALUE_OF[@]}"; do
+    in_list "$opt" "$@" || return 1
+  done
+  return 0
+}
+
+# Returns 0 when every word of the current call from index $1 up to (not
+# including) index $2 is an option word, so a - at $2 is the first operand.
+# Each of those words is literal: queue_all_arguments has already queued it,
+# and a non-literal one blocks there.
+only_options_between() {
+  local k
+  for ((k = $1; k < $2; k++)); do
+    [[ "${words[$k]}" == -?* ]] || return 1
+  done
+  return 0
+}
+
+# Returns 0 when the bare - at word $1 of the current call is standard input
+# or output (or option text) rather than a file named `-`. Deny by default:
+# a - is a file name unless its command and position are listed here, each
+# checked against the real tool:
+#   sort     an operand, or the value of -t/--field-separator (text) or
+#            --files0-from (names read from stdin); not -o/--output or
+#            -T/--temporary-directory, which name a file or directory
+#   uniq     either operand (input, and output, which `-` sends to stdout)
+#   touch    an operand (touches stdout's file); not -r/--reference
+#   file     an operand, or the value of -f/--files-from (stdin) or
+#            -F/--separator (text)
+#   curl     the value of a separate -o or --output (stdout)
+#   openssl  the value of -in, -out, --in or --out (stdin/stdout)
+#   xmllint  an operand, or the value of -o, -output or --output (stdout)
+#   shfmt    anywhere: an operand is stdin and its only value options
+#            (-i, -ln, --filename, --detect) take text
+#   git      the first operand of checkout (the previous branch)
+# The option before the - is read from the word before it; a non-literal
+# word there could be any option, so the - is then a file name (only a text
+# option's value, which queue_all_arguments skips unqueued, can be one). That word
+# is mis-read only when it is itself an earlier option's value, and then the
+# - is really an operand, which no listed tool writes (a curl URL, an
+# openssl input). sed and awk read their operands themselves; awk's
+# fallback for an option it does not know reaches here, where its - is a
+# file name.
+dash_is_stream() {
+  local j="$1" prev="${words[$(($1 - 1))]}"
+  [ "${wflags[$((j - 1))]}" = N ] && return 1
   case "${words[$i]##*/}" in
-    tee | mkdir) return 0 ;;
-    git) [ "$GIT_SUBCOMMAND" = clone ] ;;
-    sort) [[ "$prev" =~ ^-[^-]*o$ ]] || [[ ${#prev} -ge 3 && "--output" == "${prev}"* ]] ;;
+    sort)
+      dash_value_of "$prev" koStT --batch-size --buffer-size --compress-program --field-separator --files0-from --key --output --parallel --random-source --sort --temporary-directory
+      dash_values_within -t --field-separator --files0-from
+      ;;
+    uniq)
+      dash_value_of "$prev" fsw --check-chars --skip-chars --skip-fields
+      dash_values_within
+      ;;
+    touch)
+      dash_value_of "$prev" drt --date --reference --time
+      dash_values_within
+      ;;
+    file)
+      dash_value_of "$prev" efmFP --exclude --exclude-quiet --files-from --magic-file --parameter --separator
+      dash_values_within -f -F --files-from --separator
+      ;;
+    curl) in_list "$prev" -o --output ;;
+    openssl) in_list "$prev" -in -out --in --out ;;
+    xmllint)
+      in_list "$prev" -o -output --output && return 0
+      ! [[ "$prev" =~ ^--?(dtdvalid|dtdvalidfpi|encode|max-ampl|maxmem|path|pattern|pretty|relaxng|schema|schematron|xpath|xpath0)$ ]]
+      ;;
+    shfmt) return 0 ;;
+    git) [ "$GIT_SUBCOMMAND" = checkout ] && only_options_between $((GIT_SUBCOMMAND_INDEX + 1)) "$j" ;;
     *) return 1 ;;
   esac
 }
@@ -1175,8 +1273,8 @@ queue_all_arguments() {
       case "$tok" in
         --) operands_only=1; j=$((j + 1)); continue ;;
         -)
-          # Usually stdin/stdout (rm/mv/cp and a hard ln check their own -).
-          dash_names_file "$j" && queue_write_target - "$flags" "$name" "$base" "$relative_ok"
+          # A file named - unless listed as stdin/stdout (rm/mv/cp check their own).
+          dash_is_stream "$j" || queue_write_target - "$flags" "$name" "$base" "$relative_ok"
           j=$((j + 1))
           continue
           ;;
@@ -1398,14 +1496,6 @@ ln_write_targets() {
   done
   if [ "$symbolic" -eq 0 ]; then
     queue_all_arguments $((i + 1))
-    # queue_all_arguments skips a bare - as stdin/stdout, but a hard link's
-    # - (an operand or the --target-directory) is a file name.
-    for ((k = 0; k < ${#operands[@]}; k++)); do
-      [ "${operands[k]}" = - ] && queue_write_target - "${operand_flags[k]}" "ln operand"
-    done
-    for ((k = 0; k < ${#target_dirs[@]}; k++)); do
-      [ "${target_dirs[k]}" = - ] && queue_write_target - "${target_dir_flags[k]}" "ln --target-directory"
-    done
     return 0
   fi
   # Symbolic: what each link points to is text, resolved only when something

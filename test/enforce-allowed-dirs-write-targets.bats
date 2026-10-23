@@ -1090,33 +1090,80 @@ EOF'
     [ "${status}" -eq 0 ]
 }
 
-@test "a bare - that tee, mkdir, sort -o or git clone writes as a file is checked as ./-" {
+# Commands whose bare - is a file name: deny by default, so each is checked as ./-, while the
+# exceptions below are listed in dash_is_stream.
+DASH_FILE_COMMANDS=(
+    "tee -" "mkdir -" "mkdir -p -" "chmod 600 -" "dotnet build -o -" "dotnet new console -o -"
+    "mktemp -p - x.XXXX" "sort -o - a" "sort -ro - a" "sort --output=- a" "sort --output - a"
+    "sort --o - a" "sort -T - a" "sort -rT - a" "sort --temporary-directory - a" "sort --te - a"
+    "touch -r - a" "uniq -f - a" "file -m - a" "curl -D - https://example.com"
+    "curl -so - https://example.com" "openssl dgst -" "xmllint --schema - a.xml"
+    "xmllint -relaxng - a.xml" "awk -d '{print}' -" "gh release download v1 -O -"
+    "git clone https://github.com/x/y.git -" "git -C . checkout HEAD -" "git -C . checkout -b x -"
+    "git -C . restore -"
+)
+
+# Commands whose bare - is standard input or output, or option text, so it is not a path.
+DASH_STREAM_COMMANDS=(
+    "sort a -" "sort -" "sort -s -" "sort -rs -" "sort -o out a -" "sort -t - -k2 a" "sort --field-sep - a"
+    "sort --field-separator=, -" "sort -ok -" "sort -tX -"
+    "sort --files0-from -" "uniq -" "uniq - -" "uniq a -" "touch -" "touch -c -" "file -"
+    "file -f -" "file --files -" "file -F - a" "curl -o - https://example.com"
+    "curl --output - https://example.com" "openssl base64 -in - -out -" "openssl base64 --in - --out -"
+    "xmllint -" "xmllint -o - -" "xmllint --output - a.xml" "shfmt -" "shfmt -i 2 -"
+    "git -C . checkout -" "git -C . checkout -q -" "awk '{print}' -"
+)
+
+@test "a bare - is checked as the file ./- unless dash_is_stream lists it as stdin/stdout" {
     local cmd
-    for cmd in "tee -" "echo x | tee -a -" "sort -o - ${SRC}/a" "sort -ro - ${SRC}/a" "sort --output=- ${SRC}/a" \
-        "sort --output - ${SRC}/a" "sort --o - ${SRC}/a" "mkdir -" "mkdir -p -" "git clone https://github.com/x/y.git -"; do
+    # From outside every root: in the ${SRC} cases only the - is outside, while the others also
+    # name an outside operand, so the in-repo checks below are what isolate the -.
+    for cmd in "tee -" "echo x | tee -a -" "mkdir -" "mkdir -p -" "chmod 600 -" "sort -o - ${SRC}/a" \
+        "sort -ro - ${SRC}/a" "sort --output=- ${SRC}/a" "sort --output - ${SRC}/a" "sort --o - ${SRC}/a" \
+        "sort -T - ${SRC}/a" "touch -r - ${SRC}/a" "dotnet build -o -" \
+        "mktemp -p - x.XXXX" "git clone https://github.com/x/y.git -"; do
         run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
         [ "${status}" -eq 2 ] || { echo "status ${status}, want 2: ${cmd}: ${output}" >&2; return 1; }
         [[ "${output}" == *'outside the allowed directories'* ]] || { echo "wrong message for ${cmd}: ${output}" >&2; return 1; }
     done
-    assert_each 0 '' "tee -" "sort -o - a.txt" "sort --output=- a.txt" "sort --output - a.txt" "mkdir -" \
-        "git clone https://github.com/x/y.git -"
+    # Inside the repo an ordinary ./- is allowed; a ./- linking into configuration is not, so
+    # each of these shows the - itself is resolved, every other operand being inside the repo.
+    assert_each 0 '' "${DASH_FILE_COMMANDS[@]}"
+    mkdir -p "${TEST_TMP}/repo/.claude/agents"
+    ln -s .claude/settings.json "${TEST_TMP}/repo/-"
+    assert_each_config_write "${DASH_FILE_COMMANDS[@]}"
+    rm "${TEST_TMP}/repo/-"
+    ln -s .claude/agents "${TEST_TMP}/repo/-"
+    assert_each_config_write "${DASH_FILE_COMMANDS[@]}"
+}
+
+@test "a bare - after a non-literal word is a file name" {
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    ln -s .claude/settings.json "${TEST_TMP}/repo/-"
+    # dotnet changelog's -m value is text, skipped without being queued, so it is the one
+    # non-literal word that can sit before the -; the - is then still checked as ./-.
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    assert_each_config_write 'dotnet changelog -m "$X" -'
+    # Anywhere else a non-literal word before the - is queued itself and blocks first, so a
+    # git checkout's - after one is never taken as the previous branch.
+    # shellcheck disable=SC2016  # literal $X - must reach the hook unexpanded
+    assert_each 2 'non-literal' 'git -C . checkout "$X" -' 'sort -t "$X" -' 'curl -o "$X" -'
 }
 
 @test "a bare - that is standard input or output is not a path" {
     local cmd
-    for cmd in "sort ${SRC}/a -" "sort -" "sort -o ${SRC}/out ${SRC}/a -" "touch -" "uniq -"; do
+    for cmd in "sort ${SRC}/a -" "sort -" "sort -s -" "sort -o ${SRC}/out ${SRC}/a -" "sort --files0-from -" "touch -" \
+        "uniq -" "uniq - -" "file -" "file -f -" "file -F - ${SRC}/a" "xmllint -" "xmllint -o - -" "shfmt -"; do
         run_hook_in_dir "${cmd}" "${TEST_TMP}/outside"
         [ "${status}" -eq 0 ] || { echo "status ${status}, want 0: ${cmd}: ${output}" >&2; return 1; }
     done
-    # curl's URL is itself checked as a path, so curl runs inside a root, where a ./- linking to
-    # configuration shows its -o - is not resolved, while tee's - is.
-    mkdir -p "${TEST_TMP}/repo/.claude"
+    # Inside the repo a ./- linking into configuration shows none of these resolves its -.
+    mkdir -p "${TEST_TMP}/repo/.claude/agents"
     ln -s .claude/settings.json "${TEST_TMP}/repo/-"
-    assert_each 0 '' "curl -o - https://example.com"
-    assert_each_config_write "tee -"
-    # git checkout - switches to the previous branch, so its - is not ./- either; clone's is.
-    assert_each 0 '' "git -C . checkout -"
-    assert_each_config_write "git -C . clone https://github.com/x/y.git -"
+    assert_each 0 '' "${DASH_STREAM_COMMANDS[@]}"
+    rm "${TEST_TMP}/repo/-"
+    ln -s .claude/agents "${TEST_TMP}/repo/-"
+    assert_each 0 '' "${DASH_STREAM_COMMANDS[@]}"
 }
 
 @test "ln -t with a glued value starting with s is a hard link, not a symbolic one" {
