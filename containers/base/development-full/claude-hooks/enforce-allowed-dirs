@@ -132,7 +132,8 @@
 #                    when the last -p or --tmpdir is a bare --tmpdir or has
 #                    an empty DIR (`-p ""`, `--tmpdir=`), or with no template
 #                    and no -p or --tmpdir; a template containing `/` beside
-#                    a directory option blocks;
+#                    a directory option blocks, as does a use of $TMPDIR in
+#                    a command with a variable assignment anywhere in it;
 #       sed, awk     the program text (sed's script, awk's program and -v
 #                    assignments) is checked as text against the protected
 #                    names only, since a program routinely names paths it does
@@ -1663,8 +1664,12 @@ dotnet_write_targets() {
 # --tmpdir is a bare --tmpdir or an empty DIR, or with no template and no
 # DIR. A template is joined to that directory, so one containing `/` could
 # climb out of it and blocks. --suffix's separate value is not a template.
+# The $TMPDIR checked is the hook's own, so when mktemp would use it, any
+# variable assignment anywhere in the command blocks, whether a prefix of
+# that call or a statement of its own (`TMPDIR=.claude/hooks; mktemp -d`
+# reaches mktemp too, as TMPDIR is already exported).
 mktemp_write_targets() {
-  local j k tok opt template="" operands_only=0 t_option=0 last_dir=""
+  local j k tok opt template="" operands_only=0 t_option=0 last_dir="" uses_tmpdir=0
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     tok="${words[$j]}"
     if [ "$operands_only" -eq 1 ] || [[ "$tok" != -?* ]]; then
@@ -1696,8 +1701,10 @@ mktemp_write_targets() {
     fi
   done
   { [ "$t_option" -eq 1 ] || [ -n "$last_dir" ]; } && [[ "$template" == */* ]] && block "mktemp template '${template}' contains '/' but is joined to a directory option (-p, -t or --tmpdir), so it could climb out of that directory - name the directory in the template instead"
+  { [ "$t_option" -eq 1 ] || [ "$last_dir" = implicit ] || { [ -z "$template" ] && [ -z "$last_dir" ]; }; } && uses_tmpdir=1
+  [ "$uses_tmpdir" -eq 1 ] && [ "${assign_count:-1}" != 0 ] && block "mktemp writes into \$TMPDIR here, in a command that assigns a variable, so the directory it uses cannot be verified - name the directory with -p DIR (without -t) instead"
   queue_all_arguments $((i + 1))
-  { [ "$t_option" -eq 1 ] || [ "$last_dir" = implicit ] || { [ -z "$template" ] && [ -z "$last_dir" ]; }; } && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
+  [ "$uses_tmpdir" -eq 1 ] && queue_write_target "${TMPDIR:-/tmp}" "" "mktemp (implicit \$TMPDIR)"
   return 0
 }
 
