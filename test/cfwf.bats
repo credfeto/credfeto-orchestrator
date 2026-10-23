@@ -194,7 +194,7 @@ gh_line_of() {
         [[ "${output}" == *"release view"*"(exit 9 when it has none)"* ]]
         [[ "${output}" == *"release list"* ]]
         [[ "${output}" == *"tag view"*"(exit 9 when not found)"* ]]
-        [[ "${output}" == *"run rerun"*"(exit 4 while it runs, 8 when refused)"* ]]
+        [[ "${output}" == *"run rerun"*"(exit 4 while it runs, 8 when refused, 9 when not found)"* ]]
     done
 }
 
@@ -9614,7 +9614,7 @@ run_tag_view() {
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
-    listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused)"$'\n'
+    listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
     [[ "${output}" == *"${listed}"* ]]
     [ ! -f "${GH_LOG}" ]
