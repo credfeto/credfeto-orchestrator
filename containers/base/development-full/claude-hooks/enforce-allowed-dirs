@@ -175,8 +175,11 @@
 #   .claude/hooks, .claude/agents,   the directories and everything under them
 #   .claude/skills, .claude/commands,
 #   .claude/plugins, .claude/rules,
-#   .claude/output-styles
+#   .claude/output-styles,
+#   .claude/sessions
 #   .claude/CLAUDE.md                the user's or project's memory file
+#   .claude/.credentials.json        the user's login credentials
+#   .claude/history.jsonl            the prompt history
 #   .claude.json                     the user's global Claude Code state
 #   .mcp.json                        project MCP server config
 #   /etc/claude-code                 managed settings and the installed hooks
@@ -337,7 +340,7 @@ block_not_yet_existing() {
 }
 
 block_config_write() {
-  block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md and MCP config are changed by a human editing the tracked source files and reinstalling"
+  block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md, credentials, session history and MCP config are changed by a human editing the tracked source files and reinstalling"
 }
 
 in_list() {
@@ -496,7 +499,7 @@ MARKER='(non-literal)'
 # character there (sed's `wclaude-code/...`).
 names_protected_config() {
   case "$1" in
-    *.claude | *.claude/ | *.claude/*settings*.json* | *.claude/*hooks* | *.claude/*agents* | *.claude/*skills* | *.claude/*commands* | *.claude/*plugins* | *.claude/*rules* | *.claude/*output-styles* | *.claude/*CLAUDE.md* | *.claude.json* | *.mcp.json* | *etc/*claude-code*) return 0 ;;
+    *.claude | *.claude/ | *.claude/*settings*.json* | *.claude/*hooks* | *.claude/*agents* | *.claude/*skills* | *.claude/*commands* | *.claude/*plugins* | *.claude/*rules* | *.claude/*output-styles* | *.claude/*CLAUDE.md* | *.claude/*sessions* | *.claude/*.credentials.json* | *.claude/*history.jsonl* | *.claude.json* | *.mcp.json* | *etc/*claude-code*) return 0 ;;
     *claude-code/*) return 0 ;;
   esac
   return 1
@@ -580,6 +583,7 @@ is_protected_path() {
   case "$1" in
     */.claude | */.claude/settings*.json* | */.claude/hooks | */.claude/hooks/* | */.claude/agents | */.claude/agents/* | */.claude/skills | */.claude/skills/* | */.claude/commands | */.claude/commands/*) return 0 ;;
     */.claude/plugins | */.claude/plugins/* | */.claude/rules | */.claude/rules/* | */.claude/output-styles | */.claude/output-styles/* | */.claude/CLAUDE.md) return 0 ;;
+    */.claude/sessions | */.claude/sessions/* | */.claude/.credentials.json | */.claude/history.jsonl) return 0 ;;
     */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
   esac
   return 1
