@@ -1026,6 +1026,28 @@ assert_protected_git_path() {
     assert_each_config_write "gh extension create .claude/skills/gh-x"
 }
 
+@test "an option before gh's group or subcommand cannot hide a blocked gh command, and keeps the call a writer (#1554 SEC-R4-1)" {
+    assert_each 2 'changes the extensions gh runs' \
+        "gh extension --force=true install owner/gh-x" \
+        "gh ext --force=true upgrade --all" \
+        "gh extensions --force=true install ." \
+        "gh --force=true extension install owner/gh-x" \
+        "gh extension --pin v1 install owner/gh-x" \
+        "gh extension -p v1 install owner/gh-x" \
+        "gh extension --force install owner/gh-x"
+    assert_each 2 'defines a command whose writes appear on no command line' \
+        "gh alias --clobber=true set co 'pr checkout'" \
+        "gh --clobber=true alias set co 'pr checkout'" \
+        "gh -R o/r alias set x y" \
+        "gh --repo o/r alias import aliases.yml"
+    assert_each 0 '' "gh pr --repo o/r view 1" "gh extension list" "gh pr view 1 --repo o/r"
+    mkdir -p "${TEST_TMP}/repo/.claude"
+    assert_each_config_write_in_dir "${TEST_TMP}/repo/.claude" \
+        "gh pr --repo=o/r view 1" \
+        "gh --repo=o/r pr view 1"
+    assert_each 0 '' "cd .claude && gh pr view 1 --repo o/r"
+}
+
 @test "the agents' read-only and remote-only gh workflows are allowed from the repo and from .claude, with text naming config" {
     mkdir -p "${TEST_TMP}/repo/.claude"
     local cmd
