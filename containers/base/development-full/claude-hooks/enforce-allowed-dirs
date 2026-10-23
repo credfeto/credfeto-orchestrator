@@ -163,7 +163,7 @@
 # A writer (git and gh only when they write, as above) can also write into its
 # working directory without naming anything (`curl -O`, `gh release
 # download`), so it may not run anywhere inside a `.claude` tree (or
-# /etc/claude-code), from where a `..` in a sed `w` name reaches a protected
+# /etc/claude-code, or one of the user's config homes), from where a `..` in a sed `w` name reaches a protected
 # entry: not in such a $PWD or leading cd/`git -C` target, and not in a
 # command that also cds into one anywhere, whatever the order (a loop can
 # run the cd first). A cd there with no writer, to read, stays allowed.
@@ -183,6 +183,17 @@
 #   .claude.json                     the user's global Claude Code state
 #   .mcp.json                        project MCP server config
 #   /etc/claude-code                 managed settings and the installed hooks
+# and, only under the user's own $HOME (both its `realpath -ms` and its
+# `realpath -m` form), the configuration git, gh and curl read from there:
+#   ~/.curlrc, ~/.gitconfig          curl's and git's user config files
+#   <config>/git, <config>/gh        the directories and everything under them,
+#                                    for <config> ~/.config and
+#                                    $XDG_CONFIG_HOME when set
+# A repo's own `.gitconfig` or `.curlrc` (a test fixture) is not protected as
+# a path, so a write target resolved to one stays allowed. Program text and
+# link targets are never resolved, so for them the names are matched as text
+# wherever they point (names_home_config), and a link target or working
+# directory anywhere inside a config home blocks, as for a `.claude` tree.
 # The tracked sources under containers/base/development-full/ have no
 # `.claude/` path segment, so they stay editable for normal hook development:
 # they take effect only once a human reinstalls or rebuilds.
@@ -340,7 +351,7 @@ block_not_yet_existing() {
 }
 
 block_config_write() {
-  block "writing to Claude Code configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md, credentials, session history and MCP config are changed by a human editing the tracked source files and reinstalling"
+  block "writing to Claude Code, git, gh or curl configuration ('$1') is not permitted - stop and report what you needed instead; settings, hooks, agents, skills, commands, plugins, rules, output styles, CLAUDE.md, credentials, session history and MCP config are changed by a human editing the tracked source files and reinstalling, and the user's git, gh and curl configuration by a human directly"
 }
 
 in_list() {
@@ -514,8 +525,36 @@ names_protected_config() {
 names_config_tree() {
   case "$1" in
     *.claude/* | */claude-code | claude-code) return 0 ;;
+    */.config | .config | */.config/* | .config/*) return 0 ;;
+  esac
+  [ -n "${XDG_CONFIG_HOME:-}" ] || return 1
+  case "$1" in
+    *"${XDG_CONFIG_HOME%/}" | *"${XDG_CONFIG_HOME%/}"/*) return 0 ;;
   esac
   return 1
+}
+
+# Text check, for text that is never resolved (sed and awk programs, link
+# targets): the user's git, gh and curl configuration, wherever it points,
+# since the text cannot be resolved against $HOME. Not used for a write
+# target that is resolved, so a repo's own `.gitconfig` fixture stays
+# writable. As for `.claude/`, anything may sit between `.config/` and the
+# name, so an `x/../gh` detour still matches.
+names_home_config() {
+  case "$1" in
+    *.curlrc* | *.gitconfig* | *.config/*git | *.config/*git/* | *.config/*gh | *.config/*gh/*) return 0 ;;
+  esac
+  [ -n "${XDG_CONFIG_HOME:-}" ] || return 1
+  case "$1" in
+    *"${XDG_CONFIG_HOME%/}"/*git* | *"${XDG_CONFIG_HOME%/}"/*gh*) return 0 ;;
+  esac
+  return 1
+}
+
+# Text check for text that is never resolved: the Claude Code names and the
+# user's git, gh and curl configuration.
+names_unresolved_config() {
+  names_protected_config "$1" || names_home_config "$1"
 }
 
 # Sets DECODED_TEXT to $1 with its backslash escapes decoded the way awk
@@ -559,11 +598,11 @@ decode_backslash_escapes() {
 # as a file name (awk, sqlite3), which bash has passed through with the
 # backslashes intact: the text is checked as each reading of `\x` decodes it.
 names_protected_config_once_decoded() {
-  local greedy
+  local greedy checker="${2:-names_protected_config}"
   [[ "$1" == *\\* ]] || return 1
   for greedy in 0 1; do
     decode_backslash_escapes "$1" "$greedy"
-    names_protected_config "$DECODED_TEXT" && return 0
+    "$checker" "$DECODED_TEXT" && return 0
   done
   return 1
 }
@@ -586,18 +625,76 @@ is_protected_path() {
     */.claude/sessions | */.claude/sessions/* | */.claude/.credentials.json | */.claude/history.jsonl) return 0 ;;
     */.claude.json | */.mcp.json | /etc/claude-code | /etc/claude-code/*) return 0 ;;
   esac
+  is_protected_home_path "$1"
+}
+
+# The user's $HOME and config homes (~/.config, and $XDG_CONFIG_HOME when
+# set), each in its `realpath -ms` and `realpath -m` form, to match the two
+# resolutions resolve_queued_paths checks. Computed once, on first use.
+HOME_FORMS=()
+CONFIG_HOME_FORMS=()
+HOME_FORMS_READY=0
+init_home_forms() {
+  local dir
+  [ "$HOME_FORMS_READY" -eq 1 ] && return 0
+  HOME_FORMS_READY=1
+  if [ -n "${HOME:-}" ]; then
+    for dir in "$(realpath -ms -- "$HOME" 2>/dev/null)" "$(realpath -m -- "$HOME" 2>/dev/null)"; do
+      [ -n "$dir" ] || continue
+      HOME_FORMS+=("${dir%/}")
+      CONFIG_HOME_FORMS+=("${dir%/}/.config")
+    done
+  fi
+  if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    for dir in "$(realpath -ms -- "$XDG_CONFIG_HOME" 2>/dev/null)" "$(realpath -m -- "$XDG_CONFIG_HOME" 2>/dev/null)"; do
+      [ -n "$dir" ] && CONFIG_HOME_FORMS+=("${dir%/}")
+    done
+  fi
+  return 0
+}
+
+# Path check, for a fully resolved absolute path: the user's git, gh and curl
+# configuration under their own $HOME and config homes only.
+is_protected_home_path() {
+  local dir
+  init_home_forms
+  for dir in "${HOME_FORMS[@]}"; do
+    case "$1" in
+      "${dir}/.curlrc" | "${dir}/.gitconfig") return 0 ;;
+    esac
+  done
+  for dir in "${CONFIG_HOME_FORMS[@]}"; do
+    case "$1" in
+      "${dir}/git" | "${dir}/git/"* | "${dir}/gh" | "${dir}/gh/"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# Working-directory and link-target check, for a fully resolved absolute
+# path: anywhere inside one of the user's config homes, from where a `..` in
+# text that is never resolved reaches gh's or git's configuration.
+is_in_config_home() {
+  local dir
+  init_home_forms
+  for dir in "${CONFIG_HOME_FORMS[@]}"; do
+    case "$1" in
+      "$dir" | "${dir}/"*) return 0 ;;
+    esac
+  done
   return 1
 }
 
 # Working-directory check, for a fully resolved absolute path: anywhere inside
 # a `.claude` tree, not only its protected entries, because a writer there
 # can reach one with a `..` in text that is never resolved (`sed -n 'w
-# ../settings.json'` from `.claude/x`).
+# ../settings.json'` from `.claude/x`), and likewise anywhere inside one of
+# the user's config homes (is_in_config_home).
 is_in_claude_config_tree() {
   case "$1" in
     */.claude | */.claude/* | /etc/claude-code | /etc/claude-code/*) return 0 ;;
   esac
-  return 1
+  is_in_config_home "$1"
 }
 
 # ---- command classification ------------------------------------------------
@@ -807,7 +904,7 @@ queue_write_target() {
 # names only. Non-literal program text could name anything, so it blocks.
 check_program_text() {
   [ "$2" = N ] && block "${3} could not be verified (non-literal) - a program can name files it writes"
-  names_protected_config "$1" && block_config_write "$1"
+  names_unresolved_config "$1" && block_config_write "$1"
   return 0
 }
 
@@ -818,7 +915,7 @@ check_program_text() {
 check_awk_text() {
   check_program_text "$@"
   block_unicode_escape "$1" "$3"
-  names_protected_config_once_decoded "$1" && block_config_write "$1"
+  names_protected_config_once_decoded "$1" names_unresolved_config && block_config_write "$1"
   return 0
 }
 
@@ -1207,7 +1304,7 @@ note_writer() {
 }
 
 block_cd_with_writer() {
-  block "writing to Claude Code configuration ('${CD_INTO_PROTECTED}') through a cd into it, in the same command as ${WRITER_SEEN}, which can write into its working directory without naming a path, is not permitted - stop and report what you needed instead"
+  block "writing to Claude Code, git, gh or curl configuration ('${CD_INTO_PROTECTED}') through a cd into it, in the same command as ${WRITER_SEEN}, which can write into its working directory without naming a path, is not permitted - stop and report what you needed instead"
 }
 
 # Sets CLONE_DIR_NAME to the directory `git clone <repository>` creates for
@@ -1727,7 +1824,7 @@ mktemp_write_targets() {
 check_ln_target() {
   local word="$1" flags="$2"
   [ "$flags" = N ] && block "ln target could not be verified (non-literal argument) - a symbolic link target must be a literal path"
-  { names_protected_config "$word" || names_config_tree "$word"; } && block_config_write "$word"
+  { names_unresolved_config "$word" || names_config_tree "$word"; } && block_config_write "$word"
   [[ "$flags" == *r* && "$word" == *'{'* ]] && block "ln target '${word}' contains a brace expansion, which could name Claude Code configuration once expanded - write each target out in full"
   if [[ "$flags" == *g* ]]; then
     prepare_word "$word" "$flags" "ln target"
