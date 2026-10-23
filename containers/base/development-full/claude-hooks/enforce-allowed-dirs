@@ -63,9 +63,10 @@
 #     command and position are on dash_is_stream's list of places where it
 #     is standard input or output (or option text), each checked against the
 #     real tool: a sort, uniq, touch, file or xmllint operand, any shfmt
-#     `-`, the first operand of git checkout (the previous branch), and the
-#     value of a few options (sort -t/--files0-from, file -f/-F, curl
-#     -o/--output, openssl -in/-out, xmllint -o/--output).
+#     `-`, the first operand of git checkout (the previous branch), a
+#     python3, node or bun `-` that is the program read from stdin, a flake8
+#     operand, and the value of a few options (sort -t/--files0-from, file
+#     -f/-F, curl -o/--output, openssl -in/-out, xmllint -o/--output).
 #     A few writers have their own rule instead:
 #       rm, mv, cp   every operand and --target-directory (see below), which
 #                    must also be under a root before anything else runs;
@@ -1210,6 +1211,25 @@ only_options_between() {
   return 0
 }
 
+# Returns 0 when a python3 option word of the current call before index $1
+# names the program itself (-c code or -m module, alone or ending a short
+# cluster, or glued as -ccode), so a - after it is the program's argument.
+# In a short cluster the first of c, m, W and X takes the rest of the word.
+python_program_option_before() {
+  local k n w
+  for ((k = i + 1; k < $1; k++)); do
+    w="${words[$k]}"
+    [[ "$w" == --* ]] && continue
+    for ((n = 1; n < ${#w}; n++)); do
+      case "${w:n:1}" in
+        c | m) return 0 ;;
+        W | X) break ;;
+      esac
+    done
+  done
+  return 1
+}
+
 # Returns 0 when the bare - at word $1 of the current call is standard input
 # or output (or option text) rather than a file named `-`. Deny by default:
 # a - is a file name unless its command and position are listed here, each
@@ -1227,6 +1247,19 @@ only_options_between() {
 #   shfmt    anywhere: an operand is stdin and its only value options
 #            (-i, -ln, --filename, --detect) take text
 #   git      the first operand of checkout (the previous branch)
+#   python3  the first operand (the program, read from stdin), after only
+#            options with no -c/-m before it (the program is then that code
+#            or module and the - is its argument) and not as the value of
+#            -W/-X/--check-hash-based-pycs
+#   node, bun  the program read from stdin, only straight after the command
+#            name or a flag listed here (node --no-warnings, bun --silent):
+#            their option tables are too large to tell a flag from an option
+#            taking the - as its value, and node --redirect-warnings writes
+#            its value
+#   flake8   an operand (stdin), only after a non-option word, an
+#            --option=value or a flag listed here: plugins add options of
+#            their own, argparse accepts any unique abbreviation, and
+#            --output-file - writes the file `-`
 # The option before the - is read from the word before it; a non-literal
 # word there could be any option, so the - is then a file name (only a text
 # option's value, which queue_all_arguments skips unqueued, can be one). That word
@@ -1263,6 +1296,17 @@ dash_is_stream() {
       ;;
     shfmt) return 0 ;;
     git) [ "$GIT_SUBCOMMAND" = checkout ] && only_options_between $((GIT_SUBCOMMAND_INDEX + 1)) "$j" ;;
+    python3)
+      only_options_between $((i + 1)) "$j" && ! python_program_option_before "$j" || return 1
+      dash_value_of "$prev" cmWX --check-hash-based-pycs
+      dash_values_within
+      ;;
+    node) [ "$j" -eq $((i + 1)) ] || { only_options_between $((i + 1)) "$j" && in_list "$prev" --no-warnings; } ;;
+    bun) [ "$j" -eq $((i + 1)) ] || { only_options_between $((i + 1)) "$j" && in_list "$prev" --silent; } ;;
+    flake8)
+      [[ "$prev" != -?* || "$prev" == --?*=* ]] && return 0
+      in_list "$prev" -q -v --benchmark --count --disable-noqa --doctests --exit-zero --hang-closing --isolated --no-show-source --quiet --show-source --statistics --tee --verbose
+      ;;
     *) return 1 ;;
   esac
 }
