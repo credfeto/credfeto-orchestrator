@@ -818,6 +818,55 @@ EOF'
     assert_each 0 '' "dotnet build -p:" "dotnet build -o:" "dotnet build --output:"
 }
 
+@test "a dotnet argument with a %XX escape other than %3B or %2C blocks in every form, since MSBuild decodes it" {
+    assert_each 2 'contains a %XX escape other than %3B or %2C, which MSBuild decodes' \
+        "dotnet build -p:OutputPath=%2Eclaude/hooks/" \
+        "dotnet build -p:OutputPath=%2E%63laude/skills/x/" \
+        "dotnet build -p:OutputPath=..%2F..%2Foutside/" \
+        "dotnet build -p:OutputPath=%2eclaude/hooks/" \
+        "dotnet build -o %2Eclaude/hooks" \
+        "dotnet build --output %2Eclaude/hooks" \
+        "dotnet build -property:OutputPath=%2Eclaude/hooks/" \
+        "dotnet build -p OutputPath=%2Eclaude/hooks/" \
+        "dotnet msbuild -p:OutputPath=%2Eclaude/hooks/" \
+        "dotnet publish -p:PublishDir=%2Eclaude/hooks/" \
+        "dotnet build -bl:%2Eclaude/hooks/x.binlog" \
+        "dotnet build -flp:logfile=%2Eclaude/hooks/x.log" \
+        "dotnet test --results-directory %2Eclaude/hooks" \
+        "dotnet %62uild" \
+        "dotnet run -- %2Eclaude/hooks" \
+        "dotnet build -p:OutputPath=%2Eclaude/hooks/%3B" \
+        "dotnet build -p:X=a%2Cb%2F..%2Foutside" \
+        "dotnet build -p:OutputPath=%%3B2Eclaude/hooks/"
+}
+
+@test "a dotnet %3B or %2C escape, a literal ';' or ',' in one MSBuild value, is allowed in either case" {
+    assert_each 0 '' \
+        "dotnet build -p:DefineConstants=DEBUG%3BTRACE" \
+        "dotnet build -p:DefineConstants=DEBUG%3bTRACE" \
+        "dotnet build -p:X=a%2Cb" \
+        "dotnet build -p:X=a%2cb"
+}
+
+@test "a dotnet -p value with %3B is one value, so the text after it is not a separate property and stays inside the repo" {
+    # MSBuild splits the list on the raw ';' before decoding, so this sets A to the literal
+    # '1;OutputPath=../outside/x', and OutputPath is never set. The hook checks the raw value as a
+    # path ('1%3BOutputPath=..' is a directory name, not '..'), which stays inside the repo too.
+    assert_each 0 '' "dotnet build -p:A=1%3BOutputPath=../outside/x"
+    assert_each 2 'outside the allowed directories' "dotnet build \"-p:A=1%3B;OutputPath=../outside/x\""
+    assert_each_config_write "dotnet build \"-p:A=1%3B;OutputPath=.claude/hooks\""
+}
+
+@test "a dotnet argument without a %XX escape, or for another command, is not blocked as one" {
+    assert_each 0 '' \
+        "dotnet build -p:Configuration=Release" \
+        "dotnet test --filter Name~Foo" \
+        "dotnet build -p:Prop=100%" \
+        "dotnet build -p:Prop=%zz" \
+        "dotnet build '-p:Items=%(Identity)'"
+    assert_each 0 '' "mkdir x%2Ey"
+}
+
 @test "a colon-form word for a command other than dotnet is checked as short-option tails" {
     assert_each 2 'outside the allowed directories' "sort -o:../outside/x f"
     assert_each 0 '' "sort -o:${TEST_TMP}/repo/x f"

@@ -110,7 +110,10 @@
 #                    colon form (`-p:Name=value`, `--output:DIR`) is
 #                    checked as the text after `:` and as the value of each
 #                    `;`- or `,`-separated Name=value pair in that (MSBuild's
-#                    property list), not as short-option tails;
+#                    property list), not as short-option tails; any literal
+#                    argument containing a %XX escape other than %3B or %2C
+#                    (a literal `;` or `,` in one value) blocks, since
+#                    MSBuild decodes it;
 #       mktemp       every argument (so the DIR of -p DIR, -pDIR and
 #                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
 #                    when the last -p or --tmpdir is a bare --tmpdir or has
@@ -1527,9 +1530,24 @@ gh_queue_clone_default_dirs() {
   return 0
 }
 
+# MSBuild decodes a %XX escape anywhere in a command-line value
+# (`-p:OutputPath=%2Eclaude/hooks/` writes to .claude/hooks/), so no checked
+# spelling of a dotnet argument with one can be trusted, and every literal
+# argument with one blocks before any is queued. The exceptions are %3B and
+# %2C, the documented way to put a literal `;` or `,` inside one property
+# value (`-p:DefineConstants=DEBUG%3BTRACE`): they decode to separators, not
+# path characters, and MSBuild splits the property list before decoding, so
+# they cannot add a pair. Removing them can only join the text around them
+# into another escape, which then blocks.
 dotnet_write_targets() {
-  local j
+  local j separators_removed
   local -a text_value_options=()
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    [ "${wflags[$j]}" = N ] && continue
+    separators_removed="${words[$j]//%3[Bb]/}"
+    separators_removed="${separators_removed//%2[Cc]/}"
+    [[ "$separators_removed" =~ %[0-9A-Fa-f]{2} ]] && block "dotnet argument '${words[$j]:0:80}' contains a %XX escape other than %3B or %2C, which MSBuild decodes - name the path without it"
+  done
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     case "${words[$j]}" in
       -*) continue ;;
