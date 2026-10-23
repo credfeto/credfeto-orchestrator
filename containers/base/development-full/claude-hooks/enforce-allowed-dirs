@@ -97,8 +97,12 @@
 #                    the paths they read from a file or stdin cannot be
 #                    checked;
 #       gh           only when it downloads or clones or is given an output
-#                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), since its
-#                    other arguments are routinely issue and PR text;
+#                    option (GH_WRITE_ARGS, GH_WRITE_OPTION_RE), or clones
+#                    through an option (`--clone`, and `-c` for `repo
+#                    create`/`new`; see gh_clone_targets), since its other
+#                    arguments are routinely issue and PR text; a clone
+#                    through an option also checks the directory gh names
+#                    after the repository (or `--fork-name`);
 #       dotnet       every argument, except the message of `dotnet changelog
 #                    -m`/`--message`, which is text; an option word in
 #                    colon form (`-p:Name=value`, `--output:DIR`) is
@@ -354,6 +358,13 @@ GIT_PATHSPEC_FILE_WRITERS=(checkout restore rm)
 # match alone or with a glued value (-Dvalue, -D=value).
 GH_WRITE_ARGS=(download clone)
 GH_WRITE_OPTION_RE='^(-[DO]|--(dir|output)(=|$))'
+# The spellings pflag (strconv.ParseBool) reads as false in a boolean
+# option's =value; any other value clones, or gh rejects it.
+GH_FALSE_RE='^(0|f|F|false|FALSE|False)$'
+# The repo subcommands that clone with --clone (and, for create and its alias
+# new, -c; elsewhere -c is another option, such as pr review's --comment).
+GH_CLONE_SUBCOMMANDS=(fork create new)
+GH_SHORT_CLONE_SUBCOMMANDS=(create new)
 LINK_SEEN=0
 GIT_SUBCOMMAND=""
 GIT_SUBCOMMAND_INDEX=0
@@ -1108,25 +1119,33 @@ block_cd_with_writer() {
   block "writing to Claude Code configuration ('${CD_INTO_PROTECTED}') through a cd into it, in the same command as ${WRITER_SEEN}, which can write into its working directory without naming a path, is not permitted - stop and report what you needed instead"
 }
 
-# The directory `git clone <repository>` creates when none is given: git's
-# own guess from the repository (trailing `/` and `/.git` dropped, then the
-# last `/` or `:` component, then a `.git` or `.bundle` suffix dropped).
-# Every non-option argument is treated as a possible repository, which can
-# only over-check.
+# Sets CLONE_DIR_NAME to the directory `git clone <repository>` creates for
+# repository $1 when none is given: git's own guess (trailing `/` and `/.git`
+# dropped, then the last `/` or `:` component, then a `.git` or `.bundle`
+# suffix dropped). gh names its clone after the repository's name, which the
+# same rule finds in an OWNER/REPO name or a repository URL.
+CLONE_DIR_NAME=""
+clone_default_dir_name() {
+  local name="${1%"${1##*[!/]}"}"
+  name="${name%/.git}"
+  name="${name%"${name##*[!/]}"}"
+  name="${name##*[/:]}"
+  name="${name%.git}"
+  CLONE_DIR_NAME="${name%.bundle}"
+}
+
+# The directory `git clone <repository>` creates when none is given (see
+# clone_default_dir_name). Every non-option argument is treated as a possible
+# repository, which can only over-check.
 queue_git_clone_default_dirs() {
-  local j tok name
+  local j tok
   for ((j = GIT_SUBCOMMAND_INDEX + 1; j < ${#words[@]}; j++)); do
     tok="${words[$j]}"
     [ "${wflags[$j]}" = N ] && continue
     case "$tok" in -*) continue ;; esac
-    name="${tok%"${tok##*[!/]}"}"
-    name="${name%/.git}"
-    name="${name%"${name##*[!/]}"}"
-    name="${name##*[/:]}"
-    name="${name%.git}"
-    name="${name%.bundle}"
-    [ -n "$name" ] || continue
-    queue_write_target "$name" "" "git clone (default directory for '${tok}')" "$GIT_BASE" "$GIT_RELATIVE_OK"
+    clone_default_dir_name "$tok"
+    [ -n "$CLONE_DIR_NAME" ] || continue
+    queue_write_target "$CLONE_DIR_NAME" "" "git clone (default directory for '${tok}')" "$GIT_BASE" "$GIT_RELATIVE_OK"
   done
   return 0
 }
@@ -1412,6 +1431,56 @@ gh_write_targets() {
       queue_all_arguments $((i + 1))
       return 0
     fi
+  done
+  gh_clone_targets
+}
+
+# gh repo fork and gh repo create (alias new) clone through an option, not a
+# subcommand word: `--clone`, `--clone=VALUE` for any VALUE but a false
+# spelling (GH_FALSE_RE), and for create/new the shorthand `-c` (alone, in a
+# cluster such as `-cdTEXT`, or `-c=VALUE`). `--clone` counts after any
+# subcommand, failing closed. The clone goes into the working directory,
+# into the directory named by the first word after `--` (the rest of those
+# words go to git clone), or by default into a directory named after the
+# repository (the last component of OWNER/REPO or a URL) or the
+# `--fork-name` value. Every argument, every word after `--` and the default
+# directory of every non-option word after the subcommand (it may be the
+# repository) are checked, which can only over-check. In a repo
+# fork/create/new call a non-literal word before `--` could be `--clone`, and
+# with a non-literal subcommand `-c` could be create's, so both fail closed.
+gh_clone_targets() {
+  local j tok clones=0 sub_literal=1 repo_clone=0 short_clone=0 name
+  local -a names=()
+  [ "${wflags[$((i + 1))]:-}" = N ] || [ "${wflags[$((i + 2))]:-}" = N ] && sub_literal=0
+  if [ "$sub_literal" -eq 1 ] && [ "${words[$((i + 1))]:-}" = repo ]; then
+    in_list "${words[$((i + 2))]:-}" "${GH_CLONE_SUBCOMMANDS[@]}" && repo_clone=1
+    in_list "${words[$((i + 2))]:-}" "${GH_SHORT_CLONE_SUBCOMMANDS[@]}" && short_clone=1
+  fi
+  [ "$sub_literal" -eq 0 ] && short_clone=1
+  for ((j = i + 1; j < ${#words[@]}; j++)); do
+    tok="${words[$j]}"
+    if [ "${wflags[$j]}" = N ]; then
+      [ "$repo_clone" -eq 1 ] && clones=1
+      continue
+    fi
+    [ "$tok" = -- ] && break
+    case "$tok" in
+      --clone) clones=1 ;;
+      --clone=*) [[ "${tok#*=}" =~ $GH_FALSE_RE ]] || clones=1 ;;
+      -c=*) [ "$short_clone" -eq 1 ] && ! [[ "${tok#*=}" =~ $GH_FALSE_RE ]] && clones=1 ;;
+      -c*) [ "$short_clone" -eq 1 ] && clones=1 ;;
+      --fork-name=*) names+=("${tok#*=}") ;;
+      -*) : ;;
+      *) [ "$j" -gt $((i + 2)) ] && names+=("$tok") ;;
+    esac
+  done
+  [ "$clones" -eq 1 ] || return 0
+  note_writer gh "$BASE_DIR" "$RELATIVE_OK"
+  queue_all_arguments $((i + 1))
+  for name in "${names[@]}"; do
+    clone_default_dir_name "$name"
+    [ -n "$CLONE_DIR_NAME" ] || continue
+    queue_write_target "$CLONE_DIR_NAME" "" "gh clone (default directory for '${name}')"
   done
   return 0
 }
