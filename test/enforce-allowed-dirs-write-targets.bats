@@ -565,6 +565,36 @@ assert_protected_git_path() {
         "git -C . config --get core.hooksPath"
 }
 
+@test "cp, mv and ln into a directory are blocked when only the source's name makes the destination protected; ordinary copies into a directory are allowed" {
+    mkdir -p "${SRC}/gh" "${SRC}/in"
+    local f
+    for f in .gitconfig .curlrc curlrc a.txt b.txt in/.gitconfig; do printf x > "${SRC}/${f}"; done
+    assert_each_config_write \
+        "cp ${SRC}/.gitconfig ${HOME}/" \
+        "cp ${SRC}/.gitconfig ${HOME}" \
+        "cp ${SRC}/a.txt ${SRC}/.curlrc ${HOME}" \
+        "mv ${SRC}/.gitconfig ${HOME}/" \
+        "cp ${SRC}/curlrc ${HOME}/.config/" \
+        "cp -r ${SRC}/gh ${HOME}/.config/" \
+        "cp -t ${HOME} ${SRC}/.gitconfig" \
+        "cp --target-directory=${HOME}/.config ${SRC}/curlrc" \
+        "mv -t ${HOME}/ ${SRC}/.curlrc" \
+        "cp ${SRC}/.git* ${HOME}/" \
+        "cp ${SRC}/in/.gitconfig ${HOME}/" \
+        "ln ${SRC}/curlrc ${HOME}/.config/" \
+        "ln -s ${SRC}/curlrc ${HOME}/.config/" \
+        "ln -s -t ${HOME}/.config ${SRC}/curlrc" \
+        "ln -sf ${SRC}/a.txt ${SRC}/curlrc ${HOME}/.config"
+    assert_each_config_write_in_dir "${HOME}" "ln ${SRC}/.gitconfig"
+    assert_each 0 '' \
+        "cp ${SRC}/a.txt sub/" \
+        "cp ${SRC}/a.txt ${SRC}/b.txt sub" \
+        "cp ${SRC}/a.txt sub/c.txt" \
+        "mv ${SRC}/a.txt sub/" \
+        "cp ${SRC}/.gitconfig sub/" \
+        "ln -s ${SRC}/a.txt sub/"
+}
+
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
     assert_each_config_write \
         "touch .claude/settings.json" \
