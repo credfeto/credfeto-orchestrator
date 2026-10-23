@@ -49,9 +49,10 @@ roots themselves):
 The symlinking step is driven by a `find -mindepth 1 -maxdepth 1 -type d` loop over each repo's `skills/`
 subtree (not a hardcoded name list), so newly added upstream skills are picked up automatically on the
 next build as long as they still land under a `skills/` folder. The build fails if two repos ever produce
-a skill with the same name. `/home/developer/.claude/skills/` and every symlink in it are root:root —
+a skill with the same name. `/home/developer/.claude/skills/` and every symlink in it are root:root, so
 `developer` can read/execute through them (to resolve and use the skill) but cannot add, remove, or
-retarget entries.
+retarget entries directly. See [Limits of the root-owned `~/.claude`](#limits-of-the-root-owned-claude)
+for what this does not stop.
 
 ### Linking agents into `~/.claude/agents`
 
@@ -64,7 +65,8 @@ that file symlinked to `/home/developer/.claude/agents/credfeto-<name>.md`; ever
 The build fails if `ai/agents/` is missing, if any link cannot be created, or if no agents are
 linked. The number of links is recorded in `/opt/.claude-agent-count`.
 `/home/developer/.claude/agents/` and every symlink in it are root:root, so `developer` can read the
-agent definitions but cannot add, remove, or retarget entries.
+agent definitions but cannot add, remove, or retarget entries directly. See
+[Limits of the root-owned `~/.claude`](#limits-of-the-root-owned-claude) for what this does not stop.
 
 ### Baked-in Claude Code settings, policy-limits, and hooks
 
@@ -223,8 +225,8 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/opt/cc-devops-skills/` | root:root | 0755 | GitHub Actions devops skills plugin; agent can read/execute but not modify |
 | `/opt/markdown-linter-fixer/` | root:root | 0755 | Markdown linter/fixer skill (pinned to `MARKDOWN_LINTER_FIXER_REF`); agent can read/execute but not modify |
 | `/opt/dotnet-skills/` | root:root | 0755 | Sparse-checkout of dotnet, dotnet-advanced, dotnet-diag, dotnet-msbuild, dotnet-nuget, dotnet-test, dotnet-upgrade plugins (pinned to `DOTNET_SKILLS_COMMIT`); agent can read/execute but not modify |
-| `/home/developer/.claude/skills/` | root:root | 0755 | Symlinks into the `/opt/*` skill repos above, one per skill (count recorded at build time in `/opt/.claude-skill-count`); agent can read/execute but not add, remove, or retarget |
-| `/home/developer/.claude/agents/` | root:root | 0755 | Symlinks named `credfeto-<name>.md` to each `/opt/credfeto-ai-skills/ai/agents/<name>/AGENT.md` (count recorded at build time in `/opt/.claude-agent-count`); agent can read but not add, remove, or retarget |
+| `/home/developer/.claude/skills/` | root:root | 0755 | Symlinks into the `/opt/*` skill repos above, one per skill (count recorded at build time in `/opt/.claude-skill-count`); agent can read/execute but not add, remove, or retarget directly (see [Limits of the root-owned `~/.claude`](#limits-of-the-root-owned-claude)) |
+| `/home/developer/.claude/agents/` | root:root | 0755 | Symlinks named `credfeto-<name>.md` to each `/opt/credfeto-ai-skills/ai/agents/<name>/AGENT.md` (count recorded at build time in `/opt/.claude-agent-count`); agent can read but not add, remove, or retarget directly (see [Limits of the root-owned `~/.claude`](#limits-of-the-root-owned-claude)) |
 | `/home/developer/.claude/settings.json` | root:root | 0444 | Baked-in Claude Code preferences (from `claude-user-settings.json`); read-only for all users |
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
@@ -250,6 +252,22 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/usr/local/bin/pre-commit-check` | root:root | 0755 | Repo-local wrapper script (from `scripts/pre-commit-check`); read/execute only |
 | `/usr/local/bin/querydb` | root:root | 0755 | Repo-local wrapper script (from `scripts/querydb`); read/execute only |
 | `/usr/local/bin/cfwf` | root:root | 0755 | Repo-local workflow helper (from `scripts/cfwf`); read/execute only |
+
+### Limits of the root-owned `~/.claude`
+
+The guarantee is `/etc/claude-code`: the managed settings and the hooks are root-owned, as is every
+ancestor directory, so nothing running as `developer` can change, replace or remove them, and the
+`allowManagedPermissionRulesOnly`/`allowManagedHooksOnly`/`allowManagedMcpServersOnly` locks in
+`managed-settings.json` stop any user or project settings file adding permissions, hooks or MCP servers.
+
+`/home/developer/.claude` being root-owned only stops direct writes into it. `developer` owns
+`/home/developer`, so a process running as `developer` can rename `~/.claude` away and create a new one in
+its place. The managed locks still stop a replacement adding permissions, hooks or MCP servers, but it
+could add skills or agents, or change the preferences in `settings.json` and the limits in
+`policy-limits.json`. The hooks block a Bash command or file tool call that
+names a `.claude` path, so only code run by a writer (an interpreter, npm/bun scripts, `dotnet run`,
+pre-commit hooks) could do this; that is the accepted "code run by a writer" gap described in
+[ai/local/claude-hooks.instructions.md](../../../ai/local/claude-hooks.instructions.md).
 
 ---
 
