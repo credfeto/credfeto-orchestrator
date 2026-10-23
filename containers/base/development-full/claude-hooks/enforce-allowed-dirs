@@ -113,7 +113,10 @@
 #                    property list), not as short-option tails; any literal
 #                    argument containing a %XX escape other than %3B or %2C
 #                    (a literal `;` or `,` in one value) blocks, since
-#                    MSBuild decodes it;
+#                    MSBuild decodes it; an `@file` response-file argument
+#                    blocks, as does any variable assignment anywhere in
+#                    the command (MSBuild reads the environment as
+#                    properties);
 #       mktemp       every argument (so the DIR of -p DIR, -pDIR and
 #                    --tmpdir=DIR), plus $TMPDIR (default /tmp) only for -t,
 #                    when the last -p or --tmpdir is a bare --tmpdir or has
@@ -1539,11 +1542,20 @@ gh_queue_clone_default_dirs() {
 # path characters, and MSBuild splits the property list before decoding, so
 # they cannot add a pair. Removing them can only join the text around them
 # into another escape, which then blocks.
+# MSBuild also takes switches from input this hook cannot see: a response
+# file named by an `@file` argument (expanded by the dotnet CLI and by
+# MSBuild), and environment variables, which it reads as properties
+# (`OutputPath=.claude/hooks/ dotnet build`). So an `@` argument blocks, and
+# so does any variable assignment anywhere in a command with a dotnet call,
+# whether a prefix of that call or a statement of its own (a plain
+# assignment to an already exported variable reaches dotnet too).
 dotnet_write_targets() {
   local j separators_removed
   local -a text_value_options=()
+  [ "${assign_count:-1}" = 0 ] || block "dotnet runs in a command that assigns a variable, and MSBuild reads environment variables as properties (OutputPath, PublishDir, ...) - pass the setting as an argument (-p:Name=value) instead"
   for ((j = i + 1; j < ${#words[@]}; j++)); do
     [ "${wflags[$j]}" = N ] && continue
+    [[ "${words[$j]}" == @* ]] && block "dotnet argument '${words[$j]:0:80}' names a response file, whose switches this check cannot see - pass the switches as arguments instead"
     separators_removed="${words[$j]//%3[Bb]/}"
     separators_removed="${separators_removed//%2[Cc]/}"
     [[ "$separators_removed" =~ %[0-9A-Fa-f]{2} ]] && block "dotnet argument '${words[$j]:0:80}' contains a %XX escape other than %3B or %2C, which MSBuild decodes - name the path without it"
@@ -1908,7 +1920,7 @@ to_json_array() {
 }
 
 # One jq pass over the AST. Line 1 is a header:
-#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1>
+#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1><TAB><count of calls with a variable assignment>
 # then, in document order, a line "C" per CallExpr followed by one line per
 # word, and a line "R" per writing redirection followed by its word (a
 # statement's redirections come before its command, as they are applied
@@ -1983,12 +1995,13 @@ transport=$(printf '%s' "$ast" | jq -r \
   ] as $items
   | [$items[] | select(.call) | .call | cmdname] as $names
   | "H\t" + ([$names[] | select(. as $n | $cd_names | index($n) != null)] | length | tostring)
-    + "\t" + (if ($names | length) > 0 and ($cd_names | index($names[0])) != null then "1" else "0" end),
+    + "\t" + (if ($names | length) > 0 and ($cd_names | index($names[0])) != null then "1" else "0" end)
+    + "\t" + ([.. | objects | select(.Type? == "CallExpr" and ((.Assigns // []) | length) > 0)] | length | tostring),
     ( $items[] | if .call then "C", (.call[] | word_line) else "R", (.redir | word_line) end )
 ') || block 'command structure could not be analyzed - failing closed'
 
 header="${transport%%$'\n'*}"
-IFS=$'\t' read -r _ cd_count first_is_cd <<<"$header"
+IFS=$'\t' read -r _ cd_count first_is_cd assign_count <<<"$header"
 
 load_classes
 [ "${#COMMAND_CLASS[@]}" -gt 0 ] || block "${COMMAND_ALLOWLIST##*/} classifies no command - failing closed"
