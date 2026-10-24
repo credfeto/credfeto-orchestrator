@@ -87,3 +87,9 @@ CURL_HOME
 # and HTTP cache, no executables or config, so they are not listed.
 XDG_DATA_HOME
 GH_DATA_DIR
+# cp, mv and ln take a backup suffix and backup method from these with no
+# option on the line, and a backup renames an existing file to its name plus
+# the suffix, which can create a protected path no word names; the -b, -S,
+# --backup and --suffix options are blocked by enforce-allowed-dirs.
+SIMPLE_BACKUP_SUFFIX
+VERSION_CONTROL

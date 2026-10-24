@@ -825,6 +825,10 @@ git status'
         "XDG_DATA_HOME=x" \
         "GH_DATA_DIR=x gh extension list" \
         "GH_DATA_DIR=x" \
+        "SIMPLE_BACKUP_SUFFIX=x cp a b" \
+        "SIMPLE_BACKUP_SUFFIX=x" \
+        "VERSION_CONTROL=t cp a b" \
+        "VERSION_CONTROL=t" \
         "home=/tmp/x git log"; do
         name="${cmd%%=*}"
         run_hook "${cmd}"
