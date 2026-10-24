@@ -2186,6 +2186,20 @@ DASH_STREAM_COMMANDS=(
         "mv b.txt one.*"
 }
 
+@test "cp --parents is blocked in every abbreviation, since it recreates the source's whole path under the destination" {
+    mkdir -p "${TEST_TMP}/repo/.config/gh"
+    printf x > "${TEST_TMP}/repo/.config/gh/hosts.yml"
+    printf x > "${TEST_TMP}/repo/.config/curlrc"
+    printf x > "${TEST_TMP}/repo/a"
+    assert_each 2 'recreates each source' \
+        "cp --parents .config/gh/hosts.yml ${HOME}" \
+        "cp --pa .config/curlrc ${HOME}" \
+        "cp --par .config/curlrc ${HOME}/" \
+        "cp -r --parents .config/gh ${HOME}" \
+        "cp -t ${HOME} --parents .config/curlrc"
+    assert_each 0 '' "cp a sub/" "cp --preserve=mode a b" "cp --preserve a sub/" "mv a b"
+}
+
 @test "cp, mv and ln backups are blocked in every spelling, since a backup can rename an existing file to a protected name" {
     printf x > "${TEST_TMP}/repo/a"
     assert_each 2 'makes a backup, which is not available to agents' \
