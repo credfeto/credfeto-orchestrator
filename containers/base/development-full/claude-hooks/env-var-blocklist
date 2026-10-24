@@ -22,6 +22,16 @@ LD_AUDIT
 PYTHONPATH
 PYTHONSTARTUP
 NODE_OPTIONS
+# .NET loads every assembly named here into the process before Main runs, the
+# same loader hijack as NODE_OPTIONS/PYTHONSTARTUP for the dotnet writer. Only
+# this name: a DOTNET_* glob would also block harmless switches such as
+# DOTNET_CLI_TELEMETRY_OPTOUT. DOTNET_ROOT, DOTNET_ADDITIONAL_DEPS and
+# DOTNET_SHARED_STORE choose which runtime and which dependency assemblies are
+# loaded, the same hijack by another route (#1554 review, Q53).
+DOTNET_STARTUP_HOOKS
+DOTNET_ROOT
+DOTNET_ADDITIONAL_DEPS
+DOTNET_SHARED_STORE
 GIT_*
 # npm reads any option from the environment as npm_config_<option>, so a
 # prefixed assignment (npm_config_script_shell=/evil npm run x) is the same
@@ -40,3 +50,46 @@ http_proxy
 https_proxy
 all_proxy
 ftp_proxy
+# gh and git run whatever program these name, as a pager, editor or browser,
+# instead of the command on the line, and less (their default pager) runs the
+# LESSOPEN/LESSCLOSE preprocessor; GH_CONFIG_DIR moves gh's config, aliases and
+# extensions to a directory the agent chose. git's own GIT_PAGER/GIT_EDITOR/
+# GIT_SEQUENCE_EDITOR are already covered by GIT_* (#1554 review, Q49).
+# MANPAGER and SYSTEMD_PAGER name the pager man and systemctl/journalctl run,
+# the same class for any of those that becomes allowlisted (#1554 review, Q54).
+GH_PAGER
+PAGER
+MANPAGER
+SYSTEMD_PAGER
+LESSOPEN
+LESSCLOSE
+BROWSER
+GH_BROWSER
+GH_EDITOR
+EDITOR
+VISUAL
+GH_CONFIG_DIR
+# HOME and XDG_CONFIG_HOME move where git and gh read their configuration
+# (~/.gitconfig, $XDG_CONFIG_HOME/git/config, $XDG_CONFIG_HOME/gh), so pointing
+# either at a directory the agent wrote lets that config set gpg.program,
+# core.pager, gh aliases and the like - the GH_CONFIG_DIR bypass by another
+# name, and a way round enforce-git-identity (#1554 review, Q52). CURL_HOME is
+# the same for curl: it reads $CURL_HOME/.curlrc first, and a .curlrc can add
+# a `url =` enforce-curl-host never sees and an `output =` path no write check
+# sees (#1554 review, SEC-R3-1).
+HOME
+XDG_CONFIG_HOME
+CURL_HOME
+# XDG_DATA_HOME moves gh's data directory, where its installed extensions
+# live and are run from by `gh <extension>`; GH_DATA_DIR is listed too in case
+# a gh release reads it, as GH_CONFIG_DIR is read for config (#1554 review,
+# Q57). XDG_STATE_HOME and XDG_CACHE_HOME hold only gh's update-check state
+# and HTTP cache, no executables or config, so they are not listed.
+XDG_DATA_HOME
+GH_DATA_DIR
+# cp, mv and ln take a backup suffix and backup method from these with no
+# option on the line, and a backup renames an existing file to its name plus
+# the suffix, which can create a protected path no word names; the -b, -S,
+# --backup and --suffix options are blocked by enforce-allowed-dirs.
+SIMPLE_BACKUP_SUFFIX
+VERSION_CONTROL

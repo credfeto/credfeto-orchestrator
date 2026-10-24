@@ -1,0 +1,190 @@
+#!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+
+load test_helper
+
+HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/block-config-skills"
+MANAGED_SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
+
+setup() {
+    setup_isolated_env
+    # The hook's own list, so the tests and the parity check below cannot drift from it.
+    read -r -a CONFIG_SKILLS < <(sed -n 's/^CONFIG_SKILLS=(\(.*\))$/\1/p' "${HOOK}")
+    [ "${#CONFIG_SKILLS[@]}" -gt 0 ] || { echo "could not read CONFIG_SKILLS from ${HOOK}" >&2; return 1; }
+}
+
+teardown() {
+    cleanup_stubs
+}
+
+# Pipes a Claude Code PreToolUse payload for a Skill call into the hook under test.
+# status 0 = allowed, 2 = blocked.
+run_skill() {
+    local payload
+    payload=$(jq -n --arg skill "$1" '{tool_name: "Skill", tool_input: {skill: $skill}}')
+    run bash -c 'printf "%s" "$1" | "$2"' _ "${payload}" "${HOOK}"
+}
+
+# As run_skill, for a SlashCommand call, whose input carries the whole `/name args` line.
+run_slash_command() {
+    local payload
+    payload=$(jq -n --arg command "$1" '{tool_name: "SlashCommand", tool_input: {command: $command}}')
+    run bash -c 'printf "%s" "$1" | "$2"' _ "${payload}" "${HOOK}"
+}
+
+# Pipes a raw JSON payload into the hook, so JSON escapes reach jq as written rather than being
+# decoded first by run_skill's jq --arg.
+run_raw_payload() {
+    run bash -c 'printf "%s" "$1" | "$2"' _ "$1" "${HOOK}"
+}
+
+@test "each config-editing skill is blocked, naming it and stating it never ran" {
+    local skill
+    for skill in "${CONFIG_SKILLS[@]}"; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block ${skill}: ${output}" >&2; return 1; }
+        [[ "${output}" == *"the ${skill} skill changes Claude Code configuration"* ]] || { echo "wrong message for ${skill}: ${output}" >&2; return 1; }
+        [[ "${output}" == *'command did not run'* ]] || { echo "missing 'command did not run' for ${skill}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "a config-editing skill is blocked whatever plugin prefix it is invoked with" {
+    local skill
+    for skill in anthropic-skills:skill-creator other-plugin:update-config a:b:keybindings-help; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block ${skill}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "a config-editing skill is blocked however its name is spelt (slash, whitespace, case, prefix)" {
+    local skill
+    for skill in '/update-config' ' update-config ' 'p:/update-config' 'Update-Config' '/p:update-config' \
+        'Anthropic-Skills:Skill-Creator' '//update-config' 'update-config extra args'; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'skill changes Claude Code configuration'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a SlashCommand naming a config-editing skill is blocked" {
+    local command
+    for command in '/update-config foo' '/update-config' ' /Init ' '/anthropic-skills:skill-creator make one'; do
+        run_slash_command "${command}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${command}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'skill changes Claude Code configuration'* ]] || { echo "wrong message for '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a raw JSON payload naming a config-editing skill is blocked in every spelling, escapes and control whitespace included" {
+    local skill
+    for skill in 'update-config' '/update-config' 'UPDATE-CONFIG' ' update-config' 'update-config ' '\tupdate-config' \
+        'plugin:update-config' 'a:b:update-config' '//update-config' 'update-config\n' 'update-config\r' \
+        '\u0075pdate-config' '\u00a0update-config' 'update-config\u00a0'; do
+        run_raw_payload "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"${skill}\"}}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'the update-config skill changes Claude Code configuration'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "a raw SlashCommand payload naming a config-editing skill is blocked whatever separates its arguments" {
+    local command
+    for command in '/update-config x' '/update-config\tx' '/update-config\nx'; do
+        run_raw_payload "{\"tool_name\":\"SlashCommand\",\"tool_input\":{\"command\":\"${command}\"}}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${command}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'the update-config skill changes Claude Code configuration'* ]] || { echo "wrong message for '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+# jq, like JavaScript's JSON.parse, keeps the last of duplicate keys, so the hook checks the value
+# Claude Code itself reads.
+@test "with a duplicate skill key the last value is the one checked" {
+    run_raw_payload '{"tool_name":"Skill","tool_input":{"skill":"x","skill":"update-config"}}'
+    [ "${status}" -eq 2 ]
+    run_raw_payload '{"tool_name":"Skill","tool_input":{"skill":"update-config","skill":"x"}}'
+    [ "${status}" -eq 0 ]
+}
+
+# The hook folds only ASCII case, ASCII whitespace at the ends, leading '/' and a ':' prefix. A
+# confusable hyphen, an inner non-breaking space, a zero-width character, a non-ASCII capital or a
+# trailing '/' leaves a different name, which is allowed unless Claude Code resolves it to a listed
+# skill.
+@test "a name that differs from a config-editing skill by a confusable, invisible or non-ASCII character or a trailing / is not matched" {
+    local skill
+    for skill in 'update\u2010config' 'update\u00a0config' '\u200bupdate-config' 'UPDATE-CONF\u0130G' 'p:/update-config/'; do
+        run_raw_payload "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"${skill}\"}}"
+        [ "${status}" -eq 0 ] || { echo "status ${status} for '${skill}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "an unrelated SlashCommand is allowed" {
+    local command
+    for command in '/commit msg' '/review' '/update-configuration now'; do
+        run_slash_command "${command}"
+        [ "${status}" -eq 0 ] || { echo "did not allow '${command}': ${output}" >&2; return 1; }
+    done
+}
+
+@test "ordinary skills are allowed" {
+    local skill
+    for skill in credfeto-git-commit credfeto-code-style anthropic-skills:pdf update-configuration initialise Update-Configuration; do
+        run_skill "${skill}"
+        [ "${status}" -eq 0 ] || { echo "did not allow ${skill}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "the hook blocks exactly the skills the managed settings deny with a Skill(...) rule" {
+    # A deny may carry a plugin prefix (anthropic-skills:skill-creator); the hook matches the
+    # part after the last ':', so that is what is compared, in both directions.
+    run diff <(printf '%s\n' "${CONFIG_SKILLS[@]}" | sort) \
+        <(jq -r '.permissions.deny[] | capture("^Skill\\((?<s>.*)\\)$").s | split(":") | last' "${MANAGED_SETTINGS}" | sort)
+    [ "${status}" -eq 0 ] || { echo "hook list (<) and Skill(...) denies (>) differ: ${output}" >&2; return 1; }
+    jq -r '.permissions.deny[]' "${MANAGED_SETTINGS}" | grep -qxF 'Agent(statusline-setup)'
+}
+
+@test "the managed settings register this hook against the Skill and SlashCommand matcher" {
+    run jq -r '.hooks.PreToolUse[] | select(.matcher == "Skill|SlashCommand") | .hooks[] | .command' "${MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '/etc/claude-code/hooks/block-config-skills' ]
+}
+
+@test "an empty skill name is blocked (fail closed)" {
+    run_skill ""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'no skill name'* ]]
+}
+
+@test "a skill name that is empty once normalised is blocked (fail closed)" {
+    local skill
+    for skill in '   ' '/' 'p:' 'p:/'; do
+        run_skill "${skill}"
+        [ "${status}" -eq 2 ] || { echo "did not block '${skill}': ${output}" >&2; return 1; }
+        [[ "${output}" == *'no skill name'* ]] || { echo "wrong message for '${skill}': ${output}" >&2; return 1; }
+    done
+    run_slash_command ''
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'no skill name'* ]]
+}
+
+@test "a skill name that is not a string is blocked (fail closed)" {
+    run bash -c 'printf "%s" "{\"tool_input\":{\"skill\":[\"update-config\"]}}" | "$1"' _ "${HOOK}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
+}
+
+@test "a payload with no skill field is blocked (fail closed)" {
+    run bash -c 'printf "%s" "{}" | "$1"' _ "${HOOK}"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a payload that does not parse as JSON is blocked (fail closed)" {
+    run bash -c 'printf "not json" | "$1"' _ "${HOOK}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'could not be parsed by jq'* ]]
+}
+
+@test "missing jq is blocked (fail closed)" {
+    mkdir -p "${STUB_BIN}/nojq"
+    run bash -c 'printf "%s" "{}" | PATH="$1" "$(command -v bash)" "$2"' _ "${STUB_BIN}/nojq" "${HOOK}"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'jq is not available'* ]]
+}

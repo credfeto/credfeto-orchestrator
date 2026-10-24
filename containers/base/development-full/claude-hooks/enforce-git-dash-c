@@ -38,7 +38,7 @@
 #     dedicated handling. Hardcoded here (not a data file like
 #     command-allowlist) since this hook is its only consumer and the real
 #     enforcement is this hook's own AST-based parse - unlike
-#     claude-settings.json's permissions.allow, which does plain text
+#     claude-managed-settings.json's permissions.allow, which does plain text
 #     matching and can't reliably identify "the real subcommand" for a tool
 #     whose subcommand follows a wildcarded -C <dir>, so that layer is kept
 #     coarse (bare Bash(git -C *)) and this hook is the sole place that
@@ -613,7 +613,7 @@ while IFS= read -r words_line && IFS= read -r ends_line && IFS= read -r resolved
 done <<< "$calls"
 
 if [ "${#INSERT_OFFSETS[@]}" -gt 0 ]; then
-  insertion=" -C $(printf '%q' "$INJECT_DIR")"
+  printf -v insertion ' -C %q' "$INJECT_DIR"
   mapfile -t sorted_offsets < <(printf '%s\n' "${INSERT_OFFSETS[@]}" | sort -rn -u)
   new_cmd="$raw_cmd"
   for off in "${sorted_offsets[@]}"; do
