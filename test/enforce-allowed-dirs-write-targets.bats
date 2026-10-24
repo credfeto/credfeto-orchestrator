@@ -586,13 +586,30 @@ assert_protected_git_path() {
         "ln -s -t ${HOME}/.config ${SRC}/curlrc" \
         "ln -sf ${SRC}/a.txt ${SRC}/curlrc ${HOME}/.config"
     assert_each_config_write_in_dir "${HOME}" "ln ${SRC}/.gitconfig"
+    # An option's separate value word is not an operand, so getopt's reordering cannot hide the
+    # real destination behind it.
+    assert_each_config_write \
+        "cp ${SRC}/.gitconfig ${HOME} -S suf" \
+        "cp ${SRC}/.gitconfig ${HOME} -bS suf" \
+        "mv ${SRC}/curlrc ${HOME}/.config --suffix suf" \
+        "mv ${SRC}/curlrc ${HOME}/.config --su suf" \
+        "cp ${SRC}/curlrc ${HOME}/.config --no-preserve mode" \
+        "cp ${SRC}/curlrc ${HOME}/.config --no-p mode" \
+        "cp -r ${SRC}/gh ${HOME}/.config --sparse always" \
+        "cp -r ${SRC}/gh ${HOME}/.config --sp always"
+    assert_each 2 'requires a value' "cp ${SRC}/a.txt sub/ -S" "mv ${SRC}/a.txt sub/ --suffix"
     assert_each 0 '' \
         "cp ${SRC}/a.txt sub/" \
         "cp ${SRC}/a.txt ${SRC}/b.txt sub" \
         "cp ${SRC}/a.txt sub/c.txt" \
         "mv ${SRC}/a.txt sub/" \
         "cp ${SRC}/.gitconfig sub/" \
-        "ln -s ${SRC}/a.txt sub/"
+        "ln -s ${SRC}/a.txt sub/" \
+        "cp -S .bak ${SRC}/a.txt sub/b.txt" \
+        "cp --suffix=.bak ${SRC}/a.txt sub/b.txt" \
+        "cp -b -S .bak ${SRC}/a.txt sub/" \
+        "cp --sparse=always ${SRC}/a.txt sub/" \
+        "cp ${SRC}/a.txt sub/ --no-preserve mode"
 }
 
 @test "every other allowlisted command that writes a named file is blocked on a protected path" {
