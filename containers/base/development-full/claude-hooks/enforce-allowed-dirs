@@ -1330,6 +1330,35 @@ check_find() {
 # "" as the directory rather than the next word, so "" in TARGET_DIR_VALUE
 # always means the value is the next word.
 TARGET_DIR_VALUE=""
+# Whether cp/mv option word $1 takes the next word as its value, which is
+# then not an operand (a value read as one would make getopt's reordering
+# pick the wrong destination: `cp x/.gitconfig ~ -S suf`): -S last in a short
+# cluster (before any -t, which takes the rest itself), and, with no `=`,
+# any abbreviation getopt accepts of --suffix, cp's --sparse and cp's
+# --no-preserve. Every other cp/mv option with a value takes it only with `=`
+# (--backup, --preserve, --reflink, --update, --context) or is -t/
+# --target-directory, handled by target_directory_option.
+cp_mv_option_takes_next_word() {
+  local tok="$1" k
+  case "$tok" in
+    *=*) return 1 ;;
+    --*)
+      [ "${#tok}" -ge 4 ] && [[ "--suffix" == "$tok"* || "--sparse" == "$tok"* ]] && return 0
+      [ "${#tok}" -ge 6 ] && [[ "--no-preserve" == "$tok"* ]] && return 0
+      return 1
+      ;;
+    -[A-Za-z]*)
+      for ((k = 1; k < ${#tok}; k++)); do
+        case "${tok:k:1}" in
+          t) return 1 ;;
+          S) [ "$k" -eq $((${#tok} - 1)) ] && return 0 || return 1 ;;
+        esac
+      done
+      ;;
+  esac
+  return 1
+}
+
 target_directory_option() {
   local tok="$1" name k
   TARGET_DIR_VALUE=""
@@ -1453,6 +1482,11 @@ check_rm_mv_cp() {
               target_dir_flags+=("${wflags[$((j + 1))]}")
               j=$((j + 1))
             fi
+          elif [ "$name" != "rm" ] && cp_mv_option_takes_next_word "$tok"; then
+            # Its value (a backup suffix, a sparse mode, attribute names) is
+            # not an operand.
+            [ "$((j + 1))" -lt "${#words[@]}" ] || block "${name} ${tok} requires a value"
+            j=$((j + 1))
           fi
           j=$((j + 1))
           continue
