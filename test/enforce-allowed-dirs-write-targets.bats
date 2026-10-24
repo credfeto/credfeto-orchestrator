@@ -2161,6 +2161,31 @@ DASH_STREAM_COMMANDS=(
     assert_each 0 '' "ln -stsub ${TEST_TMP}/outside/x"
 }
 
+@test "cp, mv and ln block when a glob chooses the destination; a literal or single-match destination and --target-directory are allowed" {
+    mkdir -p "${HOME}/.local/gh" "${HOME}/.local/share" "${SRC}/g" "${TEST_TMP}/repo/one.d"
+    printf x > "${SRC}/.gitconfig"
+    ln -s "${HOME}" "${SRC}/.zz"
+    local f
+    for f in a1.txt a2.txt b.txt; do printf x > "${TEST_TMP}/repo/${f}"; done
+    assert_each 2 'is a glob that matches' \
+        "cp -r ${HOME}/.local/[gs]*" \
+        "mv ${HOME}/.local/[gs]*" \
+        "cp ${SRC}/.[gz]*" \
+        "ln ${SRC}/.[gz]*" \
+        "ln -s ${SRC}/.[gz]*" \
+        "cp b.txt ${HOME}/.local/[gs]*"
+    # With --target-directory, each glob match is a source joined onto that directory.
+    assert_each_config_write "cp -t ${HOME} ${SRC}/.git*" "cp --target-directory=${HOME} ${SRC}/.[gz]*"
+    assert_each 0 '' \
+        "cp *.txt sub/" \
+        "cp -t sub *.txt" \
+        "cp --target-directory=sub a*.txt" \
+        "cp a*.txt b.txt sub" \
+        "cp a*.txt b.txt" \
+        "cp a1.txt one*" \
+        "mv b.txt one.*"
+}
+
 @test "cp, mv and ln backups are blocked in every spelling, since a backup can rename an existing file to a protected name" {
     printf x > "${TEST_TMP}/repo/a"
     assert_each 2 'makes a backup, which is not available to agents' \
