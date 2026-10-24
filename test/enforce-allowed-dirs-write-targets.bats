@@ -589,15 +589,11 @@ assert_protected_git_path() {
     # An option's separate value word is not an operand, so getopt's reordering cannot hide the
     # real destination behind it.
     assert_each_config_write \
-        "cp ${SRC}/.gitconfig ${HOME} -S suf" \
-        "cp ${SRC}/.gitconfig ${HOME} -bS suf" \
-        "mv ${SRC}/curlrc ${HOME}/.config --suffix suf" \
-        "mv ${SRC}/curlrc ${HOME}/.config --su suf" \
         "cp ${SRC}/curlrc ${HOME}/.config --no-preserve mode" \
         "cp ${SRC}/curlrc ${HOME}/.config --no-p mode" \
         "cp -r ${SRC}/gh ${HOME}/.config --sparse always" \
         "cp -r ${SRC}/gh ${HOME}/.config --sp always"
-    assert_each 2 'requires a value' "cp ${SRC}/a.txt sub/ -S" "mv ${SRC}/a.txt sub/ --suffix"
+    assert_each 2 'requires a value' "cp ${SRC}/a.txt sub/ --sparse" "cp ${SRC}/a.txt sub/ --no-preserve"
     assert_each 0 '' \
         "cp ${SRC}/a.txt sub/" \
         "cp ${SRC}/a.txt ${SRC}/b.txt sub" \
@@ -605,9 +601,7 @@ assert_protected_git_path() {
         "mv ${SRC}/a.txt sub/" \
         "cp ${SRC}/.gitconfig sub/" \
         "ln -s ${SRC}/a.txt sub/" \
-        "cp -S .bak ${SRC}/a.txt sub/b.txt" \
-        "cp --suffix=.bak ${SRC}/a.txt sub/b.txt" \
-        "cp -b -S .bak ${SRC}/a.txt sub/" \
+        "mv ${SRC}/a.txt ${SRC}/b.txt" \
         "cp --sparse=always ${SRC}/a.txt sub/" \
         "cp ${SRC}/a.txt sub/ --no-preserve mode"
 }
@@ -2167,22 +2161,35 @@ DASH_STREAM_COMMANDS=(
     assert_each 0 '' "ln -stsub ${TEST_TMP}/outside/x"
 }
 
-@test "ln -S takes the rest of its word: an s after it is not -s, and a t after it is not -t" {
-    assert_each_config_write "ln -Sxs .claude/settings.json evil" "ln -fSs .claude/settings.json evil" "ln -sSt x .claude/settings.json" \
-        "ln -sf ${SRC}/payload .claude/settings.json -S .bak" "ln -sfS .bak ${SRC}/payload .claude/settings.json" \
-        "ln -sf ${SRC}/payload .claude/settings.json --suffix .bak" "ln -sf ${SRC}/payload .claude/settings.json --suf .bak" \
-        "ln -sf -S -tx ${SRC}/payload .claude/settings.json" "ln -sf --suffix -tx ${SRC}/payload .claude/settings.json" \
-        "ln -sf -S --target-directory=x ${SRC}/payload .claude/settings.json" "ln -s -t x -t .claude/skills ${SRC}/payload"
-    assert_each 0 '' "ln -sS.bak ${TEST_TMP}/outside/x link" "ln -s --suffix=.bak ${TEST_TMP}/outside/x link"
-    # A separate-word -S/--suffix value is skipped, so the real link name is still the last operand.
-    assert_each_config_write "ln -s -S .bak ${TEST_TMP}/outside/x .claude/settings.json" \
-        "ln -s --suffix .bak ${TEST_TMP}/outside/x .claude/settings.json" \
-        "ln -sf ${SRC}/payload .claude/settings.json --suffix=.bak"
-    assert_each 0 '' "ln -s -S .bak ${TEST_TMP}/outside/x link" "ln -s --suffix .bak ${TEST_TMP}/outside/x link" \
-        "ln -s ${TEST_TMP}/outside/x link --suffix=.bak"
-    # cp/mv share the -t parser: a t inside a -S suffix is not -t, so no operand is taken as the
-    # target directory.
-    assert_each 0 '' "cp -Sxt a.txt b.txt" "mv -fSt a.txt b.txt"
+@test "cp, mv and ln backups are blocked in every spelling, since a backup can rename an existing file to a protected name" {
+    printf x > "${TEST_TMP}/repo/a"
+    assert_each 2 'makes a backup, which is not available to agents' \
+        "cp -b ${SRC}/a sub/" \
+        "cp -bS fig ${SRC}/x ${HOME}/.gitcon" \
+        "cp -S .bak a sub/b" \
+        "cp -Sxt a b" \
+        "cp -rb a sub/" \
+        "cp --suffix=.bak a sub/b" \
+        "cp --su .bak a sub/b" \
+        "cp --backup a sub/b" \
+        "cp --backup=numbered a sub/b" \
+        "cp --b a sub/b" \
+        "cp a sub/b -b" \
+        "mv --backup=numbered a b" \
+        "mv -fSt a b" \
+        "mv a b --suffix .x" \
+        "ln -b a b" \
+        "ln -S .x a b" \
+        "ln -sS.bak ${TEST_TMP}/outside/x link" \
+        "ln -fSs .claude/settings.json evil" \
+        "ln -s --suffix=.bak ${TEST_TMP}/outside/x link" \
+        "ln -sf ${SRC}/payload link --suf .bak" \
+        "ln --backup=t a b"
+    # A t ends a short cluster's options (it takes the rest of the word), so a b or S after it is
+    # part of the directory name, not a backup option.
+    mkdir -p "${TEST_TMP}/repo/bsub"
+    assert_each_config_write "ln -s -t x -t .claude/skills ${SRC}/payload"
+    assert_each 0 '' "cp a sub/" "mv a b" "ln -s a sub/link" "cp -t sub a" "cp -tbsub a" "ln -s -tbsub a"
 }
 
 # Builds a PATH directory holding only the named tools (plus cat, which reads the payload), so
