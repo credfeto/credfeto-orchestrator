@@ -1532,6 +1532,13 @@ check_rm_mv_cp() {
           # A bare - is a file name to rm/mv/cp, not an option, so it is
           # checked as an operand below.
           [ "$name" != "rm" ] && backup_option "$tok" && block_backup_option "$name" "$tok"
+          # cp --parents creates DEST/<source as written>, not DEST/<its last
+          # component>, which queue_source_in_directory does not model, so it
+          # blocks in every abbreviation getopt accepts (--pa and longer;
+          # --p is ambiguous with --preserve). mv and ln have no equivalent.
+          if [ "$name" = "cp" ] && [[ "$tok" == --pa* && "--parents" == "${tok%%=*}"* ]]; then
+            block "cp ${tok} recreates each source's whole path under the destination, which this hook does not check - copy to the full destination path instead"
+          fi
           # mv/cp write into a directory named by --target-directory, which
           # getopt also accepts as any unique abbreviation (--t, --target,
           # --target-dir), and as -t inside a bundled short cluster with the
