@@ -1486,6 +1486,38 @@ queue_source_in_directory() {
   return 0
 }
 
+# Sets GLOB_MATCH_COUNT to how many names operand $1 (flags $2) becomes:
+# its current glob matches when it is an unquoted glob that matches anything,
+# else one (bash passes an unmatched glob through as written).
+count_glob_matches() {
+  local match
+  GLOB_MATCH_COUNT=1
+  [[ "$2" == *g* ]] || return 0
+  prepare_word "$1" "$2" "$3"
+  GLOB_MATCH_COUNT=0
+  while IFS= read -r match; do
+    [ -n "$match" ] && GLOB_MATCH_COUNT=$((GLOB_MATCH_COUNT + 1))
+  done < <(compgen -G "$PREPARED_GLOB")
+  [ "$GLOB_MATCH_COUNT" -eq 0 ] && GLOB_MATCH_COUNT=1
+  return 0
+}
+
+# For cp, mv or ln ($1) with no --target-directory (its caller's operands,
+# operand_flags and target_dirs): the destination is the last name bash
+# passes, which a glob can choose. When the last operand is an unquoted glob
+# that matches more than one name, or a lone operand is one that matches two
+# or more, the destination is not any word on the line, so the call blocks
+# rather than guess which name it is. With a --target-directory every match
+# is a source joined onto that directory, which is checked.
+block_glob_destination() {
+  [ "${#target_dirs[@]}" -eq 0 ] && [ "${#operands[@]}" -gt 0 ] || return 0
+  count_glob_matches "${operands[-1]}" "${operand_flags[-1]}" "${1} operand"
+  if [ "$GLOB_MATCH_COUNT" -gt 1 ]; then
+    block "${1} destination '${operands[-1]}' is a glob that matches ${GLOB_MATCH_COUNT} names, so which one is the destination cannot be checked - name the destination explicitly, or use --target-directory"
+  fi
+  return 0
+}
+
 check_rm_mv_cp() {
   local name="${words[$i]##*/}" j=$((i + 1)) tok flags operands_only=0 k t
   local -a operands=() operand_flags=() operand_resolved=() target_dirs=() target_dir_flags=()
@@ -1542,6 +1574,7 @@ check_rm_mv_cp() {
     done
   fi
   [ "$name" = "rm" ] && return 0
+  block_glob_destination "$name"
   # What mv and cp create inside a destination directory: each
   # --target-directory, else the last of two or more operands.
   if [ "${#target_dirs[@]}" -gt 0 ]; then
@@ -2262,6 +2295,7 @@ ln_write_targets() {
     operands+=("$tok")
     operand_flags+=("$flags")
   done
+  block_glob_destination ln
   if [ "$symbolic" -eq 0 ]; then
     queue_all_arguments $((i + 1))
     ln_queue_links_in_directory
