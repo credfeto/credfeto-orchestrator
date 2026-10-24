@@ -1330,6 +1330,39 @@ check_find() {
 # "" as the directory rather than the next word, so "" in TARGET_DIR_VALUE
 # always means the value is the next word.
 TARGET_DIR_VALUE=""
+# Whether cp, mv or ln option word $1 asks for a backup: -b or -S anywhere in
+# a short cluster before a -t (which takes the rest of the word), or any
+# abbreviation of --backup or --suffix, with or without a value. A backup
+# renames an existing destination to its name plus the suffix (`cp -b -S fig
+# x ~/.gitcon` turns an existing ~/.gitcon into ~/.gitconfig), a write no word
+# names, so backups are not available at all.
+backup_option() {
+  local tok="$1" name k
+  case "$tok" in
+    --*)
+      name="${tok#--}"
+      name="${name%%=*}"
+      [ -n "$name" ] || return 1
+      [[ "backup" == "$name"* ]] && return 0
+      [ "${#name}" -ge 2 ] && [[ "suffix" == "$name"* ]] && return 0
+      return 1
+      ;;
+    -[A-Za-z]*)
+      for ((k = 1; k < ${#tok}; k++)); do
+        case "${tok:k:1}" in
+          t) return 1 ;;
+          b | S) return 0 ;;
+        esac
+      done
+      ;;
+  esac
+  return 1
+}
+
+block_backup_option() {
+  block "${1} ${2} makes a backup, which is not available to agents: a backup renames an existing file to its name plus a suffix, which can create a protected path no word on the command line names - copy, move or link without a backup"
+}
+
 # Whether cp/mv option word $1 takes the next word as its value, which is
 # then not an operand (a value read as one would make getopt's reordering
 # pick the wrong destination: `cp x/.gitconfig ~ -S suf`): -S last in a short
@@ -1466,6 +1499,7 @@ check_rm_mv_cp() {
         -?*)
           # A bare - is a file name to rm/mv/cp, not an option, so it is
           # checked as an operand below.
+          [ "$name" != "rm" ] && backup_option "$tok" && block_backup_option "$name" "$tok"
           # mv/cp write into a directory named by --target-directory, which
           # getopt also accepts as any unique abbreviation (--t, --target,
           # --target-dir), and as -t inside a bundled short cluster with the
@@ -2191,6 +2225,7 @@ ln_write_targets() {
     tok="${words[$j]}"
     flags="${wflags[$j]}"
     if [ "$operands_only" -eq 0 ] && [ "$flags" != N ]; then
+      [[ "$tok" == -?* ]] && backup_option "$tok" && block_backup_option ln "$tok"
       case "$tok" in
         --) operands_only=1; continue ;;
         --sy*) symbolic=1; continue ;;
