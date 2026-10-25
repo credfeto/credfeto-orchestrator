@@ -630,7 +630,7 @@ teardown() {
     [[ "${output}" == *"dependency update PR"* ]]
     [[ "${output}" == *"Do NOT make any code changes"* ]]
     [[ "${output}" == *"gh pr merge --auto --merge 7 --repo ${REPO_FULL}"* ]]
-    [[ "${output}" == *"gh pr edit 7 --repo ${REPO_FULL} --add-label Blocked"* ]]
+    [[ "${output}" == *"If any required check has FAILED: stop without taking action"* ]]
     [[ "${output}" != *"mandatory rules from the AI instructions"* ]]
     [[ "${output}" != *"force-with-lease"* ]]
 }
@@ -640,6 +640,24 @@ teardown() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"PENDING"* ]]
     [[ "${output}" == *"stop without taking action"* ]]
+}
+
+@test "build_pr_claude_md PHASE C tells the agent to diagnose from error lines, fix pre-existing errors and treat warnings as non-causes" {
+    run build_pr_claude_md 5 "/ai" "CLEAN" "feat/x" "/workspace/repo" "" "false"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"printed \`##[error]\` or a non-zero exit code"* ]]
+    [[ "${output}" == *"\`##[warning]\` lines, and downloads or retries the job recovered from, are NOT the cause"* ]]
+    [[ "${output}" == *"Quote the exact error lines"* ]]
+    [[ "${output}" == *"already exist on the base branch, or that are in files this PR does not touch, are fixed in this PR too"* ]]
+    [[ "${output}" == *"never bypass the hook"* ]]
+    [[ "${output}" == *"cfwf run rerun --repo ${REPO_FULL} --run <run-id>"* ]]
+}
+
+@test "build_pr_claude_md for dependency PR no longer tells the agent to block on a failed required check" {
+    run build_pr_claude_md 5 "/ai" "CLEAN" "depends/x" "/workspace/repo" "" "true"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"If any required check has FAILED: stop without taking action"* ]]
+    [[ "${output}" != *"then add the Blocked label and stop"* ]]
 }
 
 @test "build_pr_claude_md for dependency PR checks for a failed required check before treating auto-merge-enabled as done" {
