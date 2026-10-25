@@ -16,7 +16,12 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Fixed
 ### Changed
 - The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)
-- TBD - to be finalized after review
+- The development-tools base image now installs shellcheck and devscripts from trixie-backports, and the build fails if shellcheck is older than 0.11, so lint results match developer machines and super-linter (#1547)
+- The development-tools base image now installs ansible-lint, flake8, pre-commit, pylint and yamllint from pip instead of trixie apt, so linter findings match the releases developers and super-linter use (#1547)
+- The development-tools base image now installs shfmt from the latest mvdan/sh release instead of the out-of-date trixie package, and verifies the binary against the digest GitHub recorded for that release (#1547)
+- The development-tools base image now installs bats from a pinned bats-core release instead of trixie apt, and verifies the release commit before installing (#1547)
+- The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
+- The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)
 ### Deprecated
 ### Removed
 ### Deployment Changes
