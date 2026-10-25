@@ -8,7 +8,7 @@
 # application source, entrypoint scripts, or user workspace — those belong in
 # the customisation layer that FROMs this image.
 #
-# Built and pushed hourly by .github/workflows/build-development-tools.yml as
+# Built and pushed daily by .github/workflows/build-development-tools.yml as
 #   ghcr.io/<owner>/development-tools:latest
 #
 # Multi-stage build: a throwaway Go stage compiles composite-action-lint (no

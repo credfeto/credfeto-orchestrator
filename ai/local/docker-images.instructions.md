@@ -10,7 +10,7 @@ The base images form a strict chain, topped by a locked-down agent layer:
 
 ```text
 debian:trixie-slim
-  └── development-tools   (apt packages, .NET SDK, static binary linters)
+  └── development-tools   (apt + trixie-backports packages, pip linters, upstream-release binaries, .NET SDK)
         └── development-node   (Node.js, Bun, npm globals)
               └── development-python   (pip tools)
                     └── development-dotnet-tools   (third-party dotnet global tools, Claude Code)
