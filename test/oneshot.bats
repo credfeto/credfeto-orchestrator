@@ -645,8 +645,8 @@ teardown() {
 @test "build_pr_claude_md PHASE C tells the agent to diagnose from error lines, fix pre-existing errors and treat warnings as non-causes" {
     run build_pr_claude_md 5 "/ai" "CLEAN" "feat/x" "/workspace/repo" "" "false"
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *'printed `##[error]` or a non-zero exit code'* ]]
-    [[ "${output}" == *'`##[warning]` lines, and downloads or retries the job recovered from, are NOT the cause'* ]]
+    [[ "${output}" == *"printed \`##[error]\` or a non-zero exit code"* ]]
+    [[ "${output}" == *"\`##[warning]\` lines, and downloads or retries the job recovered from, are NOT the cause"* ]]
     [[ "${output}" == *"Quote the exact error lines"* ]]
     [[ "${output}" == *"already exist on the base branch, or that are in files this PR does not touch, are fixed in this PR too"* ]]
     [[ "${output}" == *"never bypass the hook"* ]]
