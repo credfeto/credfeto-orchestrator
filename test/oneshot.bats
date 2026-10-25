@@ -6375,6 +6375,28 @@ STUBEOF
     [ "${status}" -eq 1 ]
 }
 
+@test "pr_should_use_dependency_prompt falls back to the full flow when a required check has failed" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-xunit/3.0.1","reviewDecision":"APPROVED","statusCheckRollup":[{"name":"build-pre-release","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow when a check of unknown required-ness has failed" {
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/nuget/x-1.0.1","statusCheckRollup":[{"name":"build","status":"COMPLETED","conclusion":"FAILURE"}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt keeps the verify-only prompt when only a non-required check failed or CI is green or pending" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/x","statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE","isRequired":false},{"name":"build","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/x","statusCheckRollup":[{"name":"build","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_use_dependency_prompt keeps the verify-only prompt once a later run of the failed check passes" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/x","statusCheckRollup":[{"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE","isRequired":true,"startedAt":"2026-10-25T10:00:00Z"},{"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true,"startedAt":"2026-10-25T11:00:00Z"}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_has_dependency_update_branch never matches a PR from a fork, so a fork PR is not exempted from the human-driven check" {
     run pr_has_dependency_update_branch '{"headRefName":"depends/x","isCrossRepository":true}'
     [ "${status}" -eq 1 ]
