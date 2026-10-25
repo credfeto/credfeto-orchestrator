@@ -6392,6 +6392,13 @@ STUBEOF
     [ "${status}" -eq 0 ]
 }
 
+@test "pr_should_use_dependency_prompt falls back to the full flow for a DIRTY branch so the conflict gets resolved" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","mergeStateStatus":"DIRTY","autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[]}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","mergeStateStatus":"BEHIND","statusCheckRollup":[]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_should_use_dependency_prompt keeps the verify-only prompt once a later run of the failed check passes" {
     run pr_should_use_dependency_prompt '{"headRefName":"depends/x","statusCheckRollup":[{"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE","isRequired":true,"startedAt":"2026-10-25T10:00:00Z"},{"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true,"startedAt":"2026-10-25T11:00:00Z"}]}'
     [ "${status}" -eq 0 ]
