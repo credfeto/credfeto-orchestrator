@@ -9615,6 +9615,7 @@ run_tag_view() {
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
     listed+="  run rerun                Rerun the failed jobs of a pull request's run (exit 4 while it runs, 8 when refused, 9 when not found)"$'\n'
+    listed+="  task wait                Wait, in one call, for a background command to finish (exit 4 while it runs, 9 when not found)"$'\n'
     listed+="  help [command]           Show this help, or the help for one command"$'\n'
     [[ "${output}" == *"${listed}"* ]]
     [ ! -f "${GH_LOG}" ]
@@ -11158,3 +11159,65 @@ assert_unexpected_run() {
     [ "${stderr}" = "cfwf: could not rerun the failed jobs of the run 123 of ${REPO}: HTTP 403: This workflow run cannot be retried" ]
     [ "$(grep -cxF -- "${RUN_RERUN_CALL}" "${GH_LOG}")" -eq 1 ]
 }
+
+@test "task wait exits 0 at once for an output file no process holds, printing finished and the end of the output, and never calls gh (#1710)" {
+    local file="${TEST_TMP}/done.output"
+    printf 'line %s\n' $(seq 1 50) > "${file}"
+    run --separate-stderr "${SCRIPT}" task wait --output "${file}"
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [[ "${output}" == "finished"$'\n'"line 11"$'\n'* ]]
+    [[ "${output}" == *$'\n'"line 50" ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "task wait exits 4 at the timeout while a process still holds the output file, printing the output so far (#1710)" {
+    local file="${TEST_TMP}/running.output" holder
+    sleep 30 > "${file}" &
+    holder=$!
+    run --separate-stderr "${SCRIPT}" task wait --output "${file}" --timeout 1
+    kill "${holder}" 2> /dev/null || true
+    [ "${status}" -eq 4 ]
+    [[ "${output}" == "still running after 1 seconds; run cfwf task wait again to keep waiting"* ]]
+}
+
+@test "task wait returns 0 once the process holding the output file exits, before the timeout (#1710)" {
+    local file="${TEST_TMP}/finishing.output"
+    (sleep 2; printf 'done\n') > "${file}" &
+    run --separate-stderr "${SCRIPT}" task wait --output "${file}" --timeout 20
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "finished"$'\n'"done" ]]
+}
+
+@test "task wait exits 9 for an output file that does not exist, printing nothing on stdout (#1710)" {
+    run --separate-stderr "${SCRIPT}" task wait --output "${TEST_TMP}/missing.output"
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the output file ${TEST_TMP}/missing.output was not found" ]
+}
+
+@test "task wait refuses (exit 2) a missing --output, a bad or out-of-range --timeout and a repeated option (#1710)" {
+    local file="${TEST_TMP}/any.output" args
+    : > "${file}"
+    for args in "" "--timeout 5" "--output ${file} --timeout 0" "--output ${file} --timeout 571" "--output ${file} --timeout abc" "--output ${file} --timeout -1" "--output ${file} --output ${file}" "--output ${file} --bogus"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" task wait ${args}
+        [ "${status}" -eq 2 ] || { echo "${args}: ${status}" >&2; return 1; }
+        [ -z "${output}" ]
+    done
+    run --separate-stderr "${SCRIPT}" task wait --output "${file}" --timeout 570
+    [ "${status}" -eq 0 ]
+}
+
+@test "task wait help, from -h, --help and help, gives the usage and the exit codes (#1710)" {
+    local invocation
+    for invocation in "task wait -h" "task wait --help" "help task wait" "help task"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
+        [[ "${output}" == "Usage: cfwf task wait --output <file> [--timeout <seconds>]"* ]]
+        [[ "${output}" == *"4  it is still running at the timeout"* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
