@@ -26,17 +26,15 @@ precedence over the apt-managed `/usr/bin` equivalents.
 | `cfn-lint` | latest | AWS CloudFormation linter; not packaged in Debian |
 
 Note: the stage-1 `development-tools` image installs `yamllint`, `ansible-lint`,
-`flake8`, `pylint`, and `pre-commit` as native apt packages. Those are not
-reinstalled here.
+`flake8`, `pylint`, and `pre-commit` from pip. Those are not reinstalled here.
 
 ### Why two separate RUN steps are needed
 
-`cfn-lint` is installed in its own `RUN` step with `--ignore-installed`. Its
-dependency tree (notably `pydantic` and related packages) wants to upgrade
-`typing_extensions`. However, the apt block in `development-tools` pulled
-`python3-typing-extensions` in as a transitive dependency of `ansible-lint`.
-Packages installed by apt do not carry a `RECORD` file, so pip cannot uninstall
-them (it exits with `error: uninstall-no-record-file`).
+`cfn-lint` is installed in its own `RUN` step with `--ignore-installed`,
+because its dependency tree may want to upgrade a Python package that apt
+installed in an earlier stage. Packages installed by apt do not carry a
+`RECORD` file, so pip cannot uninstall them (it exits with
+`error: uninstall-no-record-file`).
 
 `--ignore-installed` tells pip to skip the uninstall step entirely and write
 fresh copies into `/usr/local/lib/python3.X/dist-packages`. That path has
