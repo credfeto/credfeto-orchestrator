@@ -79,6 +79,11 @@ ARG TRIVY_SHA256_ARM64=e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e
 ARG SHFMT_VERSION
 ARG SHFMT_SHA256_AMD64
 ARG SHFMT_SHA256_ARM64
+# bats: bats-core publishes no release assets or checksums, so it is pinned to a
+# release tag plus the commit that tag resolves to (the peeled commit, not the
+# annotated tag object). Update BATS_REF and BATS_COMMIT together when bumping.
+ARG BATS_REF=v1.14.0
+ARG BATS_COMMIT=eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
@@ -169,7 +174,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bats \
         bubblewrap \
         ca-certificates \
         curl \
@@ -387,6 +391,19 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod 0755 /usr/local/bin/shfmt \
     && shfmt --version
 
+# ---- bats (bats-core) — Bash Automated Testing System -----------------------
+# Cloned at the pinned tag and checked against the pinned commit, so a moved
+# or re-pointed tag fails the build. install.sh copies bin/bats, libexec/ and
+# lib/bats-core into /usr/local; the clone is removed so no .git is left for an
+# agent to pull from.
+RUN git clone --depth 1 --branch "${BATS_REF}" \
+        https://github.com/bats-core/bats-core.git /tmp/bats-core \
+    && { test "$(git -C /tmp/bats-core rev-parse HEAD)" = "${BATS_COMMIT}" \
+         || { echo "FATAL: bats-core ${BATS_REF} does not resolve to the pinned commit ${BATS_COMMIT}" >&2; exit 1; }; } \
+    && /tmp/bats-core/install.sh /usr/local \
+    && rm -rf /tmp/bats-core \
+    && bats --version
+
 # ---- composite-action-lint --------------------------------------------------
 # Built upstream-from-source by the multi-stage Go builder above (no release
 # binaries are published). Lives at /opt/composite-action-lint/ alongside an
@@ -507,6 +524,7 @@ RUN { \
       echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
       echo "devscripts: $(dpkg-query -W -f='${Version}' devscripts || echo 'version unknown')"; \
       echo "shfmt: ${SHFMT_VERSION}"; \
+      echo "bats: ${BATS_REF} (${BATS_COMMIT})"; \
       echo "ansible-lint: $(pip3 show ansible-lint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
       echo "flake8: $(pip3 show flake8 | sed -n 's/^Version: //p' || echo 'version unknown')"; \
       echo "pre-commit: $(pip3 show pre-commit | sed -n 's/^Version: //p' || echo 'version unknown')"; \
@@ -551,6 +569,10 @@ RUN set -e; \
     echo "== shfmt comes from the mvdan/sh release, not apt =="; \
     if [ "$(command -v shfmt)" != "/usr/local/bin/shfmt" ]; then \
         echo "FATAL sanity: 'shfmt' resolves to '$(command -v shfmt)', not the mvdan/sh release in /usr/local/bin" >&2; exit 1; \
+    fi; \
+    echo "== bats comes from the pinned bats-core clone, not apt =="; \
+    if [ "$(command -v bats)" != "/usr/local/bin/bats" ]; then \
+        echo "FATAL sanity: 'bats' resolves to '$(command -v bats)', not the bats-core install in /usr/local/bin" >&2; exit 1; \
     fi; \
     echo "== composite-action-lint check (uses -h not --version) =="; \
     if ! command -v composite-action-lint >/dev/null 2>&1; then \
