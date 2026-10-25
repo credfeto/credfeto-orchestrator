@@ -1538,6 +1538,32 @@ teardown() {
     [ "${status}" -ne 0 ]
 }
 
+@test "pr_json_is_terminal is false when auto-merge is enabled but a required CheckRun concluded unsuccessfully without FAILURE (#1432)" {
+    local conclusion
+    for conclusion in CANCELLED TIMED_OUT ACTION_REQUIRED STALE STARTUP_FAILURE; do
+        run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"'"${conclusion}"'","isRequired":true}]}'
+        [[ "${status}" -ne 0 ]] || { echo "terminal despite ${conclusion}"; return 1; }
+    done
+}
+
+@test "pr_json_is_terminal is true when auto-merge is enabled and a required CheckRun concluded NEUTRAL or SKIPPED (#1432)" {
+    local conclusion
+    for conclusion in NEUTRAL SKIPPED; do
+        run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"'"${conclusion}"'","isRequired":true}]}'
+        [[ "${status}" -eq 0 ]] || { echo "not terminal for ${conclusion}"; return 1; }
+    done
+}
+
+@test "pr_json_is_terminal is false when every required check on an auto-merge-armed PR was CANCELLED (#1432)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"reviewDecision":"APPROVED","mergeStateStatus":"UNKNOWN","statusCheckRollup":[{"name":"lint","workflowName":"PR","status":"COMPLETED","conclusion":"CANCELLED","isRequired":true},{"name":"build","workflowName":"PR","status":"COMPLETED","conclusion":"CANCELLED","isRequired":true}]}'
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_json_is_terminal is true when a CANCELLED required run was superseded by a newer SUCCESS run (#1432)" {
+    run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","workflowName":"CI","status":"COMPLETED","conclusion":"CANCELLED","isRequired":true,"startedAt":"2026-10-01T10:00:00Z"},{"name":"ci","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true,"startedAt":"2026-10-01T11:00:00Z"}]}'
+    [ "${status}" -eq 0 ]
+}
+
 @test "pr_json_is_terminal is true when auto-merge is enabled and only a non-required check has FAILED" {
     run pr_json_is_terminal '{"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"badge","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}]}'
     [ "${status}" -eq 0 ]
@@ -2249,6 +2275,23 @@ teardown() {
 
 @test "pr_json_has_failed_required_check is true for a required CheckRun with conclusion FAILURE" {
     run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"FAILURE","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_failed_required_check is true for a required CheckRun with conclusion CANCELLED or TIMED_OUT (#1432)" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"CANCELLED","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"TIMED_OUT","isRequired":true}]}'
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_has_failed_required_check is false for a required CheckRun with conclusion NEUTRAL, SKIPPED or none yet (#1432)" {
+    run pr_json_has_failed_required_check '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"NEUTRAL","isRequired":true},{"name":"lint","status":"COMPLETED","conclusion":"SKIPPED","isRequired":true},{"name":"build","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_has_failed_check_of_unknown_requiredness is true for a CANCELLED check whose required-ness is unknown (#1432)" {
+    run pr_json_has_failed_check_of_unknown_requiredness '{"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"CANCELLED"}]}'
     [ "${status}" -eq 0 ]
 }
 
@@ -18213,6 +18256,13 @@ esac'
 }
 
 # --- naming the next phase for an unchanged PR ------------------------------------------------------
+
+@test "pr_next_phase_for_board_status routes a CANCELLED required check to PHASE C ahead of the board (#1432)" {
+    local pr='{"isDraft":false,"autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[{"name":"ci","status":"COMPLETED","conclusion":"CANCELLED","isRequired":true}]}'
+    run pr_next_phase_for_board_status "Human Review" "${pr}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "PHASE C (fix the failed required check)" ]
+}
 
 @test "pr_next_phase_for_board_status names the phase each review-loop board status implies" {
     local pr='{"isDraft":true,"autoMergeRequest":null,"statusCheckRollup":[]}'
