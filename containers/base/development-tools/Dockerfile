@@ -136,6 +136,12 @@ RUN useradd -m -s /bin/bash developer
 #                      e.g. funfair-server-code-analysis#463
 #   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
 #                      not; without it `python3 -m venv` fails outright (#1289)
+#   shellcheck, devscripts (checkbashisms) — from trixie-backports: trixie's
+#                      shellcheck lags the version developer machines and
+#                      super-linter run, so the findings differ. Backports
+#                      has apt pin priority 100, so only the -t trixie-backports
+#                      install (and any dependency it adds that the main list
+#                      has not already installed) comes from it.
 # dist-upgrade below refreshes this whole apt layer daily (every package installed by this
 # RUN, not just the ones Debian bakes pre-installed into debian:trixie-slim itself), so it
 # avoids needing a dedicated fix for each future Trivy-flagged base-package CVE individually;
@@ -148,6 +154,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     : "${APT_UPGRADE_CACHE_BUST}"; \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
         > /etc/apt/sources.list.d/debian-contrib.sources \
+    && printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie-backports\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
+        > /etc/apt/sources.list.d/debian-backports.sources \
     && echo 'ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true' \
         | debconf-set-selections \
     && apt-get update \
@@ -160,7 +168,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         ca-certificates \
         curl \
         dash \
-        devscripts \
         git \
         gnupg \
         jq \
@@ -171,7 +178,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3 \
         python3-pip \
         python3-venv \
-        shellcheck \
         shfmt \
         sqlite3 \
         tini \
@@ -184,6 +190,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         pre-commit \
         pylint \
         yamllint \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        -t trixie-backports \
+        devscripts \
+        shellcheck \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
@@ -454,6 +464,8 @@ RUN { \
       echo "trivy: $(trivy --version | head -n1 | sed 's/^Version: *//' || echo 'version unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
       echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
+      echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
+      echo "devscripts: $(dpkg-query -W -f='${Version}' devscripts || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -471,7 +483,7 @@ RUN set -e; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
                python3 ansible-lint flake8 pylint \
-               yamllint pre-commit xmllint bwrap; do \
+               yamllint pre-commit xmllint bwrap checkbashisms; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
         fi; \
@@ -479,6 +491,11 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== shellcheck minimum version (0.11, matching developer machines) =="; \
+    shellcheck_version=$(shellcheck --version | sed -n 's/^version: //p'); \
+    if ! dpkg --compare-versions "${shellcheck_version}" ge 0.11; then \
+        echo "FATAL sanity: shellcheck '${shellcheck_version}' is older than 0.11 — not installed from trixie-backports?" >&2; exit 1; \
+    fi; \
     echo "== composite-action-lint check (uses -h not --version) =="; \
     if ! command -v composite-action-lint >/dev/null 2>&1; then \
         echo "FATAL sanity: required binary 'composite-action-lint' is missing" >&2; exit 1; \
