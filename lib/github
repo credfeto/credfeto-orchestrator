@@ -481,7 +481,8 @@ pr_has_dependency_update_branch() {
 # Whether build_pr_claude_md should use its CI-verify-only dependency prompt: a same-repository
 # dependency-update branch (pr_has_dependency_update_branch, which refuses a fork PR). Falls back to
 # the full phase flow when a reviewer has requested changes (that prompt cannot make code changes),
-# when a required check has failed (or a failing check's required-ness could not be looked up), or
+# when the branch has merge conflicts (DIRTY), when a required check has failed (or a failing
+# check's required-ness could not be looked up), or
 # when the branch still carries the .deleteme.now placeholder (that prompt would arm auto-merge on
 # a scaffold-only PR). A failed check needs a fix, which the verify-only prompt forbids: it could
 # only comment and add Blocked, so a dependency bump that breaks the build was parked for a human
@@ -494,6 +495,10 @@ pr_should_use_dependency_prompt() {
     printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
     pr_json_has_failed_required_check "${pr_json}" && return 1
     pr_json_has_failed_check_of_unknown_requiredness "${pr_json}" && return 1
+    # A DIRTY branch reaches the agent only after the non-agentic rebase hit conflicts. The
+    # verify-only prompt has no rebase steps, so the agent found "nothing to do" and the PR was
+    # re-invoked every tick without the conflict ever being resolved; the full flow resolves it.
+    printf '%s' "${pr_json}" | jq -e '.mergeStateStatus == "DIRTY"' > /dev/null 2>&1 && return 1
     pr_json_has_placeholder_file "${pr_json}" && return 1
     return 0
 }
