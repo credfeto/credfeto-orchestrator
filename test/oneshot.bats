@@ -16406,6 +16406,97 @@ STUBEOF
     [ "${output}" = "2026-08-12T10:05:07Z" ]
 }
 
+@test "pr_unknown_merge_state_timed_out starts the clock on the first UNKNOWN and returns false (#1701)" {
+    run pr_unknown_merge_state_timed_out 42 "UNKNOWN"
+    [ "${status}" -ne 0 ]
+    [ -f "$(pr_unknown_merge_state_file_path 42)" ]
+    [[ "$(cat "$(pr_unknown_merge_state_file_path 42)")" =~ ^[0-9]+$ ]]
+}
+
+@test "pr_unknown_merge_state_timed_out returns false while UNKNOWN is younger than the timeout (#1701)" {
+    save_pr_unknown_merge_state_since 42 "$(($(date +%s) - 60))"
+    UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES=60
+    run pr_unknown_merge_state_timed_out 42 "UNKNOWN"
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_unknown_merge_state_timed_out returns true once UNKNOWN reaches the timeout and restarts the clock (#1701)" {
+    local old
+    old=$(($(date +%s) - 7200))
+    save_pr_unknown_merge_state_since 42 "${old}"
+    UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES=60
+    run pr_unknown_merge_state_timed_out 42 "UNKNOWN"
+    [ "${status}" -eq 0 ]
+    local saved
+    saved=$(cat "$(pr_unknown_merge_state_file_path 42)")
+    [ "${saved}" -gt "${old}" ]
+    run pr_unknown_merge_state_timed_out 42 "UNKNOWN"
+    [ "${status}" -ne 0 ]
+}
+
+@test "pr_unknown_merge_state_timed_out clears the clock for any other merge state (#1701)" {
+    save_pr_unknown_merge_state_since 42 "$(($(date +%s) - 7200))"
+    run pr_unknown_merge_state_timed_out 42 "CLEAN"
+    [ "${status}" -ne 0 ]
+    [ ! -f "$(pr_unknown_merge_state_file_path 42)" ]
+}
+
+@test "pr_unknown_merge_state_timed_out restarts the clock when the state file is unreadable (#1701)" {
+    mkdir -p "${SESSION_BASE_DIR}"
+    printf 'garbage\n' > "$(pr_unknown_merge_state_file_path 42)"
+    run pr_unknown_merge_state_timed_out 42 "UNKNOWN"
+    [ "${status}" -ne 0 ]
+    [[ "$(cat "$(pr_unknown_merge_state_file_path 42)")" =~ ^[0-9]+$ ]]
+}
+
+@test "pr_branch_behind_base reads behind_by from the compare API for the encoded branches (#1701)" {
+    # shellcheck disable=SC2016  # expanded by the stub, not here
+    make_stub gh 'printf "%s\n" "$*" >> "'"${TEST_TMP}"'/gh_args"
+cat "'"${TEST_TMP}"'/behind"'
+    local pr='{"baseRefName":"main","headRefName":"depends/update/1.2","isCrossRepository":false}'
+    printf '267\n' > "${TEST_TMP}/behind"
+    run pr_branch_behind_base "org/repo" "${pr}"
+    [ "${status}" -eq 0 ]
+    grep -qF 'api repos/org/repo/compare/main...depends%2Fupdate%2F1.2 --jq .behind_by' "${TEST_TMP}/gh_args"
+    printf '0\n' > "${TEST_TMP}/behind"
+    run pr_branch_behind_base "org/repo" "${pr}"
+    [ "${status}" -eq 1 ]
+    printf 'oops\n' > "${TEST_TMP}/behind"
+    run pr_branch_behind_base "org/repo" "${pr}"
+    [ "${status}" -eq 2 ]
+}
+
+@test "pr_branch_behind_base returns 2 when gh fails and 1 for a fork PR without calling gh (#1701)" {
+    make_stub gh 'printf "called\n" >> "'"${TEST_TMP}"'/gh_called"; exit 1'
+    run pr_branch_behind_base "org/repo" '{"baseRefName":"main","headRefName":"feat/x","isCrossRepository":false}'
+    [ "${status}" -eq 2 ]
+    rm -f "${TEST_TMP}/gh_called"
+    run pr_branch_behind_base "org/repo" '{"baseRefName":"main","headRefName":"feat/x","isCrossRepository":true}'
+    [ "${status}" -eq 1 ]
+    [ ! -f "${TEST_TMP}/gh_called" ]
+    run pr_branch_behind_base "org/repo" '{"headRefName":"feat/x"}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_merge_state_stuck_behind needs both a timed-out UNKNOWN and a branch behind its base (#1701)" {
+    pr_branch_behind_base() { return 0; }
+    run pr_merge_state_stuck_behind 42 "org/repo" '{}' "UNKNOWN"
+    [ "${status}" -ne 0 ]
+    save_pr_unknown_merge_state_since 42 "$(($(date +%s) - 7200))"
+    run pr_merge_state_stuck_behind 42 "org/repo" '{}' "UNKNOWN"
+    [ "${status}" -eq 0 ]
+    save_pr_unknown_merge_state_since 42 "$(($(date +%s) - 7200))"
+    pr_branch_behind_base() { return 1; }
+    run pr_merge_state_stuck_behind 42 "org/repo" '{}' "UNKNOWN"
+    [ "${status}" -ne 0 ]
+    save_pr_unknown_merge_state_since 42 "$(($(date +%s) - 7200))"
+    pr_branch_behind_base() { return 2; }
+    run pr_merge_state_stuck_behind 42 "org/repo" '{}' "UNKNOWN"
+    [ "${status}" -ne 0 ]
+    run pr_merge_state_stuck_behind 42 "org/repo" '{}' "CLEAN"
+    [ "${status}" -ne 0 ]
+}
+
 @test "ci_checks_timed_out returns false and writes state on first call for a new OID" {
     local pr_json='{"headRefOid":"abc123","statusCheckRollup":[{"name":"ci","status":"IN_PROGRESS","conclusion":null}]}'
     run ci_checks_timed_out 42 "${pr_json}"
@@ -17440,6 +17531,50 @@ STUBEOF
     [[ "${output}" == *"rebased non-agentically"* ]]
     [[ "${output}" != *"settled"* ]]
     [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main rebases an auto-merge-armed PR whose merge state has stayed UNKNOWN and is behind its base instead of calling it settled (#1701)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"depends/update","baseRefName":"main","comments":[],"reviews":[],"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json()  { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    pr_branch_behind_base() { return 0; }
+    try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    save_pr_unknown_merge_state_since 5 "$(($(date +%s) - 7200))"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"merge state UNKNOWN for at least"*"treating as BEHIND"* ]]
+    [[ "${output}" == *"rebased non-agentically"* ]]
+    [[ "${output}" != *"settled"* ]]
+    [ -f "${TEST_TMP}/rebase_log" ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+}
+
+@test "main still treats a briefly UNKNOWN auto-merge-armed PR as settled and starts the UNKNOWN clock (#1701)" {
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":5,"itemType":"PullRequest","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"depends/update","baseRefName":"main","comments":[],"reviews":[],"reviewDecision":"APPROVED","statusCheckRollup":[],"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","autoMergeRequest":{"enabledAt":"now"}}\n'; }
+    fingerprint_pr_json()  { printf 'fp-same\n'; }
+    load_pr_fingerprint()  { printf 'fp-same\n'; }
+    pr_branch_behind_base() { printf 'called\n' >> "${TEST_TMP}/compare_log"; return 0; }
+    try_nonagentic_rebase() { printf 'rebased\n' >> "${TEST_TMP}/rebase_log"; return 0; }
+    invoke_claude() { printf 'called\n' >> "${TEST_TMP}/claude_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"settled"* ]]
+    [[ "${output}" != *"treating as BEHIND"* ]]
+    [ ! -f "${TEST_TMP}/compare_log" ]
+    [ ! -f "${TEST_TMP}/rebase_log" ]
+    [ ! -f "${TEST_TMP}/claude_log" ]
+    [ -f "$(pr_unknown_merge_state_file_path 5)" ]
 }
 
 @test "main invokes the agent for a terminal, fingerprint-unchanged PR with an unaddressed trusted comment (#1307)" {

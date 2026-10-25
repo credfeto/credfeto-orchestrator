@@ -14,6 +14,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Added
 - Added the block-config-skills hook, which blocks the skills that edit Claude Code's settings, permissions, hooks, keybindings or skill definitions (update-config, fewer-permission-prompts, keybindings-help, init, plugin-authoring and skill-creator), as a second layer beside the Skill permission denies (#1554)
 ### Fixed
+- A PR whose merge state GitHub keeps reporting as UNKNOWN is no longer treated as settled forever: once it has stayed UNKNOWN for UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES (default 60) and the branch is behind its base, it gets the same non-agentic rebase as a BEHIND PR (#1701)
 - A PR whose required check was cancelled, timed out or failed to start, with auto-merge armed, is no longer treated as settled and skipped forever: every unsuccessful check conclusion now counts as a failed check, so the orchestrator works on the PR or blocks it for a human (#1432)
 ### Changed
 - The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)

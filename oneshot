@@ -564,6 +564,12 @@ main() {
                 saved_fp=$(load_pr_fingerprint "${open_pr}")
                 pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
                 pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+                # A merge state stuck at UNKNOWN on a branch that is behind its base is handled as
+                # BEHIND (#1701); see pr_merge_state_stuck_behind (lib/github-status).
+                if pr_merge_state_stuck_behind "${open_pr}" "${item_repo}" "${pr_json}" "${pr_merge_state}"; then
+                    info "PR #${open_pr} in ${item_repo}: merge state UNKNOWN for at least ${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES} minute(s) and the branch is behind its base — treating as BEHIND"
+                    pr_merge_state="BEHIND"
+                fi
                 # Freshly recomputed every iteration (never left to a stale value from a prior
                 # loop pass, per the "local is a no-op after the first while-loop iteration"
                 # rule above): true when a trusted comment has arrived that no real agent
@@ -1043,6 +1049,11 @@ main() {
             saved_fp=$(load_pr_fingerprint "${item_id}")
             pr_is_draft=$(printf '%s' "${pr_json}" | jq -r '.isDraft // false')
             pr_merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            # See the matching comment on the issue-pivot path above (#1701).
+            if pr_merge_state_stuck_behind "${item_id}" "${item_repo}" "${pr_json}" "${pr_merge_state}"; then
+                info "PR #${item_id} in ${item_repo}: merge state UNKNOWN for at least ${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES} minute(s) and the branch is behind its base — treating as BEHIND"
+                pr_merge_state="BEHIND"
+            fi
             # See the matching comment on the issue-pivot path above (#1307): freshly
             # recomputed every iteration, overrides both the terminal/"settled" skip and the
             # general-fingerprint "unchanged" skip below when a trusted comment has arrived that
@@ -1154,7 +1165,9 @@ main() {
         branch_name=""
         DIRTY_BRANCH=""
         if [ "${item_type}" = "PullRequest" ]; then
-            merge_state=$(printf '%s' "${pr_json}" | jq -r '.mergeStateStatus // "UNKNOWN"')
+            # Both PR paths above set pr_merge_state this iteration before reaching here, including
+            # any UNKNOWN treated as BEHIND (#1701), which re-reading pr_json would undo.
+            merge_state="${pr_merge_state:-UNKNOWN}"
             branch_name=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty')
 
             # No CI-pending check here (deliberately, #1375 review): item_type only ever becomes
