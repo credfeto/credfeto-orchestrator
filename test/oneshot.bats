@@ -129,6 +129,15 @@ teardown() {
     [[ "${output}" == *"WAIT for it to actually finish before doing anything else, including ending your turn"* ]]
 }
 
+@test "build_issue_claude_md tells agents to wait with cfwf task wait and never to poll (#1710)" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf task wait --output <the output file named in the run_in_background result> --timeout 570, run in the foreground with the Bash tool's timeout set to 600000"* ]]
+    [[ "${output}" == *"exit 4 means it is still running, so run the same call again"* ]]
+    [[ "${output}" == *"Never wait by polling (ps or pgrep checks, or repeated Reads of the output file)"* ]]
+    [[ "${output}" == *"Only if cfwf is unavailable, read the command's output file"* ]]
+}
+
 @test "build_issue_claude_md makes the Monitor tool optional and gives a Read fallback with no shell wait loops (#1656)" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]

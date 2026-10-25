@@ -435,6 +435,17 @@ Exit codes: 0 printed, an empty list included; 9 the repository has no branch of
 
 A successful run makes four `gh` calls: the run, the repository, `pr list` and the rerun (test "run rerun reruns only the failed jobs, once, of a run that is an open pull request's head, after reading the run, the repository and the branch's open pull requests, and prints the attempt it starts").
 
+### Waiting for a background command
+
+`task wait` (`task_wait`) is the sanctioned way for an agent to wait for a command it started with `run_in_background: true`. The hooks deny every shell wait (`sleep`, loops, `timeout`, `pgrep`), so before it the only option was to Read the output file again and again, a full model turn per poll. Sessions spent their whole budget that way while a slow pre-commit build ran (#1710).
+
+1. `parse_command_options` with `assign_task_option`: `--output` is required and `--timeout` defaults to `TASK_WAIT_DEFAULT_SECONDS` (100, under the Bash tool's default 2-minute limit). `--timeout` must be 1 to `TASK_WAIT_MAX_SECONDS` (570, under the tool's 10-minute ceiling), digits only (exit 2 otherwise).
+2. The file is resolved with `readlink -e`. A missing file is exit `TASK_NOT_FOUND_EXIT` (9), with `cfwf: the output file <path> was not found`.
+3. `task_output_held` walks `/proc/[0-9]*/fd/*` and succeeds while any link points at the resolved path. The background command's shell and the command itself hold the file while they run, and nothing does after they exit. This was observed on a live agent container: the Claude Code process itself does not keep the file open.
+4. While it is held, it sleeps `TASK_WAIT_POLL_SECONDS` (1) and looks again, up to the timeout. It then prints `finished` or `still running after <n> seconds; …`, followed by the last `TASK_WAIT_TAIL_LINES` (40) lines of the file, and exits 0 or `TASK_PENDING_EXIT` (4, the same as a pending check).
+
+It only reads: it never signals, ends or waits on a process by pid, and it never calls `gh`. A daemon that inherited the output file's descriptor would keep it "held", and the timeout bounds that case.
+
 ### Why it is built this way
 
 GitHub's project API lags behind writes, and `gh project` has no command that reads a single item. Those facts drive every design decision (issue #1491; the `--set` and `--check` help text and the comments in the script say the same):
