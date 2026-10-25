@@ -479,13 +479,18 @@ _JQ_DEF_LATEST_CHECK_RUNS='def latest_check_runs:
 
 # jq definition shared by the lib/github-status predicates that judge check results: whether one
 # statusCheckRollup entry has definitively failed, a CheckRun (it has .status) whose conclusion is
-# FAILURE or a legacy StatusContext (no .status) whose state is FAILURE or ERROR. One definition,
-# so the terminal check, the failed-required-check claim and the next-phase routing cannot
-# disagree about what counts as a failure.
+# any unsuccessful terminal value (FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STALE or
+# STARTUP_FAILURE) or a legacy StatusContext (no .status) whose state is FAILURE or ERROR. SUCCESS,
+# NEUTRAL and SKIPPED are fine, and a missing conclusion means the run has not finished
+# (pr_json_has_pending_ci_checks). Matching FAILURE alone let a PR whose required check was
+# cancelled or timed out, with auto-merge armed, read as settled forever although GitHub will
+# never merge it (#1432). One definition, so the terminal check, the failed-required-check claim
+# and the next-phase routing cannot disagree about what counts as a failure.
 # shellcheck disable=SC2034  # read by lib/github-status after sourcing
 _JQ_DEF_CHECK_FAILED='def check_failed:
     if (.status != null)
-    then .conclusion == "FAILURE"
+    then ((.conclusion // "") | . == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT"
+        or . == "ACTION_REQUIRED" or . == "STALE" or . == "STARTUP_FAILURE")
     else ((.state // "") | . == "FAILURE" or . == "ERROR")
     end;'
 
