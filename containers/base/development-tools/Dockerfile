@@ -182,20 +182,34 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         sqlite3 \
         tini \
         unzip \
-        ansible-lint \
-        flake8 \
         fontconfig \
         ttf-mscorefonts-installer \
         libxml2-utils \
-        pre-commit \
-        pylint \
-        yamllint \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         -t trixie-backports \
         devscripts \
         shellcheck \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- Python linters (pip) ----------------------------------------------------
+# Deliberately unpinned: trixie's apt versions lag the ones developer machines
+# and super-linter run, so the findings differ. Tying the layer to
+# APT_UPGRADE_CACHE_BUST makes it pick up the latest releases on the same daily
+# rebuild as the apt dist-upgrade above.
+# --break-system-packages acknowledges pip's PEP 668 marker (the image is a
+# sealed environment). --ignore-installed is required because the dependency
+# tree upgrades packaging, which apt installed for python3-wheel without the
+# RECORD file pip needs to uninstall it (`uninstall-no-record-file`); the new
+# copies land in /usr/local, which takes priority over apt's /usr/lib at import.
+# hadolint ignore=DL3013
+RUN : "${APT_UPGRADE_CACHE_BUST}"; \
+    pip3 install --break-system-packages --no-cache-dir --ignore-installed \
+        ansible-lint \
+        flake8 \
+        pre-commit \
+        pylint \
+        yamllint
 
 # ---- GitHub CLI --------------------------------------------------------------
 # Added via the upstream apt source so we track gh releases automatically
@@ -466,6 +480,11 @@ RUN { \
       echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
       echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
       echo "devscripts: $(dpkg-query -W -f='${Version}' devscripts || echo 'version unknown')"; \
+      echo "ansible-lint: $(pip3 show ansible-lint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "flake8: $(pip3 show flake8 | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "pre-commit: $(pip3 show pre-commit | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "pylint: $(pip3 show pylint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "yamllint: $(pip3 show yamllint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -496,6 +515,12 @@ RUN set -e; \
     if ! dpkg --compare-versions "${shellcheck_version}" ge 0.11; then \
         echo "FATAL sanity: shellcheck '${shellcheck_version}' is older than 0.11 — not installed from trixie-backports?" >&2; exit 1; \
     fi; \
+    echo "== Python linters come from pip, not apt =="; \
+    for cmd in ansible-lint flake8 pre-commit pylint yamllint; do \
+        if [ "$(command -v "$cmd")" != "/usr/local/bin/$cmd" ]; then \
+            echo "FATAL sanity: '$cmd' resolves to '$(command -v "$cmd")', not the pip install in /usr/local/bin" >&2; exit 1; \
+        fi; \
+    done; \
     echo "== composite-action-lint check (uses -h not --version) =="; \
     if ! command -v composite-action-lint >/dev/null 2>&1; then \
         echo "FATAL sanity: required binary 'composite-action-lint' is missing" >&2; exit 1; \
