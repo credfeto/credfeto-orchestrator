@@ -7,10 +7,13 @@ SOURCE_HOOK="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-
 SOURCE_HOOK_DIR="${REPO_ROOT}/containers/base/development-full/claude-hooks"
 
 # The hook reads its allowlist from `allowed-dirs` (or `allowed-dirs.local`)
-# next to its own file, so each test gets a private copy of the hook in a
-# directory whose allowlist it controls, plus a directory tree to point that
-# allowlist at: ROOT (allowed), ROOT/sub, ROOT/escape -> OUTSIDE (a symlink
-# leading out of the root), and OUTSIDE (never allowed).
+# and the command classifications from `command-allowlist`, both next to its
+# own file, so each test gets a private copy of the hook in a directory whose
+# data files it controls, plus a directory tree to point that allowlist at:
+# ROOT (allowed), ROOT/sub, ROOT/escape -> OUTSIDE (a symlink leading out of
+# the root), and OUTSIDE (never allowed). pushd is not on the shipped
+# command-allowlist (reject-obfuscated-commands rejects it), so the private
+# copy classifies it to keep the hook's own cd-family handling under test.
 setup() {
     setup_isolated_env
     HOOK_DIR="${TEST_TMP}/hooks"
@@ -19,6 +22,8 @@ setup() {
     OUTSIDE="${TEST_TMP}/outside"
     mkdir -p "${HOOK_DIR}" "${ROOT}/sub" "${OUTSIDE}"
     cp "${SOURCE_HOOK}" "${HOOK}"
+    cp "${SOURCE_HOOK_DIR}/command-allowlist" "${HOOK_DIR}/command-allowlist"
+    printf '%s\n' 'pushd read-only' >> "${HOOK_DIR}/command-allowlist"
     ln -s "${OUTSIDE}" "${ROOT}/escape"
     printf '%s\n' "${ROOT}" > "${HOOK_DIR}/allowed-dirs"
 }
@@ -54,10 +59,26 @@ assert_blocked() {
     assert_blocked "cd escape" 'outside the allowed directories'
 }
 
+@test "cd through a symlink leaving the root and back with .. is allowed, since bash's logical cd lands in the root" {
+    assert_allowed "cd escape/.. && rm -rf x"
+    assert_blocked "cd escape/.. && rm -rf ../x" 'outside the allowed directories'
+}
+
 @test "bare cd, cd -, and cd with more than one argument are blocked" {
     assert_blocked "cd" 'requires a directory'
     assert_blocked "cd -" 'flags'
     assert_blocked "cd -P ${ROOT}" 'exactly one argument'
+}
+
+@test "cd or pushd with an extra empty argument is blocked, since bash rejects it as too many arguments and stays put" {
+    mkdir -p "${ROOT}/sub/deep"
+    assert_blocked 'cd sub/deep ""; tee ../../x' 'exactly one argument'
+    assert_blocked 'pushd sub/deep ""; tee ../../x' 'exactly one argument'
+}
+
+@test "cd or pushd to an empty directory name is blocked, since bash rejects a null directory" {
+    assert_blocked 'cd ""' 'target is empty'
+    assert_blocked 'pushd ""' 'target is empty'
 }
 
 @test "popd is blocked - its target is invisible to static parsing" {
@@ -90,7 +111,11 @@ assert_blocked() {
 
 @test "a cd nested in a substitution never becomes the base" {
     # shellcheck disable=SC2016  # literal $(...) - must reach the hook unexpanded
-    assert_blocked '$(cd '"${ROOT}/sub"') ; rm -rf x' 'unknowable'
+    assert_blocked 'echo $(cd '"${ROOT}/sub"') ; rm -rf x' 'unknowable'
+}
+
+@test "a command name that is not a plain literal fails closed" {
+    assert_blocked "\$(cd ${ROOT}/sub) ; rm -rf x" 'command name could not be verified'
 }
 
 @test "git -C does not leak its directory into a later call's relative paths (regression)" {
@@ -114,10 +139,21 @@ assert_blocked() {
     assert_blocked "git -C . status" '' "${OUTSIDE}"
 }
 
+@test "git -- ends the global options: the cwd is still checked when no -C was given" {
+    assert_allowed "git -- status"
+    assert_blocked "git -- status" 'implicit -C .' "${OUTSIDE}"
+    assert_allowed "git -C ${ROOT} -- status" "${OUTSIDE}"
+    assert_blocked "git -C /etc -- status" 'outside the allowed directories'
+}
+
 @test "git -C .., a symlink leaving the root, or a directory outside every root is blocked" {
     assert_blocked "git -C .. status"
     assert_blocked "git -C escape status"
     assert_blocked "git -C /etc status" 'outside the allowed directories'
+}
+
+@test "git -C written with a backslash bash removes is still checked as -C" {
+    assert_blocked "git -\\C /etc status" 'outside the allowed directories'
 }
 
 @test "cumulative git -C is resolved relative to the previous -C, as git does" {
@@ -231,6 +267,11 @@ assert_blocked() {
     done
 }
 
+@test "a find action written with a backslash bash removes is still blocked" {
+    assert_blocked "find ${ROOT} -name x -\\exec rm {} \\;" '-exec'
+    assert_blocked "find ${ROOT} -name x -\\delete" '-delete'
+}
+
 # --- rm / mv / cp ---------------------------------------------------------------
 
 @test "rm of relative paths under the root is allowed, including globs" {
@@ -263,6 +304,15 @@ assert_blocked() {
 @test "rm -- treats everything after as operands, including dash-prefixed names" {
     assert_allowed "rm -- -weird-name"
     assert_blocked "rm -- /etc/x"
+}
+
+@test "a bare - is an rm/mv/cp operand (a file name in the working directory), not an option" {
+    assert_blocked "rm -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_blocked "mv ${ROOT}/a -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_blocked "cp ${ROOT}/a -" 'outside the allowed directories' "${OUTSIDE}"
+    assert_allowed "rm -"
+    assert_allowed "mv ${ROOT}/a -"
+    assert_allowed "cp ${ROOT}/a -"
 }
 
 @test "mv within the root is allowed, out of it or of a root itself is blocked" {
@@ -304,11 +354,11 @@ assert_blocked() {
     assert_blocked 'echo $(find /etc -name x)'
 }
 
-@test "a checked name as a non-command argument is not checked" {
-    assert_allowed "ls | xargs rm -rf /etc/x"
+@test "a checked name as a read-only command's argument is not checked" {
+    assert_allowed "ls | grep rm -rf /etc/x"
 }
 
-@test "a command with no checked call is allowed untouched, without reading the allowlist at all" {
+@test "a read-only command with no checked call is allowed untouched, without reading allowed-dirs at all" {
     rm -f "${HOOK_DIR}/allowed-dirs"
     assert_allowed "echo hello"
     assert_allowed "ls -la /etc"
@@ -409,6 +459,11 @@ assert_blocked() {
     assert_blocked "mv ${ROOT} ${ROOT}/sub/moved" 'may not target an allowed root'
 }
 
+@test "an mv source repeating the destination operand is still checked as a source" {
+    assert_blocked "mv ${ROOT} sub/x ${ROOT}" 'may not target an allowed root'
+    assert_allowed "mv sub/a sub/b sub/a"
+}
+
 @test "find -files0-from is blocked - it supplies starting points this hook cannot see" {
     assert_blocked "find -files0-from ${OUTSIDE}/list -name x" '-files0-from'
     assert_blocked "find ${ROOT} -files0-from ${OUTSIDE}/list"
@@ -448,6 +503,14 @@ assert_blocked() {
     assert_blocked "mv -ft${OUTSIDE} sub"
     assert_allowed "cp -rt sub payload"
     assert_allowed "cp -r --target=sub payload"
+}
+
+@test "an explicitly empty --target-directory= value is blocked rather than taking the next word" {
+    assert_blocked "cp --target-directory= sub payload" 'empty target directory'
+    assert_blocked "mv --t= sub payload" 'empty target directory'
+    assert_blocked "ln -s --target-directory= sub payload" 'empty target directory'
+    assert_allowed "cp -t sub payload"
+    assert_allowed "ln -s -t sub ${ROOT}/payload"
 }
 
 @test "npm single-dash long options are treated as the long option (nopt strips all leading dashes)" {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # Asserts containers/base/development-full/claude-hooks/command-allowlist and
-# containers/base/development-full/claude-settings.json's permissions.allow stay
+# containers/base/development-full/claude-managed-settings.json's permissions.allow stay
 # in sync, per the MANDATORY rule in ai/local/claude-hooks.instructions.md
-# ("Keep command-allowlist and claude-settings.json in sync"). Without this,
+# ("Keep command-allowlist and claude-managed-settings.json in sync"). Without this,
 # permissions.allow is free to silently drift behind command-allowlist - as it
 # already had, by the time this test was added (#1313). Since #1331, the container
 # runs under --permission-mode dontAsk rather than --dangerously-skip-permissions, so
@@ -20,7 +20,7 @@ load test_helper
 
 ALLOWLIST="${REPO_ROOT}/containers/base/development-full/claude-hooks/command-allowlist"
 BLOCKLIST="${REPO_ROOT}/containers/base/development-full/claude-hooks/command-blocklist"
-SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
+SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-managed-settings.json"
 
 # Names deliberately absent from command-allowlist (so reject-obfuscated-commands rejects
 # every OTHER invocation of them) but present in permissions.allow as a single narrow,
@@ -29,7 +29,7 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
 # is not allowlisted (would also permit `set -x` tracing, `set -o` reconfiguring shell
 # options, `set --` reassigning positional parameters, bare `set` dumping every shell
 # variable to stdout), but a dedicated Layer 4a check in reject-obfuscated-commands lets
-# through exactly `set -e`, and claude-settings.json's own permissions.allow needs its own
+# through exactly `set -e`, and claude-managed-settings.json's own permissions.allow needs its own
 # matching `Bash(set -e)` entry - Claude Code's own permission layer is independent of and
 # runs regardless of the hook layer, so the hook allowing a call is not sufficient on its
 # own. command-allowlist's flat per-name model has no way to express "only with these exact
@@ -37,7 +37,7 @@ SETTINGS="${REPO_ROOT}/containers/base/development-full/claude-settings.json"
 # automatically - same class of gap the #1315 NOTE above already anticipated for denies.
 NARROW_ALLOW_ONLY_NAMES=(set)
 
-@test "every command-allowlist entry has a matching claude-settings.json permissions.allow entry, and vice versa, unless blocklisted or explicitly denied" {
+@test "every command-allowlist entry has a matching claude-managed-settings.json permissions.allow entry, and vice versa, unless blocklisted or explicitly denied" {
     local allow_names blocklist_names deny_names settings_allow_names expected missing extra
 
     # Fail loud, not open: a $(...) pipeline reports its LAST command's exit
@@ -51,7 +51,7 @@ NARROW_ALLOW_ONLY_NAMES=(set)
     # Same comment-stripping convention as reject-obfuscated-commands itself
     # uses on these exact two files, so an indented comment is handled the
     # same way by both consumers.
-    allow_names=$(grep -vE '^[[:space:]]*(#|$)' "${ALLOWLIST}" | sort -u)
+    allow_names=$(grep -vE '^[[:space:]]*(#|$)' "${ALLOWLIST}" | awk '{ print $1 }' | sort -u)
     blocklist_names=$(grep -vE '^[[:space:]]*(#|$)' "${BLOCKLIST}" | cut -f1 | sort -u)
     # Whole-command denies only - Bash(name), Bash(name *), or the no-space
     # Bash(name*) style also used elsewhere in this same deny array. A
@@ -96,18 +96,56 @@ NARROW_ALLOW_ONLY_NAMES=(set)
     local failed=0
 
     if [ -n "${missing}" ]; then
-        echo "command-allowlist name(s) with no matching claude-settings.json permissions.allow entry - add Bash(<name> ...) there (or, if deliberately excluded, add it to command-blocklist, or to permissions.deny as a whole-command Bash(<name> *) block, and document why in ai/local/claude-hooks.instructions.md):" >&2
+        echo "command-allowlist name(s) with no matching claude-managed-settings.json permissions.allow entry - add Bash(<name> ...) there (or, if deliberately excluded, add it to command-blocklist, or to permissions.deny as a whole-command Bash(<name> *) block, and document why in ai/local/claude-hooks.instructions.md):" >&2
         echo "${missing}" >&2
         failed=1
     fi
 
     if [ -n "${extra}" ]; then
-        echo "claude-settings.json permissions.allow name(s) with no command-allowlist entry to justify them (stale after a command-allowlist removal, or a contradiction with command-blocklist/permissions.deny) - remove the entry, or add the name back to command-allowlist if it's still meant to be usable:" >&2
+        echo "claude-managed-settings.json permissions.allow name(s) with no command-allowlist entry to justify them (stale after a command-allowlist removal, or a contradiction with command-blocklist/permissions.deny) - remove the entry, or add the name back to command-allowlist if it's still meant to be usable:" >&2
         echo "${extra}" >&2
         failed=1
     fi
 
     [ "${failed}" -eq 0 ]
+}
+
+# enforce-allowed-dirs treats a command with no valid classification as unclassified and blocks
+# it, so an entry added without deciding whether the command writes files fails at runtime; this
+# fails the build first, naming the entries, so the decision is made when the entry is added. The
+# pattern is enforce-allowed-dirs' own CLASSIFIED_LINE_RE, read from the hook so the two cannot
+# drift apart.
+ENFORCE_ALLOWED_DIRS="${REPO_ROOT}/containers/base/development-full/claude-hooks/enforce-allowed-dirs"
+CLASSIFIED_ENTRY_RE=$(sed -n "s/^CLASSIFIED_LINE_RE='\(.*\)'$/\1/p" "${ENFORCE_ALLOWED_DIRS}")
+
+# Prints every entry of allowlist file $1 that is not a name followed by exactly one valid
+# classification. An empty pattern would match every line and report nothing, so it fails.
+unclassified_entries() {
+    [ -n "${CLASSIFIED_ENTRY_RE}" ] || { echo "could not read CLASSIFIED_LINE_RE from ${ENFORCE_ALLOWED_DIRS}" >&2; return 1; }
+    grep -vE '^[[:space:]]*(#|$)' "$1" | grep -vE "${CLASSIFIED_ENTRY_RE}" || true
+}
+
+@test "every command-allowlist entry is classified as exactly one of writer or read-only" {
+    [ -s "${ALLOWLIST}" ] || { echo "ALLOWLIST not found or empty: ${ALLOWLIST}" >&2; return 1; }
+
+    local unclassified
+    [ "$(grep -cvE '^[[:space:]]*(#|$)' "${ALLOWLIST}")" -gt 0 ]
+    unclassified=$(unclassified_entries "${ALLOWLIST}")
+
+    if [ -n "${unclassified}" ]; then
+        echo "command-allowlist entries without exactly one writer/read-only classification - add one (writer when in doubt):" >&2
+        echo "${unclassified}" >&2
+        return 1
+    fi
+}
+
+@test "the classification check reports an unclassified, misspelt or over-long entry" {
+    local fixture="${BATS_TEST_TMPDIR}/command-allowlist"
+    printf '%s\n' '# comment' '' 'ls read-only' 'sed    writer' 'cat' 'grep reader' 'tee writer extra' > "${fixture}"
+    run unclassified_entries "${fixture}"
+    [ "${output}" = "cat
+grep reader
+tee writer extra" ]
 }
 
 # Non-Bash tool names the agent's mandated workflow provably needs (#1329), independent
@@ -117,7 +155,7 @@ NARROW_ALLOW_ONLY_NAMES=(set)
 # under --permission-mode dontAsk (the one tool tested there without an entry, WebFetch,
 # was denied outright) - so every one of these is required, not a
 # defensive guess. EnterWorktree is deliberately absent: block-git-worktree already gates
-# it via a PreToolUse hook (claude-settings.json's own hooks.PreToolUse), and omitting an
+# it via a PreToolUse hook (claude-managed-settings.json's own hooks.PreToolUse), and omitting an
 # allow entry here reinforces that rather than letting the permission layer approve what
 # the hook is meant to block.
 EXPECTED_NON_BASH_TOOLS=(
@@ -138,7 +176,7 @@ EXPECTED_NON_BASH_TOOLS=(
     Write
 )
 
-@test "claude-settings.json permissions.allow contains every non-Bash tool the mandated workflow needs" {
+@test "claude-managed-settings.json permissions.allow contains every non-Bash tool the mandated workflow needs" {
     [ -s "${SETTINGS}" ] || { echo "SETTINGS not found or empty: ${SETTINGS}" >&2; return 1; }
 
     local settings_bare_names missing tool
@@ -152,7 +190,7 @@ EXPECTED_NON_BASH_TOOLS=(
     done
 
     if [ -n "${missing}" ]; then
-        echo "claude-settings.json permissions.allow is missing bare (non-Bash) entries required by #1329:" >&2
+        echo "claude-managed-settings.json permissions.allow is missing bare (non-Bash) entries required by #1329:" >&2
         printf '%s' "${missing}" >&2
         return 1
     fi
@@ -164,7 +202,7 @@ EXPECTED_NON_BASH_TOOLS=(
 # denied by their real path instead, and the Bash text-match denies for them must require a
 # slash before the name so the cs-template search-exclusion form (--exclude='.database') does
 # not trip them.
-@test "claude-settings.json permissions.deny has no Read/Edit entry beginning with **/ and keeps the ~/.database rules (#1419)" {
+@test "claude-managed-settings.json permissions.deny has no Read/Edit entry beginning with **/ and keeps the ~/.database rules (#1419)" {
     [ -s "${SETTINGS}" ] || { echo "SETTINGS not found or empty: ${SETTINGS}" >&2; return 1; }
 
     local deny_entries

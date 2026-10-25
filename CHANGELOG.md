@@ -10,9 +10,12 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- Agents can no longer change Claude Code configuration (`.claude` settings, hooks, agents, skills, `.mcp.json` and `/etc/claude-code`) through Bash: enforce-allowed-dirs now works out every Bash write target and denies by default, classifying every command-allowlist entry as a writer or read-only, and it checks Edit, Write and NotebookEdit paths against the same rules (#1554)
 ### Added
+- Added the block-config-skills hook, which blocks the skills that edit Claude Code's settings, permissions, hooks, keybindings or skill definitions (update-config, fewer-permission-prompts, keybindings-help, init, plugin-authoring and skill-creator), as a second layer beside the Skill permission denies (#1554)
 ### Fixed
 ### Changed
+- The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)
 ### Deprecated
 ### Removed
 ### Deployment Changes
