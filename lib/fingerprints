@@ -251,6 +251,56 @@ clear_pr_ci_pending_state() {
     rm -f "${state_file}" 2>/dev/null || true
 }
 
+# Returns the path to the per-PR "merge state UNKNOWN since" state file (#1701).
+pr_unknown_merge_state_file_path() {
+    local item_id="$1"
+    printf '%s/PullRequest_%s.unknown_merge_state' "${SESSION_BASE_DIR}" "${item_id}"
+}
+
+# Records the epoch second from which a PR's merge state counts as UNKNOWN.
+save_pr_unknown_merge_state_since() {
+    local item_id="$1" timestamp="$2"
+    local state_file
+    state_file=$(pr_unknown_merge_state_file_path "${item_id}")
+    mkdir -p "${SESSION_BASE_DIR}" || die "Failed to create session directory: ${SESSION_BASE_DIR}"
+    printf '%s\n' "${timestamp}" > "${state_file}" \
+        || die "Failed to write merge state file: ${state_file}"
+}
+
+# Removes the "merge state UNKNOWN since" state file, so the next UNKNOWN starts a fresh clock.
+clear_pr_unknown_merge_state() {
+    local item_id="$1"
+    rm -f "$(pr_unknown_merge_state_file_path "${item_id}")" 2>/dev/null || true
+}
+
+# Returns 0 (true) when merge_state has been UNKNOWN for at least UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES
+# (#1701). Any other merge state clears the clock; the first UNKNOWN (or an unreadable state file)
+# starts it. When the timeout is reached the clock restarts, so the caller's follow-up (a compare
+# lookup, then possibly a non-agentic rebase) happens at most once per timeout window while the
+# state stays UNKNOWN, rather than on every tick: a rebase that changes nothing would otherwise
+# reset the idle budget every tick.
+pr_unknown_merge_state_timed_out() {
+    local item_id="$1" merge_state="$2"
+    if [ "${merge_state}" != "UNKNOWN" ]; then
+        clear_pr_unknown_merge_state "${item_id}"
+        return 1
+    fi
+
+    local state_file current_time saved_timestamp=""
+    state_file=$(pr_unknown_merge_state_file_path "${item_id}")
+    current_time=$(date +%s)
+    [ -f "${state_file}" ] && saved_timestamp=$(cat "${state_file}" 2>/dev/null)
+
+    if ! [[ "${saved_timestamp}" =~ ^[0-9]+$ ]]; then
+        save_pr_unknown_merge_state_since "${item_id}" "${current_time}"
+        return 1
+    fi
+
+    [ $(((current_time - saved_timestamp) / 60)) -ge "${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES}" ] || return 1
+    save_pr_unknown_merge_state_since "${item_id}" "${current_time}"
+    return 0
+}
+
 # Returns the path to the per-PR "last agent-seen comment" state file.
 pr_last_agent_comment_file_path() {
     local item_id="$1"

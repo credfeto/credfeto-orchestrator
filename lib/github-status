@@ -308,6 +308,19 @@ set_pr_has_unaddressed_comment() {
         && pr_has_unaddressed_comment=true
 }
 
+# Returns 0 (true) when a PR whose mergeStateStatus has stayed UNKNOWN for at least
+# UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES is behind its base branch, so the caller should treat this
+# tick's merge state as BEHIND and give it the usual non-agentic rebase (#1701). A rebase makes
+# GitHub recompute the merge state. Without this, an auto-merge-armed PR stuck at UNKNOWN reads as
+# settled forever: pr_json_is_terminal ignores mergeStateStatus by design (#1266), and only
+# BEHIND/DIRTY trigger a rebase. A failed compare lookup, a PR that is not behind, and a short-lived
+# UNKNOWN all return 1 and leave the merge state as it is.
+pr_merge_state_stuck_behind() {
+    local item_id="$1" repo_full="$2" pr_json="$3" merge_state="$4"
+    pr_unknown_merge_state_timed_out "${item_id}" "${merge_state}" || return 1
+    pr_branch_behind_base "${repo_full}" "${pr_json}"
+}
+
 # Returns 0 (true) if any required check has definitively failed (an unsuccessful CheckRun
 # conclusion such as FAILURE, CANCELLED or TIMED_OUT, or legacy StatusContext state FAILURE/ERROR;
 # see _JQ_DEF_CHECK_FAILED in lib/globals).  Used to distinguish a PR that has legitimately

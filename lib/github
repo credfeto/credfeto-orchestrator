@@ -239,6 +239,26 @@ fetch_branch_requires_status_checks() {
     ' 2>/dev/null
 }
 
+# Returns 0 when the PR's head branch is behind its base branch (the compare API's behind_by is
+# above zero), 1 when it is not, or when the PR comes from a fork or names no base/head branch, and
+# 2 when the lookup fails. Used only once a PR's merge state has stayed UNKNOWN past its timeout
+# (#1701): GitHub then gives no BEHIND signal, so this asks directly. Both branch names are encoded
+# as single path segments, as fetch_branch_requires_status_checks does.
+pr_branch_behind_base() {
+    local repo_full="$1" pr_json="$2" base_branch head_branch encoded_base encoded_head behind_by
+    if printf '%s' "${pr_json}" | jq -e '.isCrossRepository == true' > /dev/null 2>&1; then
+        return 1
+    fi
+    base_branch=$(printf '%s' "${pr_json}" | jq -r '.baseRefName // empty' 2>/dev/null)
+    head_branch=$(printf '%s' "${pr_json}" | jq -r '.headRefName // empty' 2>/dev/null)
+    [ -n "${base_branch}" ] && [ -n "${head_branch}" ] || return 1
+    encoded_base=$(printf '%s' "${base_branch}" | jq -sRr '@uri') || return 2
+    encoded_head=$(printf '%s' "${head_branch}" | jq -sRr '@uri') || return 2
+    behind_by=$(gh api "repos/${repo_full}/compare/${encoded_base}...${encoded_head}" --jq '.behind_by' 2>/dev/null) || return 2
+    [[ "${behind_by}" =~ ^[0-9]+$ ]] || return 2
+    [ "${behind_by}" -gt 0 ]
+}
+
 # Reads JSON with a .commits array on stdin and succeeds when any commit matches the given
 # identity — by resolved GitHub login (of that commit's author OR co-author), or, ONLY when that
 # ENTIRE COMMIT has no resolved login at all (neither author nor any co-author), by raw

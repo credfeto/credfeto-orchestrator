@@ -408,6 +408,17 @@ CI_CHECK_TIMEOUT_DEFAULT_MINUTES=1440
 CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_MINUTES:-${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}}"
 [[ "${CI_CHECK_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || CI_CHECK_TIMEOUT_MINUTES="${CI_CHECK_TIMEOUT_DEFAULT_MINUTES}"
 
+# How long (in minutes) a PR's mergeStateStatus may stay UNKNOWN before the orchestrator stops
+# waiting for GitHub to settle it (#1701). GitHub computes mergeability lazily and normally settles
+# within seconds, but it can also report UNKNOWN for weeks on a branch far behind its base, and the
+# BEHIND/DIRTY rebase path never fires for UNKNOWN. Past this age the PR is checked against its
+# base and, if it is behind, treated as BEHIND for that tick. Override with
+# UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES in the environment or in .env; an invalid value falls back to
+# the default.
+UNKNOWN_MERGE_STATE_TIMEOUT_DEFAULT_MINUTES=60
+UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES="${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES:-${UNKNOWN_MERGE_STATE_TIMEOUT_DEFAULT_MINUTES}}"
+[[ "${UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES}" =~ ^[1-9][0-9]*$ ]] || UNKNOWN_MERGE_STATE_TIMEOUT_MINUTES="${UNKNOWN_MERGE_STATE_TIMEOUT_DEFAULT_MINUTES}"
+
 # How many times to retry the `gh api user` identity lookup, and how long to wait between
 # attempts, before giving up. The lookup is cheap and cached for the rest of the run once it
 # succeeds, so a transient blip should not sacrifice a whole cycle (#1085). Overridable from the
