@@ -426,6 +426,58 @@ assert_blocked() {
     assert_allowed $'echo \xe2\x80\x94'
 }
 
+# --- non-ASCII in quoted heredoc bodies (#1658) -------------------------------------
+
+@test "non-ASCII in the body of a quoted-delimiter heredoc is allowed with a writer command" {
+    assert_allowed $'cfwf comment add --repo o/r --issue 5 --body-file - <<\'PLAN\'\n## Plan \xe2\x80\x94 with an em dash\nPLAN'
+    assert_allowed $'tee sub/out <<"EOF"\ncaf\xc3\xa9 \xe2\x80\x98quoted\xe2\x80\x99\nEOF'
+    assert_allowed $'tee sub/out <<\\EOF\n\xe2\x86\x92 arrow\nEOF'
+    assert_allowed $'cat > sub/out <<\'EOF\'\n\xe2\x80\x9cx\xe2\x80\x9d\nEOF\ntee sub/two <<\'B2\'\n\xe2\x80\xa6\nB2'
+}
+
+@test "non-ASCII in the body of a <<- quoted-delimiter heredoc is allowed" {
+    assert_allowed $'tee sub/out <<-\'EOF\'\n\t\xe2\x80\x94 indented\n\tEOF'
+    assert_allowed $'tee sub/out <<-"EOF"\n\t\xc3\xa9\n\tEOF'
+}
+
+@test "non-ASCII in the body of an unquoted-delimiter heredoc still blocks" {
+    assert_blocked $'tee sub/out <<EOF\n\xe2\x80\x94\nEOF' 'plain ASCII'
+    assert_blocked $'tee sub/out <<-EOF\n\t\xe2\x80\x98$(id)\xe2\x80\x99\n\tEOF' 'plain ASCII'
+}
+
+@test "non-ASCII outside a quoted heredoc body still blocks alongside one" {
+    assert_blocked $'tee sub/caf\xc3\xa9 <<\'EOF\'\nx\nEOF' 'plain ASCII'
+    assert_blocked $'tee sub/out <<\'EOF\' > \xe2\x80\x98/etc/x\xe2\x80\x99\n\xe2\x80\x94\nEOF' 'plain ASCII'
+    assert_blocked $'cfwf comment add --body \xe2\x80\x94 --body-file - <<\'EOF\'\n\xe2\x80\x94\nEOF' 'plain ASCII'
+    assert_blocked $'tee sub/out <<\'EOF\'\n\xe2\x80\x94\nEOF\nrm -rf \xe2\x80\x98/etc/x\xe2\x80\x99' 'plain ASCII'
+    assert_blocked $'tee\xc2\xa0sub/out <<\'EOF\'\nx\nEOF'
+}
+
+@test "a non-ASCII heredoc delimiter still blocks" {
+    assert_blocked $'tee sub/out <<\'E\xc3\x89F\'\nx\nE\xc3\x89F' 'plain ASCII'
+    assert_blocked $'tee sub/out <<\'E\xe2\x80\x94F\'\n\xe2\x80\x94\nE\xe2\x80\x94F' 'plain ASCII'
+}
+
+@test "two heredocs where the unquoted one holds non-ASCII still block" {
+    assert_blocked $'tee sub/a <<\'A\' && tee sub/b <<B\n\xe2\x80\x94\nA\n\xe2\x80\x94\nB' 'plain ASCII'
+    assert_blocked $'tee sub/a <<\'A\' && tee sub/b <<B\nfine\nA\n\xe2\x80\x94\nB' 'plain ASCII'
+    assert_allowed $'tee sub/a <<\'A\' && tee sub/b <<B\n\xe2\x80\x94\nA\nascii\nB'
+}
+
+@test "a quoted delimiter that Layer 0 rewriting could forge keeps the full non-ASCII rule" {
+    # reject-obfuscated-commands would rewrite the em dash line to END-X,
+    # ending the heredoc early and running the rm this hook saw as data.
+    assert_blocked $'tee sub/out <<\'END-X\'\nEND\xe2\x80\x94X\nrm -rf /etc/x\nEND-X' 'plain ASCII'
+    assert_blocked $'tee sub/out <<\'A B\'\nA\xc2\xa0B\nA B' 'plain ASCII'
+    assert_blocked $'tee sub/out <<E\'O\'F\n\xe2\x80\x94\nEOF' 'plain ASCII'
+    assert_blocked $'tee sub/out <<$\'EOF\'\n\xe2\x80\x94\nEOF' 'plain ASCII'
+}
+
+@test "a quoted heredoc inside a command substitution keeps the full non-ASCII rule" {
+    assert_blocked $'tee sub/out <<\'A\'\nx\nA\necho "$(cat <<\'B\'\n\xe2\x80\x94\nB\n)"' 'plain ASCII'
+    assert_blocked $'tee sub/out <<A\n$(cat <<\'B\'\n\xe2\x80\x94\nB\n)\nA' 'plain ASCII'
+}
+
 @test "cp/mv --target-directory and -t are validated in every spelling" {
     assert_blocked "cp x --target-directory=${OUTSIDE}" '--target-directory'
     assert_blocked "cp x --target-directory ${OUTSIDE}"

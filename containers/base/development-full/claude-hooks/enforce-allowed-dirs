@@ -2530,8 +2530,8 @@ to_json_array() {
 }
 
 # One jq pass over the AST. Line 1 is a header:
-#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1><TAB><count of constructs that can set a variable>
-# then, in document order, a line "C" per CallExpr followed by one line per
+#   H<TAB><cd-family call count><TAB><first call is cd-family: 0/1><TAB><count of constructs that can set a variable><TAB><exempt heredoc bodies>
+# (the last field is explained above require_ascii below), then, in document order, a line "C" per CallExpr followed by one line per
 # word, and a line "R" per writing redirection followed by its word (a
 # statement's redirections come before its command, as they are applied
 # first). A word line is "N" for anything not fully literal (substitution,
@@ -2631,6 +2631,29 @@ transport=$(printf '%s' "$ast" | jq -r \
   def redir_op:
     (.OpPos.Offset // 0) as $at
     | ($op_src[$at:($at + 3)] | capture("^(?<op>&>>|&>|>>|>[|]|>&|<>|<<<|<<-|<<|<&|>|<)").op) // "?";
+  def quoted_delimiter:
+    (.Word.Parts // []) as $ps
+    | if ($ps | length) != 1 then null
+      elif $ps[0].Type == "SglQuoted" and (($ps[0].Dollar // false) | not) then $ps[0].Value
+      elif $ps[0].Type == "DblQuoted" and (($ps[0].Dollar // false) | not) and all(($ps[0].Parts // [])[]; .Type == "Lit")
+        then (($ps[0].Parts // []) | map(.Value) | join(""))
+      elif $ps[0].Type == "Lit" and (($ps[0].Value // "") | startswith("\\")) then $ps[0].Value[1:]
+      else null end;
+  def span: {p: .Pos.Offset?, e: .End.Offset?};
+  def exempt_heredocs:
+    [ .. | objects | select((.Redirs? | type) == "array") | .Redirs[] | select(.Hdoc != null) ] as $hdocs
+    | [ ($hdocs[] | .Hdoc | span), (.. | objects | select(.Type? | IN("CmdSubst", "ProcSubst")) | span) ] as $encl
+    | if any($encl[]; (.p | type) != "number" or (.e | type) != "number") then ""
+      else
+        [ $hdocs[]
+          | select(redir_op | IN("<<", "<<-"))
+          | select((quoted_delimiter // "") | test("^[A-Za-z0-9_]+$"))
+          | select(((.Hdoc.Parts // []) | length) > 0 and all(.Hdoc.Parts[]; .Type == "Lit"))
+          | .Hdoc.Pos.Offset? as $p
+          | select(($p | type) == "number" and (any($encl[]; .p < $p and $p < .e) | not))
+          | {p: $p, b: (.Hdoc.Parts | map(.Value) | join(""))} ]
+        | sort_by(.p) | map("\(.p):\(.b | @base64)") | join(" ")
+      end;
   [ .. | objects
     | if .Type? == "CallExpr" and ((.Args // []) | length) > 0 then {call: [.Args[] | word_info]}
       elif (.Redirs? | type) == "array" then
@@ -2643,12 +2666,13 @@ transport=$(printf '%s' "$ast" | jq -r \
   | [$items[] | select(.call) | .call | cmdname] as $names
   | "H\t" + ([$names[] | select(. as $n | $cd_names | index($n) != null)] | length | tostring)
     + "\t" + (if ($names | length) > 0 and ($cd_names | index($names[0])) != null then "1" else "0" end)
-    + "\t" + ([.. | objects | select(sets_variable)] | length | tostring),
+    + "\t" + ([.. | objects | select(sets_variable)] | length | tostring)
+    + "\t" + exempt_heredocs,
     ( $items[] | if .call then "C", (.call[] | word_line) else "R", (.redir | word_line) end )
 ') || block 'command structure could not be analyzed - failing closed'
 
 header="${transport%%$'\n'*}"
-IFS=$'\t' read -r _ cd_count first_is_cd assign_count <<<"$header"
+IFS=$'\t' read -r _ cd_count first_is_cd assign_count exempt_heredocs <<<"$header"
 
 load_classes
 [ "${#COMMAND_CLASS[@]}" -gt 0 ] || block "${COMMAND_ALLOWLIST##*/} classifies no command - failing closed"
@@ -2661,10 +2685,60 @@ load_classes
 # once a checked or writing command or a writing redirection is present, any
 # non-ASCII byte fails closed here regardless of what the normalising hook
 # decides - the agent retries in plain ASCII.
+#
+# One exemption: the body of a heredoc whose delimiter is quoted (<<'X',
+# <<"X", <<\X and the <<- forms), e.g. a plan with an em dash posted with
+# `--body-file - <<'PLAN'`. Such a body is data on stdin: bash expands
+# nothing in it, and no check here reads it (its AST is one plain Lit, which
+# carries no call, redirection or variable-setting construct). Layer 0 maps
+# a non-ASCII sequence to ASCII in place, never adding or removing a newline
+# or tab, so the rewritten command differs from this one only inside such
+# bodies - every byte outside them is still required to be ASCII, so Layer 0
+# leaves it alone - provided each body still ends at the same line. A line
+# is a body's last when it equals the delimiter (after leading tabs, for
+# <<-); a line Layer 0 changes gains one of - ' " . < > or a space, so the
+# delimiter must consist only of [A-Za-z0-9_] for no rewritten line to
+# become (or stop being) the delimiter line - with `<<'END-X'`, a body line
+# END<em dash>X would end the heredoc after rewriting and run the lines
+# after it as commands this hook never saw. Exempted, from the shfmt AST
+# (header field 5, "<byte offset>:<base64 body>" per heredoc): only a <<
+# or <<- redirection whose delimiter word is one single-quoted, double-
+# quoted or backslash-led part matching ^[A-Za-z0-9_]+$, whose body is
+# plain Lit parts only, and which is not inside a command or process
+# substitution or another heredoc (where bash's own scan of the enclosing
+# text is involved). Each body is checked to be byte-for-byte the raw text
+# at its offset, in order, without overlap; any mismatch keeps the whole
+# command under the full rule. Everything else - the delimiter word, every
+# command word and redirection, every unquoted-delimiter heredoc body - is
+# still checked, so a non-ASCII delimiter still blocks.
 NON_PRINTABLE_RE=$'[^ -~\t\n\r]' # same class reject-obfuscated-commands' Layer 0 uses; LC_ALL=C makes it byte-exact
+ascii_subject=""
+ascii_subject_ready=0
+# Sets ascii_subject to raw_cmd minus the exempt heredoc bodies, or to all
+# of raw_cmd when any listed body does not match the raw text (fail closed).
+build_ascii_subject() {
+  local -a entries=()
+  local entry start body subject="" at=0
+  ascii_subject="$raw_cmd"
+  ascii_subject_ready=1
+  read -r -a entries <<<"$exempt_heredocs"
+  for entry in "${entries[@]}"; do
+    start="${entry%%:*}"
+    [[ "$start" =~ ^[0-9]+$ ]] || return 0
+    body=$(printf '%s' "${entry#*:}" | base64 -d 2>/dev/null && printf '.') || return 0
+    body="${body%.}"
+    [ -n "$body" ] && [ "$start" -ge "$at" ] || return 0
+    [ "${raw_cmd:start:${#body}}" = "$body" ] || return 0
+    subject+="${raw_cmd:at:start-at}"
+    at=$((start + ${#body}))
+  done
+  ascii_subject="${subject}${raw_cmd:at}"
+}
 require_ascii() {
-  if [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]]; then
-    block 'command contains non-ASCII or non-printable bytes and includes a directory-taking or file-writing command - rewrite it in plain ASCII'
+  [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]] || return 0
+  [ "$ascii_subject_ready" -eq 1 ] || build_ascii_subject
+  if [[ "$ascii_subject" =~ $NON_PRINTABLE_RE ]]; then
+    block 'command contains non-ASCII or non-printable bytes and includes a directory-taking or file-writing command - rewrite it in plain ASCII (other text may appear only in the body of a heredoc with a quoted, alphanumeric delimiter, e.g. <<"EOF")'
   fi
 }
 

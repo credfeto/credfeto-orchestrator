@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- enforce-allowed-dirs no longer blocks non-ASCII text (such as an em dash) in the body of a heredoc whose delimiter is quoted and alphanumeric (`<<'PLAN'`), so agents can post plans and comments with `--body-file -`; the delimiter, every word and redirection and the body of an unquoted-delimiter heredoc must still be plain ASCII when a writing command is present (#1658)
 ### Changed
 ### Deprecated
 ### Removed
