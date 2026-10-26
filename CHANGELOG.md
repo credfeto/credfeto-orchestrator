@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - A PR whose required check was cancelled, timed out or failed to start, with auto-merge armed, is no longer treated as settled and skipped forever: every unsuccessful check conclusion now counts as a failed check, so the orchestrator works on the PR or blocks it for a human (#1432)
 ### Changed
 - The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)
+- SDK - Updated DotNet SDK to 10.0.403
 ### Deprecated
 ### Removed
 ### Deployment Changes
