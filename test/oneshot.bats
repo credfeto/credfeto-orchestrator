@@ -112,7 +112,8 @@ teardown() {
     [ "${status}" -eq 0 ]
     template=$(printf '%s\n' "${output}" | sed -n '/^## Implementation Plan$/,/ready to proceed pending approval/p')
     [ -n "${template}" ]
-    ! printf '%s' "${template}" | LC_ALL=C grep -q '[^ -~]'
+    run bash -c 'printf "%s" "$1" | LC_ALL=C grep -q "[^ -~]"' _ "${template}"
+    [ "${status}" -eq 1 ]
 }
 
 @test "build_issue_claude_md only blocks the issue once the plan is confirmed posted" {
