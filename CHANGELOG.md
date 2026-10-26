@@ -12,6 +12,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Security
 ### Added
 ### Fixed
+- Planning sessions now post the implementation plan with one sanctioned command, `cfwf comment add --body-file -` fed by a quoted heredoc, from a plain-ASCII template, and only add Blocked and move the board to Planning once the plan is confirmed posted. Multi-line plan bodies had been denied in several shapes, and a failed post still left the issue Blocked with no plan, where oneshot skipped it for good (#1658)
 ### Changed
 ### Deprecated
 ### Removed
