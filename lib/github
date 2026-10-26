@@ -495,10 +495,13 @@ pr_should_use_dependency_prompt() {
     printf '%s' "${pr_json}" | jq -e '.reviewDecision != "CHANGES_REQUESTED"' > /dev/null 2>&1 || return 1
     pr_json_has_failed_required_check "${pr_json}" && return 1
     pr_json_has_failed_check_of_unknown_requiredness "${pr_json}" && return 1
-    # A DIRTY branch reaches the agent only after the non-agentic rebase hit conflicts. The
-    # verify-only prompt has no rebase steps, so the agent found "nothing to do" and the PR was
-    # re-invoked every tick without the conflict ever being resolved; the full flow resolves it.
-    printf '%s' "${pr_json}" | jq -e '.mergeStateStatus == "DIRTY"' > /dev/null 2>&1 && return 1
+    # A DIRTY or BEHIND branch reaches the agent only when the non-agentic rebase hit conflicts
+    # or never ran: a successful one skips the agent for this tick, and it is skipped when the
+    # working tree is dirty (ensure_repo_current hands the checkout to the agent) or a trusted
+    # comment is unaddressed. The verify-only prompt has no rebase or working-tree recovery
+    # steps, so the agent found "nothing to do" and the PR was re-invoked every tick, still
+    # behind or conflicted (#1706, #1714); the full flow rebases it and recovers the tree.
+    printf '%s' "${pr_json}" | jq -e '.mergeStateStatus == "DIRTY" or .mergeStateStatus == "BEHIND"' > /dev/null 2>&1 && return 1
     pr_json_has_placeholder_file "${pr_json}" && return 1
     return 0
 }

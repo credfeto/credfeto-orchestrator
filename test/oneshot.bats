@@ -6422,8 +6422,20 @@ STUBEOF
 @test "pr_should_use_dependency_prompt falls back to the full flow for a DIRTY branch so the conflict gets resolved" {
     run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","mergeStateStatus":"DIRTY","autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[]}'
     [ "${status}" -eq 1 ]
-    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","mergeStateStatus":"BEHIND","statusCheckRollup":[]}'
-    [ "${status}" -eq 0 ]
+}
+
+@test "pr_should_use_dependency_prompt falls back to the full flow for a BEHIND branch the non-agentic rebase did not update" {
+    run pr_should_use_dependency_prompt '{"headRefName":"depends/update-x/1.2.3","mergeStateStatus":"BEHIND","autoMergeRequest":{"enabledAt":"now"},"statusCheckRollup":[]}'
+    [ "${status}" -eq 1 ]
+    run pr_should_use_dependency_prompt '{"headRefName":"dependabot/npm_and_yarn/x-1.2.3","mergeStateStatus":"BEHIND","statusCheckRollup":[]}'
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_should_use_dependency_prompt keeps the verify-only prompt for an up-to-date dependency branch with green checks" {
+    for state in CLEAN UNSTABLE BLOCKED HAS_HOOKS; do
+        run pr_should_use_dependency_prompt "{\"headRefName\":\"depends/update-x/1.2.3\",\"mergeStateStatus\":\"${state}\",\"statusCheckRollup\":[]}"
+        [ "${status}" -eq 0 ]
+    done
 }
 
 @test "pr_should_use_dependency_prompt keeps the verify-only prompt once a later run of the failed check passes" {

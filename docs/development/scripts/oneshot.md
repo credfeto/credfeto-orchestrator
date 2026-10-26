@@ -63,7 +63,7 @@ Where to make a common change:
 | To change | Look at |
 | --- | --- |
 | Whether an item is skipped or stood off | The Issue and PullRequest branches in `main` before the Work block, and the predicate they call (lib/github, lib/github-status). |
-| Which PR prompt is used | `pr_should_use_dependency_prompt` (lib/github): branch prefix `depends/` or `dependabot/` only, never a label, and never while changes are requested, `.deleteme.now` is present, or the PR is from a fork (`isCrossRepository`). |
+| Which PR prompt is used | `pr_should_use_dependency_prompt` (lib/github): branch prefix `depends/` or `dependabot/` only, never a label, and never while changes are requested, a required check (or one of unknown required-ness) has failed, the merge state is DIRTY or BEHIND (the non-agentic rebase conflicted or did not run), `.deleteme.now` is present, or the PR is from a fork (`isCrossRepository`). |
 | What counts as a settled PR | `pr_json_is_terminal` (false while `.deleteme.now` is in the diff) and `pr_review_pipeline_finished_without_auto_merge` (the board fallback when auto-merge cannot be armed, #1479). |
 | What "changed" means | `fingerprint_issue_json` and `fingerprint_pr_json` (bump `FINGERPRINT_SCHEMA_VERSION`, see below). |
 | What leaves an idle-advance session uncharged, and what the last-agent-comment-seen marker records | `pr_session_progress_reason` (lib/github-status) and the pre-session capture above `invoke_claude`. |
