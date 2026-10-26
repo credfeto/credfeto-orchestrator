@@ -100,6 +100,29 @@ teardown() {
     [[ "${output}" == *"Read AI instructions from /resolved/.ai-instructions"* ]]
 }
 
+@test "build_issue_claude_md posts the plan with cfwf comment add from a quoted heredoc" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"cfwf comment add --repo "*" --issue 42 --body-file - <<'PLAN'"* ]]
+    [[ "${output}" == *"no --body, no Write, no temp file"* ]]
+}
+
+@test "build_issue_claude_md plan template is plain ASCII" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    template=$(printf '%s\n' "${output}" | sed -n '/^## Implementation Plan$/,/ready to proceed pending approval/p')
+    [ -n "${template}" ]
+    run bash -c 'printf "%s" "$1" | LC_ALL=C grep -q "[^ -~]"' _ "${template}"
+    [ "${status}" -eq 1 ]
+}
+
+@test "build_issue_claude_md only blocks the issue once the plan is confirmed posted" {
+    run build_issue_claude_md 42 "/resolved/.ai-instructions"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Only once the plan is confirmed posted"* ]]
+    [[ "${output}" == *"If the plan could NOT be posted, do NOT add Blocked and do NOT move the board"* ]]
+}
+
 @test "build_issue_claude_md references AI instructions for CLI and label rules" {
     run build_issue_claude_md 42 "/resolved/.ai-instructions"
     [ "${status}" -eq 0 ]
