@@ -436,6 +436,9 @@ build_pr_claude_md() {
     # own doc comment on why callers pass this via a variable rather than a literal.
     local phase_g_cap_condition="without the branch catching up (judge from prior \"...${ROUND_MARKER_COVERAGE}\" coverage comments)"
     [ "${merge_state}" = "BEHIND" ] || [ "${merge_state}" = "DIRTY" ] && needs_rebase=1
+    # Named explicitly because agents otherwise reach for GIT_EDITOR=true or -c core.editor=true,
+    # which the hooks deny, and only then try the plain form, which works in the container (#1716).
+    local rebase_continue_rule="To continue the rebase after fixing conflicts: git -C ${repo_path} add <files>, then git -C ${repo_path} rebase --continue as its own command. It needs no editor override: do not set GIT_EDITOR or -c core.editor (both are blocked), and do not chain it with &&. Edit conflicted files with the file tools or one sed -i per file, not a heredoc script."
 
     # Dirty on the PR's own branch means an earlier session for this PR left uncommitted work
     # behind, so it is kept (stashed when it has to move) and never discarded, matching
@@ -446,7 +449,7 @@ build_pr_claude_md() {
    b. git -C ${repo_path} diff     (review the uncommitted changes)
    c. git -C ${repo_path} stash
    d. git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
-      CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md; note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop.
+      CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md; note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop. ${rebase_continue_rule}
    e. git -C ${repo_path} push --force-with-lease
    f. git -C ${repo_path} stash pop, so the next cycle finds the work and finishes it in PHASE C. If the pop conflicts, leave the stash in place (it is not lost) and say so in your status comment."
     elif [ -n "${dirty_branch}" ] && [ "${dirty_branch}" = "${branch_name}" ]; then
@@ -460,7 +463,7 @@ build_pr_claude_md() {
    b. If changes belong to this PR: git -C ${repo_path} stash && git -C ${repo_path} checkout ${branch_name} && git -C ${repo_path} stash pop
       Otherwise: git -C ${repo_path} reset HEAD && git -C ${repo_path} checkout -- . && git -C ${repo_path} checkout ${branch_name}
    c. git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
-      CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop.
+      CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop. ${rebase_continue_rule}
    d. git -C ${repo_path} push --force-with-lease"
     elif [ -n "${dirty_branch}" ]; then
         checkout_step="1. The working tree is on branch '${dirty_branch}' with uncommitted changes — clean up before checking out the PR branch:
@@ -471,7 +474,7 @@ build_pr_claude_md() {
         checkout_step="1. The PR is ${merge_state} — check out the branch and rebase immediately before any other work:
    git -C ${repo_path} checkout ${branch_name}
    git -C ${repo_path} fetch origin && git -C ${repo_path} rebase origin/main
-   CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop.
+   CHANGELOG.md conflicts: keep entries from both sides. COVERAGE.md conflicts: take origin/main's copy (git -C ${repo_path} checkout --ours -- COVERAGE.md — note rebase reverses ours/theirs vs a merge: --ours means origin/main here, not this branch), continue the rebase, and once the build/tests pass re-run the coverage extraction and commit a fresh COVERAGE.md as part of this same rebase work. Any other conflict: post the details as a PR comment and stop. ${rebase_continue_rule}
    git -C ${repo_path} push --force-with-lease"
     else
         checkout_step="1. Check out the PR branch BEFORE making any changes: git -C ${repo_path} checkout ${branch_name}"
