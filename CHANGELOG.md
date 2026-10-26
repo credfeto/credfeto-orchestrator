@@ -10,6 +10,19 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+### Added
+### Fixed
+### Changed
+### Deprecated
+### Removed
+### Deployment Changes
+
+<!--
+Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
+-->
+
+## [0.0.6] - 2026-10-26
+### Security
 - Agents can no longer change Claude Code configuration (`.claude` settings, hooks, agents, skills, `.mcp.json` and `/etc/claude-code`) through Bash: enforce-allowed-dirs now works out every Bash write target and denies by default, classifying every command-allowlist entry as a writer or read-only, and it checks Edit, Write and NotebookEdit paths against the same rules (#1554)
 ### Added
 - cfwf task wait waits in one blocking call for a background command (run_in_background) to finish, by watching whether any process still holds its output file. It exits 0 when finished, 4 at the timeout and 9 for a missing file, and prints the end of the output. The background-commands rule now tells agents to wait with it and never to poll with ps, pgrep or repeated Reads, which had used up whole sessions without a commit (#1710)
@@ -26,13 +39,6 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ### Changed
 - The Claude Code hooks and managed settings are installed root-owned under `/etc/claude-code` by install-claude-hooks, so the agent's user can no longer rewrite the guardrails that govern it; the user settings.json now only carries preferences (#1554)
 - SDK - Updated DotNet SDK to 10.0.403
-### Deprecated
-### Removed
-### Deployment Changes
-
-<!--
-Releases that have at least been deployed to staging, BUT NOT necessarily released to live.  Changes should be moved from [Unreleased] into here as they are merged into the appropriate release branch
--->
 
 ## [0.0.5] - 2026-10-23
 ### Security
