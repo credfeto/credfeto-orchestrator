@@ -677,6 +677,28 @@ teardown() {
     [ "${#before_failed}" -lt "${#before_automerge}" ]
 }
 
+@test "build_pr_claude_md tells a BEHIND or DIRTY PR to continue the rebase with plain git -C rebase --continue" {
+    for state in BEHIND DIRTY; do
+        run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "${state}" "feat/my-branch" "/workspace/repo"
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == *"git -C /workspace/repo rebase --continue as its own command"* ]]
+        [[ "${output}" == *"do not set GIT_EDITOR or -c core.editor"* ]]
+    done
+}
+
+@test "build_pr_claude_md names the rebase-continue rule in every dirty-tree rebase variant" {
+    run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "BEHIND" "feat/my-branch" "/workspace/repo" "feat/my-branch"
+    [[ "${output}" == *"rebase --continue as its own command"* ]]
+    run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "DIRTY" "feat/my-branch" "/workspace/repo" "other/branch"
+    [[ "${output}" == *"rebase --continue as its own command"* ]]
+}
+
+@test "build_pr_claude_md omits the rebase-continue rule when no rebase is needed" {
+    run build_pr_claude_md 7 "/workspace/rules/.ai-instructions" "CLEAN" "feat/my-branch" "/workspace/repo"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"rebase --continue as its own command"* ]]
+}
+
 @test "build_pr_claude_md for dependency PR skips rebase steps even when merge state is BEHIND" {
     run build_pr_claude_md 7 "/resolved/.ai-instructions" "BEHIND" "feat/my-branch" "" "" "true"
     [ "${status}" -eq 0 ]
