@@ -1,6 +1,6 @@
 --- # Scan a container image for vulnerabilities and upload results to GitHub Security
 name: "Scan container image for vulnerabilities"
-description: "Runs Trivy against a container image, fails on unfixed CRITICAL CVEs, and uploads SARIF to GitHub Security"
+description: "Runs Trivy against a container image, reports findings in the log, job summary and PR, fails on fixable CRITICAL CVEs, and uploads SARIF"
 inputs:
   image-ref:
     description: "Fully-qualified container image reference to scan (e.g. ghcr.io/owner/image:latest)"
@@ -9,12 +9,33 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # One SARIF file per image under results/, so sarif-summary (which reads results/) can
+    # report it, and so each image gets its own sticky PR comment and summary heading.
+    - name: "Prepare vulnerability scan results"
+      id: prepare
+      shell: "bash"
+      env:
+        IMAGE_REF: "${{inputs.image-ref}}"
+      run: |
+        image="${IMAGE_REF##*/}"
+        image="${image%%[:@]*}"
+        if [[ ! "${image}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "::error::Unexpected image name in image-ref: cannot derive a results file name"
+          exit 1
+        fi
+        mkdir -p "${GITHUB_WORKSPACE}/results"
+        {
+          echo "image=${image}"
+          echo "sarif-name=trivy-${image}.sarif"
+          echo "sarif-file=${GITHUB_WORKSPACE}/results/trivy-${image}.sarif"
+        } >> "${GITHUB_OUTPUT}"
+
     - name: "Scan image for vulnerabilities"
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         image-ref: "${{inputs.image-ref}}"
         format: "sarif"
-        output: "trivy-results.sarif"
+        output: "${{steps.prepare.outputs.sarif-file}}"
         severity: "CRITICAL"
         scanners: "vuln"
         ignore-unfixed: true
@@ -23,8 +44,58 @@ runs:
         skip-files: "/usr/local/bin/sqlcmd,/usr/local/bin/actionlint,/opt/composite-action-lint/composite-action-lint,/usr/local/bin/trufflehog"
         exit-code: "1"
 
+    # The scan's own output is SARIF only, so on failure the log just says "exit code 1".
+    # Print each finding and annotate it, whether the scan passed or failed. jq builds every
+    # line from the SARIF, so no finding text is ever expanded by the shell.
+    - name: "Show vulnerability findings"
+      if: "${{ !cancelled() && steps.prepare.outputs.sarif-file != '' }}"
+      shell: "bash"
+      env:
+        SARIF_FILE: "${{steps.prepare.outputs.sarif-file}}"
+        IMAGE: "${{steps.prepare.outputs.image}}"
+      run: |
+        if [[ ! -s "${SARIF_FILE}" ]]; then
+          echo "::warning::Trivy (${IMAGE}): no SARIF output was produced, so there are no findings to show (see the scan step above)"
+          exit 0
+        fi
+        count="$(jq '[.runs[]?.results[]?] | length' "${SARIF_FILE}")"
+        if [[ "${count}" == "0" ]]; then
+          echo "✅ Trivy (${IMAGE}): no CRITICAL vulnerabilities with a fix available"
+          exit 0
+        fi
+        echo "❌ Trivy (${IMAGE}): ${count} CRITICAL finding(s) with a fix available:"
+        jq -r --arg image "${IMAGE}" '
+          def field($name): (.message.text // "") | (capture("(?:^|\n)" + $name + ": *(?<v>[^\r\n]*)").v // "-");
+          def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+          def escprop: esc | gsub(":"; "%3A") | gsub(","; "%2C");
+          .runs[]?.results[]? |
+          (.ruleId // "-") as $id |
+          (field("Package")) as $pkg |
+          (field("Installed Version")) as $installed |
+          (field("Fixed Version")) as $fixed |
+          (field("Severity")) as $severity |
+          (.locations[0]?.physicalLocation?.artifactLocation?.uri // "-") as $target |
+          ("Trivy " + $image + ": " + $id | escprop) as $title |
+          ("\($pkg) \($installed) has \($id) (\($severity)); fixed in \($fixed). Target: \($target)" | esc) as $text |
+          "  \($id)  \($severity)  \($pkg) \($installed) -> \($fixed)  [\($target)]",
+          "::error title=\($title)::\($text)"
+        ' "${SARIF_FILE}"
+
     - name: "Upload vulnerability scan results to GitHub Security"
-      if: "${{ always() }}"
+      if: "${{ always() && steps.prepare.outputs.sarif-file != '' }}"
       uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
       with:
-        sarif_file: "trivy-results.sarif"
+        sarif_file: "${{steps.prepare.outputs.sarif-file}}"
+
+    # Same reporting as the Roslyn and Poutine findings: a table in the job summary, one
+    # sticky comment per image on the PR (updated to "No findings" once clean), and a
+    # failure on error-level results (Trivy marks CRITICAL as error, so the gate matches
+    # the scan's own exit-code).
+    - name: "Summarise vulnerability findings"
+      if: >-
+        ${{ !cancelled() && steps.prepare.outputs.sarif-file != '' &&
+        hashFiles(format('results/{0}', steps.prepare.outputs.sarif-name)) != '' }}
+      uses: ./.github/actions/sarif-summary
+      with:
+        title: "Trivy vulnerabilities: ${{steps.prepare.outputs.image}} image"
+        glob: "${{steps.prepare.outputs.sarif-name}}"

@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Container image vulnerability scans (trivy-scan) now list each finding (CVE, severity, package, installed and fixed version) in the build log and as annotations, write a findings table to the job summary, and post one comment per image on the PR, instead of only failing with "exit code 1"; the CRITICAL gate and the code scanning upload are unchanged (#1729)
 ### Fixed
 - enforce-allowed-dirs no longer blocks non-ASCII text (such as an em dash) in the body of a heredoc whose delimiter is quoted and alphanumeric (`<<'PLAN'`), so agents can post plans and comments with `--body-file -`; the delimiter, every word and redirection and the body of an unquoted-delimiter heredoc must still be plain ASCII when a writing command is present (#1658)
 - Planning sessions now post the implementation plan with one sanctioned command, `cfwf comment add --body-file -` fed by a quoted heredoc, from a plain-ASCII template, and only add Blocked and move the board to Planning once the plan is confirmed posted. Multi-line plan bodies had been denied in several shapes, and a failed post still left the issue Blocked with no plan, where oneshot skipped it for good (#1658)
