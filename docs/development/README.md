@@ -130,12 +130,12 @@ link in these pages is broken.
    coverage ratchet (skipped when every changed file is a dependency manifest or version pin, a
    workflow, SQL, a shell script, a Dockerfile or documentation). Fix what they find in separate
    commits and re-run each pass until it finds nothing new, its round cap is reached, or its
-   convergence rule ends it (see `ai/local/interactive-session.instructions.md`).
+   convergence rule ends it (see
+   [PR Workflow: AI Review Loop](../../ai/global/agent-roles.instructions.md#pr-workflow-ai-review-loop)).
 6. Mark the PR ready and enable auto-merge; a human reviews before it merges.
 
-The interactive-session rules in
-[ai/local/interactive-session.instructions.md](../../ai/local/interactive-session.instructions.md)
-give the same lifecycle for a session you drive by hand.
+A session you drive by hand follows the same lifecycle, as set out in
+[agent-roles.instructions.md](../../ai/global/agent-roles.instructions.md).
 
 ## GitHub API behaviour to allow for
 

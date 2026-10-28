@@ -6,13 +6,13 @@
 
 ## Headless Operation Principle (MANDATORY)
 
-The orchestrator is designed to run **completely unattended**.  Any condition that requires a human to intervene — deleting a file, resetting a branch, restarting a service, running a manual command — is a **bug** and must be fixed in code so the orchestrator recovers automatically on the next run.
+The orchestrator is designed to run **completely unattended**.  Any condition that requires a human to intervene - deleting a file, resetting a branch, restarting a service, running a manual command - is a **bug** and must be fixed in code so the orchestrator recovers automatically on the next run.
 
 **Never ask the user to perform a manual recovery step.**  If you identify a problem, either fix it in the orchestrator's code, or (while the fix is being developed) perform the recovery yourself via SSH.
 
-## Before Debugging — SSH to nanoclaw.lan (MANDATORY)
+## Before Debugging - SSH to nanoclaw.lan (MANDATORY)
 
-When asked to diagnose a problem with the orchestrator, or when something is behaving unexpectedly, **you must SSH to `markr@nanoclaw.lan` and inspect the live state yourself.**  Do not ask the user to run commands or collect information — go and look yourself.
+When asked to diagnose a problem with the orchestrator, or when something is behaving unexpectedly, **you must SSH to `markr@nanoclaw.lan` and inspect the live state yourself.**  Do not ask the user to run commands or collect information - go and look yourself.
 
 ```bash
 ssh markr@nanoclaw.lan
@@ -20,89 +20,86 @@ ssh markr@nanoclaw.lan
 
 Run the relevant commands from the State Inventory below, interpret the output, and report your findings.  Only after you have done this should you propose a fix or ask the user a question.
 
-## Real Deployment Layout (verified against `setup-owner`/`lib/systemd-units`, #1185 review)
+## Real Deployment Layout (as set up by `setup-owner`/`lib/systemd-units`)
 
 Production runs each configured owner (e.g. `credfeto`, `funfair-tech`) as its **own separate
 Linux user account** with its own home directory, its own checkout, and its own systemd
-service/timer pair — there is no single shared orchestrator checkout or service. `markr`'s own
+service/timer pair - there is no single shared orchestrator checkout or service. `markr`'s own
 home directory is a personal interactive-dev checkout only; it is **not** one of the live
 service accounts, and its checkout being behind `origin/main` is expected (nothing auto-updates
 it) rather than a symptom of anything broken.
 
 - **Checkout path**: `/home/<owner>/credfeto-orchestrator` (from `setup-owner`'s
-  `clone_or_pull_repo`: `clone_dir="${owner_home}/credfeto-orchestrator"`) — **not**
+  `clone_or_pull_repo`: `clone_dir="${owner_home}/credfeto-orchestrator"`) - **not**
   `~/work/personal/credfeto-orchestrator`.
 - **State/config paths**: `/home/<owner>/.local/state/orchestrator/...` (or wherever that owner's
   `XDG_STATE_HOME` points, if set) and `/home/<owner>/.config/orchestrator/...`, matching every
-  `${XDG_STATE_HOME:-~/.local/state}/orchestrator`/`~/.config/orchestrator` path below — but read
+  `${XDG_STATE_HOME:-~/.local/state}/orchestrator`/`~/.config/orchestrator` path below - but read
   as "the owner's home", not `markr`'s.
 - **Systemd unit names**: `credfeto-orchestrator-<owner>-<owner>.service` and `.timer` (from
   `systemd_service_name` in `lib/systemd-units`: `credfeto-orchestrator-${user}-${owner_filter}`,
-  and `setup-owner` passes the owner account as both, hence the doubled name) — **not**
+  and `setup-owner` passes the owner account as both, hence the doubled name) - **not**
   `orchestrator-loop.service`. These are system-level units (`sudo systemctl status <name>`, no
   `--user`), not user units.
 - **Inspecting another owner's checkout as `markr`**: their home directory is typically only
   readable via `sudo`, and `git` will refuse with "detected dubious ownership" if you `sudo git -C`
   a directory owned by a different user. Use a scoped override rather than a persistent global
   config change: `sudo env GIT_OPTIONAL_LOCKS=0 git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status`.
-  Prefer this over `sudo -u <owner> git ...` — some sessions have a permission rule that denies
+  Prefer this over `sudo -u <owner> git ...` - some sessions have a permission rule that denies
   `sudo -u` specifically (routing a sudo invocation through a different effective user is treated
   as more sensitive than running a read-only command as root).
   `GIT_OPTIONAL_LOCKS=0` is **mandatory** here, not optional hygiene: `git status` is not actually
-  read-only — it opportunistically rewrites `.git/index` with a refreshed stat cache as a side
+  read-only - it opportunistically rewrites `.git/index` with a refreshed stat cache as a side
   effect. Run as root without it, that rewrite reowns `.git/index` to `root:root`, which the real
-  owner then cannot read or write — the next `sudo -u <owner> git ... pull` (e.g. from
-  `setup-owner`'s `clone_or_pull_repo`) fails with `index file open failed: Permission denied`
-  (#1300, live incident against `funfair-tech`'s checkout, traced to exactly this command run
-  without the guard). Put `GIT_OPTIONAL_LOCKS=0` **before** `sudo`, not between `sudo` and `git`:
+  owner then cannot read or write - the next `sudo -u <owner> git ... pull` (e.g. from
+  `setup-owner`'s `clone_or_pull_repo`) fails with `index file open failed: Permission denied`.
+  Put `GIT_OPTIONAL_LOCKS=0` **before** `sudo`, not between `sudo` and `git`:
   `sudo` resets the environment (`env_reset`), so `GIT_OPTIONAL_LOCKS=0 sudo git ...` silently
-  drops the variable and rewrites the index exactly as if it were absent — `sudo env
+  drops the variable and rewrites the index exactly as if it were absent - `sudo env
   GIT_OPTIONAL_LOCKS=0 git ...` is the only form that actually survives the privilege switch.
   If a checkout's `.git/index` is ever found owned by someone other than that checkout's owner,
   that is this exact corruption; `chown` it back to the owner (verify with `git -C <dir> pull`
-  as that owner) — do not delete/regenerate it, which would discard any staged state.
-  `setup-owner`'s manual/`--owner` re-run above is no longer the only fix: the service unit
-  `lib/systemd-units` generates now carries its own `+`-prefixed, failure-tolerant `ExecStartPre` that detects and
-  reasserts ownership under `REPO_DIR` immediately before its self-update fetch/merge, so the
-  automatic self-update path self-heals the same drift on its own (#1302): a stuck `failed` timer
-  no longer requires a human to notice and manually re-run `setup-owner`.
-- **`${owner_home}/.local` root-owned across a reboot (#1232, unconfirmed root cause).** After a
-  reboot of `nanoclaw` on 2026-07-22, `/home/credfeto/.local` and `/home/funfair-tech/.local`
-  (including `.local/share/containers`, rootless Podman's storage/layer directory) were found
-  owned by `root:root`, breaking both orchestrator instances identically on their first run after
-  boot (`mkdir .../containers/storage/libpod: permission denied`). What was ruled out: the
-  orchestrator's own systemd units (`User=` applies to every `ExecStartPre`/`ExecStart` line, so
-  nothing in the unit itself runs as root except the explicitly `+`-prefixed heal steps), and a
-  static `systemd-tmpfiles.d` rule (nothing under `/usr/lib/tmpfiles.d`/`/etc/tmpfiles.d` targets
-  `/home` or either owner). Suspected but never confirmed: an `ansible-pull` autoupdate
-  (`credfeto-setup-arch-vm`) firing at almost the same second as the drift, possibly via pacman's
-  `systemd-hook` PostTransaction `systemd-tmpfiles --create`; also worth checking is the
-  btrfs-subvolume-mount-ordering lead (`home-credfeto.mount: Directory ... to mount over is not
-  empty, mounting anyway` in the boot log). The box was fully remediated (fresh subvolume,
-  `setup-owner` re-run) before the mechanism could be isolated, so root cause remains open — a
-  clean-reboot repro on `nanoclaw` and an audit of `credfeto-setup-arch-vm`'s ansible roles are the
-  next steps if this recurs. The service unit `lib/systemd-units` generates now carries a second, independent
-  `-+`-prefixed (deliberately the reverse of the `+-` REPO_DIR heal's prefix order — functionally
+  as that owner) - do not delete/regenerate it, which would discard any staged state.
+  The service unit `lib/systemd-units` generates also carries its own `+`-prefixed,
+  failure-tolerant `ExecStartPre` that detects and reasserts ownership under `REPO_DIR`
+  immediately before its self-update fetch/merge, so the automatic self-update path self-heals
+  the same drift on its own and a stuck `failed` timer does not need a human to re-run
+  `setup-owner`.
+- **`${owner_home}/.local` root-owned across a reboot (root cause unconfirmed).** A host reboot
+  can leave `/home/<owner>/.local` (including `.local/share/containers`, rootless Podman's
+  storage/layer directory) owned by `root:root`, which breaks every orchestrator instance on its
+  first run after boot (`mkdir .../containers/storage/libpod: permission denied`). The
+  orchestrator's own systemd units are not the cause (`User=` applies to every
+  `ExecStartPre`/`ExecStart` line, so nothing in the unit runs as root except the explicitly
+  `+`-prefixed heal steps), and no static `systemd-tmpfiles.d` rule under
+  `/usr/lib/tmpfiles.d`/`/etc/tmpfiles.d` targets `/home` or an owner. If it recurs, check an
+  `ansible-pull` autoupdate (`credfeto-setup-arch-vm`) firing at the same moment as the drift,
+  possibly via pacman's `systemd-hook` PostTransaction `systemd-tmpfiles --create`, and the
+  btrfs subvolume mount ordering (`home-credfeto.mount: Directory ... to mount over is not
+  empty, mounting anyway` in the boot log); a clean-reboot repro on `nanoclaw` and an audit of
+  `credfeto-setup-arch-vm`'s ansible roles are the next steps. The service unit
+  `lib/systemd-units` generates carries a second, independent
+  `-+`-prefixed (deliberately the reverse of the `+-` REPO_DIR heal's prefix order - functionally
   identical, but textually distinct so the two lines are never conflated by a marker/grep keyed on
   the exact prefix string) `ExecStartPre` as the very first step in the unit, ahead of the
   REPO_DIR heal and self-update steps, that detects (`find -maxdepth 0 -not -user -o -maxdepth 0
-  -not -group`, a single stat rather than a walk of the whole tree — `.local/share/containers` can
+  -not -group`, a single stat rather than a walk of the whole tree - `.local/share/containers` can
   be many GB) and reasserts ownership of `${owner_home}/.local` before every run, so a recurrence
   self-heals regardless of whether the underlying mechanism is ever confirmed.
 
 ## Always Read the Full GitHub Timeline, Not Just Current State (MANDATORY)
 
-When investigating any Issue or PR, pull its full timeline — not just its current labels/state via `gh pr view`/`gh issue view`:
+When investigating any Issue or PR, pull its full timeline - not just its current labels/state via `gh pr view`/`gh issue view`:
 
 ```bash
 gh api repos/<owner>/<repo>/issues/<n>/timeline --paginate -q '.[] | select(.event=="labeled" or .event=="unlabeled" or .event=="reviewed" or .event=="committed" or .event=="head_ref_force_pushed") | [.event, (.label.name // .state // .sha // ""), .created_at, .actor?.login] | @tsv'
 ```
 
-Current state alone is a snapshot and hides *when* things happened and *what didn't happen in between* — exactly the evidence that matters for "why did this get stuck". For example, PR #116 in `credfeto-enum-source-generation` looked like an ordinary blocked PR from its current state; only the timeline revealed that a human removed the `Blocked` label and approved it, and the bot re-added `Blocked` under two hours later with **zero** commits, reviews, or force-pushes in between — proving the automation never even got a turn, rather than that it failed to resolve something (see #1115).
+Current state alone is a snapshot and hides *when* things happened and *what didn't happen in between* - exactly the evidence that matters for "why did this get stuck". For example, a PR can look like an ordinary blocked PR from its current state, while only the timeline shows that a human removed the `Blocked` label and approved it and the bot re-added `Blocked` with **zero** commits, reviews, or force-pushes in between - proving the automation never even got a turn, rather than that it failed to resolve something.
 
 ## State Inventory
 
-### 1 — Orchestrator version
+### 1 - Orchestrator version
 
 Run per owner (see Real Deployment Layout above for why the path/sudo form is needed):
 
@@ -111,37 +108,37 @@ sudo git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/
 sudo env GIT_OPTIONAL_LOCKS=0 git -c safe.directory=/home/<owner>/credfeto-orchestrator -C /home/<owner>/credfeto-orchestrator status
 ```
 
-(`rev-parse` is plumbing and never touches `.git/index`, so it needs no guard; `status` does — see
+(`rev-parse` is plumbing and never touches `.git/index`, so it needs no guard; `status` does - see
 the `GIT_OPTIONAL_LOCKS=0` explanation under "Inspecting another owner's checkout" above.)
 
-Confirms which version of `oneshot`/`lib/*` is deployed for that owner. This checkout self-updates via the systemd unit's own `ExecStartPre` (`git fetch` + `merge --ff-only origin/main`) immediately before every run, not via `loop`'s self-update path — a dirty tree or a commit behind `origin/main` right after a service run means that `ExecStartPre` step itself failed; check the service's own log (Section 2) for the exact fetch/merge error.
+Confirms which version of `oneshot`/`lib/*` is deployed for that owner. This checkout self-updates via the systemd unit's own `ExecStartPre` (`git fetch` + `merge --ff-only origin/main`) immediately before every run, not via `loop`'s self-update path - a dirty tree or a commit behind `origin/main` right after a service run means that `ExecStartPre` step itself failed; check the service's own log (Section 2) for the exact fetch/merge error.
 
-Since #1298, staleness is largely self-reported rather than something you need to go hunting for: the merge step retries once, clearing any stale `*.lock` file anywhere under `.git` first, if the first attempt fails — the exact failure seen in that incident, a lock left by a previous merge killed mid-write by the step's own `timeout`. A `find`, not a top-level glob, is required here: a merge killed while updating the branch ref leaves its lock nested at `.git/refs/heads/<branch>.lock`, not directly under `.git/`. The deletion is age-gated (locks younger than a minute are left alone) — `REPO_DIR` is the same checkout for every `--owner` variant installed for a given user, so an unconditional delete could remove a lock a *different*, concurrently-running unit's merge is still legitimately holding, not just one abandoned by a killed process. If the checkout is still behind `origin/main` after that, `oneshot` itself detects it (`git_commits_behind` in `lib/git`) and, **only when systemd-invoked** (gated on `ORCHESTRATOR_SELF_UPDATE_MANAGED` — a variable the service unit `lib/systemd-units` generates declares explicitly, deliberately not systemd's generic `INVOCATION_ID`, which is set for any unit's main process and would also wrongly catch a manual shell descended from an unrelated systemd session; this deliberately does not apply to `loop`, which has its own looser "warn and keep going" recovery policy for the same underlying condition, #1104, or to a manual/interactive invocation), posts a Discord alert (`docs/discord-notifications.md`) and exits non-zero — so `systemctl status`/`journalctl` also show the unit as `failed`, not a normal successful run. The commands above remain the fallback for diagnosing *why* a merge keeps failing (a genuinely diverged branch, an auth/network failure, or some other stale-lock shape not yet handled) once the alert or a failed unit points you here.
+Staleness is largely self-reported rather than something you need to go hunting for: if the first attempt fails, the merge step retries once, first clearing any stale `*.lock` file anywhere under `.git`, such as a lock left by a previous merge killed mid-write by the step's own `timeout`. A `find`, not a top-level glob, is required here: a merge killed while updating the branch ref leaves its lock nested at `.git/refs/heads/<branch>.lock`, not directly under `.git/`. The deletion is age-gated (locks younger than a minute are left alone) - `REPO_DIR` is the same checkout for every `--owner` variant installed for a given user, so an unconditional delete could remove a lock a *different*, concurrently-running unit's merge is still legitimately holding, not just one abandoned by a killed process. If the checkout is still behind `origin/main` after that, `oneshot` itself detects it (`git_commits_behind` in `lib/git`) and, **only when systemd-invoked** (gated on `ORCHESTRATOR_SELF_UPDATE_MANAGED` - a variable the service unit `lib/systemd-units` generates declares explicitly, deliberately not systemd's generic `INVOCATION_ID`, which is set for any unit's main process and would also wrongly catch a manual shell descended from an unrelated systemd session; this deliberately does not apply to `loop`, which has its own looser "warn and keep going" recovery policy for the same underlying condition, or to a manual/interactive invocation), posts a Discord alert (`docs/discord-notifications.md`) and exits non-zero - so `systemctl status`/`journalctl` also show the unit as `failed`, not a normal successful run. The commands above remain the fallback for diagnosing *why* a merge keeps failing (a genuinely diverged branch, an auth/network failure, or some other stale-lock shape not yet handled) once the alert or a failed unit points you here.
 
-### 2 — Orchestrator service
+### 2 - Orchestrator service
 
 ```bash
 sudo systemctl status "credfeto-orchestrator-<owner>-<owner>.service" --no-pager -l
 sudo systemctl list-timers "credfeto-orchestrator-<owner>-*" --no-pager
 ```
 
-Determines whether the service is running (`activating` for the duration of one `oneshot` cycle — normal, not stuck, if the cgroup process tree is still actively computing), idle between ticks (`inactive (dead)`, exited 0), or failed. Check `sudo journalctl -u "credfeto-orchestrator-<owner>-<owner>.service" -n 100 --no-pager` for recent output, including the `ExecStartPre` fetch/merge/agent-setup steps.
+Determines whether the service is running (`activating` for the duration of one `oneshot` cycle - normal, not stuck, if the cgroup process tree is still actively computing), idle between ticks (`inactive (dead)`, exited 0), or failed. Check `sudo journalctl -u "credfeto-orchestrator-<owner>-<owner>.service" -n 100 --no-pager` for recent output, including the `ExecStartPre` fetch/merge/agent-setup steps.
 
-### 3 — Lock files
+### 3 - Lock files
 
 ```bash
 ls -la ${XDG_STATE_HOME:-~/.local/state}/orchestrator/locks/
 ```
 
-A stale lock (`_global.lock` or `<owner>.lock`) left by a crashed process will cause every subsequent `oneshot` run to exit immediately with "Another oneshot instance is already running". Verify with `flock --exclusive --nonblock <lockfile>` — if it fails to acquire, a process still holds it; if it succeeds, the lock is stale and safe to remove.
+A stale lock (`_global.lock` or `<owner>.lock`) left by a crashed process will cause every subsequent `oneshot` run to exit immediately with "Another oneshot instance is already running". Verify with `flock --exclusive --nonblock <lockfile>` - if it fails to acquire, a process still holds it; if it succeeds, the lock is stale and safe to remove.
 
-### 4 — Rate-limit files
+### 4 - Rate-limit files
 
 ```bash
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'rate-limit' -exec echo {} \; -exec cat {} \;
 ```
 
-A rate-limit file contains a unix timestamp. Compare against `date +%s` — if the stored value is in the future, the orchestrator will skip all items for that owner until it expires.
+A rate-limit file contains a unix timestamp. Compare against `date +%s` - if the stored value is in the future, the orchestrator will skip all items for that owner until it expires.
 
 ### 4a - Session-denials record and daily digest marker
 
@@ -158,9 +155,9 @@ cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/last-digest-sent
 - Files older than `SESSION_DENIALS_RETENTION_DAYS` (lib/globals) are pruned on every rollover attempt, whether or not the digest was sent.
 - A date with no file (before the per-day record existed, or already pruned) can still be checked for quit sessions from the service journal: check 7 in `tasks/healthcheck.md` describes the per-repo count.
 
-### 5 — PR invocation-guard files
+### 5 - PR invocation-guard files
 
-The orchestrator no longer persists Claude session IDs — every run is a fresh single-phase
+The orchestrator does not persist Claude session IDs - every run is a fresh single-phase
 session (see `oneshot-prompts.instructions.md`). Instead each PR has an invocation-guard file
 holding two space-separated counters, `<total> <idle>`:
 
@@ -169,10 +166,10 @@ find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.invocat
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.invocations' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
-- `total` — every agent invocation ever spent on the PR. At `MAX_PR_TOTAL_INVOCATIONS` (computed in lib/globals from the four per-phase round budgets plus a flat headroom — see lib/globals for the current value) the PR is marked Blocked. A PR stuck at a high total that never merges is churning without converging.
-- `idle` — consecutive re-invocations where the PR fingerprint did not change (a phase that advanced the board without pushing). At `MAX_PR_IDLE_INVOCATIONS` (default 5) the PR is parked (skipped) until its state changes. A PR parked here is either done and waiting on a human, or a phase failed to leave a durable trace.
+- `total` - every agent invocation ever spent on the PR. At `MAX_PR_TOTAL_INVOCATIONS` (computed in lib/globals from the four per-phase round budgets plus a flat headroom - see lib/globals for the current value) the PR is marked Blocked. A PR stuck at a high total that never merges is churning without converging.
+- `idle` - consecutive re-invocations where the PR fingerprint did not change (a phase that advanced the board without pushing). At `MAX_PR_IDLE_INVOCATIONS` (default 5) the PR is parked (skipped) until its state changes. A PR parked here is either done and waiting on a human, or a phase failed to leave a durable trace.
 
-A companion `PullRequest_<n>.runaway-blocked` (or `Issue_<n>.runaway-blocked`) marker file records that this item was observed `Blocked` while its total already sat at/over the cap — written both by oneshot's own runaway backstop *and*, since #1115, whenever oneshot observes the item blocked by any other mechanism (the code-review workflow's own rules, CI-timeout, idle-exhaustion, a manual label) while already capped. When a human clears the `Blocked` label, oneshot only resets `total`/`idle` to `0` if this marker is present — so a human-driven unblock on a capped item reliably gets a fresh invocation budget regardless of which rule applied the block. If a capped PR/Issue was re-blocked instantly after a human cleared it with no new agent activity in between (check the GitHub timeline — see above), first confirm the marker was written on the observing tick; its absence points to a gap in marker coverage, not user error.
+A companion `PullRequest_<n>.runaway-blocked` (or `Issue_<n>.runaway-blocked`) marker file records that this item was observed `Blocked` while its total already sat at/over the cap - written both by oneshot's own runaway backstop *and* whenever oneshot observes the item blocked by any other mechanism (the code-review workflow's own rules, CI-timeout, idle-exhaustion, a manual label) while already capped. When a human clears the `Blocked` label, oneshot only resets `total`/`idle` to `0` if this marker is present - so a human-driven unblock on a capped item reliably gets a fresh invocation budget regardless of which rule applied the block. If a capped PR/Issue was re-blocked instantly after a human cleared it with no new agent activity in between (check the GitHub timeline - see above), first confirm the marker was written on the observing tick; its absence points to a gap in marker coverage, not user error.
 
 Delete the file to reset both counters (also makes the next run treat the PR as first-touch and re-initialise its board status to "Not Started"):
 
@@ -180,40 +177,40 @@ Delete the file to reset both counters (also makes the next run treat the PR as 
 rm ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n>.invocations
 ```
 
-### 5a — Environment auto-unblock files (#1118)
+### 5a - Environment auto-unblock files
 
-When an agent diagnoses a `Blocked`-ing failure as environmental/infrastructure (e.g. a missing tool in the container), it leaves a machine-readable trailer on its diagnosis comment: `<!-- orchestrator:env-block image-sha=<sha> -->` (see `agent-roles.instructions.md` § "Environment/Infrastructure Block Marker"). `oneshot` checks every `Blocked` PR carrying this marker against the currently-pulled agent image's own baked-in `IMAGE_SHA_DEVELOPMENT_AGENT` — if a newer image has been built since the diagnosis (different SHA), it auto-clears `Blocked` and comments, with no human needed:
+When an agent diagnoses a `Blocked`-ing failure as environmental/infrastructure (e.g. a missing tool in the container), it leaves a machine-readable trailer on its diagnosis comment: `<!-- orchestrator:env-block image-sha=<sha> -->` (see `agent-roles.instructions.md` § "Environment/Infrastructure Block Marker"). `oneshot` checks every `Blocked` PR carrying this marker against the currently-pulled agent image's own baked-in `IMAGE_SHA_DEVELOPMENT_AGENT` - if a newer image has been built since the diagnosis (different SHA), it auto-clears `Blocked` and comments, with no human needed:
 
 ```bash
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.env-unblocks' -exec echo "=== {} ===" \; -exec cat {} \;
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'PullRequest_*.env-unblock-cap-notified'
 ```
 
-- `PullRequest_<n>.env-unblocks` — count of times oneshot has auto-cleared this PR's Blocked label for an environment diagnosis. Resets to nothing whenever the PR is next observed open-and-unblocked through the normal path (a human clearing it, or a fresh unrelated block cycle).
-- At `MAX_PR_ENV_AUTO_UNBLOCKS` (default 3), oneshot stops auto-clearing and instead posts a one-time comment saying the same failure recurred after a rebuild (the "environment" diagnosis was likely wrong) — `PullRequest_<n>.env-unblock-cap-notified` marks that this notice has already been sent, so it isn't repeated every tick.
-- If a PR you expected to auto-unblock is still sitting `Blocked`, check (a) whether its latest diagnosis comment actually carries the marker, (b) whether `current_agent_image_sha` (a `podman inspect` on `${ORCHESTRATOR_IMAGE}`) actually differs from the recorded SHA — the image may not have rebuilt yet — and (c) whether the `.env-unblock-cap-notified` marker is already present (the cap was hit).
+- `PullRequest_<n>.env-unblocks` - count of times oneshot has auto-cleared this PR's Blocked label for an environment diagnosis. Resets to nothing whenever the PR is next observed open-and-unblocked through the normal path (a human clearing it, or a fresh unrelated block cycle).
+- At `MAX_PR_ENV_AUTO_UNBLOCKS` (default 3), oneshot stops auto-clearing and instead posts a one-time comment saying the same failure recurred after a rebuild (the "environment" diagnosis was likely wrong) - `PullRequest_<n>.env-unblock-cap-notified` marks that this notice has already been sent, so it isn't repeated every tick.
+- If a PR you expected to auto-unblock is still sitting `Blocked`, check (a) whether its latest diagnosis comment actually carries the marker, (b) whether `current_agent_image_sha` (a `podman inspect` on `${ORCHESTRATOR_IMAGE}`) actually differs from the recorded SHA - the image may not have rebuilt yet - and (c) whether the `.env-unblock-cap-notified` marker is already present (the cap was hit).
 
-### 5b — Plan-block self-heal marker (#1286)
+### 5b - Plan-block self-heal marker
 
-An Issue's `fingerprint_issue_json` includes its labels, but the agent applying `Blocked` after posting a plan is a *prompt instruction*, not something the shell verifies — an agent that ends its session without applying it leaves the Issue's fingerprint unchanged forever, so it is never re-invoked to notice its own omission (`Issue #N ... unchanged — skipping`, every tick). `oneshot` self-heals this directly: on an unchanged-fingerprint, plan-not-approved Issue, if a `## Implementation Plan` comment exists with no genuine human approval since (see `issue_plan_awaiting_human_approval` / `issue_json_has_human_plan_approval` in `lib/github-status`), it applies `Blocked` itself and writes a marker:
+An Issue's `fingerprint_issue_json` includes its labels, but the agent applying `Blocked` after posting a plan is a *prompt instruction*, not something the shell verifies - an agent that ends its session without applying it leaves the Issue's fingerprint unchanged forever, so it is never re-invoked to notice its own omission (`Issue #N ... unchanged - skipping`, every tick). `oneshot` self-heals this directly: on an unchanged-fingerprint, plan-not-approved Issue, if a `## Implementation Plan` comment exists with no genuine human approval since (see `issue_plan_awaiting_human_approval` / `issue_json_has_human_plan_approval` in `lib/github-status`), it applies `Blocked` itself and writes a marker:
 
 ```bash
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name 'Issue_*.plan-block' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
-- `Issue_<n>.plan-block` — presence means oneshot has already auto-applied `Blocked` once for this exact drift. Bounds the self-heal to firing at most once per drift episode: if a human later clears `Blocked` **without** approving (no board `Approved`, no human approval comment), oneshot sees the marker and does **not** re-add the label — mirroring the `MAX_PR_ENV_AUTO_UNBLOCKS` precedent (bound the automation, never the human) and specifically avoiding a repeat of the #1115 incident (a bot re-adding `Blocked` within two hours of a human clearing it, with zero activity in between).
-- Cleared once the Issue's plan is observed board-`Approved` (`clear_issue_plan_block_marker`, called right after `issue_plan_approved` returns `true`) — so a later, unrelated plan-revision drift episode on the same Issue is not wrongly suppressed by a stale marker from an already-resolved one.
-- Unlike `Issue_<n>.blocked` (re-armed on every "observed open + unblocked" tick, for Discord notification), this marker deliberately does **not** clear on that observation — clearing it there would defeat its only purpose.
-- If an Issue that should have self-healed is still missing `Blocked`, check whether it actually has a `## Implementation Plan` comment and whether any comment after it could be misread as approval — `issue_json_has_human_plan_approval` only counts a comment from a human (not the orchestrator's own login) who is also in the trusted-logins list; the bot's own comments explaining that approval is *missing* must never satisfy the check (verified live against `funfair-build-check#434` and `adblockplusrules#615`, both of which had only their own such comment before this fix).
+- `Issue_<n>.plan-block` - presence means oneshot has already auto-applied `Blocked` once for this exact drift. Bounds the self-heal to firing at most once per drift episode: if a human later clears `Blocked` **without** approving (no board `Approved`, no human approval comment), oneshot sees the marker and does **not** re-add the label - mirroring the `MAX_PR_ENV_AUTO_UNBLOCKS` precedent (bound the automation, never the human), so a bot never re-adds `Blocked` straight after a human clears it with zero activity in between.
+- Cleared once the Issue's plan is observed board-`Approved` (`clear_issue_plan_block_marker`, called right after `issue_plan_approved` returns `true`) - so a later, unrelated plan-revision drift episode on the same Issue is not wrongly suppressed by a stale marker from an already-resolved one.
+- Unlike `Issue_<n>.blocked` (re-armed on every "observed open + unblocked" tick, for Discord notification), this marker deliberately does **not** clear on that observation - clearing it there would defeat its only purpose.
+- If an Issue that should have self-healed is still missing `Blocked`, check whether it actually has a `## Implementation Plan` comment and whether any comment after it could be misread as approval - `issue_json_has_human_plan_approval` only counts a comment from a human (not the orchestrator's own login) who is also in the trusted-logins list; the bot's own comments explaining that approval is *missing* must never satisfy the check.
 
-### 6 — Fingerprint files
+### 6 - Fingerprint files
 
 ```bash
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.fingerprint' | sort
 find ${XDG_STATE_HOME:-~/.local/state}/orchestrator -name '*.fingerprint' -exec echo "=== {} ===" \; -exec cat {} \;
 ```
 
-A fingerprint file holds `<schema-version>:<SHA-256 hash>` of a PR's or Issue's state at the end of the last run (see [fingerprinting.instructions.md](fingerprinting.instructions.md) for what's hashed and why the version prefix exists). When the fingerprint matches the current GitHub state, `oneshot` skips the item. An incorrect or stale fingerprint is why an item that should be worked on is being skipped — including a plan approved purely on the Workflow board, which the fingerprint now accounts for (#1204); if a board-approved item is still stuck, check whether `FINGERPRINT_SCHEMA_VERSION` was bumped for whatever field is supposed to catch it.
+A fingerprint file holds `<schema-version>:<SHA-256 hash>` of a PR's or Issue's state at the end of the last run (see [fingerprinting.instructions.md](fingerprinting.instructions.md) for what's hashed and why the version prefix exists). When the fingerprint matches the current GitHub state, `oneshot` skips the item. An incorrect or stale fingerprint is why an item that should be worked on is being skipped - including a plan approved purely on the Workflow board, which the fingerprint accounts for; if a board-approved item is still stuck, check whether `FINGERPRINT_SCHEMA_VERSION` was bumped for whatever field is supposed to catch it.
 
 To force a re-run, delete the relevant fingerprint file:
 
@@ -237,7 +234,7 @@ cat ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/PullRequest_<n
 ```
 
 A missing or stale value here (older than the comment's own timestamp) means no real agent turn
-has read it yet — `pr_json_has_unaddressed_trusted_comment` (`lib/github-status`) should force one
+has read it yet - `pr_json_has_unaddressed_trusted_comment` (`lib/github-status`) should force one
 on the next tick regardless of the general fingerprint or a "settled"/terminal PR state; if it
 doesn't, that predicate itself is the place to check first. Delete the file to force this state
 back to "nothing seen yet" (same idea as deleting `.fingerprint`, above).
@@ -258,12 +255,12 @@ find ${XDG_STATE_HOME:-~/.local/state}/orchestrator/<owner>/<repo>/transcripts/I
 - Transcripts missing for an item that is still open mean it had no session for 14 days; that is expected, since `oneshot` never resumes a session. Transcripts older than 14 days that are still present belong to a repository that has not launched a container since, because the purge only runs before a launch for that repository; delete the directory by hand if it matters.
 - An item directory that `ls -A` shows as empty, or holding only `.orchestrator-last-pivot` (the activity file each Issue-to-PR pivot touches), after a session ran means Claude Code wrote no transcript; check the mount is present in the `podman run` arguments (`/home/developer/.claude/projects:rw`) before suspecting anything else.
 
-### 7 — Podman containers
+### 7 - Podman containers
 
 Containers run as **rootless Podman** under the owner's own user namespace (Docker was replaced
 with rootless Podman; `docker` is not installed on the host at all, so `sudo docker ...` fails
 with "command not found", not a permission error). `sudo podman ps` from `markr` shows root's own
-(empty) rootless namespace, not the owner's — it does **not** reveal the owner's containers. The
+(empty) rootless namespace, not the owner's - it does **not** reveal the owner's containers. The
 practical way to confirm a container is genuinely running (vs. hung) as `markr` is to read the
 process tree directly, which doesn't require entering the owner's podman namespace:
 
@@ -273,14 +270,14 @@ sudo systemctl status "credfeto-orchestrator-<owner>-<owner>.service" --no-pager
 
 The `CGroup:` section lists the live process tree, including the `podman run --name
 orchestrator-<owner> ...` invocation and, once started, the container's own `claude` process and
-any build/test tooling it spawned — if those PIDs are actively accumulating CPU time across
+any build/test tooling it spawned - if those PIDs are actively accumulating CPU time across
 repeated checks, the container is working, not stuck. A container named `orchestrator-<owner>`
 left running (or in exited state with `--rm` not honoured) will cause the next `invoke_claude`
 call to die with "Container already exists"; if the service log confirms this, become that owner
 to remove it (`sudo -iu <owner>` if your session allows `sudo -u`-style commands, otherwise ask a
 human with owner access) with `podman rm -f orchestrator-<owner>`.
 
-### 8 — Working directories
+### 8 - Working directories
 
 ```bash
 for d in ~/work/*/*/repo; do
@@ -292,7 +289,7 @@ done
 
 A dirty working tree or a non-main branch left from a previous session is detected by `ensure_repo_current` and handed to the agent as `DIRTY_BRANCH`. Confirm whether uncommitted changes are expected or residue from a crash.
 
-### 9 — Config and tokens
+### 9 - Config and tokens
 
 ```bash
 ls -la ~/.config/orchestrator/
@@ -302,7 +299,7 @@ ls -la ~/.config/orchestrator/tokens/
 
 Missing or malformed config causes Discord notifications to silently fail and GH Enterprise calls to fall through to the wrong host.
 
-### 10 — Priorities API
+### 10 - Priorities API
 
 ```bash
 curl --silent --fail https://git-workflow.markridgwell.com/priorities | jq '.'
@@ -319,7 +316,7 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | Item skipped every run despite changes | Fingerprint not updating | Section 6 |
 | All items skipped for an owner | Rate-limit file active | Section 4 |
 | `invoke_claude` dies "container exists" | Previous container not removed | Section 7 |
-| Agent starts from scratch every run | Expected — every run is a fresh single-phase session (no resume) | Section 5 |
+| Agent starts from scratch every run | Expected - every run is a fresh single-phase session (no resume) | Section 5 |
 | PR worked repeatedly then Blocked, or parked mid-workflow | `total`/`idle` invocation-guard caps reached | Section 5 |
 | No Discord notifications | `DISCORD_WEBHOOK` not set in `.env` | Section 9 |
 | Priorities fetch fails | API unreachable or auth issue | Section 10 |
@@ -327,10 +324,10 @@ Confirms whether the priorities API is reachable and returning valid JSON. An em
 | `Workflow project: ... status updates disabled` + a `Workflow project setup required` issue in the repo | No `Workflow` project for the repo; the bot cannot create one under a personal account | Run `create-project --repo <owner>/<repo>` as the repo owner |
 | `Workflow` project exists (visible by node ID) but `oneshot` always treats the repo as having no project | Repo has `hasProjectsEnabled: false`; `repository.projectsV2` returns empty even when the project is linked | `gh repo edit <owner>/<repo> --enable-projects`, then re-run `create-project` |
 | `newuidmap: Could not set caps` / `cannot set up namespace using "/usr/bin/newuidmap"`; container pull/start fails | Service unit drops the caps rootless Podman needs (`CapabilityBoundingSet=` empty and/or `NoNewPrivileges=yes`), so `newuidmap`/`newgidmap` cannot map subuid/subgid ranges | Unit must set `NoNewPrivileges=no` and `CapabilityBoundingSet=CAP_SETUID CAP_SETGID` (see `create_service_unit` in `lib/systemd-units`); re-run `setup-owner` to regenerate, or apply a drop-in override as interim recovery |
-| `jq: Argument list too long` computing a PR fingerprint (`lib/fingerprints`) | A long-lived PR's inline review comments (`fetch_pr_review_comments`) serialised past Linux's per-argument `MAX_ARG_STRLEN` (128KiB — separate from, and much smaller than, total `ARG_MAX`) once passed to `jq` via `--argjson`; confirmed against `credfeto-docker-registry#8` (63 inline comments, 316KB). Fixed in #1254 by passing that argument via `--rawfile`+`fromjson` (a temp file) instead — pull the current code, this should not recur; if it does anyway, check whether some *other* field feeding fingerprinting has grown unbounded and is still being passed via `--argjson`/`--arg` | `lib/fingerprints` (`fingerprint_pr_json`); see `credfeto/cs-template#1012` for the generalised rule ("never pass unbounded data as a single argv value") |
+| `jq: Argument list too long` computing a PR fingerprint (`lib/fingerprints`) | A long-lived PR's inline review comments (`fetch_pr_review_comments`) serialised past Linux's per-argument `MAX_ARG_STRLEN` (128KiB - separate from, and much smaller than, total `ARG_MAX`) once passed to `jq` via `--argjson`. That argument is passed via `--rawfile`+`fromjson` (a temp file) instead - pull the current code, this should not recur; if it does anyway, check whether some *other* field feeding fingerprinting has grown unbounded and is still being passed via `--argjson`/`--arg` | `lib/fingerprints` (`fingerprint_pr_json`); never pass unbounded data as a single argv value |
 | Image pull fails with `creating a temporary directory: mkdir /var/tmp/container_images_storage…: no such file or directory` (often only when the image actually needs a fresh layer copy) | Service unit sets `PrivateTmp=yes`; rootless Podman's persistent pause process captured the empty private `/var/tmp`, so all later pulls in that pause namespace see a broken `/var/tmp` | Drop `PrivateTmp` from the unit (see `create_service_unit` in `lib/systemd-units`); to recover a live host, clear the pause process (`pkill -u <owner> -f catatonit; pkill -u <owner> -f 'podman pause'`) and regenerate/override the unit so the next run does not re-leak |
 | Plan-approved Issue marked `Blocked` with "no further progress ... idle-invocation budget ... exhausted", although the agent comments show it deferring because another PR was open in the same repo | The shell never defers an Issue for a PR that is not the orchestrator's own: only PRs authored by `_GH_ME` or `PR_CREATOR_LOGIN` occupy its slot, and `find_open_nonblocked_pr_for_repo` (Blocked PRs included) and `find_human_taken_over_pr_for_issue` already stand it off for those. So the session itself deferred, reading the one-active-PR rule ("per user") as covering someone else's PR, and the idle counter climbed to the cap. The cause is the agent instruction wording, which is maintained upstream in `cs-template`, not the shell | Read the agent transcript for the deferral and the PR it named, then compare that PR author with `_GH_ME` and `PR_CREATOR_LOGIN`; `oneshot` (`block_issue_for_idle_exhausted_no_progress` call site) |
-| First orchestrator run after a host reboot fails Podman with `mkdir .../containers/storage/libpod: permission denied` | `${owner_home}/.local` found root-owned (root cause unconfirmed — see "Real Deployment Layout" above, #1232) | The service unit `lib/systemd-units` generates now carries a `-+`-prefixed `ExecStartPre` (the very first step, ahead of the REPO_DIR heal) that detects and reasserts ownership of `${owner_home}/.local` before every run; re-run `setup-owner` to regenerate an older unit, or `chown -R <owner>:<owner> /home/<owner>/.local` as interim recovery |
+| First orchestrator run after a host reboot fails Podman with `mkdir .../containers/storage/libpod: permission denied` | `${owner_home}/.local` found root-owned (root cause unconfirmed - see "Real Deployment Layout" above) | The service unit `lib/systemd-units` generates carries a `-+`-prefixed `ExecStartPre` (the very first step, ahead of the REPO_DIR heal) that detects and reasserts ownership of `${owner_home}/.local` before every run; re-run `setup-owner` to regenerate an older unit, or `chown -R <owner>:<owner> /home/<owner>/.local` as interim recovery |
 
 ## After Reviewing State
 
@@ -341,4 +338,4 @@ Summarise what you found, then act:
 - Whether the lock is held
 - The current git state of the orchestrator repo itself
 
-If the problem required any manual action to resolve (deleting a file, resetting a branch, removing a container), **that manual action is a bug**.  Fix it in the orchestrator's code so it cannot recur — raise a GitHub issue if a code fix is non-trivial.
+If the problem required any manual action to resolve (deleting a file, resetting a branch, removing a container), **that manual action is a bug**.  Fix it in the orchestrator's code so it cannot recur - raise a GitHub issue if a code fix is non-trivial.

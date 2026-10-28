@@ -24,7 +24,7 @@ Each image is built and pushed to `ghcr.io/<owner>/<image>:latest`.
 
 ## Build Contexts (MANDATORY)
 
-The build context for each image is the directory containing its Dockerfile — **never the repo root**:
+The build context for each image is the directory containing its Dockerfile - **never the repo root**:
 
 | Image | Dockerfile | CI context |
 | --- | --- | --- |
@@ -38,13 +38,13 @@ Any `COPY` instruction in a Dockerfile uses a path relative to that image's own 
 
 ## system-gitconfig and SSH Rewriting
 
-All git operations — both inside the container and on the host — are configured to rewrite `https://github.com/` URLs to `git@github.com:`. This is done at two levels:
+All git operations - both inside the container and on the host - are configured to rewrite `https://github.com/` URLs to `git@github.com:`. This is done at two levels:
 
 **Inside the container:** `containers/base/development-full/system-gitconfig` is baked into the image at `/etc/gitconfig` (root:root 0444). It rewrites HTTPS to SSH for github.com, gitlab.com, and bitbucket.org.
 
 **On the host:** `setup-owner`'s `configure_git()` writes the same `url.insteadOf` / `pushInsteadOf` rules into the owner user's `~/.gitconfig`. Every owner provisioned via `setup-owner --owner <name>` has SSH rewriting active on the host.
 
-Together these mean that even if the agent inside the container changes the remote URL to HTTPS (e.g. via `gh pr checkout`), any subsequent `git push` — whether in the container or on the host — will still use SSH.
+Together these mean that even if the agent inside the container changes the remote URL to HTTPS (e.g. via `gh pr checkout`), any subsequent `git push` - whether in the container or on the host - will still use SSH.
 
 As belt-and-suspenders, `ensure_repo_current()` and `try_nonagentic_rebase()` in `oneshot` also explicitly reset the remote URL to `git@github.com:` before each push, fixing the stored URL in `.git/config` for all tools regardless of `url.insteadOf`.
 
@@ -52,9 +52,9 @@ The self-check HTTPS clone in each Dockerfile uses `GIT_CONFIG_SYSTEM=/dev/null`
 
 ## Build Verification Before Any Change (MANDATORY)
 
-`docker`/`podman` execution is now banned outright for in-session Bash calls (#1539; see `ai/local/claude-hooks.instructions.md`), so an agent session can no longer run `docker build` locally to verify a Dockerfile or workflow change.
+`docker`/`podman` execution is banned outright for in-session Bash calls (see `ai/local/claude-hooks.instructions.md`), so an agent session cannot run `docker build` locally to verify a Dockerfile or workflow change.
 
-Each `build-development-*.yml` workflow already builds its image on every pull request (a `pull_request` trigger with no `paths:` filter, so it always runs, and it is a required status check). That CI run is now the verification point for a Dockerfile or workflow change: push the change and confirm the relevant `build-development-*` check passes before considering it verified. Do not mark a PR ready until it does.
+Each `build-development-*.yml` workflow already builds its image on every pull request (a `pull_request` trigger with no `paths:` filter, so it always runs, and it is a required status check). That CI run is the verification point for a Dockerfile or workflow change: push the change and confirm the relevant `build-development-*` check passes before considering it verified. Do not mark a PR ready until it does.
 
 ## Lock-Down Requirements (MANDATORY)
 
@@ -66,11 +66,11 @@ Every file and directory installed by the build that an agent must not modify MU
 
 Examples of correctly locked-down artefacts:
 
-- `/etc/gitconfig` — global git config, root:root 0444
-- `/home/developer/.nuget/NuGet/NuGet.Config` — NuGet feed list, root:root 0444
-- `/opt/pre-commit/` — pre-commit hook repo, root:root 0755
-- `/opt/git-global-hooks/` — hook shim directory, root:root 0755
-- `/opt/composite-action-lint/` — linter binary, root:root 0755
+- `/etc/gitconfig` - global git config, root:root 0444
+- `/home/developer/.nuget/NuGet/NuGet.Config` - NuGet feed list, root:root 0444
+- `/opt/pre-commit/` - pre-commit hook repo, root:root 0755
+- `/opt/git-global-hooks/` - hook shim directory, root:root 0755
+- `/opt/composite-action-lint/` - linter binary, root:root 0755
 
 ## Self-Check Requirements (MANDATORY)
 
@@ -80,7 +80,7 @@ Every Dockerfile MUST end with a `RUN set -e; ...` self-check block that:
 2. Re-verifies ALL inherited binaries from every previous stage
 3. Includes `ssh -V` (not `--version`) for the SSH client
 4. Includes a live HTTPS `git clone --depth 1` against a sacrificial public repo (`dnyw4l3n13/scratch`) with `GIT_CONFIG_SYSTEM=/dev/null` to bypass the url.https→ssh rewrite
-5. Fails the build (not runtime) if any check fails — a broken image must never be pushed
+5. Fails the build (not runtime) if any check fails - a broken image must never be pushed
 
 ## Installed-Versions Report (MANDATORY)
 
@@ -88,10 +88,10 @@ Every `containers/base/*/Dockerfile` and `containers/agent/Dockerfile` MUST writ
 
 Rules:
 
-- **Overwrite, never append, across stages.** The *first* `RUN` in a stage that touches this file must create it fresh (`>`, not `>>`), so it ends up containing only that stage's own additions — a downstream image inherits the file via `FROM` but immediately replaces it with its own content, never carrying forward a previous stage's entries. A stage that genuinely adds no new tools (e.g. `development-agent`, which only removes package managers) still overwrites it with an explanatory line rather than leaving the inherited file in place. Within a single stage, if the tools it installs are spread across more than one `RUN` (e.g. `development-tools`' dotnet SDK install followed by its static-binary linters), the first such `RUN` uses `>` and any subsequent ones in that same stage use `>>` to append to what that stage itself already started — this is not the cross-stage case the rule forbids.
+- **Overwrite, never append, across stages.** The *first* `RUN` in a stage that touches this file must create it fresh (`>`, not `>>`), so it ends up containing only that stage's own additions - a downstream image inherits the file via `FROM` but immediately replaces it with its own content, never carrying forward a previous stage's entries. A stage that genuinely adds no new tools (e.g. `development-agent`, which only removes package managers) still overwrites it with an explanatory line rather than leaving the inherited file in place. Within a single stage, if the tools it installs are spread across more than one `RUN` (e.g. `development-tools`' dotnet SDK install followed by its static-binary linters), the first such `RUN` uses `>` and any subsequent ones in that same stage use `>>` to append to what that stage itself already started - this is not the cross-stage case the rule forbids.
 - **Lock down like any other baked artefact**: `chown root:root /opt/installed-versions.txt && chmod 0444 /opt/installed-versions.txt`, per the Lock-Down Requirements above.
-- **Attribute at the point of installation, not afterwards.** Where two or more installs of the same kind land in the same location (e.g. the dotnet SDK's LTS, STS, and go-live installs all extracting into `/usr/share/dotnet/sdk`), attribute each one to its resolved version. Prefer installing by exact version (`dotnet-install.sh --version "$v"`) over a moving target (`--channel LTS`) wherever the caller already knows the exact version to install — the target directory name is then already known, so there is nothing to reconstruct afterwards and no need for a "find the newly-added directory" scan.
-- **Prefer values already known exactly** — a pinned `ARG` version, a `dotnet tool list -g` row, a captured commit SHA — over re-deriving them from a floating install. When only a `--version`/`-version`/`-h` probe is available, capture its actual output rather than assuming a single-line format (e.g. `sqlcmd --version` prints a multi-line banner; the real version is on the `Version:` line, not the first line).
+- **Attribute at the point of installation, not afterwards.** Where two or more installs of the same kind land in the same location (e.g. the dotnet SDK's LTS, STS, and go-live installs all extracting into `/usr/share/dotnet/sdk`), attribute each one to its resolved version. Prefer installing by exact version (`dotnet-install.sh --version "$v"`) over a moving target (`--channel LTS`) wherever the caller already knows the exact version to install - the target directory name is then already known, so there is nothing to reconstruct afterwards and no need for a "find the newly-added directory" scan.
+- **Prefer values already known exactly** - a pinned `ARG` version, a `dotnet tool list -g` row, a captured commit SHA - over re-deriving them from a floating install. When only a `--version`/`-version`/`-h` probe is available, capture its actual output rather than assuming a single-line format (e.g. `sqlcmd --version` prints a multi-line banner; the real version is on the `Version:` line, not the first line).
 
 ## ARG Cache-Busting Pattern
 
@@ -107,13 +107,13 @@ Without this, changing the ARG in the workflow has no effect on the cached layer
 
 This no-op trick is only needed when the ARG's *value* doesn't otherwise appear in the layer's
 command text (e.g. a cache-bust hash/SHA that exists purely to invalidate the cache). When the ARG
-already IS the value being installed — e.g. `dotnet-install.sh --version "${DOTNET_LTS_VERSION}"`
-— referencing it directly already busts the cache whenever it changes; don't add a redundant
+already IS the value being installed - e.g. `dotnet-install.sh --version "${DOTNET_LTS_VERSION}"` -
+referencing it directly already busts the cache whenever it changes; don't add a redundant
 `: "${ARG}"` line on top of that.
 
 ## Pinned Upstream Repo Clones (MANDATORY)
 
-Never clone an external repo with a plain `git clone --depth 1 <url>` and then assert the resulting `HEAD` equals a pinned commit — that clones whatever the default branch's tip is *right now*, so the assertion (and the build) fails every time upstream gets a new commit, not just on an actual tamper event. Pick the mechanism per repo, and re-evaluate the choice (not just the value) whenever bumping:
+Never clone an external repo with a plain `git clone --depth 1 <url>` and then assert the resulting `HEAD` equals a pinned commit - that clones whatever the default branch's tip is *right now*, so the assertion (and the build) fails every time upstream gets a new commit, not just on an actual tamper event. Pick the mechanism per repo, and re-evaluate the choice (not just the value) whenever bumping:
 
 - **Third-party repo with a current, compatible tagged release**: pin to that tag and verify the commit it resolves to:
 
@@ -125,7 +125,7 @@ Never clone an external repo with a plain `git clone --depth 1 <url>` and then a
       && chown -R root:root /opt/tool
   ```
 
-  "Compatible" means: check the tag isn't stale relative to what the Dockerfile actually consumes (e.g. a hardcoded file/skill list or count) — diff the tag's relevant subtree against current default-branch HEAD before adopting it. A stale tag that predates a refactor the build depends on is worse than no tag.
+  "Compatible" means: check the tag isn't stale relative to what the Dockerfile actually consumes (e.g. a hardcoded file/skill list or count) - diff the tag's relevant subtree against current default-branch HEAD before adopting it. A stale tag that predates a refactor the build depends on is worse than no tag.
 
 - **Third-party repo with no usable tag** (none published, or the latest one is stale/incompatible): pin to an exact commit SHA, fetched directly rather than cloned from the moving tip:
 
@@ -137,13 +137,13 @@ Never clone an external repo with a plain `git clone --depth 1 <url>` and then a
       && chown -R root:root /opt/tool
   ```
 
-  This only fails the build if that commit becomes unreachable upstream (a force-push/history rewrite) — verified: `git fetch <url> <bogus-sha>` fails hard (`fatal: remote error: upload-pack: not our ref ...`, exit 128), so the tamper-detection property is preserved. For a sparse-checkout repo, run `git sparse-checkout init --cone` before the `fetch` and `sparse-checkout set <paths>` before the `checkout`.
+  This only fails the build if that commit becomes unreachable upstream (a force-push/history rewrite) - verified: `git fetch <url> <bogus-sha>` fails hard (`fatal: remote error: upload-pack: not our ref ...`, exit 128), so the tamper-detection property is preserved. For a sparse-checkout repo, run `git sparse-checkout init --cone` before the `fetch` and `sparse-checkout set <paths>` before the `checkout`.
 
-- **credfeto-owned repo**: implicitly trusted — always track live main HEAD with no pinned-commit assertion at all (plain `git clone --depth 1 <url>`, no `test`). Still cache-bust on a live-resolved value (e.g. `git ls-remote <url> HEAD` in the workflow) so the layer refreshes when upstream changes — see `credfeto-global-pre-commit` and `credfeto-ai-skills` in `containers/base/development-full/Dockerfile`.
+- **credfeto-owned repo**: implicitly trusted - always track live main HEAD with no pinned-commit assertion at all (plain `git clone --depth 1 <url>`, no `test`). Still cache-bust on a live-resolved value (e.g. `git ls-remote <url> HEAD` in the workflow) so the layer refreshes when upstream changes - see `credfeto-global-pre-commit` and `credfeto-ai-skills` in `containers/base/development-full/Dockerfile`.
 
 ### Sanity-checking a dynamic set (e.g. skills)
 
-Do not hardcode an exact expected count (`[ "$n" -eq 100 ]`) for anything sourced even partly from a live-tracked or otherwise-growing repo — it silently goes stale and starts failing (or worse, stops meaning anything) the next time that source changes. Instead, record the count computed at the point the set is built, and compare against that recorded value later, with a `-gt 0` guard so a degenerate build that produces zero of everything doesn't trivially "match":
+Do not hardcode an exact expected count (`[ "$n" -eq 100 ]`) for anything sourced even partly from a live-tracked or otherwise-growing repo - it silently goes stale and starts failing (or worse, stops meaning anything) the next time that source changes. Instead, record the count computed at the point the set is built, and compare against that recorded value later, with a `-gt 0` guard so a degenerate build that produces zero of everything doesn't trivially "match":
 
 ```dockerfile
 RUN ...build the set... \
@@ -159,7 +159,7 @@ See the `~/.claude/skills` and `~/.claude/agents` symlink counts in `containers/
 
 ## Workflow Build Chain
 
-Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`. `build-development-tools.yml` carries the *only* cron in the whole chain (daily); every other stage relies solely on `workflow_run` chaining plus real-change triggers (`push`, `pull_request`, and `development-full`'s `repository_dispatch: pre-commit-updated`) — do not add a per-stage cron to any downstream workflow. Stacking an independent schedule at every stage previously meant `development-agent` at the bottom inherited the union of all of them, moving its `:latest` digest every 15-30 minutes and starving the orchestrator host, which re-pulls before every invocation (#1401). A stage whose freshness depends on an external, non-push-triggered source may add its own change-detection poll workflow instead: resolve the current upstream state, compare it against a value baked into the currently-published image, and dispatch a rebuild only on a mismatch, never an unconditional per-tick rebuild. `development-credfeto-tools` uses this pattern: `check-credfeto-tools-updates.yml` polls nuget.org hourly for its 5 tracked packages and dispatches a rebuild via `.github/actions/dispatch-workflow` only when the resolved version hash differs from the one baked into the currently-published image, so it doesn't reintroduce the #1401 problem.
+Each workflow (except `build-development-tools.yml`) MUST include a `workflow_run` trigger that fires when the preceding stage completes on `main`. `build-development-tools.yml` carries the *only* cron in the whole chain (daily); every other stage relies solely on `workflow_run` chaining plus real-change triggers (`push`, `pull_request`, and `development-full`'s `repository_dispatch: pre-commit-updated`) - do not add a per-stage cron to any downstream workflow. Stacking an independent schedule at every stage makes `development-agent` at the bottom inherit the union of all of them, moving its `:latest` digest every 15-30 minutes and starving the orchestrator host, which re-pulls before every invocation. A stage whose freshness depends on an external, non-push-triggered source may add its own change-detection poll workflow instead: resolve the current upstream state, compare it against a value baked into the currently-published image, and dispatch a rebuild only on a mismatch, never an unconditional per-tick rebuild. `development-credfeto-tools` uses this pattern: `check-credfeto-tools-updates.yml` polls nuget.org hourly for its 5 tracked packages and dispatches a rebuild via `.github/actions/dispatch-workflow` only when the resolved version hash differs from the one baked into the currently-published image, so it doesn't reintroduce the digest-churn problem.
 
 ```yaml
 on:
@@ -184,7 +184,7 @@ Every `build-development-*.yml` workflow's `cache-from`/`cache-to` MUST include 
           cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
 ```
 
-Without an explicit `scope=`, all `build-development-*.yml` workflows share BuildKit's default `type=gha` scope, and their cache writes collide/evict each other — this was previously misdiagnosed as a per-repo storage/write-rate quota problem, but is confirmed (from a real scheduled run's log, zero `CACHED` markers, full `apt-get` re-execution on every build) to be the missing `scope=` alone (#1401). `ignore-error=true` remains required regardless: a cache-export failure can still occur **after** the image has already been fully pushed to ghcr.io, and without `ignore-error=true` buildx treats that as a fatal build failure even though the image itself is fine.
+Without an explicit `scope=`, all `build-development-*.yml` workflows share BuildKit's default `type=gha` scope, and their cache writes collide/evict each other, so every build gets zero `CACHED` markers and re-executes `apt-get` in full. That symptom comes from the missing `scope=`, not from a per-repo storage or write-rate quota. `ignore-error=true` remains required regardless: a cache-export failure can still occur **after** the image has already been fully pushed to ghcr.io, and without `ignore-error=true` buildx treats that as a fatal build failure even though the image itself is fine.
 
 ## SBOM and Provenance (MANDATORY)
 
@@ -197,13 +197,13 @@ Every `build-development-*.yml` workflow's `docker/build-push-action` step MUST 
           provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
 ```
 
-`provenance` MUST use `mode=max` (not bare `true`, which resolves to `mode=min` and omits build args/source materials — near-useless for supply-chain auditing) whenever the build args being embedded are safe to publish (cache-bust hashes, `BUILD_GIT_SHA` — none of these workflows pass secrets as build-args).
+`provenance` MUST use `mode=max` (not bare `true`, which resolves to `mode=min` and omits build args/source materials - near-useless for supply-chain auditing) whenever the build args being embedded are safe to publish (cache-bust hashes, `BUILD_GIT_SHA` - none of these workflows pass secrets as build-args).
 
 Both MUST stay disabled on the `pull_request` (`load: true`) path: buildx's docker exporter used for `--load` cannot store attestation manifests, so requesting `sbom`/`provenance` there fails the build.
 
 ## File Placement
 
 - Dockerfiles: `containers/base/<stage>/Dockerfile`
-- Files COPYd into images: place them alongside the Dockerfile in `containers/base/<stage>/` — do not reference files from other directories
+- Files COPYd into images: place them alongside the Dockerfile in `containers/base/<stage>/` - do not reference files from other directories
 - Workflows: `.github/workflows/build-development-<stage>.yml`
 - Cron schedules: exactly one daily cron, on `development-tools` only; every other stage relies solely on `workflow_run` chaining plus real-change triggers (see "Workflow Build Chain" above)
