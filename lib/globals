@@ -478,6 +478,29 @@ PR_CREATOR_LOGIN="${PR_CREATOR_LOGIN:-prpixie}"
 # shellcheck disable=SC2016  # $login, $me and $creator are jq variables, not shell expansions
 _JQ_DEF_OWN_PR_AUTHOR='def own_pr_author: ((.author.login // "") | ascii_downcase) as $login | ($login == ($me | ascii_downcase) or $login == ($creator | ascii_downcase));'
 
+# jq definition, prepended to every jq program that asks whether a PR closes a given Issue
+# (#1722): pr_issue_link gives "yes", "no" or "unknown". The PR's closingIssuesReferences in this
+# repository decide (a reference that names no repository counts as in it, as in
+# pr_json_lowest_closing_issue). Only a PR that names no Issue here falls back to the branch-name
+# convention (issue_branch_regex, lib/git), the same fallback find_human_taken_over_pr_for_issue
+# uses (#1134). An absent or malformed field gives "unknown", which callers treat as "closes it".
+# The program must be given --arg repo (owner/name), --arg n (the Issue number) and --arg pattern
+# (issue_branch_regex for that Issue).
+# shellcheck disable=SC2016  # $repo, $n, $pattern and $nums are jq variables, not shell expansions
+_JQ_DEF_PR_ISSUE_LINK='def pr_issue_link:
+    if (.closingIssuesReferences | type) != "array" then "unknown"
+    else
+        [.closingIssuesReferences[]
+            | select(.repository == null
+                or (((.repository.owner.login // "") + "/" + (.repository.name // "")) | ascii_downcase) == ($repo | ascii_downcase))
+            | .number] as $nums
+        | if ($nums | all(type == "number")) | not then "unknown"
+          elif ($nums | length) > 0 then (if ($nums | map(tostring) | index($n)) != null then "yes" else "no" end)
+          elif (.headRefName | type) != "string" then "unknown"
+          elif (.headRefName | test($pattern)) then "yes"
+          else "no" end
+    end;'
+
 # jq definition shared by the lib/github-status predicates that judge check results: keeps only
 # the most recent run of each check, keyed on name (or a legacy StatusContext's context) and
 # workflow, so a failure that a later run of the same check has superseded no longer counts.

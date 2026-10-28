@@ -318,6 +318,7 @@ main() {
     local pr_required_checks pr_base_requires_checks pr_required_checks_lookup_failed pr_next_phase pr_unaddressed_comments_text
     local ensure_repo_current_status trusted_logins
     local standoff_pr standoff_rc human_driven_rc closed_takeover_marker closed_pr_tagged_marker
+    local pivot_issue_link_rc holding_pr holding_pr_rc
     local stale_issue_branch resumable_branch
     local background_stall
     local -a _filtered_repos
@@ -415,6 +416,9 @@ main() {
             # than being filtered out here and silently misread as "no PR yet" — which re-armed
             # the plan-approved idle-reinvocation path on an issue that already had a PR, wastefully
             # re-invoking a session that could only ever find the same blocked PR and stop (#1463).
+            # The PR found is only the repository's first bot PR, though, so a Blocked one stands the
+            # Issue off only when it closes this Issue; otherwise the Issue is worked on its own
+            # (#1722, at the Blocked check below).
             # A transient gh failure here (identity lookup or PR list) should skip just this item,
             # not abort the whole cycle and throw away every other priority item (#1085).
             if ! open_pr=$(find_open_nonblocked_pr_for_repo "${item_repo}" true); then
@@ -517,13 +521,48 @@ main() {
                         item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - auto-unblock attempted this tick")")
                         continue
                     fi
-                    info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
                     mark_capped_block_for_forgiveness "PullRequest" "${open_pr}" "${item_repo}"
                     notify_discord_blocked_item "PullRequest" "${open_pr}"
-                    count_blocked=$((count_blocked + 1))
-                    item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)")")
-                    continue
+                    # A Blocked or capped PR is not active work, so it holds back only the Issue it
+                    # closes, which stands off rather than open a duplicate branch (#1463). Standing
+                    # off behind another Issue's Blocked PR froze every Issue in the repository
+                    # (#1722), so when this PR does not close this Issue, and no other bot PR closes
+                    # it or is active work there, the Issue is worked on its own below and the
+                    # repository is not added to skip_repos. A PR whose closing references can't be
+                    # read counts as this Issue's.
+                    pivot_issue_link_rc=0
+                    pr_json_closes_issue "${pr_json}" "${item_repo}" "${item_id}" || pivot_issue_link_rc=$?
+                    if [ "${pivot_issue_link_rc}" -ne 1 ]; then
+                        info "PR #${open_pr} in ${item_repo} is blocked — skipping (not counting as active work)"
+                        count_blocked=$((count_blocked + 1))
+                        item_status_log+=("$(record_item_status "PullRequest" "${open_pr}" "${item_repo}" "blocked - skipping (not counting as active work)")")
+                        continue
+                    fi
+                    holding_pr_rc=0
+                    holding_pr=$(find_bot_pr_holding_issue "${item_repo}" "${item_id}" "${open_pr}") || holding_pr_rc=$?
+                    if [ "${holding_pr_rc}" -eq 2 ]; then
+                        warn "Failed to check the other open PRs in ${item_repo} for Issue #${item_id} — skipping this item for now"
+                        count_error=$((count_error + 1))
+                        item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "failed to check other open PRs - skipping this item for now")")
+                        continue
+                    fi
+                    if [ "${holding_pr_rc}" -eq 0 ]; then
+                        info "PR #${open_pr} in ${item_repo} is blocked and does not close Issue #${item_id}, but bot PR #${holding_pr} closes it or is active work — skipping"
+                        count_blocked=$((count_blocked + 1))
+                        item_status_log+=("$(record_item_status "Issue" "${item_id}" "${item_repo}" "blocked - bot PR #${holding_pr} closes it or is active work")")
+                        continue
+                    fi
+                    info "PR #${open_pr} in ${item_repo} is blocked but does not close Issue #${item_id} — working the Issue on its own"
+                    # Nothing from the pivot attempt may reach the Issue workflow, which fetches the
+                    # Issue again and makes its own checks.
+                    open_pr=""
+                    pr_json=""
+                    pr_state=""
+                    pivot_closing_issue=""
                 fi
+            fi
+
+            if [ -n "${open_pr}" ]; then
                 # PR observed open and un-blocked — re-arm its blocked notifier and clear any
                 # environment-auto-unblock history (#1118); the budget reset already happened
                 # above via reset_pr_invocation_counts_if_capped (#1093, #1115, #1310).
@@ -698,7 +737,8 @@ main() {
                 item_type="PullRequest"
 
             else
-                # No bot-driven PR to pivot into. The one-active-branch-or-PR-at-a-time rule is per
+                # No bot-driven PR to pivot into, or only a Blocked one that closes another Issue
+                # (#1722). The one-active-branch-or-PR-at-a-time rule is per
                 # user, so a PR that is human-driven, or authored by anyone else (a person, a
                 # dependency bot), does not occupy this issue's slot: only the orchestrator's own
                 # PRs do, and the pivot above has already handled those. An issue whose own linked

@@ -353,6 +353,58 @@ find_open_nonblocked_pr_for_repo() {
     return 0
 }
 
+# Finds a bot-driven open PR in repo_full, other than skip_pr, that holds back Issue issue_id: one
+# that closes it, Blocked or not (by the rule in _JQ_DEF_PR_ISSUE_LINK, lib/globals, so a PR whose
+# references can't be read counts), or any PR that is not Blocked, which is the repository's
+# active work. The Issue-to-PR pivot asks this once the PR it found (skip_pr) is Blocked or capped
+# and does not close the Issue (#1722). That PR is only the first bot PR gh lists, so the Issue's
+# own PR, or an active one, can come after it; working the Issue on its own would then open a
+# duplicate branch, or start a second piece of work in the repository. A capped PR without the
+# label is not Blocked here, so it holds the Issue back too.
+# Bot-driven means what it means for find_open_nonblocked_pr_for_repo: created by the bot or the
+# PR create bot, with a commit by the bot (#1131). A human-driven PR is left to
+# find_human_taken_over_pr_for_issue, which the Issue workflow runs.
+# Outputs the PR number and returns 0 when such a PR exists; returns 1 when none does; returns 2
+# when the identity, the PR list or a candidate's commits can't be fetched and no holding PR was
+# found, so the caller skips the Issue rather than risk duplicate work.
+find_bot_pr_holding_issue() {
+    local repo_full="$1" issue_id="$2" skip_pr="${3:-}"
+
+    local pr_list candidates candidate commit_rc scan_error=0
+    resolve_gh_me || return 2
+    pr_list=$(gh pr list \
+        --repo "${repo_full}" \
+        --state open \
+        --limit 200 \
+        --json number,labels,author,closingIssuesReferences,headRefName \
+        2>/dev/null) || return 2
+    candidates=$(printf '%s' "${pr_list}" | jq -r \
+        --arg me "${_GH_ME}" --arg creator "${PR_CREATOR_LOGIN}" --arg skip "${skip_pr}" \
+        --arg repo "${repo_full}" --arg n "${issue_id}" --arg pattern "$(issue_branch_regex "${issue_id}")" \
+        "${_JQ_DEF_OWN_PR_AUTHOR}${_JQ_DEF_PR_ISSUE_LINK}"'
+        .[] | select(own_pr_author and ((.number | tostring) != $skip))
+        | select(
+            (([(.labels // [])[] | .name | ascii_downcase] | index("blocked")) == null)
+            or (pr_issue_link != "no")
+        ) | .number
+    ') || return 2
+    while IFS= read -r candidate; do
+        [ -n "${candidate}" ] || continue
+        commit_rc=0
+        pr_has_bot_authored_commit "${repo_full}" "${candidate}" || commit_rc=$?
+        if [ "${commit_rc}" -eq 0 ]; then
+            printf '%s' "${candidate}"
+            return 0
+        fi
+        if [ "${commit_rc}" -eq 2 ]; then
+            warn "Failed to fetch commits for PR #${candidate} in ${repo_full} — continuing scan"
+            scan_error=1
+        fi
+    done <<< "${candidates}"
+    [ "${scan_error}" -eq 0 ] || return 2
+    return 1
+}
+
 # Tests whether the bot (_GH_ME) has authored (or co-authored) at least one commit on the given
 # PR — the signal that the bot, not a human, is driving the branch (#1131).
 # Returns 0 when a bot-authored commit exists, 1 when none does, and 2 when the gh fetch fails

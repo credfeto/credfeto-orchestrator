@@ -68,6 +68,17 @@ must recognise that and leave the PR alone rather than re-invoking the agent on 
 else's in-progress changes. This is done by checking whether the bot has authored *any* commit
 still on the branch — not just who opened the PR.
 
+A Blocked Pull Request is not active work, so it holds back only the Issue it closes. The lookup
+above includes Blocked Pull Requests on purpose: an Issue whose own Pull Request is Blocked stands
+off rather than open a second branch. The Pull Request it finds is just the first one the bot has
+open in the repository, though. When that Pull Request is Blocked (or has hit its invocation cap)
+and closes a *different* Issue, `oneshot` checks the bot's other open Pull Requests there. If
+none of them closes this Issue and none is active (non-blocked) work, the Issue is worked as a
+plain Issue; the Blocked Pull Request no longer freezes every Issue in its repository. A Pull
+Request "closes" an Issue when its closing references name it, or, when it names no Issue in the
+repository, when its branch follows the Issue's branch-name convention. If the references can't
+be read, or the check of the other Pull Requests fails, the Issue stands off.
+
 ## One repository at a time
 
 A single `oneshot` run only ever invokes the agent once, full stop — the moment one item has been

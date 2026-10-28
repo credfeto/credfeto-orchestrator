@@ -5837,6 +5837,93 @@ STUBEOF
     [ "${output}" = "7" ]
 }
 
+# --- pr_json_closes_issue / find_bot_pr_holding_issue (#1722) -----------------
+
+@test "pr_json_closes_issue is true when the PR's closing references name the Issue (#1722)" {
+    run pr_json_closes_issue '{"closingIssuesReferences":[{"number":7},{"number":10}],"headRefName":"feat/7-x"}' "org/repo" 10
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_closes_issue is false when the PR closes a different Issue, whatever its branch is called (#1722)" {
+    run pr_json_closes_issue '{"closingIssuesReferences":[{"number":7}],"headRefName":"feat/10-x"}' "org/repo" 10
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_json_closes_issue falls back to the branch name only when the PR names no Issue in the repository (#1722)" {
+    run pr_json_closes_issue '{"closingIssuesReferences":[],"headRefName":"feat/10-x"}' "org/repo" 10
+    [ "${status}" -eq 0 ]
+    run pr_json_closes_issue '{"closingIssuesReferences":[],"headRefName":"feat/100-x"}' "org/repo" 10
+    [ "${status}" -eq 1 ]
+    # A reference into another repository does not count, so the branch name decides.
+    run pr_json_closes_issue '{"closingIssuesReferences":[{"number":10,"repository":{"name":"other","owner":{"login":"org"}}}],"headRefName":"fix/7"}' "org/repo" 10
+    [ "${status}" -eq 1 ]
+    run pr_json_closes_issue '{"closingIssuesReferences":[{"number":10,"repository":{"name":"Repo","owner":{"login":"ORG"}}}]}' "org/repo" 10
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr_json_closes_issue can't tell when the closing references or the branch name are missing (#1722)" {
+    run pr_json_closes_issue '{"headRefName":"feat/7-x"}' "org/repo" 10
+    [ "${status}" -eq 2 ]
+    run pr_json_closes_issue '{"closingIssuesReferences":[]}' "org/repo" 10
+    [ "${status}" -eq 2 ]
+    run pr_json_closes_issue '' "org/repo" 10
+    [ "${status}" -eq 2 ]
+}
+
+@test "find_bot_pr_holding_issue finds nothing when every other bot PR is Blocked and closes another Issue (#1722)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":99,"labels":[],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":10}],"headRefName":"feat/10-x"},{"number":98,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":7}],"headRefName":"feat/7-x"},{"number":97,"labels":[],"author":{"login":"someone"},"closingIssuesReferences":[{"number":10}],"headRefName":"feat/10-y"}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    # PR 99 is the pivot's own PR (skipped); PR 97 was opened by someone else.
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+}
+
+@test "find_bot_pr_holding_issue finds a non-blocked bot PR, the repository's active work (#1722)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":98,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":7}],"headRefName":"feat/7-x"},{"number":42,"labels":[],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":8}],"headRefName":"feat/8-x"}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr42.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42.json" ;; *) exit 1 ;; esac'
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "42" ]
+}
+
+@test "find_bot_pr_holding_issue finds a Blocked bot PR that closes the Issue, by reference or by branch name (#1722)" {
+    _GH_ME="testuser"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/pr100.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 100"*"--json commits"*) cat "'"${TEST_TMP}"'/pr100.json" ;; *) exit 1 ;; esac'
+    printf '%s' '[{"number":100,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":10}],"headRefName":"feat/other"}]' > "${TEST_TMP}/prlist.json"
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "100" ]
+    printf '%s' '[{"number":100,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[],"headRefName":"feat/10-thing"}]' > "${TEST_TMP}/prlist.json"
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "100" ]
+}
+
+@test "find_bot_pr_holding_issue passes over a bot-created PR with no bot-authored commits (#1722)" {
+    _GH_ME="testuser"
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":10}],"headRefName":"feat/10-x"}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"humanuser"}]}]}' > "${TEST_TMP}/pr42.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view 42"*"--json commits"*) cat "'"${TEST_TMP}"'/pr42.json" ;; *) exit 1 ;; esac'
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 1 ]
+}
+
+@test "find_bot_pr_holding_issue fails when the PR list or a candidate's commits can't be fetched (#1722)" {
+    _GH_ME="testuser"
+    make_stub gh 'exit 1'
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 2 ]
+    printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":8}],"headRefName":"feat/8-x"}]' > "${TEST_TMP}/prlist.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *) exit 1 ;; esac'
+    run find_bot_pr_holding_issue "org/repo" 10 99
+    [ "${status}" -eq 2 ]
+}
+
 @test "find_open_nonblocked_pr_for_repo skips a candidate with no bot-authored commits and returns the next (#1131)" {
     _GH_ME="testuser"
     printf '%s' '[{"number":42,"labels":[],"author":{"login":"testuser"}},{"number":50,"labels":[],"author":{"login":"testuser"}}]' > "${TEST_TMP}/prlist.json"
@@ -9438,6 +9525,193 @@ ENVEOF
     [[ "${output}" == *"Issue #10 in org/repo: found open PR #99 — switching to PR workflow"* ]]
     [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
     [[ "${output}" != *"plan approved"* ]]
+    [ ! -f "${_invoke_log}" ]
+}
+
+# --- issue pivot: a Blocked PR holds back only the Issue it closes (#1722) -----
+
+# The pivot's PR 99 is Blocked and closes Issue 7, not Issue 10; the caller stubs the rest.
+stub_pr_open_blocked_for_other_issue() {
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","headRefName":"feat/7-other","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":7}]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+}
+
+@test "main works the Issue on its own when the pivot's Blocked PR closes a different Issue (#1722)" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked_for_other_issue
+    find_bot_pr_holding_issue() { return 1; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf '%s %s\n' "$2" "$3" >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    local _notif_log="${TEST_TMP}/notif_log"
+    notify_discord_blocked_item() { printf 'type=%s id=%s\n' "$1" "$2" >> "${_notif_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked but does not close Issue #10 — working the Issue on its own"* ]]
+    [[ "${output}" != *"is blocked — skipping"* ]]
+    [[ "${output}" == *"Found actionable Issue #10 in org/repo"* ]]
+    # The session is the Issue's, not the PR's: no pivot state leaked into it.
+    [ "$(cat "${_invoke_log}")" = "Issue 10" ]
+    # The Blocked PR is still reported as blocked, as before.
+    grep -q 'type=PullRequest id=99' "${_notif_log}"
+}
+
+@test "main does not mark the repository active when it works past another Issue's Blocked PR (#1722)" {
+    setup_main_pivot_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false},{"id":20,"itemType":"Issue","repository":"org/repo","priority":2,"status":"Open","isOnHold":false}]'
+    }
+    stub_pr_open_blocked_for_other_issue
+    find_bot_pr_holding_issue() { return 1; }
+    # Issue 10 is unchanged and so not worked, which lets the loop reach Issue 20.
+    fingerprint_issue_json() { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint() { printf 'issue-fp-same\n'; }
+    stub_plan_already_self_heal_marked
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"does not close Issue #10 — working the Issue on its own"* ]]
+    [[ "${output}" == *"does not close Issue #20 — working the Issue on its own"* ]]
+    [[ "${output}" != *"Skipping Issue #20 in org/repo — repo already has active work"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main still stands an Issue off when the pivot's Blocked PR closes it (#1722)" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked
+    find_bot_pr_holding_issue() { printf 'called\n' >> "${TEST_TMP}/holding_log"; return 1; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [[ "${output}" != *"working the Issue on its own"* ]]
+    [ ! -f "${TEST_TMP}/holding_log" ]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main stands an Issue off when the pivot's Blocked PR names no Issue but its branch is the Issue's (#1722)" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","headRefName":"feat/10-thing","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    find_bot_pr_holding_issue() { return 1; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main stands an Issue off when it can't tell which Issue the pivot's Blocked PR closes (#1722)" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[{"name":"Blocked"}],"headRefOid":"abc","headRefName":"feat/7-other","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    pr_json_has_blocked_label() { return 0; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    find_bot_pr_holding_issue() { return 1; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked — skipping (not counting as active work)"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main stands an Issue off when another bot PR closes it or is active work, behind another Issue's Blocked PR (#1722)" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked_for_other_issue
+    find_bot_pr_holding_issue() { [ "$1" = "org/repo" ] && [ "$2" = "10" ] && [ "$3" = "99" ] && printf '42'; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked and does not close Issue #10, but bot PR #42 closes it or is active work — skipping"* ]]
+    [[ "${output}" != *"working the Issue on its own"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+}
+
+@test "main skips an Issue and counts an error when the other open PRs can't be checked, behind another Issue's Blocked PR (#1722)" {
+    setup_main_pivot_mocks
+    stub_pr_open_blocked_for_other_issue
+    find_bot_pr_holding_issue() { return 2; }
+    invoke_claude() { printf 'invoked\n' >> "${TEST_TMP}/invoke_log"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+    local _status_log="${TEST_TMP}/status_log"
+    notify_discord_no_work() { printf '%s\n' "$*" >> "${_status_log}"; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Failed to check the other open PRs in org/repo for Issue #10 — skipping this item for now"* ]]
+    [[ "${output}" != *"working the Issue on its own"* ]]
+    [ ! -f "${TEST_TMP}/invoke_log" ]
+    grep -q 'failed to check other open PRs - skipping this item for now' "${_status_log}"
+}
+
+@test "main works the Issue on its own when the pivot's PR is capped, not labelled, and closes a different Issue (#1722)" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/7-other","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":7}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    reset_pr_invocation_counts_if_capped() { return 1; }
+    try_auto_unblock_env_diagnosed_pr() { return 1; }
+    find_bot_pr_holding_issue() { return 1; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf '%s %s\n' "$2" "$3" >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked but does not close Issue #10 — working the Issue on its own"* ]]
+    [ "$(cat "${_invoke_log}")" = "Issue 10" ]
+}
+
+@test "main still pivots into a non-blocked bot PR that closes a different Issue (#1722)" {
+    setup_main_pivot_mocks
+    fetch_pr_json() { printf '{"state":"OPEN","title":"T","body":"","isDraft":false,"labels":[],"headRefOid":"abc","headRefName":"feat/7-other","comments":[],"reviews":[],"statusCheckRollup":[],"closingIssuesReferences":[{"number":7}]}\n'; }
+    pr_json_has_blocked_label() { return 1; }
+    find_bot_pr_holding_issue() { printf 'called\n' >> "${TEST_TMP}/holding_log"; return 1; }
+    fingerprint_pr_json() { printf 'fp-new\n'; }
+    load_pr_fingerprint() { printf 'fp-old\n'; }
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf '%s %s\n' "$2" "$3" >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Issue #10 in org/repo: found open PR #99 — switching to PR workflow"* ]]
+    [[ "${output}" != *"working the Issue on its own"* ]]
+    [ ! -f "${TEST_TMP}/holding_log" ]
+    [ "$(cat "${_invoke_log}")" = "PullRequest 99" ]
+}
+
+@test "main works past another Issue's Blocked PR through the real lookups, and stands off behind the Issue's own Blocked PR listed after it (#1722)" {
+    # Exercises find_open_nonblocked_pr_for_repo, pr_json_closes_issue and
+    # find_bot_pr_holding_issue unstubbed, against one gh pr list fixture.
+    setup_main_mocks
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    _GH_ME="testuser"
+    printf '%s' '[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":7}],"headRefName":"feat/7-other"}]' > "${TEST_TMP}/prlist.json"
+    printf '%s' '{"commits":[{"authors":[{"login":"testuser"}]}]}' > "${TEST_TMP}/commits.json"
+    make_stub gh 'case "$*" in *"pr list"*) cat "'"${TEST_TMP}"'/prlist.json" ;; *"pr view"*"--json commits"*) cat "'"${TEST_TMP}"'/commits.json" ;; *) exit 1 ;; esac'
+    fetch_issue_json() { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    issue_json_has_blocked_label() { return 1; }
+    stub_pr_open_blocked_for_other_issue
+    local _invoke_log="${TEST_TMP}/invoke_log"
+    invoke_claude() { printf '%s %s\n' "$2" "$3" >> "${_invoke_log}"; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked but does not close Issue #10 — working the Issue on its own"* ]]
+    [ "$(cat "${_invoke_log}")" = "Issue 10" ]
+
+    # The Issue's own PR, also Blocked, comes after PR 99 in the list.
+    rm -f "${_invoke_log}"
+    printf '%s' '[{"number":99,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":7}],"headRefName":"feat/7-other"},{"number":100,"labels":[{"name":"Blocked"}],"author":{"login":"testuser"},"closingIssuesReferences":[{"number":10}],"headRefName":"feat/10-this"}]' > "${TEST_TMP}/prlist.json"
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo is blocked and does not close Issue #10, but bot PR #100 closes it or is active work — skipping"* ]]
     [ ! -f "${_invoke_log}" ]
 }
 

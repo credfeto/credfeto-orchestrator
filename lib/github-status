@@ -934,6 +934,22 @@ pr_json_lowest_closing_issue() {
     printf '%s' "${issue}"
 }
 
+# Tells whether the pre-fetched PR JSON closes Issue issue_id in repo_full, by the rule in
+# _JQ_DEF_PR_ISSUE_LINK (lib/globals): its closing references in the repository, or the
+# branch-name convention when it names none there. The Issue-to-PR pivot asks this of a Blocked or
+# capped PR, which holds back only the Issue it closes (#1722).
+# Returns 0 when the PR closes the Issue, 1 when it does not, and 2 when it can't tell (the JSON
+# or its closingIssuesReferences field is absent or malformed); callers treat 2 as closing it.
+pr_json_closes_issue() {
+    local pr_json="$1" repo_full="$2" issue_id="$3" link
+    link=$(printf '%s' "${pr_json}" | jq -r \
+        --arg repo "${repo_full}" --arg n "${issue_id}" --arg pattern "$(issue_branch_regex "${issue_id}")" \
+        "${_JQ_DEF_PR_ISSUE_LINK}"' pr_issue_link' 2>/dev/null) || return 2
+    [ "${link}" = "yes" ] && return 0
+    [ "${link}" = "no" ] && return 1
+    return 2
+}
+
 # Returns 0 (true) if the pre-fetched Issue JSON contains a label named 'blocked' (case-insensitive).
 issue_json_has_blocked_label() {
     _json_has_blocked_label "$1"
