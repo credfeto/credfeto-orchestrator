@@ -32,6 +32,9 @@ info "  development-agent:   ${IMAGE_SHA_DEVELOPMENT_AGENT:-unknown}"
 # Check that the pre-commit rules checkout at /workspace/rules is up-to-date.
 # Compares the SHA recorded in /workspace/rules/.env against the published SHA.
 # Skipped silently when the .env is absent, curl unavailable, or remote unreachable.
+# A mismatch only warns: the published SHA can move between the host-side rules sync
+# and the next agent run, and a slightly stale lint set is cheaper than every agent
+# run failing until the host catches up.
 # WORKSPACE_RULES_ENV overrides the .env path (used by tests).
 verify_hooks_fresh() {
     local env_file="${WORKSPACE_RULES_ENV:-/workspace/rules/.env}"
@@ -49,9 +52,24 @@ verify_hooks_fresh() {
     printf '%s' "${remote_sha}" | grep -qE '^[0-9a-fA-F]{7,40}$' 2>/dev/null \
         || remote_sha=""
 
-    if [ -n "${remote_sha}" ] && [ "${remote_sha}" != "${installed_sha}" ]; then
-        die "Pre-commit rules are out of date (installed: ${installed_sha}, latest: ${remote_sha}) — update /workspace/rules and retry"
+    [ -n "${remote_sha}" ] || return 0
+
+    # Either side may be an abbreviated SHA, so compare only the common prefix.
+    local compare_length="${#installed_sha}"
+    if [ "${#remote_sha}" -lt "${compare_length}" ]; then
+        compare_length="${#remote_sha}"
     fi
+    if [ "${compare_length}" -lt 7 ]; then
+        compare_length=7
+    fi
+
+    local installed_prefix="${installed_sha:0:${compare_length}}"
+    local remote_prefix="${remote_sha:0:${compare_length}}"
+
+    if [ "${installed_prefix,,}" != "${remote_prefix,,}" ]; then
+        warn "Pre-commit rules checkout is stale (installed: ${installed_sha}, latest: ${remote_sha}) — continuing with the installed rules; update /workspace/rules to pick up the latest"
+    fi
+    return 0
 }
 
 verify_gpg_signing() {

@@ -305,16 +305,52 @@ run_entrypoint_with_hooks_env() {
     [ "${status}" -eq 0 ]
 }
 
-@test "entrypoint dies when installed SHA is stale" {
+@test "entrypoint warns but still starts claude when installed SHA is stale" {
     setup_entrypoint_stubs
+    make_stub claude "touch '${TEST_TMP}/claude_ran'"
     local env_file="${TEST_TMP}/rules.env"
     printf 'SHA=abc1234\n' > "${env_file}"
     make_stub curl 'printf "def5678\n"'
     run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"out of date"* ]]
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"stale"* ]]
     [[ "${output}" == *"abc1234"* ]]
     [[ "${output}" == *"def5678"* ]]
+    [ -f "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not warn when remote full SHA starts with installed short SHA" {
+    setup_entrypoint_stubs
+    make_stub claude "touch '${TEST_TMP}/claude_ran'"
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    make_stub curl 'printf "abc1234def5678abc1234def5678abc1234def56\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"stale"* ]]
+    [ -f "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint does not warn when installed full SHA starts with remote short SHA" {
+    setup_entrypoint_stubs
+    make_stub claude "touch '${TEST_TMP}/claude_ran'"
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234def5678abc1234def5678abc1234def56\n' > "${env_file}"
+    make_stub curl 'printf "abc1234\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" != *"stale"* ]]
+    [ -f "${TEST_TMP}/claude_ran" ]
+}
+
+@test "entrypoint warns when remote full SHA does not start with installed short SHA" {
+    setup_entrypoint_stubs
+    local env_file="${TEST_TMP}/rules.env"
+    printf 'SHA=abc1234\n' > "${env_file}"
+    make_stub curl 'printf "def5678abc1234def5678abc1234def5678abc12\n"'
+    run_entrypoint_with_hooks_env WORKSPACE_RULES_ENV="${env_file}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"stale"* ]]
 }
 
 @test "entrypoint skips hooks check when remote returns non-SHA output" {
