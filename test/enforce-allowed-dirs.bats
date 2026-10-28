@@ -478,6 +478,45 @@ assert_blocked() {
     assert_blocked $'tee sub/out <<A\n$(cat <<\'B\'\n\xe2\x80\x94\nB\n)\nA' 'plain ASCII'
 }
 
+# --- plain-ASCII heredocs and the offending-byte report (#1677) ---------------------
+
+@test "a plain-ASCII python3 heredoc after cd is allowed with quoted and unquoted delimiters" {
+    assert_allowed "cd ${ROOT} && python3 - <<'PLAN'"$'\nimport sys\n\nfor arg in sys.argv:\n\tprint(arg)  # ~!@#$%^&*()[]{}|;:,.<>?/\\\n'"PLAN"
+    assert_allowed "cd ${ROOT} && python3 - <<EOF"$'\nprint("a" * 3)\n\tprint(1)\nEOF'
+    assert_allowed "cd ${ROOT} && python3 - <<-'EOF'"$'\n\tprint(1)\n\tEOF'
+}
+
+@test "a plain-ASCII heredoc body with CRLF line endings is allowed" {
+    assert_allowed "cd ${ROOT} && python3 - <<EOF"$'\nprint(1)\r\nprint(2)\r\nEOF'
+    assert_allowed "cd ${ROOT} && python3 - <<'EOF'"$'\nprint(1)\r\nEOF'
+}
+
+@test "a long plain-ASCII heredoc body is allowed" {
+    local body="" n
+    for n in $(seq 1 500); do
+        body+=$'\tprint("line '"${n}"$' of a long body")\n'
+    done
+    assert_allowed "cd ${ROOT} && python3 - <<'EOF'"$'\n'"${body}EOF"
+    assert_allowed "cd ${ROOT} && python3 - <<EOF"$'\n'"${body}EOF"
+}
+
+@test "a control byte reports its hex value and byte offset" {
+    local prefix="cd ${ROOT}"
+    assert_blocked "${prefix}"$'\f && python3 -' "first offending byte 0x0c at offset ${#prefix}"
+    local before_body="${prefix} && python3 - <<EOF"$'\nprint(1)'
+    assert_blocked "${before_body}"$'\x01\nEOF' "first offending byte 0x01 at offset ${#before_body}"
+    assert_blocked $'tee sub/out\x7f' 'first offending byte 0x7f at offset 11'
+}
+
+@test "a non-ASCII byte reports the offset of its first byte in the original command" {
+    assert_blocked $'tee sub/out <<EOF\n\xe2\x80\x94\nEOF' 'first offending byte 0xe2 at offset 18'
+    assert_blocked $'tee sub/caf\xc3\xa9 <<\'EOF\'\nx\nEOF' 'first offending byte 0xc3 at offset 11'
+    # The exempt body before the offending byte is skipped when checking but
+    # still counted in the reported offset.
+    assert_blocked $'tee sub/out <<\'EOF\'\n\xe2\x80\x94\nEOF\nrm -rf \xe2\x80\x98/etc/x' 'first offending byte 0xe2 at offset 35'
+    assert_blocked $'tee sub/a <<\'A\' && tee sub/b <<B\n\xe2\x80\x94\nA\n\xc2\xa0\nB' 'first offending byte 0xc2 at offset 39'
+}
+
 @test "cp/mv --target-directory and -t are validated in every spelling" {
     assert_blocked "cp x --target-directory=${OUTSIDE}" '--target-directory'
     assert_blocked "cp x --target-directory ${OUTSIDE}"
