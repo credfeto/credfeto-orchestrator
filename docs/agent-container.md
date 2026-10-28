@@ -80,6 +80,16 @@ not "the agent failed at its task" (see the `invoke_claude`/`run_claude_fresh` d
   "does a file with this name exist") against what's already reviewed and merged closes that
   hole.
 
+One further check is deliberately non-fatal: the entrypoint compares the SHA recorded in
+`/workspace/rules/.env` with the SHA published at `https://pre-commit.markridgwell.com/sha.txt`.
+Either side may be an abbreviated SHA, so only the common prefix (at least 7 characters) is
+compared. A mismatch prints a single warning naming both SHAs and saying the rules checkout is
+stale, then startup continues: the installed hooks still run at their installed version, and a
+slightly stale lint set is far cheaper than every agent run failing whenever the published SHA
+moves ahead of the host-side rules sync. To clear the warning, update the host's rules checkout.
+The check is skipped silently when the `.env` file or its `SHA=` line is absent, `curl` is
+unavailable, the remote is unreachable, or the remote returns something that is not a hex SHA.
+
 Only once every one of these passes does the entrypoint exec `claude` itself, handing it the
 prompt built by `oneshot` (see [oneshot.md](oneshot.md) and
 [workflow-board.md](workflow-board.md) for what that prompt actually contains).
