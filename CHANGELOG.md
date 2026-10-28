@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- Container image vulnerability scans (trivy-scan) now list each finding (CVE, severity, package, installed and fixed version) in the build log and as annotations, write a findings table to the job summary, and post one comment per image on the PR, instead of only failing with "exit code 1"; the CRITICAL gate and the code scanning upload are unchanged (#1729)
 ### Fixed
 - enforce-allowed-dirs no longer blocks non-ASCII text (such as an em dash) in the body of a heredoc whose delimiter is quoted and alphanumeric (`<<'PLAN'`), so agents can post plans and comments with `--body-file -`; the delimiter, every word and redirection and the body of an unquoted-delimiter heredoc must still be plain ASCII when a writing command is present (#1658)
 - Planning sessions now post the implementation plan with one sanctioned command, `cfwf comment add --body-file -` fed by a quoted heredoc, from a plain-ASCII template, and only add Blocked and move the board to Planning once the plan is confirmed posted. Multi-line plan bodies had been denied in several shapes, and a failed post still left the issue Blocked with no plan, where oneshot skipped it for good (#1658)
@@ -20,7 +21,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
 - The development-tools base image now installs shellcheck and devscripts from trixie-backports, and the build fails if shellcheck is older than 0.11, so lint results match developer machines and super-linter (#1547)
 - The development-tools base image now installs ansible-lint, flake8, pre-commit, pylint and yamllint from pip instead of trixie apt, so linter findings match the releases developers and super-linter use (#1547)
-- The development-tools base image now installs shfmt from the latest mvdan/sh release instead of the out-of-date trixie package, and verifies the binary against the digest GitHub recorded for that release (#1547)
+- The development-tools base image installs shfmt from Debian apt again rather than the upstream mvdan/sh release binary: the release binary is built with a Go standard library that had a CRITICAL vulnerability, which failed the Trivy scan of every image. Debian's package is rebuilt and patched with the distribution (#1729)
 - The development-tools base image now installs bats from a pinned bats-core release instead of trixie apt, and verifies the release commit before installing (#1547)
 - The development-tools README describes where each tool comes from (apt, trixie-backports, pip or upstream release) and how each one is verified (#1547)
 - The docker login and docker buildx setup action pins in the build-development-tools workflow are bumped to their latest releases (#1547)

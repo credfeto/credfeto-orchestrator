@@ -52,7 +52,8 @@ jobs:
     permissions:
       contents: "read"
       packages: "write"
-      pull-requests: "read"
+      # write: trivy-scan posts its findings as a PR comment (sarif-summary)
+      pull-requests: "write"
       security-events: "write"
     steps:
       - name: "Checkout source"
