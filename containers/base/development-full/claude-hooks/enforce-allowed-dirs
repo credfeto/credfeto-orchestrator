@@ -1151,7 +1151,9 @@ check_cd() {
   # physically, so the shell ends up somewhere this hook did not check. A cd
   # that fails outright leaves the working directory unknown just the same.
   logical_cd_prefixes_are_directories "$PREPARED_ABS" || block "${name} target '${arg}' has a .. after something that is not a directory - bash would fall back to a physical cd this hook does not follow"
-  [ -d "$landing" ] && [ -x "$landing" ] || block "${name} target '${arg}' does not exist as a directory the shell can enter - bash would fall back to a physical cd this hook does not follow, or fail and leave the working directory unknown"
+  if [ ! -d "$landing" ] || [ ! -x "$landing" ]; then
+    block "${name} target '${arg}' does not exist as a directory the shell can enter - bash would fall back to a physical cd this hook does not follow, or fail and leave the working directory unknown"
+  fi
   CD_TARGET="$landing"
   # Reading there stays allowed; a writer in the same command does not (see
   # note_writer).
@@ -2714,10 +2716,13 @@ load_classes
 NON_PRINTABLE_RE=$'[^ -~\t\n\r]' # same class reject-obfuscated-commands' Layer 0 uses; LC_ALL=C makes it byte-exact
 ascii_subject=""
 ascii_subject_ready=0
+# "<start>:<length>" of each body removed from ascii_subject, in raw_cmd order,
+# so an offset into ascii_subject can be reported as an offset into raw_cmd.
+ascii_exempt_ranges=()
 # Sets ascii_subject to raw_cmd minus the exempt heredoc bodies, or to all
 # of raw_cmd when any listed body does not match the raw text (fail closed).
 build_ascii_subject() {
-  local -a entries=()
+  local -a entries=() ranges=()
   local entry start body subject="" at=0
   ascii_subject="$raw_cmd"
   ascii_subject_ready=1
@@ -2730,16 +2735,26 @@ build_ascii_subject() {
     [ -n "$body" ] && [ "$start" -ge "$at" ] || return 0
     [ "${raw_cmd:start:${#body}}" = "$body" ] || return 0
     subject+="${raw_cmd:at:start-at}"
+    ranges+=("${start}:${#body}")
     at=$((start + ${#body}))
   done
   ascii_subject="${subject}${raw_cmd:at}"
+  ascii_exempt_ranges=("${ranges[@]}")
 }
 require_ascii() {
+  local bad_byte bad_hex after_bad offset range
   [[ "$raw_cmd" =~ $NON_PRINTABLE_RE ]] || return 0
   [ "$ascii_subject_ready" -eq 1 ] || build_ascii_subject
-  if [[ "$ascii_subject" =~ $NON_PRINTABLE_RE ]]; then
-    block 'command contains non-ASCII or non-printable bytes and includes a directory-taking or file-writing command - rewrite it in plain ASCII (other text may appear only in the body of a heredoc with a quoted, alphanumeric delimiter, e.g. <<"EOF")'
-  fi
+  [[ "$ascii_subject" =~ $NON_PRINTABLE_RE ]] || return 0
+  bad_byte="${BASH_REMATCH[0]}"
+  after_bad="${ascii_subject#*"$bad_byte"}"
+  offset=$((${#ascii_subject} - ${#after_bad} - 1))
+  for range in "${ascii_exempt_ranges[@]}"; do
+    [ "$offset" -ge "${range%%:*}" ] || break
+    offset=$((offset + ${range#*:}))
+  done
+  printf -v bad_hex '%02x' "'$bad_byte"
+  block "command contains non-ASCII or non-printable bytes (first offending byte 0x${bad_hex} at offset ${offset}) and includes a directory-taking or file-writing command - rewrite it in plain ASCII (other text may appear only in the body of a heredoc with a quoted, alphanumeric delimiter, e.g. <<\"EOF\")"
 }
 
 # Runs the checks for the call currently accumulated in `words`, then, after
