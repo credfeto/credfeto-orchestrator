@@ -49,8 +49,16 @@ run_as() {
     runuser -u "${user}" -- env "HOME=${home}" "$@"
 }
 
-# Validates that all required source config files exist before we touch anything.
-# Prints a clear error for each missing file/directory and dies when any are absent.
+# Prints GIT_SIGNING_KEY from the source .env with quotes and whitespace stripped; prints nothing
+# when the file or the key is absent.
+read_signing_key_id() {
+    local env_file="${SOURCE_CONFIG}/orchestrator/.env"
+    grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
+        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]'
+}
+
+# Validates the source config files and the host prerequisites before we touch anything.
+# Prints a clear error for each problem found and dies when there are any.
 validate_source_config() {
     local owner="$1"
     local errors=0
@@ -78,6 +86,35 @@ validate_source_config() {
             *) printf '\n✗ %s\n' "${token_file} has permissions ${perms} — must be 600 (run: chmod 600 ${token_file})" >&2
                errors=$((errors + 1)) ;;
         esac
+    fi
+
+    local key_id
+    key_id=$(read_signing_key_id)
+    if [ -n "${key_id}" ] && ! export_signing_key "${key_id}" >/dev/null 2>&1; then
+        printf '\n✗ %s\n' "GIT_SIGNING_KEY ${key_id} cannot be exported from the source keyring — check the key ID in ${SOURCE_CONFIG}/orchestrator/.env" >&2
+        errors=$((errors + 1))
+    fi
+
+    if ! getent group "${JOURNAL_GROUP}" >/dev/null 2>&1; then
+        printf '\n✗ %s\n' "Group ${JOURNAL_GROUP} does not exist on this machine — is systemd-journald installed?" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -d "${POLKIT_RULES_DIR}" ]; then
+        printf '\n✗ %s\n' "${POLKIT_RULES_DIR} does not exist — is polkit installed?" >&2
+        errors=$((errors + 1))
+    fi
+
+    if id "${owner}" >/dev/null 2>&1; then
+        local owner_home
+        owner_home=$(get_owner_home "${owner}")
+        if [ -n "${owner_home}" ]; then
+            local clone_dir="${owner_home}/credfeto-orchestrator"
+            if [ -d "${clone_dir}" ] && [ ! -d "${clone_dir}/.git" ]; then
+                printf '\n✗ %s\n' "${clone_dir} exists but is not a git repository — remove it and re-run" >&2
+                errors=$((errors + 1))
+            fi
+        fi
     fi
 
     [ "${errors}" -eq 0 ] || die "Pre-flight checks failed — fix the above and re-run"
@@ -287,53 +324,82 @@ export_signing_key() {
     fi
 }
 
+# Removes the exported key file and the staging keyring, then dies, leaving the owner's existing
+# keyring untouched.
+abort_gnupg_sync() {
+    local key_file="$1" staging="$2"
+    shift 2
+    rm -f "${key_file}"
+    rm -rf "${staging}"
+    die "$@"
+}
+
+# Builds the owner's new keyring in a staging directory and only swaps it into place once the
+# key has been exported and imported, so a failed export or import keeps the old keyring.
 sync_gnupg() {
     local owner="$1"
     local owner_home="$2"
     local src="${SOURCE_HOME}/.gnupg"
     local dst="${owner_home}/.gnupg"
+    local staging="${owner_home}/.gnupg.new"
 
-    local env_file="${SOURCE_CONFIG}/orchestrator/.env"
     local key_id
-    key_id=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
-        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+    key_id=$(read_signing_key_id)
 
     if [ -z "${key_id}" ]; then
         info "GIT_SIGNING_KEY not set in .env — skipping GPG keyring sync"
         return 0
     fi
 
-    pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
-    pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
-
     info "Importing GPG key ${key_id} for ${owner}..."
-    rm -rf "${dst}" || die "Failed to remove ${dst}"
-    mkdir -p "${dst}" || die "Failed to create ${dst}"
+
+    local key_file
+    key_file=$(mktemp) || die "Failed to create temp file for GPG key ${key_id}"
+    # Export secret key (includes public key) before touching the owner's keyring
+    export_signing_key "${key_id}" > "${key_file}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to export GPG key ${key_id}"
+    [ -s "${key_file}" ] \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Exported GPG key ${key_id} is empty"
+
+    rm -rf "${staging}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to remove stale ${staging}"
+    mkdir -p "${staging}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to create ${staging}"
 
     # Empty common.conf ensures classic pubring.kbx mode regardless of system config
-    touch "${dst}/common.conf" || die "Failed to create ${dst}/common.conf"
+    touch "${staging}/common.conf" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to create ${staging}/common.conf"
 
-    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    chmod 700 "${dst}" || die "Failed to set permissions on ${dst}"
+    chown -R "${owner}:${owner}" "${staging}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to chown ${staging}"
+    chmod 700 "${staging}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to set permissions on ${staging}"
 
-    # Export secret key (includes public key) and import into owner's fresh keyring
-    export_signing_key "${key_id}" \
-        | run_as "${owner}" "${owner_home}" gpg --homedir "${dst}" --batch --no-tty --import \
-        || die "Failed to import GPG key ${key_id} for ${owner}"
+    # The root shell opens the key file, so the owner never needs read access to it
+    run_as "${owner}" "${owner_home}" gpg --homedir "${staging}" --batch --no-tty --import < "${key_file}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to import GPG key ${key_id} for ${owner}"
+    rm -f "${key_file}" || warn "Failed to remove temp file ${key_file}"
 
     if [ -f "${src}/trustdb.gpg" ]; then
-        cp "${src}/trustdb.gpg" "${dst}/" || die "Failed to copy trustdb.gpg"
+        cp "${src}/trustdb.gpg" "${staging}/" \
+            || abort_gnupg_sync "${key_file}" "${staging}" "Failed to copy trustdb.gpg"
     fi
     if [ -f "${src}/sshcontrol" ]; then
-        cp "${src}/sshcontrol" "${dst}/" || die "Failed to copy sshcontrol"
+        cp "${src}/sshcontrol" "${staging}/" \
+            || abort_gnupg_sync "${key_file}" "${staging}" "Failed to copy sshcontrol"
     fi
 
-    chown -R "${owner}:${owner}" "${dst}" || die "Failed to chown ${dst}"
-    find "${dst}" -type d -exec chmod 700 {} + || die "Failed to set dir permissions in ${dst}"
-    find "${dst}" -type f -exec chmod 600 {} + || die "Failed to set file permissions in ${dst}"
+    chown -R "${owner}:${owner}" "${staging}" \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to chown ${staging}"
+    find "${staging}" -type d -exec chmod 700 {} + \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to set dir permissions in ${staging}"
+    find "${staging}" -type f -exec chmod 600 {} + \
+        || abort_gnupg_sync "${key_file}" "${staging}" "Failed to set file permissions in ${staging}"
 
     pkill -KILL -u "${owner}" keyboxd 2>/dev/null || true
     pkill -KILL -u "${owner}" gpg-agent 2>/dev/null || true
+    rm -rf "${dst}" || die "Failed to remove ${dst} - the new keyring is staged at ${staging}"
+    mv "${staging}" "${dst}" || die "Failed to move ${staging} to ${dst}"
     # Remove socket files left behind by SIGKILL so oneshot does not mount a stale
     # socket when gpg-agent has moved to XDG_RUNTIME_DIR on the next service run.
     find "${dst}" -maxdepth 1 -type s -delete 2>/dev/null || true
@@ -350,8 +416,7 @@ configure_git() {
         | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//")
     git_user_email=$(grep '^GIT_USER_EMAIL=' "${env_file}" 2>/dev/null \
         | cut -d= -f2- | sed "s/^['\"]//;s/['\"]$//")
-    git_signing_key=$(grep '^GIT_SIGNING_KEY=' "${env_file}" 2>/dev/null \
-        | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+    git_signing_key=$(read_signing_key_id)
 
     if [ -z "${git_user_name}" ] || [ -z "${git_user_email}" ]; then
         info "GIT_USER_NAME/GIT_USER_EMAIL not set in .env — skipping git config"
