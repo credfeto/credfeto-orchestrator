@@ -47,6 +47,7 @@ daily build, so these packages pick up Debian's updates without a change here.
 | `python3` | Python 3 runtime |
 | `python3-pip` | Python package installer |
 | `python3-venv` | Provides `ensurepip`/the `venv` module — without it `python3 -m venv` fails outright |
+| `shfmt` | Shell formatter and parser; the Claude Code hooks parse every Bash command with `shfmt --tojson`. Taken from Debian rather than the upstream release binary, whose bundled Go standard library can carry CVEs until upstream rebuilds it |
 | `sqlite3` | SQLite CLI |
 | `tini` | Minimal PID 1 / signal forwarder |
 | `ttf-mscorefonts-installer` | Real Microsoft TrueType core fonts (Arial, Times New Roman, Courier New, etc.) from the `contrib` component, required by tools such as SixLabors.Fonts that match by internal family-name records |
@@ -106,7 +107,6 @@ the real GitHub PAT never enters the container.
 | `actionlint` | GitHub release `.tar.gz` archive of `rhysd/actionlint` at the pinned `ACTIONLINT_VERSION` | `sha256sum -c` against the pinned `ACTIONLINT_SHA256_*` ARGs, before extraction |
 | `trufflehog` | GitHub release `.tar.gz` archive of `trufflesecurity/trufflehog` at the pinned `TRUFFLEHOG_VERSION` | `sha256sum -c` against the pinned `TRUFFLEHOG_SHA256_*` ARGs, before extraction |
 | `trivy` | GitHub release `.tar.gz` archive of `aquasecurity/trivy` at the pinned `TRIVY_VERSION` | `sha256sum -c` against the pinned `TRIVY_SHA256_*` ARGs, before extraction |
-| `shfmt` | Latest non-prerelease `mvdan/sh` release binary, deliberately unpinned. `.github/actions/resolve-shfmt-release` resolves it on every build and passes it in as the `SHFMT_VERSION` build-arg. | mvdan/sh publishes no checksum file, so `sha256sum -c` checks the binary against the SHA256 digest GitHub computed when the asset was uploaded, passed in as `SHFMT_SHA256_AMD64`/`SHFMT_SHA256_ARM64`. A missing or malformed digest fails the build. |
 | `bats` | `bats-core/bats-core` cloned at the pinned `BATS_REF` tag and installed with its `install.sh` into `/usr/local`. The clone is removed afterwards. | bats-core publishes no release assets or checksums, so the build fails unless the clone's `HEAD` is the pinned `BATS_COMMIT` |
 | `composite-action-lint` | Built from `COMPOSITE_ACTION_LINT_REF` (default `master`) of `bettermarks/composite-action-lint` in a throwaway Go builder stage, because no release binaries are published upstream. The binary lands in `/opt/composite-action-lint/` and is symlinked to `/usr/local/bin/composite-action-lint`. | None beyond the HTTPS clone. The commit it was built from is recorded in `/opt/composite-action-lint/.env`. |
 
@@ -163,7 +163,7 @@ workload execution. The `developer` home directory is referenced in two ways:
 | `/usr/local/bin/composite-action-lint` | symlink owned by root | The symlink target resolves to the root-owned binary above; a non-root user cannot retarget or remove the symlink. |
 
 All other binaries under `/usr/local/bin/` (hadolint, dotenv-linter, sqlcmd,
-actionlint, trufflehog, trivy, shfmt) are placed with `chmod 0755` and default
+actionlint, trufflehog, trivy) are placed with `chmod 0755` and default
 to `root:root` ownership, making them executable by all but writable only by
 root. `bats` (with its support files under `/usr/local/libexec/bats-core/` and
 `/usr/local/lib/bats-core/`) and the pip-installed linters are also installed
@@ -189,9 +189,9 @@ the minimum version the Dockerfile asserts, so a fall-back to trixie's older
 shellcheck instead of the `trixie-backports` one fails the build.
 
 **Tools resolve to their intended source.** `ansible-lint`, `flake8`,
-`pre-commit`, `pylint`, `yamllint`, `shfmt` and `bats` must each resolve to
+`pre-commit`, `pylint`, `yamllint` and `bats` must each resolve to
 `/usr/local/bin`, so a Debian copy in `/usr/bin` can never be picked up in
-place of the pip, mvdan/sh release or bats-core install.
+place of the pip or bats-core install.
 
 **composite-action-lint.** Checked separately with `-h` (falling back to
 `--help`) because it has no `--version` flag.

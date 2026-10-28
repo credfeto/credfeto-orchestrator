@@ -72,13 +72,6 @@ ARG TRUFFLEHOG_SHA256_ARM64=3060f7c9f18c70afdc432984cacabdd1e9103729b5d5fee7fb67
 ARG TRIVY_VERSION=0.76.1
 ARG TRIVY_SHA256_AMD64=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
 ARG TRIVY_SHA256_ARM64=e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f
-# shfmt: deliberately not pinned. build-development-tools.yml resolves the latest
-# mvdan/sh release and the digests GitHub computed for its binaries on upload
-# (mvdan/sh publishes no checksum file), so the image tracks upstream without
-# manual bumps while each download is still verified.
-ARG SHFMT_VERSION
-ARG SHFMT_SHA256_AMD64
-ARG SHFMT_SHA256_ARM64
 # bats: bats-core publishes no release assets or checksums, so it is pinned to a
 # release tag plus the commit that tag resolves to (the peeled commit, not the
 # annotated tag object). Update BATS_REF and BATS_COMMIT together when bumping.
@@ -136,6 +129,13 @@ RUN useradd -m -s /bin/bash developer
 #                      dangerouslyDisableSandbox) regardless of path or flags —
 #                      see credfeto-orchestrator#1351.
 #   tini       — correct PID 1 / signal forwarding
+#   shfmt      — shell formatter and parser. From Debian rather than the
+#                      upstream mvdan/sh release binary, whose bundled Go
+#                      standard library can carry CVEs until upstream rebuilds;
+#                      Debian's package is rebuilt and patched with the
+#                      distribution. The Claude Code hooks parse every Bash
+#                      command with `shfmt --tojson` and handle both the
+#                      pre-3.14 and 3.14+ AST encodings.
 #   parallel   — parrallel task execution e.g. with bats
 #   libicu76   — ICU Unicode library (required by .NET)
 #   libxml2-utils — provides xmllint (used by the credfeto pre-commit chain)
@@ -188,6 +188,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3 \
         python3-pip \
         python3-venv \
+        shfmt \
         sqlite3 \
         tini \
         unzip \
@@ -370,27 +371,6 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod 0755 /usr/local/bin/trivy \
     && trivy --version
 
-# ---- shfmt (mvdan/sh) — shell formatter and parser ---------------------------
-# Static raw binary, not an archive. Asset arch suffix matches dpkg's
-# (amd64 / arm64). Version and digests come from the latest-release lookup in
-# build-development-tools.yml (see the SHFMT_* ARGs above); the version ARG
-# changing is what refreshes this layer. The Claude Code hooks parse every Bash
-# command with `shfmt --tojson` and fail closed without it.
-RUN ARCH=$(dpkg --print-architecture) \
-    && case "$ARCH" in \
-         amd64) SHA256="${SHFMT_SHA256_AMD64}" ;; \
-         arm64) SHA256="${SHFMT_SHA256_ARM64}" ;; \
-         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
-       esac \
-    && { [ -n "${SHFMT_VERSION}" ] && [ -n "${SHA256}" ] \
-         || { echo "FATAL: SHFMT_VERSION and SHFMT_SHA256_${ARCH^^} build-args are required" >&2; exit 1; }; } \
-    && curl -fsSL \
-        "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_${ARCH}" \
-        -o /usr/local/bin/shfmt \
-    && echo "${SHA256}  /usr/local/bin/shfmt" | sha256sum -c - \
-    && chmod 0755 /usr/local/bin/shfmt \
-    && shfmt --version
-
 # ---- bats (bats-core) — Bash Automated Testing System -----------------------
 # Cloned at the pinned tag and checked against the pinned commit, so a moved
 # or re-pointed tag fails the build. install.sh copies bin/bats, libexec/ and
@@ -523,7 +503,7 @@ RUN { \
       echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
       echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
       echo "devscripts: $(dpkg-query -W -f='${Version}' devscripts || echo 'version unknown')"; \
-      echo "shfmt: ${SHFMT_VERSION}"; \
+      echo "shfmt: $(dpkg-query -W -f='${Version}' shfmt || echo 'version unknown')"; \
       echo "bats: ${BATS_REF} (${BATS_COMMIT})"; \
       echo "ansible-lint: $(pip3 show ansible-lint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
       echo "flake8: $(pip3 show flake8 | sed -n 's/^Version: //p' || echo 'version unknown')"; \
@@ -566,10 +546,6 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd' resolves to '$(command -v "$cmd")', not the pip install in /usr/local/bin" >&2; exit 1; \
         fi; \
     done; \
-    echo "== shfmt comes from the mvdan/sh release, not apt =="; \
-    if [ "$(command -v shfmt)" != "/usr/local/bin/shfmt" ]; then \
-        echo "FATAL sanity: 'shfmt' resolves to '$(command -v shfmt)', not the mvdan/sh release in /usr/local/bin" >&2; exit 1; \
-    fi; \
     echo "== bats comes from the pinned bats-core clone, not apt =="; \
     if [ "$(command -v bats)" != "/usr/local/bin/bats" ]; then \
         echo "FATAL sanity: 'bats' resolves to '$(command -v bats)', not the bats-core install in /usr/local/bin" >&2; exit 1; \

@@ -3,7 +3,7 @@ name: "Build development-tools base image"
 
 # Build and push the development-tools base image — apt packages, GitHub CLI,
 # static binary linters (hadolint, dotenv-linter, sqlcmd, actionlint,
-# trufflehog, composite-action-lint, shfmt), and the .NET SDK.
+# trufflehog, composite-action-lint), and the .NET SDK.
 #
 # Tags pushed:
 #   :latest       what consumers resolve by default
@@ -30,7 +30,6 @@ on:
       - "containers/base/development-tools/**"
       - ".github/workflows/build-development-tools.yml"
       - ".github/actions/trivy-scan/**"
-      - ".github/actions/resolve-shfmt-release/**"
   pull_request:
     # No paths: filter here (unlike push above) — this workflow must always
     # run and report a status on every PR to main, since it is a required
@@ -76,7 +75,6 @@ jobs:
             containers/base/development-tools/
             .github/workflows/build-development-tools.yml
             .github/actions/trivy-scan/
-            .github/actions/resolve-shfmt-release/
 
       # GITHUB_TOKEN is automatically provided by GitHub Actions — no secret
       # configuration required. It has packages:write permission declared above.
@@ -172,16 +170,6 @@ jobs:
             echo "release_candidate_version=${DOTNET_RELEASE_CANDIDATE_VERSION}"
           } >> "$GITHUB_OUTPUT"
 
-      # Resolved here rather than inside the Dockerfile so the API call is authenticated
-      # (unauthenticated calls share the hosted runner's IP rate limit), and so the exact
-      # version changing is what busts the shfmt layer's cache.
-      - name: "Resolve latest shfmt release"
-        id: "shfmt"
-        if: ${{ steps.relevance.outputs.relevant == 'true' }}
-        uses: ./.github/actions/resolve-shfmt-release
-        with:
-          github-token: "${{ github.token }}"
-
       - name: "Build and push"
         if: ${{ steps.relevance.outputs.relevant == 'true' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -200,9 +188,6 @@ jobs:
             DOTNET_STS_VERSION=${{ steps.dotnet-sdk.outputs.sts_version }}
             DOTNET_RELEASE_CANDIDATE_CHANNEL=${{ steps.dotnet-sdk.outputs.release_candidate_channel }}
             DOTNET_RELEASE_CANDIDATE_VERSION=${{ steps.dotnet-sdk.outputs.release_candidate_version }}
-            SHFMT_VERSION=${{ steps.shfmt.outputs.version }}
-            SHFMT_SHA256_AMD64=${{ steps.shfmt.outputs.sha256-amd64 }}
-            SHFMT_SHA256_ARM64=${{ steps.shfmt.outputs.sha256-arm64 }}
             BUILD_GIT_SHA=${{ github.sha }}
           cache-from: "type=gha,scope=development-tools"
           cache-to: "type=gha,scope=development-tools,mode=max,ignore-error=true"
