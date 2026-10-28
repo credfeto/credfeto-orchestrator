@@ -16,6 +16,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Planning sessions now post the implementation plan with one sanctioned command, `cfwf comment add --body-file -` fed by a quoted heredoc, from a plain-ASCII template, and only add Blocked and move the board to Planning once the plan is confirmed posted. Multi-line plan bodies had been denied in several shapes, and a failed post still left the issue Blocked with no plan, where oneshot skipped it for good (#1658)
 - setup-owner validates its inputs before provisioning anything (signing key must be exportable, systemd-journal group, polkit rules directory, clone target must not be a non-git directory), so a misconfiguration fails before any change is made; the GnuPG keyring is now only replaced once the new signing key has imported successfully, so ~/.gnupg is no longer wiped when the key is missing (#1693)
 - enforce-allowed-dirs hook: report offending byte offset and hex value when blocking non-ASCII commands, and add regression tests for plain-ASCII heredocs - #1677
+- TBD - to be finalized after review
 ### Changed
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
 ### Deprecated
