@@ -764,3 +764,202 @@ teardown() {
     run grep -q 'cgroup_parent' "${containers_conf}"
     [ "${status}" -ne 0 ]
 }
+
+# Writes source config files that pass every file check, so each validate_source_config test
+# exercises only the host prerequisite it is about. $1 is the .env content.
+write_source_config() {
+    mkdir -p "${XDG_CONFIG_HOME}/gh" "${XDG_CONFIG_HOME}/orchestrator/tokens"
+    : > "${XDG_CONFIG_HOME}/gh/hosts.yml"
+    printf '%s\n' "${1:-}" > "${XDG_CONFIG_HOME}/orchestrator/.env"
+    : > "${XDG_CONFIG_HOME}/orchestrator/tokens/testowner"
+    chmod 600 "${XDG_CONFIG_HOME}/orchestrator/tokens/testowner"
+}
+
+# Makes the journal group exist and testowner resolve to the given home.
+stub_host_lookups() {
+    VALIDATE_OWNER_HOME="$1"
+    # shellcheck disable=SC2329
+    getent() {
+        case "$1" in
+            group) [ "$2" = "systemd-journal" ] ;;
+            passwd) echo "testowner:x:1001:1001:Test Owner:${VALIDATE_OWNER_HOME}:/bin/bash" ;;
+            *) return 2 ;;
+        esac
+    }
+    export -f getent
+    export VALIDATE_OWNER_HOME
+}
+
+@test "validate_source_config passes when the clone dir is absent" {
+    write_source_config 'GIT_SIGNING_KEY=ABCD1234'
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    make_stub gpg 'echo key-material'
+
+    run validate_source_config "testowner"
+    [ "${status}" -eq 0 ]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config passes when the clone dir is a git repository" {
+    write_source_config 'GIT_SIGNING_KEY=ABCD1234'
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    mkdir -p "${TEST_TMP}/owner_home/credfeto-orchestrator/.git"
+    make_stub gpg 'echo key-material'
+
+    run validate_source_config "testowner"
+    [ "${status}" -eq 0 ]
+}
+
+@test "validate_source_config skips the key export check when GIT_SIGNING_KEY is not set" {
+    write_source_config 'GIT_USER_NAME=Test'
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    make_stub gpg 'exit 2'
+
+    run validate_source_config "testowner"
+    [ "${status}" -eq 0 ]
+}
+
+@test "validate_source_config fails when the signing key cannot be exported" {
+    write_source_config 'GIT_SIGNING_KEY="ABCD1234"'
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    make_stub gpg 'exit 2'
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"GIT_SIGNING_KEY ABCD1234 cannot be exported from the source keyring"* ]]
+    [[ "${output}" == *"Pre-flight checks failed"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config fails when the journal group does not exist" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    # shellcheck disable=SC2329
+    getent() { [ "$1" = "passwd" ] && echo "testowner:x:1001:1001:Test Owner:${VALIDATE_OWNER_HOME}:/bin/bash"; }
+    export -f getent
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Group systemd-journal does not exist on this machine"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config fails when the polkit rules dir does not exist" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    rmdir "${POLKIT_RULES_DIR}"
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${POLKIT_RULES_DIR} does not exist"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config fails when the clone dir exists but is not a git repository" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    mkdir -p "${TEST_TMP}/owner_home/credfeto-orchestrator"
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${TEST_TMP}/owner_home/credfeto-orchestrator exists but is not a git repository"* ]]
+    [ ! -e "${TEST_TMP}/calls.log" ]
+}
+
+@test "validate_source_config skips the clone dir check when the owner does not exist yet" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    mkdir -p "${TEST_TMP}/owner_home/credfeto-orchestrator"
+    # shellcheck disable=SC2329
+    id() { return 1; }
+    export -f id
+
+    run validate_source_config "testowner"
+    [ "${status}" -eq 0 ]
+}
+
+@test "validate_source_config reports every failed host check before dying" {
+    write_source_config
+    stub_host_lookups "${TEST_TMP}/owner_home"
+    # shellcheck disable=SC2329
+    getent() { return 2; }
+    export -f getent
+    rmdir "${POLKIT_RULES_DIR}"
+
+    run validate_source_config "testowner"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Group systemd-journal does not exist"* ]]
+    [[ "${output}" == *"${POLKIT_RULES_DIR} does not exist"* ]]
+}
+
+# Gives testowner an existing keyring holding a sentinel, and points mktemp at a test-owned
+# directory so a leaked key file can be detected.
+seed_owner_keyring() {
+    write_source_config 'GIT_SIGNING_KEY=ABCD1234'
+    mkdir -p "$1/.gnupg" "${TEST_TMP}/tmp"
+    echo "old-keyring" > "$1/.gnupg/sentinel"
+    export TMPDIR="${TEST_TMP}/tmp"
+}
+
+# Asserts the owner's old keyring survived intact and nothing was left behind.
+assert_old_keyring_kept() {
+    [ "$(cat "$1/.gnupg/sentinel")" = "old-keyring" ]
+    [ ! -e "$1/.gnupg.new" ]
+    [ -z "$(ls -A "${TEST_TMP}/tmp")" ]
+}
+
+@test "sync_gnupg keeps the old keyring when the export fails" {
+    local test_home="${TEST_TMP}/owner_home"
+    seed_owner_keyring "${test_home}"
+    make_stub gpg 'exit 2'
+
+    run sync_gnupg "testowner" "${test_home}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to export GPG key ABCD1234"* ]]
+    assert_old_keyring_kept "${test_home}"
+}
+
+@test "sync_gnupg keeps the old keyring when the export is empty" {
+    local test_home="${TEST_TMP}/owner_home"
+    seed_owner_keyring "${test_home}"
+    make_stub gpg 'exit 0'
+
+    run sync_gnupg "testowner" "${test_home}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Exported GPG key ABCD1234 is empty"* ]]
+    assert_old_keyring_kept "${test_home}"
+}
+
+@test "sync_gnupg keeps the old keyring when the import fails" {
+    local test_home="${TEST_TMP}/owner_home"
+    seed_owner_keyring "${test_home}"
+    # shellcheck disable=SC2016  # stub body: $* must stay literal and expand at stub runtime
+    make_stub gpg 'case "$*" in *--import*) exit 2 ;; *) echo key-material ;; esac'
+
+    run sync_gnupg "testowner" "${test_home}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Failed to import GPG key ABCD1234 for testowner"* ]]
+    assert_old_keyring_kept "${test_home}"
+}
+
+@test "sync_gnupg swaps in the staged keyring once the import succeeds" {
+    local test_home="${TEST_TMP}/owner_home"
+    seed_owner_keyring "${test_home}"
+    mkdir -p "${HOME}/.gnupg"
+    echo "trust" > "${HOME}/.gnupg/trustdb.gpg"
+    # shellcheck disable=SC2016  # stub body: $*/$2 must stay literal and expand at stub runtime
+    make_stub gpg 'case "$*" in *--import*) cat > "$2/imported" ;; *) echo key-material ;; esac'
+
+    run sync_gnupg "testowner" "${test_home}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"GPG key ABCD1234 imported for testowner"* ]]
+
+    [ "$(cat "${test_home}/.gnupg/imported")" = "key-material" ]
+    [ "$(cat "${test_home}/.gnupg/trustdb.gpg")" = "trust" ]
+    [ ! -e "${test_home}/.gnupg/sentinel" ]
+    [ ! -e "${test_home}/.gnupg.new" ]
+    [ -z "$(ls -A "${TEST_TMP}/tmp")" ]
+    [ "$(stat -c '%a' "${test_home}/.gnupg")" = "700" ]
+    [ "$(stat -c '%a' "${test_home}/.gnupg/imported")" = "600" ]
+    grep -qxF "runuser -u testowner -- env HOME=${test_home} gpg --homedir ${test_home}/.gnupg.new --batch --no-tty --import" "${TEST_TMP}/calls.log"
+}
