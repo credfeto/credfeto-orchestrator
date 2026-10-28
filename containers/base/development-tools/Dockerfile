@@ -8,7 +8,7 @@
 # application source, entrypoint scripts, or user workspace — those belong in
 # the customisation layer that FROMs this image.
 #
-# Built and pushed hourly by .github/workflows/build-development-tools.yml as
+# Built and pushed daily by .github/workflows/build-development-tools.yml as
 #   ghcr.io/<owner>/development-tools:latest
 #
 # Multi-stage build: a throwaway Go stage compiles composite-action-lint (no
@@ -72,6 +72,18 @@ ARG TRUFFLEHOG_SHA256_ARM64=3060f7c9f18c70afdc432984cacabdd1e9103729b5d5fee7fb67
 ARG TRIVY_VERSION=0.76.1
 ARG TRIVY_SHA256_AMD64=c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
 ARG TRIVY_SHA256_ARM64=e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f
+# shfmt: deliberately not pinned. build-development-tools.yml resolves the latest
+# mvdan/sh release and the digests GitHub computed for its binaries on upload
+# (mvdan/sh publishes no checksum file), so the image tracks upstream without
+# manual bumps while each download is still verified.
+ARG SHFMT_VERSION
+ARG SHFMT_SHA256_AMD64
+ARG SHFMT_SHA256_ARM64
+# bats: bats-core publishes no release assets or checksums, so it is pinned to a
+# release tag plus the commit that tag resolves to (the peeled commit, not the
+# annotated tag object). Update BATS_REF and BATS_COMMIT together when bumping.
+ARG BATS_REF=v1.14.0
+ARG BATS_COMMIT=eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
 # composite-action-lint: built from source in the Go stage above. The
 # UPSTREAM and CACHE_BUST ARGs are re-declared here so they can be baked into
 # the .env provenance file alongside the HEAD SHA captured in the builder.
@@ -124,7 +136,6 @@ RUN useradd -m -s /bin/bash developer
 #                      dangerouslyDisableSandbox) regardless of path or flags —
 #                      see credfeto-orchestrator#1351.
 #   tini       — correct PID 1 / signal forwarding
-#   shfmt      — shell formatter
 #   parallel   — parrallel task execution e.g. with bats
 #   libicu76   — ICU Unicode library (required by .NET)
 #   libxml2-utils — provides xmllint (used by the credfeto pre-commit chain)
@@ -136,6 +147,12 @@ RUN useradd -m -s /bin/bash developer
 #                      e.g. funfair-server-code-analysis#463
 #   python3-venv — provides ensurepip/the venv module, which python3-pip alone does
 #                      not; without it `python3 -m venv` fails outright (#1289)
+#   shellcheck, devscripts (checkbashisms) — from trixie-backports: trixie's
+#                      shellcheck lags the version developer machines and
+#                      super-linter run, so the findings differ. Backports
+#                      has apt pin priority 100, so only the -t trixie-backports
+#                      install (and any dependency it adds that the main list
+#                      has not already installed) comes from it.
 # dist-upgrade below refreshes this whole apt layer daily (every package installed by this
 # RUN, not just the ones Debian bakes pre-installed into debian:trixie-slim itself), so it
 # avoids needing a dedicated fix for each future Trivy-flagged base-package CVE individually;
@@ -148,6 +165,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     : "${APT_UPGRADE_CACHE_BUST}"; \
     printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: contrib\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
         > /etc/apt/sources.list.d/debian-contrib.sources \
+    && printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie-backports\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n' \
+        > /etc/apt/sources.list.d/debian-backports.sources \
     && echo 'ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true' \
         | debconf-set-selections \
     && apt-get update \
@@ -155,12 +174,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         -o Dpkg::Options::="--force-confdef" \
         -o Dpkg::Options::="--force-confold" \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        bats \
         bubblewrap \
         ca-certificates \
         curl \
         dash \
-        devscripts \
         git \
         gnupg \
         jq \
@@ -171,21 +188,37 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3 \
         python3-pip \
         python3-venv \
-        shellcheck \
-        shfmt \
         sqlite3 \
         tini \
         unzip \
-        ansible-lint \
-        flake8 \
         fontconfig \
         ttf-mscorefonts-installer \
         libxml2-utils \
-        pre-commit \
-        pylint \
-        yamllint \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        -t trixie-backports \
+        devscripts \
+        shellcheck \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
+
+# ---- Python linters (pip) ----------------------------------------------------
+# Deliberately unpinned: trixie's apt versions lag the ones developer machines
+# and super-linter run, so the findings differ. Tying the layer to
+# APT_UPGRADE_CACHE_BUST makes it pick up the latest releases on the same daily
+# rebuild as the apt dist-upgrade above.
+# --break-system-packages acknowledges pip's PEP 668 marker (the image is a
+# sealed environment). --ignore-installed is required because the dependency
+# tree upgrades packaging, which apt installed for python3-wheel without the
+# RECORD file pip needs to uninstall it (`uninstall-no-record-file`); the new
+# copies land in /usr/local, which takes priority over apt's /usr/lib at import.
+# hadolint ignore=DL3013
+RUN : "${APT_UPGRADE_CACHE_BUST}"; \
+    pip3 install --break-system-packages --no-cache-dir --ignore-installed \
+        ansible-lint \
+        flake8 \
+        pre-commit \
+        pylint \
+        yamllint
 
 # ---- GitHub CLI --------------------------------------------------------------
 # Added via the upstream apt source so we track gh releases automatically
@@ -337,6 +370,40 @@ RUN ARCH=$(dpkg --print-architecture) \
     && chmod 0755 /usr/local/bin/trivy \
     && trivy --version
 
+# ---- shfmt (mvdan/sh) — shell formatter and parser ---------------------------
+# Static raw binary, not an archive. Asset arch suffix matches dpkg's
+# (amd64 / arm64). Version and digests come from the latest-release lookup in
+# build-development-tools.yml (see the SHFMT_* ARGs above); the version ARG
+# changing is what refreshes this layer. The Claude Code hooks parse every Bash
+# command with `shfmt --tojson` and fail closed without it.
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) SHA256="${SHFMT_SHA256_AMD64}" ;; \
+         arm64) SHA256="${SHFMT_SHA256_ARM64}" ;; \
+         *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
+       esac \
+    && { [ -n "${SHFMT_VERSION}" ] && [ -n "${SHA256}" ] \
+         || { echo "FATAL: SHFMT_VERSION and SHFMT_SHA256_${ARCH^^} build-args are required" >&2; exit 1; }; } \
+    && curl -fsSL \
+        "https://github.com/mvdan/sh/releases/download/${SHFMT_VERSION}/shfmt_${SHFMT_VERSION}_linux_${ARCH}" \
+        -o /usr/local/bin/shfmt \
+    && echo "${SHA256}  /usr/local/bin/shfmt" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/shfmt \
+    && shfmt --version
+
+# ---- bats (bats-core) — Bash Automated Testing System -----------------------
+# Cloned at the pinned tag and checked against the pinned commit, so a moved
+# or re-pointed tag fails the build. install.sh copies bin/bats, libexec/ and
+# lib/bats-core into /usr/local; the clone is removed so no .git is left for an
+# agent to pull from.
+RUN git clone --depth 1 --branch "${BATS_REF}" \
+        https://github.com/bats-core/bats-core.git /tmp/bats-core \
+    && { test "$(git -C /tmp/bats-core rev-parse HEAD)" = "${BATS_COMMIT}" \
+         || { echo "FATAL: bats-core ${BATS_REF} does not resolve to the pinned commit ${BATS_COMMIT}" >&2; exit 1; }; } \
+    && /tmp/bats-core/install.sh /usr/local \
+    && rm -rf /tmp/bats-core \
+    && bats --version
+
 # ---- composite-action-lint --------------------------------------------------
 # Built upstream-from-source by the multi-stage Go builder above (no release
 # binaries are published). Lives at /opt/composite-action-lint/ alongside an
@@ -454,6 +521,15 @@ RUN { \
       echo "trivy: $(trivy --version | head -n1 | sed 's/^Version: *//' || echo 'version unknown')"; \
       echo "gh: $(gh --version | head -n1 || echo 'version unknown')"; \
       echo "bwrap: $(bwrap --version || echo 'version unknown')"; \
+      echo "shellcheck: $(dpkg-query -W -f='${Version}' shellcheck || echo 'version unknown')"; \
+      echo "devscripts: $(dpkg-query -W -f='${Version}' devscripts || echo 'version unknown')"; \
+      echo "shfmt: ${SHFMT_VERSION}"; \
+      echo "bats: ${BATS_REF} (${BATS_COMMIT})"; \
+      echo "ansible-lint: $(pip3 show ansible-lint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "flake8: $(pip3 show flake8 | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "pre-commit: $(pip3 show pre-commit | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "pylint: $(pip3 show pylint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
+      echo "yamllint: $(pip3 show yamllint | sed -n 's/^Version: //p' || echo 'version unknown')"; \
     } >> /opt/installed-versions.txt \
     && chown root:root /opt/installed-versions.txt \
     && chmod 0444 /opt/installed-versions.txt
@@ -471,7 +547,7 @@ RUN set -e; \
     for cmd in git gpg curl jq dotnet shellcheck shfmt bats sqlite3 gh \
                hadolint dotenv-linter sqlcmd actionlint trufflehog trivy \
                python3 ansible-lint flake8 pylint \
-               yamllint pre-commit xmllint bwrap; do \
+               yamllint pre-commit xmllint bwrap checkbashisms; do \
         if ! command -v "$cmd" >/dev/null 2>&1; then \
             echo "FATAL sanity: required binary '$cmd' is missing" >&2; exit 1; \
         fi; \
@@ -479,6 +555,25 @@ RUN set -e; \
             echo "FATAL sanity: '$cmd --version' did not exit 0" >&2; exit 1; \
         fi; \
     done; \
+    echo "== shellcheck minimum version (0.11, matching developer machines) =="; \
+    shellcheck_version=$(shellcheck --version | sed -n 's/^version: //p'); \
+    if ! dpkg --compare-versions "${shellcheck_version}" ge 0.11; then \
+        echo "FATAL sanity: shellcheck '${shellcheck_version}' is older than 0.11 — not installed from trixie-backports?" >&2; exit 1; \
+    fi; \
+    echo "== Python linters come from pip, not apt =="; \
+    for cmd in ansible-lint flake8 pre-commit pylint yamllint; do \
+        if [ "$(command -v "$cmd")" != "/usr/local/bin/$cmd" ]; then \
+            echo "FATAL sanity: '$cmd' resolves to '$(command -v "$cmd")', not the pip install in /usr/local/bin" >&2; exit 1; \
+        fi; \
+    done; \
+    echo "== shfmt comes from the mvdan/sh release, not apt =="; \
+    if [ "$(command -v shfmt)" != "/usr/local/bin/shfmt" ]; then \
+        echo "FATAL sanity: 'shfmt' resolves to '$(command -v shfmt)', not the mvdan/sh release in /usr/local/bin" >&2; exit 1; \
+    fi; \
+    echo "== bats comes from the pinned bats-core clone, not apt =="; \
+    if [ "$(command -v bats)" != "/usr/local/bin/bats" ]; then \
+        echo "FATAL sanity: 'bats' resolves to '$(command -v bats)', not the bats-core install in /usr/local/bin" >&2; exit 1; \
+    fi; \
     echo "== composite-action-lint check (uses -h not --version) =="; \
     if ! command -v composite-action-lint >/dev/null 2>&1; then \
         echo "FATAL sanity: required binary 'composite-action-lint' is missing" >&2; exit 1; \

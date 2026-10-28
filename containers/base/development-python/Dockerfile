@@ -8,7 +8,7 @@ ARG SQLFLUFF_VERSION=4.2.2
 
 # ---- Python tooling not available in apt -------------------------------------
 # The development-tools base image installs yamllint / ansible-lint / flake8 /
-# pylint / pre-commit as native apt packages. What remains on pip:
+# pylint / pre-commit from pip. What this stage adds on pip:
 #   - uv, ruff           — Astral toolchain, too new for stable Debian.
 #   - cfn-lint           — AWS CloudFormation linter, not in Debian.
 #   - sqlfluff           — Trixie ships 3.3.1; we want the 4.x line. Pin via
@@ -22,11 +22,9 @@ ARG SQLFLUFF_VERSION=4.2.2
 # image is a sealed environment so global pip is fine and lands the
 # binaries at /usr/local/bin.
 #
-# Split into two RUN steps because cfn-lint's dep tree (pydantic et al.)
-# wants to upgrade typing_extensions, but the apt block in the base image
-# pulled in python3-typing-extensions as a transitive dep of ansible-lint.
-# pip can't uninstall packages that don't carry a RECORD file (which
-# apt-managed ones don't), so the upgrade attempt fails with
+# Split into two RUN steps because cfn-lint's dep tree may want to upgrade a
+# package that apt installed. pip can't uninstall packages that don't carry a
+# RECORD file (which apt-managed ones don't), so the upgrade attempt fails with
 # `error: uninstall-no-record-file`. `--ignore-installed` tells pip to skip
 # the uninstall step entirely and drop fresh copies into
 # /usr/local/lib/python3.X/dist-packages — that path has higher priority
