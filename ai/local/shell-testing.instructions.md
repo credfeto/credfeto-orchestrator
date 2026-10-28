@@ -20,7 +20,7 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 
 | File | Covers |
 | --- | --- |
-| `lib/globals` | Config env-var defaults and every `declare -gA` array / mutable counter. **Sourced first** — every other file reads or writes globals declared here, and bash requires an associative array to be `declare -A`'d before any assignment into it. |
+| `lib/globals` | Config env-var defaults and every `declare -gA` array / mutable counter. **Sourced first** - every other file reads or writes globals declared here, and bash requires an associative array to be `declare -A`'d before any assignment into it. |
 | `lib/core` | `die`/`success`/`info`/`warn`/`is_ai_agent`/`hash_sha256`/`check_required_tools`, token loading, config load/validate, disk-space checks, and the legacy state migration (`migrate_legacy_orchestrator_state`). |
 | `lib/git` | Repo context (`set_repo_context`) and git plumbing. |
 | `lib/github` | Trust/collaborators, the priorities feed, PR/issue discovery and authorship predicates. |
@@ -32,7 +32,7 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 | `lib/discord` | Discord webhook notifications. |
 | `lib/podman` | Container/Podman invocation: the largest, most side-effectful file. `invoke_claude` (oneshot's `--print` phase runs) refuses a launch without both an item type and an item id, before creating any temporary file or Podman secret, then uses `ensure_agent_container_ready` and `prepare_claude_container_args`. |
 
-Add new functions to the right `lib/*` file by what they do, not to `oneshot` itself — `oneshot`
+Add new functions to the right `lib/*` file by what they do, not to `oneshot` itself - `oneshot`
 should only ever contain `main()`, its arg parsing, and the source block. When a function
 touches more than one concern, put it where its dominant concern lives (e.g. `_build_wf_section`
 lives in `lib/prompts` because it emits prompt text, even though it reads Workflow-board state).
@@ -40,7 +40,7 @@ lives in `lib/prompts` because it emits prompt text, even though it reads Workfl
 `loop`, `create-project`, `setup-owner`, and `teardown-owner` source `lib/core` for the shared
 output helpers (`die`/`success`/`info`/`warn`/`is_ai_agent`) rather than keeping their own
 copies. `create-project`'s own `check_required_tools` (a different tool list to `oneshot`'s)
-is likewise never deduped — same function name, intentionally different bodies per script.
+is likewise never deduped - same function name, intentionally different bodies per script.
 
 ## Source-Guard Convention
 
@@ -57,7 +57,7 @@ This means the script runs `main` only when executed directly. When a test `sour
 script, the guard is skipped, so all functions become available for unit testing without the
 script driving a Claude session or entering the infinite loop. New top-level scripts must
 follow the same pattern: factor work into functions and gate execution behind this guard.
-The guard stays ONLY in the top-level script (e.g. `oneshot`), never in a `lib/*` file — those
+The guard stays ONLY in the top-level script (e.g. `oneshot`), never in a `lib/*` file - those
 are sourced-only, with no top-level executable code beyond `lib/globals`'s declarations.
 
 Every top-level script resolves its own directory via `${BASH_SOURCE[0]}`, not `$0`: when a test
@@ -68,7 +68,7 @@ test. This applies to all four scripts that source a `lib/*` file (`oneshot`, `l
 `create-project` and `setup-owner`), including `loop`, even though most of its own tests
 (`run_loop_in`) exercise it as a real subprocess rather than sourcing it: `test_helper.bash`'s
 `source_loop` still sources it directly for the handful of tests that unit-test `update_scripts`/
-`is_ai_agent` in isolation, so `$0`-based resolution silently breaks under that path too — do not
+`is_ai_agent` in isolation, so `$0`-based resolution silently breaks under that path too - do not
 assume a script is exempt just because most of its coverage runs it as a subprocess.
 
 ### `lib/*` Files Never Locate Themselves
@@ -79,17 +79,17 @@ A `lib/*` file must not use `BASH_SOURCE` (or `$0`) to work out where the tree l
 
 Every `source "${SCRIPT_DIR}/lib/x"` line must be followed by a dependency-free failure
 fallback, e.g. `|| { printf '<script>: FATAL: failed to source %s/lib/x\n' "${SCRIPT_DIR}" >&2;
-exit 1; }` — never a bare `source` with no failure check. Without it, a missing/unreadable
+exit 1; }` - never a bare `source` with no failure check. Without it, a missing/unreadable
 `lib/*` file degrades silently: `source` fails but does not stop the script (there is no
 `set -e` in any of these scripts except `notify-unit-failure`), so every function the failed file would have defined
 (`die`, `info`, `warn`, ...) becomes a plain "command not found" no-op instead of behaving as
-expected — an early `... || die "..."` guard that is SUPPOSED to stop the script on a real
-failure just silently falls through into the code that follows it instead. Confirmed incident
-(#1185 review): a `test/loop.bats` fixture missing `lib/` let a sourced `loop` fall through
-`main()`'s `[ -x oneshot ] || die "..."` check into the real `while true` loop, which then ran
-real `git switch main` / `git pull` against **the enclosing real repository** every 300 seconds
-for hours (see the Test Isolation section below for the other half of why that was possible).
-The fallback must not itself call `die` (or any other `lib/core` function) — the whole point is
+expected - an early `... || die "..."` guard that is SUPPOSED to stop the script on a real
+failure just silently falls through into the code that follows it instead. For example, a
+`test/loop.bats` fixture missing `lib/` lets a sourced `loop` fall through `main()`'s
+`[ -x oneshot ] || die "..."` check into the real `while true` loop, which then runs real
+`git switch main` / `git pull` against **the enclosing real repository** every 300 seconds
+(see the Test Isolation section below for the other half of why that is possible).
+The fallback must not itself call `die` (or any other `lib/core` function) - the whole point is
 that it runs when `lib/core` failed to source, so `die` may not exist yet.
 
 ## Test Isolation
@@ -109,17 +109,18 @@ that it runs when `lib/core` failed to source, so `die` may not exist yet.
   sets it from `HOME` at source time.
 - `setup_isolated_env` sets `GIT_CEILING_DIRECTORIES="${REPO_ROOT}"`. `make_repo_fixture_dir`
   creates fixtures nested INSIDE this real repo's working tree (`test/.fixture.XXXXXX`), with no
-  `.git` of their own — without this guard, a git command run with `-C`/cwd inside such a
+  `.git` of their own - without this guard, a git command run with `-C`/cwd inside such a
   fixture does not fail as intended; git's normal repository-discovery walks up parent
   directories until it finds a `.git`, silently escapes the fixture, and finds THIS repo's real
   `.git`, so the command operates on the real repo instead of erroring "not a git repository"
-  (the same #1185 incident referenced above: this is the other half of why a stray real
-  `git switch main` reached this actual repo instead of failing inside an isolated fixture).
+  (this is the other half of the `lib/` failure-fallback example above: without the guard, a
+  stray real `git switch main` reaches this actual repo instead of failing inside an isolated
+  fixture).
   `GIT_CEILING_DIRECTORIES` stops git's upward search at (and excluding) `REPO_ROOT`, so any git
   command inside a fixture that lacks its own `.git` fails fast. It does not affect fixtures
-  that `git init`/`git clone` their own nested repo (e.g. `setup_local_git_remote`) — git finds
+  that `git init`/`git clone` their own nested repo (e.g. `setup_local_git_remote`) - git finds
   their own `.git` before ever reaching the ceiling. `make_repo_fixture_dir` also copies `lib/`
-  alongside the fixture directory, since any top-level script staged into it now needs to
+  alongside the fixture directory, since any top-level script staged into it needs to
   source it.
 
 ## Mocking External Commands
@@ -127,13 +128,13 @@ that it runs when `lib/core` failed to source, so `die` may not exist yet.
 The scripts call external commands (`curl`, `gh`, `claude`, `git`, `sleep`, and the hashing
 tools). Replace these with deterministic, offline stubs using one of two techniques:
 
-- **PATH stub directory** — use `make_stub <name> <body>` from `test_helper.bash`. The stub
+- **PATH stub directory** - use `make_stub <name> <body>` from `test_helper.bash`. The stub
   bin directory (`STUB_BIN`) is created inside the repo tree (`test/.stub.XXXXXX`), not under
   the system temp directory, because `/tmp` is mounted `noexec` in sandboxed environments and
   files there cannot be executed as subprocesses. Use this technique for commands invoked as
   subprocesses (`gh`, `git`, `claude`, `curl`, `sleep`). Tests that call `make_stub` must have
   a `teardown()` hook that calls `cleanup_stubs` to remove the stub directory.
-- **Function override** — after sourcing the script, redefine a shell function with the same
+- **Function override** - after sourcing the script, redefine a shell function with the same
   name to control its behaviour directly. Use this when you need to inspect arguments or vary
   the response per call.
 
@@ -143,10 +144,10 @@ of side effects.
 
 `make_stub`/`make_stub_multiline` write stub content to a temp file in `STUB_BIN` first, then
 `chmod +x` and `mv` it onto the final name (see `_finalize_stub`). Writing directly to the
-final name and `chmod +x`-ing it afterwards left a window where a concurrent process (e.g. a
-parallel bats job under load) could see the file mid-write or not yet executable; `mv` within
-the same directory is atomic, so no reader ever observes a partial file. This was the suspected
-cause of an intermittent stub-exec failure under `bats --jobs N` (#1392). Keep any new stub
+final name and `chmod +x`-ing it afterwards leaves a window where a concurrent process (e.g. a
+parallel bats job under load) can see the file mid-write or not yet executable, causing
+intermittent stub-exec failures under `bats --jobs N`; `mv` within the same directory is
+atomic, so no reader ever observes a partial file. Keep any new stub
 helper on this same write-temp-then-rename pattern rather than writing straight to the final
 path.
 
@@ -154,7 +155,7 @@ path.
 
 - `shellcheck` must pass for the top-level bash scripts (`shellcheck oneshot loop create-project
   setup-owner teardown-owner`) and for any `*.bash` test helper. Lint the top-level scripts, not
-  the `lib/*` files directly — shellcheck follows a `source` line whose target has a
+  the `lib/*` files directly - shellcheck follows a `source` line whose target has a
   `# shellcheck source=lib/x` directive automatically, so checking `oneshot` alone already
   covers every `lib/*` file it sources. Running shellcheck on a `lib/*` file standalone produces
   false-positive SC2034 ("appears unused") warnings for every variable/function it defines but
@@ -162,21 +163,21 @@ path.
 - Each `source "${SCRIPT_DIR}/lib/x"` line needs both a `# shellcheck source=lib/x` directive
   (so shellcheck knows which file it points to) and `disable=SC1091` on the same comment,
   because the path is runtime-computed (`${SCRIPT_DIR}` from `${BASH_SOURCE[0]}`) and shellcheck
-  cannot statically resolve it without `-x`/`external-sources=true` — which the pre-commit
+  cannot statically resolve it without `-x`/`external-sources=true` - which the pre-commit
   hook's shellcheck invocation does not pass, and `.shellcheckrc` cannot be edited to add it (a
   guardrail hook blocks changes to shared linter config files). Once a file has an unfollowed
   `source`, shellcheck also stops flagging "possible misspelling" (SC2153) for globals assigned
-  only in that source — if a *followed* rename ever reintroduces that check, disable SC2153
+  only in that source - if a *followed* rename ever reintroduces that check, disable SC2153
   file-wide with a one-line comment rather than renaming every local/global pair that collides.
 - `checkbashisms` does not apply to the scripts that use `#!/bin/bash`; it does apply to `pre-commit-check`, which is a POSIX `/bin/sh` script.
 - The commit-time pre-commit hook lints staged `*.bats` files with `shellcheck` too, separately
-  from the top-level-scripts invocation above — a plain `shellcheck oneshot loop create-project
+  from the top-level-scripts invocation above - a plain `shellcheck oneshot loop create-project
   setup-owner teardown-owner` run does **not** cover `test/*.bats`, so a `.bats`-only issue (e.g.
   SC2314, "In Bats, `!` will not fail the test if it is not the last command") can pass local
   verification and only surface at commit time. Run `shellcheck test/*.bats` alongside the
   top-level-scripts check before committing a test change. Prefer the repo's existing bare
   `! cmd` idiom (see the `apply_blocked_label`-style `if [ -f ... ]; then ! grep ...; fi` guard)
-  over `run ! cmd` for a negative assertion inside a `@test` — `run !` only asserts non-zero on
+  over `run ! cmd` for a negative assertion inside a `@test` - `run !` only asserts non-zero on
   bats >= 1.5.0, and this repo does not pin a minimum bats version, so it can silently no-op on
   an older bats. A count-based assertion (`[ "$(grep -c ... )" -eq 0 ]`) sidesteps both the
-  shellcheck rule and the version question and is the preferred form (#1278 review).
+  shellcheck rule and the version question and is the preferred form.
