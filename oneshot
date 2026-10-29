@@ -1533,9 +1533,24 @@ main() {
                         progress_reason=$(pr_session_progress_reason "${pre_session_board_status}" "${post_session_board_status}" \
                             "${pre_session_comment_ts}" "${post_session_comment_ts}" "${pre_session_head}" "${post_session_head}")
                     fi
+                    local clean_review_next=""
                     if [ -n "${progress_reason}" ]; then
                         info "PR #${item_id} in ${item_repo}: not charging this session against the idle budget (${progress_reason})"
                         pr_new_idle=0
+                    elif clean_review_next=$(pr_clean_review_board_advance "${pre_session_board_status}" "${post_session_board_status}" "${SESSION_RESULT_TEXT}"); then
+                        # A clean review that the session reported but did not record (#1735): move
+                        # the board and post the phase's status comment here, so the next run starts
+                        # the next phase instead of repeating a clean review until the idle budget
+                        # blocks the PR. The idle count is left where it was, neither charged nor
+                        # reset, so a board write that keeps failing is still bounded by the total
+                        # invocation budget.
+                        info "PR #${item_id} in ${item_repo}: the session reported a clean review but left the board at ${pre_session_board_status} — advancing it to ${clean_review_next} and not charging the idle budget"
+                        update_workflow_status "PullRequest" "${item_id}" "${clean_review_next}"
+                        local clean_review_comment
+                        clean_review_comment=$(pr_clean_review_status_comment "${clean_review_next}")
+                        gh pr comment "${item_id}" --repo "${item_repo}" --body "${clean_review_comment}" > /dev/null 2>&1 \
+                            || warn "PR #${item_id} in ${item_repo}: failed to post the clean-review status comment"
+                        pr_new_idle="${PR_INVOCATION_IDLE}"
                     else
                         info "PR #${item_id} in ${item_repo}: no progress this session (board, non-orchestrator trusted comments and head commit unchanged), idle budget charged (${pr_new_idle}/${MAX_PR_IDLE_INVOCATIONS})"
                         pr_session_no_progress=1

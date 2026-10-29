@@ -301,6 +301,27 @@ claude_result_indicates_tool_denied_quit() {
     ! match_nocase "${without_negated}" "${workaround_re}"
 }
 
+# Returns 0 (true) if the session's final message reports a clean review: the code or security
+# review skill found nothing (CLEAN_REVIEW_PATTERNS) and the message mentions no findings, fix,
+# push, commit, non-convergence or Blocked label (REVIEW_FINDINGS_PATTERNS) once negated phrases
+# ("nothing was fixed") are removed, leftmost first and each replaced by a space, as
+# claude_result_indicates_tool_denied_quit does. Conservative by design: an empty message, or any
+# doubt, is not clean. Used only to advance a review board the session left unchanged
+# (pr_clean_review_board_advance, lib/github-status).
+claude_result_indicates_clean_review() {
+    local result_text="$1" clean_re findings_re negated_re without_negated
+    [ -n "${result_text}" ] || return 1
+    clean_re=$(IFS='|'; printf '%s' "${CLEAN_REVIEW_PATTERNS[*]}")
+    findings_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_PATTERNS[*]}")
+    negated_re=$(IFS='|'; printf '%s' "${REVIEW_FINDINGS_NEGATED_PATTERNS[*]}")
+    match_nocase "${result_text}" "${clean_re}" || return 1
+    without_negated="${result_text,,}"
+    while match_nocase "${without_negated}" "${negated_re}"; do
+        without_negated="${without_negated/"${BASH_REMATCH[0]}"/ }"
+    done
+    ! match_nocase "${without_negated}" "${findings_re}"
+}
+
 # Prints the names of the tool calls denied in a Claude JSON result, comma-separated and
 # deduplicated, or nothing when there were none: the program a denied Bash command runs, or the
 # tool name for any other tool. For Bash, leading NAME=value assignments are skipped because an

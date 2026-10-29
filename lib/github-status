@@ -728,6 +728,40 @@ pr_session_progress_reason() {
     return 1
 }
 
+# Prints the board status a PR whose review session reported a clean review should be advanced to,
+# and returns 0, when oneshot should advance the board itself; returns 1 otherwise. PHASE E (code
+# review, board "AI Review") and PHASE F (security review, board "AI Security Review") tell the
+# agent to move the board and post a status comment when the review finds nothing, but a session
+# often ends on the review skill's report alone, so the board, comments and head are unchanged and
+# the session would be charged as idle until the PR is Blocked with a clean review behind it
+# (#1735). Advances only when: a Workflow board exists (_WF_PROJECT_ID), the board read before and
+# after the session agree (neither empty nor "Unknown", which is also how a failed lookup reads),
+# that status is one of the two review statuses, and claude_result_indicates_clean_review
+# (lib/podman) judges the final message clean. Arguments: pre_board, post_board, result_text.
+pr_clean_review_board_advance() {
+    local pre_board="$1" post_board="$2" result_text="$3" next_status
+    [ -n "${_WF_PROJECT_ID:-}" ] || return 1
+    [ -n "${pre_board}" ] && [ "${pre_board}" != "Unknown" ] && [ "${pre_board}" = "${post_board}" ] || return 1
+    case "${pre_board}" in
+        "AI Review") next_status="AI Security Review" ;;
+        "AI Security Review") next_status="AI Coverage" ;;
+        *) return 1 ;;
+    esac
+    claude_result_indicates_clean_review "${result_text}" || return 1
+    printf '%s' "${next_status}"
+}
+
+# Prints the one-line status comment oneshot posts when it advances a review board itself
+# (pr_clean_review_board_advance): the same opening as the comment the phase asks the agent to
+# post, then a note that the orchestrator moved the board. Argument: the status the board moved to.
+pr_clean_review_status_comment() {
+    case "$1" in
+        "AI Security Review") printf 'Code review clean - advancing to security review (board moved by the orchestrator: the session reported no findings but did not move it)' ;;
+        "AI Coverage") printf 'Security review clean, advancing to coverage check (board moved by the orchestrator: the session reported no findings but did not move it)' ;;
+        *) return 1 ;;
+    esac
+}
+
 # Names the build_pr_claude_md phase an unchanged, non-terminal PR should run next, from its
 # Workflow board status (the agent's own phase marker) and pr_json. Prints the phase and returns 0
 # when one can be named; returns 2 when it cannot, where the caller falls back to invoking without

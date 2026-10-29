@@ -185,6 +185,38 @@ TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS=(
     '(^|[^a-z])(nothing|no)( [a-z]+){0,3} (was|were|has been|have been|is|are) (finished|completed|pushed|succeeded)'
 )
 
+# Phrasings that classify a PHASE E (code review) or PHASE F (security review) session's final
+# message as a clean review: the review skill found nothing (claude_result_indicates_clean_review,
+# lib/podman). A session often ends on the skill's own report without moving the board or posting
+# the status comment the phase asks for, so oneshot sees no progress and charges the idle budget;
+# a clean report on an unchanged review board is advanced by oneshot itself instead
+# (pr_clean_review_board_advance, lib/github-status). Deliberately narrow: a message is clean only
+# when it matches CLEAN_REVIEW_PATTERNS and, once every REVIEW_FINDINGS_NEGATED_PATTERNS match
+# ("nothing was fixed", "no commits were pushed") is removed, matches none of
+# REVIEW_FINDINGS_PATTERNS (a count of findings, a fix, a push or commit, non-convergence, the
+# round cap or the Blocked label). Any doubt leaves the session charged as before. Each array is
+# joined with "|" and matched case-insensitively against the whole message; ASCII only, like the
+# patterns above.
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+CLEAN_REVIEW_PATTERNS=(
+    'review: no (high-confidence )?(findings|vulnerabilities|issues)'
+    '(found|identified|there (are|were)) no (high-confidence |exploitable |new |real )*(security )?(vulnerabilities|findings|issues)'
+    '(^|[^a-z])no (high-confidence |exploitable |new |real )*(security )?(vulnerabilities|findings|issues) (were |was )?(found|identified|reported)'
+    '(code|security) review[^.]{0,40} (found nothing|is clean|was clean|came back clean)'
+    '(^|[^a-z])no findings([^a-z]|$)'
+)
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+REVIEW_FINDINGS_PATTERNS=(
+    '(^|[^a-z])([1-9][0-9]*|one|two|three|four|five|several|multiple|some) (new |real |valid |high-confidence |medium-confidence |low-confidence )*(findings?|vulnerabilit(y|ies)|issues?)([^a-z]|$)'
+    '(^|[^a-z])(fixed|pushed|committed)([^a-z]|$)'
+    'not converging|round cap|blocked label|add(ed)? (the )?blocked'
+    '(findings?|vulnerabilit(y|ies)|issues?) (remains?|is unresolved|are unresolved|still open)'
+)
+# shellcheck disable=SC2034  # read by lib/podman after sourcing
+REVIEW_FINDINGS_NEGATED_PATTERNS=(
+    '([a-z]n[^a-z ]{1,3}t|(^|[^a-z])(not|never|no|nothing))( [a-z]+){0,3} (fixed|pushed|committed)'
+)
+
 # Code review, security review, and coverage each get their own round budget below rather than
 # sharing one constant: each round is its own fresh invocation (one /code-review, one
 # /security-review, or one coverage round, then stop), so these are advisory guidance passed
