@@ -93,3 +93,8 @@ GH_DATA_DIR
 # --backup and --suffix options are blocked by enforce-allowed-dirs.
 SIMPLE_BACKUP_SUFFIX
 VERSION_CONTROL
+# The cp, mv and ln checks in enforce-allowed-dirs rely on getopt option
+# reordering (`cp x -t dir`); POSIXLY_CORRECT turns it off, so cp reads -t and
+# everything after the first operand as operands and writes somewhere the
+# checks never looked.
+POSIXLY_CORRECT
