@@ -18,6 +18,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - setup-owner validates its inputs before provisioning anything (signing key must be exportable, systemd-journal group, polkit rules directory, clone target must not be a non-git directory), so a misconfiguration fails before any change is made; the GnuPG keyring is now only replaced once the new signing key has imported successfully, so ~/.gnupg is no longer wiped when the key is missing (#1693)
 - enforce-allowed-dirs hook: report offending byte offset and hex value when blocking non-ASCII commands, and add regression tests for plain-ASCII heredocs - #1677
 - Agent entrypoint now warns instead of failing when the pre-commit rules checkout SHA differs from the published SHA, comparing only the common prefix so abbreviated and full SHAs match (#1100)
+- Block POSIXLY_CORRECT and multi-match --target-directory globs in cp, mv and ln hook checks - #1698
 ### Changed
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
 - The development-tools base image now installs shellcheck and devscripts from trixie-backports, and the build fails if shellcheck is older than 0.11, so lint results match developer machines and super-linter (#1547)
