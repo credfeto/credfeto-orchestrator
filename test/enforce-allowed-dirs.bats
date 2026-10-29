@@ -604,6 +604,17 @@ assert_blocked() {
     assert_allowed "ln -s -t sub ${ROOT}/payload"
 }
 
+@test "a --target-directory that is a multi-match glob is blocked for cp, mv and ln (SEC-R7-2)" {
+    mkdir -p "${ROOT}/sub/da" "${ROOT}/sub/db"
+    assert_blocked "cp -t sub/d* payload" 'glob that matches 2 names'
+    assert_blocked "cp --target-directory=sub/d* payload" 'glob that matches 2 names'
+    assert_blocked "mv -t sub/d* payload" 'glob that matches 2 names'
+    assert_blocked "ln -t sub/d* payload" 'glob that matches 2 names'
+    assert_blocked "ln -s -t sub/d* payload" 'glob that matches 2 names'
+    assert_allowed "cp -t sub/da* payload"
+    assert_allowed "cp -t sub/da payload"
+}
+
 @test "npm single-dash long options are treated as the long option (nopt strips all leading dashes)" {
     assert_blocked "npm -script-shell /evil run build" '--script-shell'
     assert_blocked "npm -prefix ${OUTSIDE} prefix"
