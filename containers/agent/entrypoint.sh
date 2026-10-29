@@ -267,16 +267,30 @@ verify_no_user_insteadof() {
 # WORKSPACE_REPO_DIR overrides the repo path (used by tests).
 verify_no_repo_claude_config() {
     local repo_dir="${WORKSPACE_REPO_DIR:-/workspace/repo}"
-    local f rel_path local_sha main_sha
+    local f rel_path local_sha main_sha local_mode main_entry main_mode
     for f in "${repo_dir}/.claude/settings.json" "${repo_dir}/.claude/settings.local.json" "${repo_dir}/.mcp.json"; do
+        # -L must come before -e: -e follows the link, so a dangling symlink would otherwise
+        # be skipped as absent and later resolved by Claude Code to whatever it then points at.
+        if [ -L "${f}" ]; then
+            die "Repo checkout contains ${f} as a symbolic link — refusing to grant workspace trust (its target is outside the reviewed origin/main content and may change after this check)"
+        fi
         [ -e "${f}" ] || continue
+        [ -f "${f}" ] || die "Repo checkout contains ${f} that is not a regular file — refusing to grant workspace trust"
         rel_path="${f#"${repo_dir}"/}"
         local_sha=$(git -C "${repo_dir}" hash-object "${f}" 2>/dev/null) || local_sha=""
         main_sha=$(git -C "${repo_dir}" rev-parse "origin/main:${rel_path}" 2>/dev/null) || main_sha=""
-        if [ -n "${local_sha}" ] && [ -n "${main_sha}" ] && [ "${local_sha}" = "${main_sha}" ]; then
-            continue
+        if [ -z "${local_sha}" ] || [ -z "${main_sha}" ] || [ "${local_sha}" != "${main_sha}" ]; then
+            die "Repo checkout contains ${f} that differs from the reviewed origin/main version — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"
         fi
-        die "Repo checkout contains ${f} that differs from the reviewed origin/main version — refusing to grant workspace trust (a checked-out hook/MCP config would auto-run once the workspace is trusted, and this checkout may contain untrusted PR content)"
+        # A matching blob SHA alone is not enough: a symlink on origin/main stores its target
+        # path as the blob, so a regular file containing that path text hashes identically.
+        local_mode=100644
+        [ -x "${f}" ] && local_mode=100755
+        main_entry=$(git -C "${repo_dir}" ls-tree origin/main -- "${rel_path}" 2>/dev/null) || main_entry=""
+        main_mode="${main_entry%% *}"
+        if [ "${local_mode}" != "${main_mode}" ]; then
+            die "Repo checkout contains ${f} whose type/mode (${local_mode}) differs from the reviewed origin/main entry (${main_mode:-missing}) — refusing to grant workspace trust"
+        fi
     done
 }
 

@@ -985,6 +985,9 @@ fi
 if [ "\$3" = "rev-parse" ] && [ "\$4" = "origin/main:.claude/settings.json" ]; then
     printf 'sha-same\n'; exit 0
 fi
+if [ "\$3" = "ls-tree" ] && [ "\$6" = ".claude/settings.json" ]; then
+    printf '100644 blob sha-same\t.claude/settings.json\n'; exit 0
+fi
 exit 0
 GITEOF
     chmod +x "${STUB_BIN}/git"
@@ -1008,6 +1011,9 @@ if [ "\$3" = "hash-object" ]; then
 fi
 if [ "\$3" = "rev-parse" ] && [ "\$4" = "origin/main:.mcp.json" ]; then
     printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "ls-tree" ] && [ "\$6" = ".mcp.json" ]; then
+    printf '100644 blob sha-same\t.mcp.json\n'; exit 0
 fi
 exit 0
 GITEOF
@@ -1092,6 +1098,157 @@ GITEOF
         bash "${ENTRYPOINT}"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"differs from the reviewed origin/main version"* ]]
+}
+
+@test "entrypoint dies when .claude/settings.json is a dangling symlink" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    ln -s "${TEST_TMP}/does-not-exist" "${repo_dir}/.claude/settings.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/.claude/settings.json as a symbolic link"* ]]
+    [[ "${output}" == *"refusing to grant workspace trust"* ]]
+}
+
+@test "entrypoint dies when .claude/settings.local.json is a dangling symlink" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    ln -s "${TEST_TMP}/does-not-exist" "${repo_dir}/.claude/settings.local.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/.claude/settings.local.json as a symbolic link"* ]]
+}
+
+@test "entrypoint dies when .mcp.json is a dangling symlink" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    ln -s "${TEST_TMP}/does-not-exist" "${repo_dir}/.mcp.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/.mcp.json as a symbolic link"* ]]
+}
+
+@test "entrypoint dies when .mcp.json is a symlink to an existing file" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    printf '{"mcpServers":{}}\n' > "${TEST_TMP}/real.json"
+    ln -s "${TEST_TMP}/real.json" "${repo_dir}/.mcp.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/.mcp.json as a symbolic link"* ]]
+}
+
+@test "entrypoint dies when .claude/settings.json is a directory" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude/settings.json"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"${repo_dir}/.claude/settings.json that is not a regular file"* ]]
+}
+
+@test "entrypoint dies when .mcp.json matches origin/main's blob but origin/main stores it as a symlink" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}"
+    printf '/etc/passwd' > "${repo_dir}/.mcp.json"
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "${TEST_TMP}/git_args"
+if [ "\$3" = "hash-object" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "rev-parse" ] && [ "\$4" = "origin/main:.mcp.json" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "ls-tree" ] && [ "\$6" = ".mcp.json" ]; then
+    printf '120000 blob sha-same\t.mcp.json\n'; exit 0
+fi
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"type/mode (100644) differs from the reviewed origin/main entry (120000)"* ]]
+}
+
+@test "entrypoint dies when .claude/settings.json is executable but origin/main stores it as a regular file" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    printf '{"permissions":{"allow":["Bash(git *)"]}}\n' > "${repo_dir}/.claude/settings.json"
+    chmod +x "${repo_dir}/.claude/settings.json"
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "${TEST_TMP}/git_args"
+if [ "\$3" = "hash-object" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "rev-parse" ] && [ "\$4" = "origin/main:.claude/settings.json" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "ls-tree" ] && [ "\$6" = ".claude/settings.json" ]; then
+    printf '100644 blob sha-same\t.claude/settings.json\n'; exit 0
+fi
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"type/mode (100755) differs from the reviewed origin/main entry (100644)"* ]]
+}
+
+@test "entrypoint passes ls-tree the protected path relative to the repo root" {
+    setup_entrypoint_stubs
+    local repo_dir="${TEST_TMP}/repo"
+    mkdir -p "${repo_dir}/.claude"
+    printf '{"permissions":{"allow":["Bash(git *)"]}}\n' > "${repo_dir}/.claude/settings.local.json"
+    cat > "${STUB_BIN}/git" << GITEOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "${TEST_TMP}/git_args"
+if [ "\$3" = "hash-object" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "rev-parse" ] && [ "\$4" = "origin/main:.claude/settings.local.json" ]; then
+    printf 'sha-same\n'; exit 0
+fi
+if [ "\$3" = "ls-tree" ] && [ "\$6" = ".claude/settings.local.json" ]; then
+    printf '100644 blob sha-same\t.claude/settings.local.json\n'; exit 0
+fi
+exit 0
+GITEOF
+    chmod +x "${STUB_BIN}/git"
+    run env CLAUDE_CODE_OAUTH_TOKEN=token GIT_USER_NAME="Alice" \
+        GIT_USER_EMAIL="alice@example.com" GIT_SIGNING_KEY="ABCD1234" \
+        WORKSPACE_REPO_DIR="${repo_dir}" \
+        bash "${ENTRYPOINT}"
+    [ "${status}" -eq 0 ]
+    grep -qxF -- "-C ${repo_dir} ls-tree origin/main -- .claude/settings.local.json" "${TEST_TMP}/git_args"
 }
 
 @test "entrypoint does not seed ~/.claude.json when the repo checkout carries its own Claude Code project config" {
