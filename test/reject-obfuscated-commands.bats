@@ -859,6 +859,14 @@ git status'
     [[ "${output}" == *'assignment to IFS is not permitted'* ]]
 }
 
+@test "assigning POSIXLY_CORRECT is blocked - cp, mv and ln checks rely on option reordering (SEC-R7-1)" {
+    run_hook "POSIXLY_CORRECT=1 cp a b"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to POSIXLY_CORRECT is not permitted'* ]]
+    run_hook "POSIXLY_CORRECT=1"
+    [ "${status}" -eq 2 ]
+}
+
 @test "assigning an npm_config_* option variable is blocked - it is the same bypass as the flag (#1385 review)" {
     run_hook 'npm_config_script_shell=/evil npm run x'
     [ "${status}" -eq 2 ]
