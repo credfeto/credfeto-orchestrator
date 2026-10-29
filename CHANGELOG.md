@@ -11,6 +11,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 ## [Unreleased]
 ### Security
 ### Added
+- `cfwf pr checks-wait --repo <owner/repo> --pr <n> [--timeout-minutes <m>]` waits, in one call, for a pull request's checks to reach a final verdict (judged as `cfwf pr checks` does, with an all-pass confirmed on a second read of the same head) or for a time limit (default 30 minutes, at most 120), then exits once: 0 passed, 3 failed, 4 still pending, 5 still no checks, 6 a failed read, never confused with a failed check (#1626)
 - Container image vulnerability scans (trivy-scan) now list each finding (CVE, severity, package, installed and fixed version) in the build log and as annotations, write a findings table to the job summary, and post one comment per image on the PR, instead of only failing with "exit code 1"; the CRITICAL gate and the code scanning upload are unchanged (#1729)
 ### Fixed
 - enforce-allowed-dirs no longer blocks non-ASCII text (such as an em dash) in the body of a heredoc whose delimiter is quoted and alphanumeric (`<<'PLAN'`), so agents can post plans and comments with `--body-file -`; the delimiter, every word and redirection and the body of an unquoted-delimiter heredoc must still be plain ASCII when a writing command is present (#1658)

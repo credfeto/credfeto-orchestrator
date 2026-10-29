@@ -47,6 +47,15 @@ readonly TASK_WAIT_TAIL_LINES=40
 # already retries on pending calls it again; a missing output file reads like any other missing item.
 readonly TASK_PENDING_EXIT="${CHECKS_PENDING_EXIT}"
 readonly TASK_NOT_FOUND_EXIT=9
+# pr checks-wait: how long it waits by default and at most, in minutes, and how long it waits
+# between two reads of the checks, in seconds. It is meant to run in the background, so, unlike
+# task wait, its limits are not tied to the Bash tool's timeout.
+readonly CHECKS_WAIT_DEFAULT_MINUTES=30
+readonly CHECKS_WAIT_MAX_MINUTES=120
+readonly CHECKS_WAIT_POLL_SECONDS=30
+# A gh, API or network failure while pr checks-wait reads the checks: a code of its own, so it is
+# never taken for a failed check (CHECKS_FAILED_EXIT) or a timeout (CHECKS_PENDING_EXIT).
+readonly CHECKS_WAIT_ERROR_EXIT=6
 readonly API_PAGE_SIZE=100
 # The most files GitHub lists for a pull request ("Responses include a maximum of 3000 files", in
 # the REST reference for "List pull requests files"), so one that changes more cannot be listed whole.
@@ -318,6 +327,7 @@ Commands:
   auth status              Print the authenticated login, the host and the gh version, never a token
   branch required-checks   Print the checks a branch requires, from its protection and rulesets (exit 9 when not found)
   pr checks                Judge the checks on a PR's, a branch's or a commit's head (exit 0, 3, 4 or 5)
+  pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
@@ -887,6 +897,8 @@ pending; ${NO_CHECKS_EXIT} the head has no check runs or statuses at all (expect
 until it is marked ready, so not a pass); 1 a runtime failure, such as a gh or network error,
 prefixed "cfwf:" and never reported as a failed check; 2 a usage error.
 
+Run 'cfwf pr checks-wait --help' for pr checks-wait, which waits, in one call, for a pull request's
+required checks to finish, up to a time limit.
 Run 'cfwf pr comments --help' for pr comments, which prints a pull request's comments, reviews and
 review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
@@ -1356,6 +1368,42 @@ not found, prefixed "cfwf:"; 2 a usage error.
 USAGE
 }
 
+usage_pr_checks_wait() {
+    cat << USAGE
+Usage: cfwf pr checks-wait --repo <owner/repo> --pr <n> [--timeout-minutes <m>]
+
+Waits, in one call, until the checks on a pull request's head reach a final verdict or the time
+limit passes, then exits once with a single code. Each read judges the checks exactly as
+'cfwf pr checks --pr' does (the same head, required checks and verdicts), and it reads again every
+${CHECKS_WAIT_POLL_SECONDS} seconds. Start it with run_in_background: true and judge its exit code when it
+finishes; never wrap it in a shell wait.
+
+--repo             Always required; never taken from the current directory.
+--pr               Always required: the pull request whose head is judged.
+--timeout-minutes  How long to wait, from 1 to ${CHECKS_WAIT_MAX_MINUTES} minutes (default ${CHECKS_WAIT_DEFAULT_MINUTES}).
+--sha, --branch, --all, --json, --jq, --template, --watch and --interval are not options.
+
+A failure is reported at once. An all-pass is reported only when the next read, on the same head
+commit, still passes, because a slow required workflow may not have been queued yet; a new head
+(a push while it waits) starts that confirmation again. Pending checks, or no checks at all yet
+(a PR whose checks start once it is marked ready), keep it waiting.
+
+Output: the last read, exactly as 'cfwf pr checks' prints it: one line for each judged check, then
+the summary line.
+
+Exit codes:
+  0  every judged check passed, on two reads in a row of the same head
+  ${CHECKS_FAILED_EXIT}  at least one check failed
+  ${CHECKS_PENDING_EXIT}  the time limit passed with checks still pending
+  ${NO_CHECKS_EXIT}  the time limit passed and the head still has no check runs or statuses at all
+  ${CHECKS_WAIT_ERROR_EXIT}  a gh, API or network failure while reading the checks, or a pull request that is not
+     found, prefixed "cfwf:"; never reported as a failed check
+  1  gh is not installed
+  2  a usage error
+It only reads: it never re-runs, cancels or changes anything.
+USAGE
+}
+
 usage_task_wait() {
     cat << USAGE
 Usage: cfwf task wait --output <file> [--timeout <seconds>]
@@ -1441,6 +1489,7 @@ usage_for() {
         "repo collaborators") usage_repo_collaborators ;;
         auth | "auth status") usage_auth ;;
         pr | "pr checks") usage_pr ;;
+        "pr checks-wait") usage_pr_checks_wait ;;
         "pr view") usage_pr_view ;;
         "pr ready-at") usage_pr_ready_at ;;
         "pr diff") usage_pr_diff ;;
@@ -3271,6 +3320,99 @@ pr_checks() {
     report_checks
 }
 
+CHECKS_WAIT_MINUTES=""
+CHECKS_WAIT_OUTPUT=""
+CHECKS_WAIT_STATUS=0
+
+assign_checks_wait_option() {
+    local flag="$1" value="$2"
+    case "${flag}" in
+        --repo) assign_checks_option "${flag}" "${value}" ;;
+        --pr)
+            assign_checks_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${PR}"
+            ;;
+        --timeout-minutes)
+            assign_once CHECKS_WAIT_MINUTES "${flag}"
+            validate "${value}" '^[0-9]{1,9}$' "${flag}" "it must be a number of minutes"
+            CHECKS_WAIT_MINUTES=$(without_leading_zeros "${value}")
+            require_number_above_zero "${flag}" "${CHECKS_WAIT_MINUTES}"
+            [ "${CHECKS_WAIT_MINUTES}" -le "${CHECKS_WAIT_MAX_MINUTES}" ] \
+                || usage_error "invalid value for ${flag}: it must be at most ${CHECKS_WAIT_MAX_MINUTES} minutes"
+            ;;
+    esac
+}
+
+# Prints the current time in whole seconds. date is read rather than SECONDS so that the tests can
+# stand in a clock for it.
+checks_wait_now() {
+    local now
+    now=$(date +%s) && [[ "${now}" =~ ^[0-9]+$ ]] || die "could not read the clock"
+    printf '%s\n' "${now}"
+}
+
+# Reads and judges the checks once, exactly as pr checks --pr does, in a subshell because
+# report_checks exits with the verdict: sets CHECKS_WAIT_OUTPUT to what it printed and
+# CHECKS_WAIT_STATUS to its exit code (0, CHECKS_FAILED_EXIT, CHECKS_PENDING_EXIT or NO_CHECKS_EXIT,
+# or 1 when a read failed, after printing its "cfwf:" error on stderr). Each read starts from the
+# state before the first one, so nothing judged on one read is carried into the next.
+checks_wait_read() {
+    CHECKS_WAIT_STATUS=0
+    CHECKS_WAIT_OUTPUT=$(
+        resolve_checks_head
+        read_required_checks "${REPO}" "${RULES_BRANCH}" "could not read the branch protection of ${REPO}" \
+            || die "the branch whose required checks apply was not found in ${REPO}"
+        read_check_results
+        report_checks
+    ) || CHECKS_WAIT_STATUS=$?
+}
+
+# Waits for the checks on the pull request's head to reach a final verdict, reading them every
+# CHECKS_WAIT_POLL_SECONDS, then prints the last read and exits with its code: a failure at once, an
+# all-pass only once a second read in a row of the same head still passes, and pending or no checks
+# at the time limit. Any other result of a read is a failed read (CHECKS_WAIT_ERROR_EXIT).
+pr_checks_wait() {
+    local deadline confirming="" head
+    parse_command_options assign_checks_wait_option "--repo --pr --timeout-minutes" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require_gh
+    [ -n "${CHECKS_WAIT_MINUTES}" ] || CHECKS_WAIT_MINUTES="${CHECKS_WAIT_DEFAULT_MINUTES}"
+    # Made before the first read, so every read in its subshell reuses it and the EXIT trap removes it.
+    ensure_temp_file GH_ERR_FILE
+    deadline=$(($(checks_wait_now) + CHECKS_WAIT_MINUTES * 60))
+    while :; do
+        checks_wait_read
+        head="${CHECKS_WAIT_OUTPUT##*head=}"
+        case "${CHECKS_WAIT_STATUS}" in
+            0)
+                if [ -n "${confirming}" ] && [ "${confirming}" = "${head}" ]; then
+                    printf '%s\n' "${CHECKS_WAIT_OUTPUT}"
+                    exit 0
+                fi
+                confirming="${head}"
+                ;;
+            "${CHECKS_FAILED_EXIT}")
+                printf '%s\n' "${CHECKS_WAIT_OUTPUT}"
+                exit "${CHECKS_FAILED_EXIT}"
+                ;;
+            "${CHECKS_PENDING_EXIT}" | "${NO_CHECKS_EXIT}")
+                confirming=""
+                ;;
+            *)
+                exit "${CHECKS_WAIT_ERROR_EXIT}"
+                ;;
+        esac
+        # An all-pass waiting for its second read always gets that read, even at the time limit.
+        if [ -z "${confirming}" ] && [ "$(checks_wait_now)" -ge "${deadline}" ]; then
+            printf '%s\n' "${CHECKS_WAIT_OUTPUT}"
+            printf 'cfwf: the checks have not finished after %s minutes\n' "${CHECKS_WAIT_MINUTES}" >&2
+            exit "${CHECKS_WAIT_STATUS}"
+        fi
+        sleep "${CHECKS_WAIT_POLL_SECONDS}"
+    done
+}
+
 # The fields of pr view, in the order they are printed: the name, the gh pr view --json fields it is
 # read from, and the jq expression of its value. A value that is null prints as empty.
 readonly PR_VIEW_FIELDS=(
@@ -4172,7 +4314,7 @@ pr_reply() {
 }
 
 cmd_pr() {
-    dispatch_subcommand pr checks pr_checks view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
+    dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
         ready-at pr_ready_at diff pr_diff -- "$@"
 }
 
