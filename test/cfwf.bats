@@ -8909,7 +8909,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, view, list, comments, reply, create, ready-at, diff)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -11221,3 +11221,249 @@ assert_unexpected_run() {
     [ ! -f "${GH_LOG}" ]
 }
 
+# --- pr checks-wait ------------------------------------------------------------
+
+# Stand-ins for the clock and for sleep, on top of prepare_pr_checks: date +%s prints the seconds in
+# CLOCK_FILE (any other date call runs the real one), and each sleep logs its argument to SLEEP_LOG,
+# adds it to the clock and, on its n-th call, copies the fixtures saved as stage n+1 (save_stage)
+# over GH_FIXTURES, so the next read sees the next state.
+prepare_checks_wait() {
+    prepare_pr_checks
+    export CLOCK_FILE="${TEST_TMP}/clock" SLEEP_LOG="${TEST_TMP}/sleep.log" STAGES="${TEST_TMP}/stages"
+    printf '0\n' > "${CLOCK_FILE}"
+    : > "${SLEEP_LOG}"
+    mkdir -p "${STAGES}"
+    local real_date
+    real_date="$(command -v date)"
+    # The stub bodies are deliberately single-quoted: they must expand when the stub runs, not here.
+    # shellcheck disable=SC2016
+    make_stub_multiline date \
+        'if [ "$*" = "+%s" ]; then cat "${CLOCK_FILE}"; exit 0; fi' \
+        "exec ${real_date} \"\$@\""
+    # shellcheck disable=SC2016
+    make_stub_multiline sleep \
+        'printf "%s\n" "$1" >> "${SLEEP_LOG}"' \
+        'printf "%s\n" "$(($(cat "${CLOCK_FILE}") + $1))" > "${CLOCK_FILE}"' \
+        'next="${STAGES}/$(($(wc -l < "${SLEEP_LOG}") + 1))"' \
+        '[ ! -d "${next}" ] || cp -f "${next}"/* "${GH_FIXTURES}/"'
+}
+
+# Saves the API fixtures as they are now as the stage $1, which the sleep stand-in copies back over
+# GH_FIXTURES after its ($1 - 1)-th call.
+save_stage() {
+    mkdir -p "${STAGES}/$1"
+    cp -f "${GH_FIXTURES}"/api-*.json "${STAGES}/$1/"
+}
+
+sleep_count() {
+    wc -l < "${SLEEP_LOG}"
+}
+
+run_checks_wait() {
+    run --separate-stderr "${SCRIPT}" pr checks-wait --repo "${REPO}" "$@"
+}
+
+@test "pr checks-wait help, from help, -h and --help, gives the usage and every exit code, and calls no gh (#1626)" {
+    local invocation
+    for invocation in "help pr checks-wait" "pr checks-wait -h" "pr checks-wait --help"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ] || { echo "${invocation}: ${status}" >&2; return 1; }
+        [[ "${output}" == "Usage: cfwf pr checks-wait --repo <owner/repo> --pr <n> [--timeout-minutes <m>]"* ]]
+        [[ "${output}" == *"from 1 to 120 minutes (default 30)"* ]]
+        [[ "${output}" == *"  3  at least one check failed"*"  4  the time limit passed with checks still pending"* ]]
+        [[ "${output}" == *"  5  the time limit passed and the head still has no check runs"*"  6  a gh, API or network failure"* ]]
+    done
+    run "${SCRIPT}" help
+    [[ "${output}" == *"pr checks-wait           Wait for a PR's required checks to finish"* ]]
+    run "${SCRIPT}" pr checks --help
+    [[ "${output}" == *"Run 'cfwf pr checks-wait --help' for pr checks-wait"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr checks-wait usage errors exit 2 before any gh call (#1626)" {
+    local -a cases=(
+        ""
+        "--pr 42 --pr 43"
+        "--pr x42"
+        "--pr 0"
+        "--pr 42 --sha ${HEAD_SHA}"
+        "--pr 42 --branch main"
+        "--pr 42 --all"
+        "--pr 42 --json name"
+        "--pr 42 --jq ."
+        "--pr 42 --template x"
+        "--pr 42 --watch"
+        "--pr 42 --interval 10"
+        "--pr 42 --timeout-minutes 0"
+        "--pr 42 --timeout-minutes 121"
+        "--pr 42 --timeout-minutes abc"
+        "--pr 42 --timeout-minutes -1"
+        "--pr 42 --timeout-minutes 1.5"
+        "--pr 42 --timeout-minutes 5 --timeout-minutes 6"
+        "--pr 42 --timeout-minutes"
+    )
+    local args
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run_checks_wait ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf pr checks-wait"* ]]
+    done
+
+    run --separate-stderr "${SCRIPT}" pr checks-wait --pr 42
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == *"missing required option --repo"* ]]
+
+    run_checks_wait --pr 42 --timeout-minutes 121
+    [[ "${stderr}" == *"invalid value for --timeout-minutes: it must be at most 120 minutes"* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr checks-wait reports an all-pass only after a second read of the same head still passes (#1626)" {
+    prepare_checks_wait
+    run_checks_wait --pr 42
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "build"$'\t'"pass"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]
+    [ "$(sleep_count)" -eq 1 ]
+    [ "$(cat "${SLEEP_LOG}")" = "30" ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/42 ")" -eq 2 ]
+    [ "$(gh_call_count "api repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all --paginate ")" -eq 2 ]
+}
+
+@test "pr checks-wait keeps waiting while checks are pending, then reports the confirmed pass (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
+    save_stage 1
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
+    save_stage 2
+    cp -f "${STAGES}/1"/* "${GH_FIXTURES}/"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${HEAD_SHA}" ]]
+    [ "$(sleep_count)" -eq 2 ]
+}
+
+@test "pr checks-wait keeps waiting while the head has no checks at all yet (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}"
+    save_stage 1
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
+    save_stage 2
+    cp -f "${STAGES}/1"/* "${GH_FIXTURES}/"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 0 ]
+    [ "$(sleep_count)" -eq 2 ]
+}
+
+@test "pr checks-wait exits 3 at once for a failed check, without waiting (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build failure 11)"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 3 ]
+    [ "${output}" = "build"$'\t'"fail"$'\t'"${COMPLETED_AT}"$'\t'"11"$'\n'"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]
+    [ "$(sleep_count)" -eq 0 ]
+}
+
+@test "pr checks-wait exits 3 when a pass is followed by a failure on the confirming read (#1626)" {
+    prepare_checks_wait
+    save_stage 1
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)" "$(check_run build cancelled 12)"
+    save_stage 2
+    cp -f "${STAGES}/1"/* "${GH_FIXTURES}/"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 3 ]
+    [[ "${output}" == *"summary passed=0 failed=1 pending=0 head=${HEAD_SHA}" ]]
+    [ "$(sleep_count)" -eq 1 ]
+}
+
+@test "pr checks-wait exits 4 at the time limit with checks still pending, printing the last read (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
+    run_checks_wait --pr 42 --timeout-minutes 1
+    [ "${status}" -eq 4 ]
+    [ "${output}" = "build"$'\t'"pending"$'\t'$'\t'"11"$'\n'"summary passed=0 failed=0 pending=1 head=${HEAD_SHA}" ]
+    [ "${stderr}" = "cfwf: the checks have not finished after 1 minutes" ]
+    # Reads at 0, 30 and 60 seconds: the third is at the limit.
+    [ "$(sleep_count)" -eq 2 ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/42 ")" -eq 3 ]
+}
+
+@test "pr checks-wait waits 30 minutes by default (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
+    run_checks_wait --pr 0042
+    [ "${status}" -eq 4 ]
+    [ "$(sleep_count)" -eq 60 ]
+    [ "$(cat "${CLOCK_FILE}")" -eq 1800 ]
+    [ "$(gh_call_count "pulls/0")" -eq 0 ]
+}
+
+@test "pr checks-wait exits 5 at the time limit when the head still has no checks at all (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}"
+    write_protection main
+    run_checks_wait --pr 42 --timeout-minutes 1
+    [ "${status}" -eq 5 ]
+    [ "${output}" = "summary passed=0 failed=0 pending=0 head=${HEAD_SHA}" ]
+}
+
+@test "pr checks-wait gives a confirming read even at the time limit (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
+    save_stage 1
+    save_stage 2
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
+    save_stage 3
+    cp -f "${STAGES}/1"/* "${GH_FIXTURES}/"
+    # Pending at 0 and 30 seconds, a first pass at 60 (the limit), confirmed at 90.
+    run_checks_wait --pr 42 --timeout-minutes 1
+    [ "${status}" -eq 0 ]
+    [ "$(sleep_count)" -eq 3 ]
+}
+
+@test "pr checks-wait exits 6 for a failed read, never 3, and prints no verdict (#1626)" {
+    prepare_checks_wait
+    fail_api "repos/${REPO}/commits/${HEAD_SHA}/check-runs"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 6 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not read the check runs of ${HEAD_SHA}: gh: Bad Gateway (HTTP 502)"* ]]
+    [ "$(sleep_count)" -eq 0 ]
+
+    rm -f "$(api_fixture "repos/${REPO}/commits/${HEAD_SHA}/check-runs").fail"
+    rm -f "$(api_fixture "repos/${REPO}/pulls/42").json"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 6 ]
+    [ "${stderr}" = "cfwf: ${REPO}#42 was not found" ]
+}
+
+@test "pr checks-wait exits 6 when a later read fails after a pending one (#1626)" {
+    prepare_checks_wait
+    write_check_runs "${HEAD_SHA}" "$(check_run build "" 11)"
+    mkdir -p "${STAGES}/2"
+    printf '%s\n' "gh: Bad Gateway (HTTP 502)" \
+        > "${STAGES}/2/$(basename "$(api_fixture "repos/${REPO}/commits/${HEAD_SHA}/status")").fail"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 6 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not read the commit statuses of ${HEAD_SHA}: gh: Bad Gateway (HTTP 502)"* ]]
+    [ "$(sleep_count)" -eq 1 ]
+}
+
+@test "pr checks-wait starts the confirmation again when the head changes while it waits (#1626)" {
+    prepare_checks_wait
+    save_stage 1
+    jq -n --arg sha "${OLD_SHA}" '{number: 42, head: {sha: $sha}, base: {ref: "main"}}' | write_api "repos/${REPO}/pulls/42"
+    write_check_runs "${OLD_SHA}" "$(check_run build success 21 "" "${OLD_SHA}")"
+    write_statuses "${OLD_SHA}"
+    save_stage 2
+    cp -f "${STAGES}/1"/* "${GH_FIXTURES}/"
+    run_checks_wait --pr 42
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${OLD_SHA}" ]]
+    # Pass on the first head, pass on the new head (not a confirmation), then the confirming read.
+    [ "$(sleep_count)" -eq 2 ]
+}
