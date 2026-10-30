@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
 ### Added
 - `cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]` changes a pull request's title or body, or assigns the agent, in one call: a Conventional Commits title and a body from a file, both leak-checked, `--assign-self` as the only assignee option, and a refusal (exit 8) for a pull request that is not the agent's own, so agents no longer need raw `gh pr edit` (#1589)
 - `cfwf pr checks-wait --repo <owner/repo> --pr <n> [--timeout-minutes <m>]` waits, in one call, for a pull request's checks to reach a final verdict (judged as `cfwf pr checks` does, with an all-pass confirmed on a second read of the same head) or for a time limit (default 30 minutes, at most 120), then exits once: 0 passed, 3 failed, 4 still pending, 5 still no checks, 6 a failed read, never confused with a failed check (#1626)
