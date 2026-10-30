@@ -127,6 +127,19 @@ stub_gh_token() {
     [ "${output}" = '{"Authorization":"Bearer Az09-._~+/="}' ]
 }
 
+@test "the token reaches jq on stdin, never on its command line" {
+    local real_jq jq_log="${TEST_TMP}/jq.log"
+    # setup linked jq into the stub directory; resolve it so the stub execs the real binary.
+    real_jq="$(readlink -f "${STUB_BIN}/jq")"
+    make_stub jq "printf '%s\n' \"\$*\" >> '${jq_log}'; exec '${real_jq}' \"\$@\""
+    run_helper GH_TOKEN=ghp_direct_secret
+    [ "${status}" -eq 0 ]
+    [ "${output}" = '{"Authorization":"Bearer ghp_direct_secret"}' ]
+    [ -s "${jq_log}" ]
+    run grep -c 'ghp_direct_secret' "${jq_log}"
+    [ "${output}" = '0' ]
+}
+
 @test "a jq failure exits non-zero with nothing on stdout and no token on stderr" {
     make_stub jq 'exit 1'
     run_helper GH_TOKEN=ghp_direct_secret

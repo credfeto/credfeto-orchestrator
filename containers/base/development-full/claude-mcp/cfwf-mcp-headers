@@ -41,5 +41,7 @@ case "${token}" in
     *[!A-Za-z0-9._~+/=-]*) fail "the GitHub token holds characters a bearer token cannot contain" ;;
 esac
 
-jq -cn --arg token "${token}" '{Authorization: ("Bearer " + $token)}' 2>/dev/null \
+# The token reaches jq on stdin from the shell's builtin printf, never as an
+# argument, so no other local user can read it from /proc/<pid>/cmdline.
+printf '%s' "${token}" | jq -cR '{Authorization: ("Bearer " + .)}' 2>/dev/null \
     || fail "jq could not build the Authorization header"
