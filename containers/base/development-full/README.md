@@ -147,7 +147,7 @@ Every hook command in `managed-settings.json`'s `PreToolUse` block is an absolut
 `/etc/claude-code/hooks/block-github-mcp-write-tools`, `/etc/claude-code/hooks/enforce-ssh-host-and-key`,
 `/etc/claude-code/hooks/enforce-curl-host`,
 `/etc/claude-code/hooks/enforce-background-for-long-running-commands`, and
-`/etc/claude-code/hooks/cache-gh-lookups`), apart from the `block-no-verify` entry, so the same
+`/etc/claude-code/hooks/cache-gh-lookups`), with no bare command looked up on `PATH`, so the same
 root-owned copies run in the container and on a host set up with `install-claude-hooks` below. The
 Dockerfile's own build-time sanity check fails the build if any hook command is anything else.
 `oneshot` does not bind-mount over any of these
@@ -308,7 +308,7 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 0444, and `/etc/claude-code` and `/etc/claude-code/hooks` root:root 0755; `managed-settings.json` must set
 the `allowManaged*Only` locks and disable bypass-permissions mode, `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
-`block-no-verify` or under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
+under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-dash-c`,
 `.../block-git-worktree`, `.../block-dotnet-tool-install`, `.../block-github-mcp-write-tools`,
 `.../enforce-ssh-host-and-key`, `.../enforce-curl-host`, `.../enforce-background-for-long-running-commands`,

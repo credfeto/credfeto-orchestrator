@@ -287,12 +287,24 @@ teardown() {
     [ "${output}" = "true true true disable dontAsk" ]
 }
 
-@test "every managed hook command is an absolute /etc/claude-code/hooks path, apart from block-no-verify" {
-    local cmd
+@test "every managed hook command is an absolute /etc/claude-code/hooks path" {
+    local cmd count=0
     while IFS= read -r cmd; do
-        [ "${cmd}" = "block-no-verify" ] && continue
+        count=$((count + 1))
         [[ "${cmd}" == /etc/claude-code/hooks/* ]] || { echo "not an /etc/claude-code/hooks path: ${cmd}" >&2; return 1; }
-    done < <(jq -r '.hooks.PreToolUse[].hooks[].command' "${SOURCE_MANAGED_SETTINGS}")
+    done < <(jq -r '.hooks[][].hooks[].command' "${SOURCE_MANAGED_SETTINGS}")
+    [ "${count}" -gt 0 ]
+}
+
+@test "no managed hook command is a bare command looked up on PATH" {
+    run jq -r '[.hooks[][].hooks[].command | select(startswith("/") | not)] | join(" ")' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "the managed settings do not wire in the npm block-no-verify tool" {
+    run grep -q 'block-no-verify' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 1 ]
 }
 
 @test "every hook the managed settings run exists in claude-hooks and is copied into /etc/claude-code/hooks by the Dockerfile" {

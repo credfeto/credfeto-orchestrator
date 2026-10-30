@@ -391,10 +391,6 @@
           },
           {
             "type": "command",
-            "command": "block-no-verify"
-          },
-          {
-            "type": "command",
             "command": "/etc/claude-code/hooks/enforce-git-identity"
           },
           {
