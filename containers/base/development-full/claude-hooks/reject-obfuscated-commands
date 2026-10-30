@@ -200,18 +200,23 @@ fi
 # Concatenates a word's parts when they are all literal or quoted text, or
 # yields null when any part is an expansion whose value is only known at run
 # time. Shared by the assignment-target and the per-CallExpr jq programs.
+# A Lit part outside any quoting (unquoted=true) has its backslash escapes
+# decoded as bash does - drop the backslash, keep the next character - since
+# shfmt keeps the raw backslash in Lit.Value. A Lit inside double quotes is
+# left raw: there a backslash is special only before $, `, ", \ and newline.
 # shellcheck disable=SC2016  # jq program text - its $ names are jq variables, not shell expansions
 JQ_RESOLVE_PARTS='
-  def resolve_parts:
+  def resolve_parts(unquoted):
     if length == 0 then ""
     else
       reduce .[] as $p (
         "";
         if . == null then null
-        elif $p.Type == "Lit" then . + $p.Value
+        elif $p.Type == "Lit" then
+          . + (if unquoted then ($p.Value | gsub("\\\\(?<c>.)"; "\(.c)")) else $p.Value end)
         elif $p.Type == "SglQuoted" then . + ($p.Value // "")
         elif $p.Type == "DblQuoted" then
-          (($p.Parts // []) | resolve_parts) as $inner
+          (($p.Parts // []) | resolve_parts(false)) as $inner
           | (if $inner == null then null else . + $inner end)
         else null
         end
@@ -249,7 +254,7 @@ assign_targets=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
     any(.. | objects | select(.Type == "Lit" or (.Type == "SglQuoted" and .Dollar == true)); .Value | contains("\\"));
   def word_value:
     if has_escape then "\u0001"
-    else (.Parts | resolve_parts) as $r | if $r == null then "\u0001" else $r end
+    else (.Parts | resolve_parts(true)) as $r | if $r == null then "\u0001" else $r end
     end;
   # Whether an opaque word certainly does not start with "-" at run time, so
   # printf cannot be reading it as an option.
@@ -340,8 +345,10 @@ done <<< "$assign_targets"
 # real \x01 byte can never appear in the input, so the marker is unambiguous,
 # and it fails the command-name allowlist regex), then the resolved line
 # (same approach as enforce-git-dash-c's own resolve_parts, trimmed to just
-# the Lit/SglQuoted/DblQuoted-of-only-those-parts concatenation - no
-# unquoted-backslash decode, no ANSI-C-escape sentinel). Unlike that hook's
+# the Lit/SglQuoted/DblQuoted-of-only-those-parts concatenation plus the
+# unquoted-backslash decode - no ANSI-C-escape sentinel). The words line keeps
+# the raw backslash, so NAME_RE still rejects an escaped command name such as
+# g\it, while the resolved line sees python3 -\c as the -c bash passes. Unlike that hook's
 # own --no-verify check, the ANSI-C gap here IS load-bearing where an
 # interpreter has a broad, unscoped allow entry (e.g. the pre-existing
 # Bash(python3 *)): python3 $'\x2d\x63' '...' passes this check, since
@@ -395,7 +402,7 @@ calls=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
      if ($w | unsafe_for_transport) then "\u0001" else $w end
   ] | join("\t")),
   ([ .Args[] |
-     (.Parts | resolve_parts) as $r |
+     (.Parts | resolve_parts(true)) as $r |
      if ($r | unsafe_for_transport) then "\u0001" else $r end
   ] | join("\u001f"))
 ') || block 'command AST could not be analysed - failing closed'

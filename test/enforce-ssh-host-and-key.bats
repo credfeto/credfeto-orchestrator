@@ -159,13 +159,34 @@ with_valid_key() {
     [[ "${output}" == *'expand into more than one word'* ]]
 }
 
-@test "a bare backslash escape immediately after the target is rejected - raw text differs from what bash actually executes" {
+@test "a bare backslash escape immediately after the target is rejected - checked as the flag bash actually passes" {
     with_valid_key
     # shellcheck disable=SC2016  # literal backslash - the leading \- decodes
     # away in real bash, leaving -oProxyCommand=id as the actual argv word
     run_hook 'ssh user@dns-01.lan \-oProxyCommand=id'
     [ "${status}" -eq 2 ]
+    [[ "${output}" == *'a flag immediately after the target is not permitted'* ]]
+}
+
+@test "an escaped literal backslash immediately after the target is still rejected" {
+    with_valid_key
+    run_hook 'ssh user@dns-01.lan \\x'
+    [ "${status}" -eq 2 ]
     [[ "${output}" == *'expand into more than one word'* ]]
+}
+
+@test "a backslash-escaped ssh command name is still recognised as ssh" {
+    with_valid_key
+    run_hook 'ss\h evil.example.com'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not in the allowed user@'* ]]
+}
+
+@test "a backslash-escaped ssh command name with an injected flag is still rejected" {
+    with_valid_key
+    run_hook 'ss\h user@dns-01.lan -oProxyCommand=id'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'a flag immediately after the target is not permitted'* ]]
 }
 
 @test "brace expansion further into the remote command (not immediately after the target) is still unrestricted" {
@@ -280,10 +301,23 @@ with_valid_key() {
     [ "${status}" -eq 2 ]
 }
 
-@test "a bare backslash escape in the target is rejected by the strict regex" {
+@test "a backslash-escaped glob character in the target is rejected by the strict regex" {
     with_valid_key
-    run_hook 'ssh user@dns-\01.lan'
+    run_hook 'ssh user@dns-01\*.lan'
     [ "${status}" -eq 2 ]
+}
+
+@test "an escaped literal backslash in the target is rejected by the strict regex" {
+    with_valid_key
+    run_hook 'ssh user@dns-\\01.lan'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a backslash-escaped ordinary character in the target is checked as the word bash passes" {
+    with_valid_key
+    # bash passes user@dns-01.lan to ssh, which is an allowed target.
+    run_hook 'ssh user@dns-\01.lan'
+    [ "${status}" -eq 0 ]
 }
 
 @test "an ANSI-C quoted target is rejected (Dollar-quoted forms excluded from literal unwrap)" {
