@@ -207,7 +207,11 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command cou
 # forms (a $-expansion, command/process substitution, extglob, ...) nulls the whole word, which
 # becomes the MARKER below and is rejected outright by every check that follows - this hook,
 # unlike the denylist-only design it replaced, fails closed on ANY non-literal word anywhere,
-# not just specific positions, since the closed grammar has no legitimate use for one.
+# not just specific positions, since the closed grammar has no legitimate use for one. A bare
+# Lit part is decoded the way bash decodes an unquoted word (each backslash dropped, the next
+# character kept), because shfmt keeps the raw backslash and `cu\rl` would otherwise never be
+# recognised as curl; word_risky below still sees the raw text, so an escaped argument is
+# still rejected.
 #
 # word_risky flags a word whose LITERAL text could still expand into more than one argv word
 # (or otherwise not mean what it looks like) once bash actually runs it, despite passing
@@ -226,7 +230,7 @@ calls=$(printf '%s' "$ast" | jq -c '
   def literal_value:
     def part_lit:
       if (.Dollar // false) then null
-      elif .Type == "Lit" then (.Value // "")
+      elif .Type == "Lit" then ((.Value // "") | gsub("\\\\(?<c>.)"; "\(.c)"))
       elif .Type == "SglQuoted" then (.Value // "")
       elif .Type == "DblQuoted" then
         (.Parts // []) as $dp |

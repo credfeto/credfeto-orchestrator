@@ -136,6 +136,35 @@ git status'
     [ "${status}" -eq 2 ]
 }
 
+@test "a backslash-escaped git command name is still blocked" {
+    run_hook 'g\it status'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "a backslash-escaped first letter of a command name is still blocked" {
+    run_hook '\dotnet --info'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'not a simple, obvious command'* ]]
+}
+
+@test "a backslash-escaped inline-code flag is blocked as the flag bash actually passes" {
+    run_hook "python3 -\\c 'print(1)'"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash-escaped letter inside a long inline-code flag is blocked" {
+    run_hook "node --ev\\al=\"1\""
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'interpreter re-invocation'* ]]
+}
+
+@test "a backslash inside a double-quoted argument is not decoded into an inline-code flag" {
+    run_hook 'python3 script.py "x\c"'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command substitution used as the command name is blocked" {
     # shellcheck disable=SC2016  # literal $(...) — must reach the hook unexpanded
     run_hook '$(echo git) push'

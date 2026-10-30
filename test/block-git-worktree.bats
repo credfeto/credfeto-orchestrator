@@ -223,6 +223,40 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a backslash-escaped letter inside the worktree word is blocked" {
+    run_hook 'git work\tree add x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "a backslash-escaped first letter of the worktree word is blocked" {
+    run_hook 'git \worktree add x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside the add word is blocked" {
+    run_hook 'git worktree a\dd x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside the git command name is blocked" {
+    run_hook 'g\it worktree add x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside an allowed worktree subcommand is allowed" {
+    run_hook 'git worktree li\st'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a backslash inside a double-quoted word is not decoded" {
+    run_hook 'git worktree "a\dd" x'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command that does not parse as shell is blocked (fail closed)" {
     run_hook "if true; then git worktree add"
     [ "${status}" -eq 2 ]

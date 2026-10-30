@@ -141,9 +141,9 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command co
 # into two on the tab-join, shifting every later word's index exactly like the empty-string
 # bug above. This also closes the #1530-tracked vector for this file specifically (a bare
 # unquoted word's backslash-escaped tab, e.g. `bu\<TAB>ild`, now decodes to a raw tab via
-# the gsub above and is caught by this same guard); the other two hooks #1530 named
-# (reject-obfuscated-commands, block-dotnet-tool-install) do not widen literal recognition
-# past a bare top-level Lit the way this file now does, so that issue still tracks them.
+# the gsub above and is caught by this same guard); reject-obfuscated-commands and
+# block-dotnet-tool-install decode a bare top-level Lit the same way and fold a decoded
+# tab, newline or CR byte to their own opaque marker.
 # Guarded the same way as the ast=$(...) assignment above: if this jq program ever
 # errors on some AST shape, an unguarded assignment would leave $calls empty, the
 # read loop below would process zero lines, and the hook would silently fall through

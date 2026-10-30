@@ -181,14 +181,19 @@ ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2>/dev/null) || block 'command cou
 # those) is JSON null. Compact (-c) mode makes call-line splitting safe even
 # when a word's own value contains a real newline, since JSON string
 # encoding always escapes one - see the header for why a plain per-word
-# text-join was not.
+# text-join was not. A bare Lit word is decoded the way bash decodes an
+# unquoted word (each backslash dropped, the next character kept): shfmt
+# keeps the raw backslash, so `ss\h` would otherwise never be recognised as
+# ssh, and the target and following word must be checked as ssh receives
+# them. Decoding can only turn an escaped character into that same literal
+# character, so a glob or brace character it exposes is still rejected.
 calls=$(printf '%s' "$ast" | jq -c '
   def literal_value:
     if (.Parts | length) != 1 then null
     else
       .Parts[0] as $p |
       if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "Lit" then ($p.Value | if . == null then null else gsub("\\\\(?<c>.)"; "\(.c)") end)
       elif $p.Type == "SglQuoted" then $p.Value
       elif $p.Type == "DblQuoted" and (($p.Parts // []) | length) == 1 and ($p.Parts[0].Type == "Lit")
         then $p.Parts[0].Value
