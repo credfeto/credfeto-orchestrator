@@ -582,6 +582,9 @@ while IFS= read -r words_line && IFS= read -r ends_line && IFS= read -r resolved
       has_C=0
       if [ "${words[$j]:-}" = "-C" ]; then
         has_C=1
+        # git reads an empty -C argument as the current directory, so it would satisfy the
+        # must-have--C rule without naming any directory.
+        [ -n "${resolved[$((j + 1))]:-}" ] || block 'git -C requires a non-empty directory argument'
         j=$((j + 2))
         # `-c` pairs may also follow -C
         while [ "${words[$j]:-}" = "-c" ]; do
