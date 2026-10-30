@@ -38,6 +38,8 @@ setup() {
         '  "api graphql") [ -f "${GH_FIXTURES}/graphql.fail" ] && { cat "${GH_FIXTURES}/graphql.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/graphql.failout" ] && { cat "${GH_FIXTURES}/graphql.failout"; exit 1; }; [ -f "${GH_FIXTURES}/graphql.stderr" ] && cat "${GH_FIXTURES}/graphql.stderr" >&2; emit "${GH_FIXTURES}/graphql-target.json" ;;' \
         '  "pr view") [ -f "${GH_FIXTURES}/pr-view.fail" ] && { cat "${GH_FIXTURES}/pr-view.fail" >&2; exit 1; }; [ -f "${GH_FIXTURES}/pr-view.json" ] || exit 1; emit_asked "${GH_FIXTURES}/pr-view" "$@" ;;' \
         '  "pr diff") f="${GH_FIXTURES}/pr-diff"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] || { echo "GraphQL: Could not resolve to a PullRequest with the number of $3. (repository.pullRequest)" >&2; exit 1; }; cat "${f}.out" ;;' \
+        '  "pr ready") [ -f "${GH_FIXTURES}/pr-ready.fail" ] && { cat "${GH_FIXTURES}/pr-ready.fail" >&2; exit 1; }; [ -d "${GH_FIXTURES}/pr-ready.then" ] && cp "${GH_FIXTURES}/pr-ready.then/"* "${GH_FIXTURES}/"; exit 0 ;;' \
+        '  "pr merge") [ -f "${GH_FIXTURES}/pr-merge.fail" ] && { cat "${GH_FIXTURES}/pr-merge.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "label list") [ -f "${GH_FIXTURES}/label-list.rewrite" ] && printf "%s\n" "rewritten with /tmp/leak" > "$(cat "${GH_FIXTURES}/label-list.rewrite")"; [ -f "${GH_FIXTURES}/label-list.fail" ] && { echo "boom" >&2; exit 1; }; emit "${GH_FIXTURES}/label-list.json" ;;' \
         '  "label create") [ -f "${GH_FIXTURES}/label-create.fail" ] && { cat "${GH_FIXTURES}/label-create.fail" >&2; exit 1; }; exit 0 ;;' \
         '  "issue create") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/issue-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/issue-create.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/issue-create.out" ;;' \
@@ -11466,4 +11468,241 @@ run_checks_wait() {
     [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${OLD_SHA}" ]]
     # Pass on the first head, pass on the new head (not a confirmation), then the confirming read.
     [ "$(sleep_count)" -eq 2 ]
+}
+
+# --- pr hand-off ---------------------------------------------------------------
+
+HAND_OFF_URL="https://github.com/credfeto/credfeto-orchestrator/pull/42"
+HAND_OFF_COMMENT_URL="https://github.com/credfeto/credfeto-orchestrator/pull/42#issuecomment-4343"
+HAND_OFF_NEW_SHA="2222222222222222222222222222222222222222"
+HAND_OFF_BOARD_EDIT="project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_9"
+
+# Writes PR 42 as the pulls endpoint gives it: state $1 (open by default), draft $2 (false by
+# default), head $3 (HEAD_SHA by default), then each further argument a label name.
+write_hand_off_pr() {
+    local state="${1:-open}" draft="${2:-false}" sha="${3:-${HEAD_SHA}}"
+    shift 3 2> /dev/null || shift "$#"
+    jq -n --arg state "${state}" --argjson draft "${draft}" --arg sha "${sha}" --arg url "${HAND_OFF_URL}" --args \
+        '{number: 42, state: $state, draft: $draft, html_url: $url, head: {sha: $sha}, base: {ref: "main"},
+          labels: ($ARGS.positional | map({name: ., color: "ff0000"}))}' "$@" \
+        | write_api "repos/${REPO}/pulls/42"
+}
+
+# PR 42, open and ready, whose head is HEAD_SHA; main requires build, which passed at COMPLETED_AT
+# (12:00); the pull request was last marked ready at 11:00; the repository allows auto-merge; the
+# review record posts as HAND_OFF_COMMENT_URL. Each test changes what it needs.
+prepare_hand_off() {
+    write_hand_off_pr open false
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main", allow_auto_merge: true}' | write_api "repos/${REPO}"
+    write_protection main build
+    write_no_rulesets main
+    write_check_runs "${HEAD_SHA}" "$(check_run build success 11)"
+    write_statuses "${HEAD_SHA}"
+    write_issue_kind 42 pull 2026-10-01T08:00:00Z
+    write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T11:00:00Z)"
+    printf '%s\n' "${HAND_OFF_COMMENT_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Reviewed and ready.\n' > "${TEST_TMP}/hand-off.md"
+}
+
+# Makes "gh pr ready" copy every file a test puts in pr-ready.then over the fixtures, as what
+# GitHub answers changes once a pull request is marked ready (new check runs, a new head).
+after_ready() {
+    mkdir -p "${GH_FIXTURES}/pr-ready.then"
+}
+
+run_hand_off() {
+    run --separate-stderr "${SCRIPT}" pr hand-off --repo "${REPO}" --pr 42 --body-file "${TEST_TMP}/hand-off.md"
+}
+
+# Nothing was written: no board change, no ready, no comment and no merge request.
+assert_nothing_handed_off() {
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr hand-off on a ready pull request moves the board, records the head and enables merge-commit auto-merge, in that order" {
+    prepare_hand_off
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${HAND_OFF_URL} Human Review
+${HAND_OFF_URL} ready
+${HAND_OFF_COMMENT_URL}
+${HAND_OFF_URL} auto-merge on" ]
+    grep -qxF "${HAND_OFF_BOARD_EDIT}" "${GH_LOG}"
+    # Already ready, so it is not marked ready again.
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    grep -qxF "pr merge 42 --repo ${REPO} --auto --merge --match-head-commit ${HEAD_SHA}" "${GH_LOG}"
+    [ "$(gh_call_count "--admin")" -eq 0 ]
+    [ "$(gh_line_of "project item-edit")" -lt "$(gh_line_of "pr comment 42")" ]
+    [ "$(gh_line_of "pr comment 42")" -lt "$(gh_line_of "pr merge 42")" ]
+    [ "$(sed -n 1p "${GH_FIXTURES}/comment-body.txt")" = "### AI Review Loop: reviewed ${HEAD_SHA}" ]
+    [ "$(sed -n 2p "${GH_FIXTURES}/comment-body.txt")" = "" ]
+    [ "$(sed -n 3p "${GH_FIXTURES}/comment-body.txt")" = "Reviewed and ready." ]
+}
+
+@test "pr hand-off marks a draft ready after the board and before the record, then defers auto-merge (exit 7) while the checks predate the ready time" {
+    prepare_hand_off
+    write_hand_off_pr open true
+    write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T13:00:00Z)"
+    run_hand_off
+    [ "${status}" -eq 7 ]
+    [ "${output}" = "${HAND_OFF_URL} Human Review
+${HAND_OFF_URL} ready
+${HAND_OFF_COMMENT_URL}
+${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since the pull request was marked ready" ]
+    [[ "${stderr}" == "cfwf: auto-merge was not enabled on ${REPO}#42: "*"run pr hand-off again once the checks have finished" ]]
+    [[ "${stderr}" != *"steps done"* ]]
+    grep -qxF "pr ready 42 --repo ${REPO}" "${GH_LOG}"
+    [ "$(gh_line_of "project item-edit")" -lt "$(gh_line_of "pr ready 42")" ]
+    [ "$(gh_line_of "pr ready 42")" -lt "$(gh_line_of "pr comment 42")" ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr hand-off defers auto-merge (exit 7) when a required check is pending, or failed, after the pull request was marked ready" {
+    local conclusion
+    for conclusion in "" failure; do
+        prepare_hand_off
+        write_hand_off_pr open true
+        after_ready
+        check_run build "${conclusion}" 12 > "${TEST_TMP}/run.json"
+        printf '%s\n' "$(cat "${TEST_TMP}/run.json")" | jq -s '{total_count: length, check_runs: .}' \
+            > "${GH_FIXTURES}/pr-ready.then/api-repos_credfeto_credfeto-orchestrator_commits_${HEAD_SHA}_check-runs.json"
+        : > "${GH_LOG}"
+        run_hand_off
+        [ "${status}" -eq 7 ]
+        [[ "${output##*$'\n'}" == "${HAND_OFF_URL} auto-merge deferred: "* ]]
+        [ "$(gh_call_count "pr merge")" -eq 0 ]
+        rm -rf "${GH_FIXTURES}/pr-ready.then"
+    done
+}
+
+@test "pr hand-off stops before auto-merge, naming the steps done, when the head changes after it was reviewed" {
+    prepare_hand_off
+    write_hand_off_pr open true
+    after_ready
+    cp "$(api_fixture "repos/${REPO}/pulls/42").json" "${TEST_TMP}/pr.json"
+    jq --arg sha "${HAND_OFF_NEW_SHA}" '.head.sha = $sha' "${TEST_TMP}/pr.json" \
+        > "${GH_FIXTURES}/pr-ready.then/api-repos_credfeto_credfeto-orchestrator_pulls_42.json"
+    jq '.' "$(api_fixture "repos/${REPO}/commits/${HEAD_SHA}/check-runs").json" \
+        > "${GH_FIXTURES}/pr-ready.then/api-repos_credfeto_credfeto-orchestrator_commits_${HAND_OFF_NEW_SHA}_check-runs.json"
+    jq '.' "$(api_fixture "repos/${REPO}/commits/${HEAD_SHA}/status").json" \
+        > "${GH_FIXTURES}/pr-ready.then/api-repos_credfeto_credfeto-orchestrator_commits_${HAND_OFF_NEW_SHA}_status.json"
+    write_timeline 42 "$(timeline_event ready_for_review credfeto "" 2026-10-01T11:00:00Z)"
+    run_hand_off
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"cfwf: the head of ${REPO}#42 changed after it was reviewed, so auto-merge was not enabled"* ]]
+    [[ "${stderr}" == *"cfwf: hand-off steps done before the failure: board Human Review, ready, review record" ]]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr hand-off refuses (exit 8, nothing written) a pull request that is closed, Blocked or On Hold" {
+    local case_ expected
+    for case_ in "closed|the pull request is not open" "Blocked|the pull request is Blocked" "On Hold|the pull request is On Hold" "on-hold|the pull request is On Hold" "blocked|the pull request is Blocked"; do
+        prepare_hand_off
+        if [ "${case_%%|*}" = closed ]; then
+            write_hand_off_pr closed false
+        else
+            write_hand_off_pr open false "${HEAD_SHA}" Medium "${case_%%|*}"
+        fi
+        expected="${case_#*|}"
+        : > "${GH_LOG}"
+        run_hand_off
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: hand-off refused: ${expected}" ]
+        assert_nothing_handed_off
+    done
+}
+
+@test "pr hand-off refuses (exit 8, nothing written) when a required check failed, is pending, or the head has no checks" {
+    local case_
+    for case_ in "failure|a required check failed" "|a required check is still pending" "none|the head has no checks yet"; do
+        prepare_hand_off
+        case "${case_%%|*}" in
+            none)
+                write_no_rulesets main
+                write_branch main
+                write_check_runs "${HEAD_SHA}"
+                ;;
+            *) write_check_runs "${HEAD_SHA}" "$(check_run build "${case_%%|*}" 11)" ;;
+        esac
+        : > "${GH_LOG}"
+        run_hand_off
+        [ "${status}" -eq 8 ]
+        [ "${stderr}" = "cfwf: hand-off refused: ${case_#*|}" ]
+        assert_nothing_handed_off
+    done
+}
+
+@test "pr hand-off refuses (exit 8) a body that leaks or carries a plan-approval keyword, before any gh call" {
+    prepare_hand_off
+    printf 'see /home/someone/secret.txt\n' > "${TEST_TMP}/hand-off.md"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    assert_nothing_handed_off
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+
+    printf 'Looks good, approved.\n' > "${TEST_TMP}/hand-off.md"
+    : > "${GH_LOG}"
+    run_hand_off
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: approval keyword (line 1)" ]
+    assert_nothing_handed_off
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+}
+
+@test "pr hand-off on a repository without auto-merge leaves the pull request ready for a human and exits 0 without a merge request" {
+    prepare_hand_off
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main", allow_auto_merge: false}' | write_api "repos/${REPO}"
+    run_hand_off
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = "${HAND_OFF_URL} auto-merge unavailable: the repository does not allow auto-merge, so the pull request is left ready for a human" ]
+    [ "$(gh_call_count "pr comment 42")" -eq 1 ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+}
+
+@test "pr hand-off exits 9 for a pull request that does not exist, writing nothing" {
+    prepare_hand_off
+    rm "$(api_fixture "repos/${REPO}/pulls/42").json"
+    run_hand_off
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    assert_nothing_handed_off
+}
+
+@test "pr hand-off rejects usage errors (exit 2) without calling gh" {
+    local args
+    printf 'text\n' > "${TEST_TMP}/hand-off.md"
+    for args in "--repo ${REPO} --pr 42" "--repo ${REPO} --body-file ${TEST_TMP}/hand-off.md" \
+        "--pr 42 --body-file ${TEST_TMP}/hand-off.md" "--repo ${REPO} --pr 0 --body-file ${TEST_TMP}/hand-off.md" \
+        "--repo ${REPO} --pr 42 --body-file ${TEST_TMP}/hand-off.md --admin" \
+        "--repo ${REPO} --pr 42 --pr 43 --body-file ${TEST_TMP}/hand-off.md"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr hand-off ${args}
+        [ "${status}" -eq 2 ]
+        [ ! -s "${GH_LOG}" ]
+    done
+}
+
+@test "pr hand-off help, from help pr hand-off, pr hand-off --help and -h, describes the order and exit 7; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "help pr hand-off" "pr hand-off --help" "pr hand-off -h"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->"* ]]
+        [[ "${output}" == *"### AI Review Loop: reviewed <head SHA>"* ]]
+        [[ "${output}" == *"7 ready and recorded, auto-merge deferred"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *"Run 'cfwf pr hand-off --help' for pr hand-off"* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *"  pr hand-off              Hand a PR to human review"* ]]
+    [ ! -s "${GH_LOG}" ]
 }
