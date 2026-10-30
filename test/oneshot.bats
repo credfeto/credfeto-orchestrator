@@ -19738,3 +19738,145 @@ stub_pr_merged() {
     [ ! -L "${SESSION_BASE_DIR}/transcripts/PullRequest_99" ]
     [ -L "${SESSION_BASE_DIR}/transcripts/PullRequest_100" ]
 }
+
+# --- a clean review the session reported but did not record (#1735) ---------------------------
+
+@test "claude_result_indicates_clean_review matches clean security review reports" {
+    claude_result_indicates_clean_review "# Security review: no findings  This PR only tightens the hook. It adds no new attack surface."
+    claude_result_indicates_clean_review "# Security review: no high-confidence findings  I found no exploitable vulnerabilities in this PR."
+    claude_result_indicates_clean_review "I found no high-confidence vulnerabilities in this PR, and there were no candidates to send to the false-positive filter sub-tasks."
+    claude_result_indicates_clean_review "The changes only add blocks to the hook checks. I found no high-confidence vulnerabilities.  No findings."
+}
+
+@test "claude_result_indicates_clean_review matches a clean code review report" {
+    claude_result_indicates_clean_review "Code review found nothing to change in this diff."
+    claude_result_indicates_clean_review "No findings were reported by the code review."
+}
+
+@test "claude_result_indicates_clean_review ignores negated fixes and pushes" {
+    claude_result_indicates_clean_review "Security review: no findings. Nothing was fixed and no commits were pushed."
+}
+
+@test "claude_result_indicates_clean_review rejects a review with findings" {
+    run claude_result_indicates_clean_review "Security review found 2 findings; I fixed both and pushed."
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review "Code review round: fixed 3 findings"
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review "No findings were new this round, but code review is not converging, so I advanced the board."
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review "Security review: no new findings, but one high-confidence finding remains unresolved."
+    [ "${status}" -eq 1 ]
+}
+
+@test "claude_result_indicates_clean_review rejects unrelated and empty messages" {
+    run claude_result_indicates_clean_review "Rebased onto main and resolved the CHANGELOG conflict."
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review "Simplify made no changes to PR #12."
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review ""
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_clean_review_board_advance names the next review status for a clean report on an unchanged board" {
+    _WF_PROJECT_ID="PVT_test"
+    run pr_clean_review_board_advance "AI Security Review" "AI Security Review" "Security review: no findings."
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "AI Coverage" ]
+    run pr_clean_review_board_advance "AI Review" "AI Review" "Code review found no issues."
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "AI Security Review" ]
+}
+
+@test "pr_clean_review_board_advance declines without a board, on a moved or unknown board, outside review, or with findings" {
+    _WF_PROJECT_ID=""
+    run pr_clean_review_board_advance "AI Security Review" "AI Security Review" "Security review: no findings."
+    [ "${status}" -eq 1 ]
+    _WF_PROJECT_ID="PVT_test"
+    run pr_clean_review_board_advance "AI Security Review" "AI Coverage" "Security review: no findings."
+    [ "${status}" -eq 1 ]
+    run pr_clean_review_board_advance "Unknown" "Unknown" "Security review: no findings."
+    [ "${status}" -eq 1 ]
+    run pr_clean_review_board_advance "Development" "Development" "Security review: no findings."
+    [ "${status}" -eq 1 ]
+    run pr_clean_review_board_advance "AI Security Review" "AI Security Review" "Security review found 1 finding; fixed and pushed."
+    [ "${status}" -eq 1 ]
+}
+
+@test "pr_clean_review_status_comment gives the phase's status comment and notes the orchestrator moved the board" {
+    run pr_clean_review_status_comment "AI Coverage"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "Security review clean, advancing to coverage check"* ]]
+    [[ "${output}" == *"board moved by the orchestrator"* ]]
+    run pr_clean_review_status_comment "AI Security Review"
+    [[ "${output}" == "Code review clean - advancing to security review"* ]]
+    run pr_clean_review_status_comment "Development"
+    [ "${status}" -eq 1 ]
+}
+
+# Shared fixture for the main-loop tests below: an unchanged PR reached via issue pivot whose board
+# reads final_board before and after the session, and whose session ends on the given final message.
+_setup_clean_review_main() {
+    local board="$1"
+    setup_main_mocks
+    _WF_PROJECT_ID="PVT_test"
+    discover_or_create_workflow_project() { return 0; }
+    sync_pr_workflow_status_from_linked_issues() { return 0; }
+    fetch_all_priorities() {
+        printf '%s\n' '[{"id":10,"itemType":"Issue","repository":"org/repo","priority":1,"status":"Open","isOnHold":false}]'
+    }
+    find_open_nonblocked_pr_for_repo() { printf '99\n'; }
+    fetch_issue_json()          { printf '{"title":"T","body":"","state":"OPEN","labels":[],"comments":[],"assignees":[],"milestone":null}\n'; }
+    fetch_pr_json()             { printf '{"state":"OPEN","title":"T","body":"","isDraft":true,"labels":[],"headRefOid":"abc","comments":[],"reviews":[],"statusCheckRollup":[]}\n'; }
+    _CLEAN_REVIEW_BOARD="${board}"
+    fetch_single_item_workflow_status() { printf '%s' "${_CLEAN_REVIEW_BOARD}"; }
+    fetch_pr_latest_trusted_comment_timestamp() { printf ''; }
+    pr_json_has_blocked_label() { return 1; }
+    fingerprint_pr_json()       { printf 'fp-same\n'; }
+    load_pr_fingerprint()       { printf 'fp-same\n'; }
+    fingerprint_issue_json()    { printf 'issue-fp-same\n'; }
+    load_issue_fingerprint()    { printf 'issue-fp-same\n'; }
+    _CLEAN_REVIEW_STATUS_LOG="${TEST_TMP}/status_log"
+    _CLEAN_REVIEW_GH_LOG="${TEST_TMP}/gh_log"
+    update_workflow_status() { printf '%s %s %s\n' "$1" "$2" "$3" >> "${_CLEAN_REVIEW_STATUS_LOG}"; }
+    gh() { printf '%s\n' "$*" >> "${_CLEAN_REVIEW_GH_LOG}"; return 0; }
+    save_pr_invocation_counts 99 2 2
+}
+
+@test "main advances an unchanged security review board when the session reported a clean review, without charging the idle budget (#1735)" {
+    _setup_clean_review_main "AI Security Review"
+    invoke_claude() { SESSION_RESULT_TEXT="# Security review: no findings  This PR only tightens the hook."; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"PR #99 in org/repo: the session reported a clean review but left the board at AI Security Review"*"advancing it to AI Coverage and not charging the idle budget"* ]]
+    [[ "${output}" != *"no progress this session"* ]]
+    grep -q '^PullRequest 99 AI Coverage$' "${_CLEAN_REVIEW_STATUS_LOG}"
+    grep -q '^pr comment 99 --repo org/repo --body Security review clean, advancing to coverage check' "${_CLEAN_REVIEW_GH_LOG}"
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 2 ]
+    [ "${PR_INVOCATION_TOTAL}" -eq 3 ]
+}
+
+@test "main does not advance the board and still charges the idle budget when the review reported findings (#1735)" {
+    _setup_clean_review_main "AI Security Review"
+    invoke_claude() { SESSION_RESULT_TEXT="Security review found 2 findings and posted them as a PR comment."; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no progress this session"* ]]
+    [ ! -f "${_CLEAN_REVIEW_STATUS_LOG}" ]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+}
+
+@test "main keeps charging the idle budget for an unrelated final message on a review board (#1735)" {
+    _setup_clean_review_main "AI Review"
+    invoke_claude() { SESSION_RESULT_TEXT="Waited for CI and checked the PR; nothing else to do this session."; printf '12345678-1234-1234-1234-123456789abc\n'; }
+
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"no progress this session"* ]]
+    [ ! -f "${_CLEAN_REVIEW_STATUS_LOG}" ]
+    load_pr_invocation_counts 99
+    [ "${PR_INVOCATION_IDLE}" -eq 3 ]
+}
