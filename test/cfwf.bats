@@ -8912,7 +8912,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit, hand-off, take-back)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -12037,5 +12037,174 @@ ${HAND_OFF_URL} auto-merge deferred: the required checks have not finished since
     [[ "${output}" == *"Run 'cfwf pr hand-off --help' for pr hand-off"* ]]
     run "${SCRIPT}" help
     [[ "${output}" == *"  pr hand-off              Hand a PR to human review"* ]]
+    [ ! -s "${GH_LOG}" ]
+}
+
+# --- pr take-back --------------------------------------------------------------
+
+TAKE_BACK_BOARD_EDIT="project item-edit --project-id PVT_proj --id PVTI_target --field-id PVTSSF_status --single-select-option-id st_4"
+
+# Writes PR 42 as the pulls endpoint gives it: state $1 (open by default), draft $2 (false by
+# default) and auto-merge $3 (true, on, by default).
+write_take_back_pr() {
+    local state="${1:-open}" draft="${2:-false}" auto="${3:-true}"
+    jq -n --arg state "${state}" --argjson draft "${draft}" --argjson auto "${auto}" --arg sha "${HEAD_SHA}" --arg url "${HAND_OFF_URL}" \
+        '{number: 42, state: $state, draft: $draft, html_url: $url, head: {sha: $sha}, base: {ref: "main"}, labels: [],
+          auto_merge: (if $auto then {merge_method: "merge", enabled_by: {login: "credfeto"}} else null end)}' \
+        | write_api "repos/${REPO}/pulls/42"
+}
+
+# PR 42, open, ready for review and with auto-merge on; the comment posts as HAND_OFF_COMMENT_URL.
+prepare_take_back() {
+    write_take_back_pr open false true
+    printf '%s\n' "${HAND_OFF_COMMENT_URL}" > "${GH_FIXTURES}/comment.out"
+    printf 'Taking this back to add the review fixes.\n' > "${TEST_TMP}/take-back.md"
+}
+
+run_take_back() {
+    run --separate-stderr "${SCRIPT}" pr take-back --repo "${REPO}" --pr 42 --body-file "${TEST_TMP}/take-back.md"
+}
+
+# Nothing was written: no merge request, no draft conversion, no board change and no comment.
+assert_nothing_taken_back() {
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "project item-add")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+}
+
+@test "pr take-back turns auto-merge off, converts to draft, moves the board to Development and comments, in that order" {
+    prepare_take_back
+    run_take_back
+    [ "${status}" -eq 0 ]
+    [ -z "${stderr}" ]
+    [ "${output}" = "${HAND_OFF_URL} auto-merge off
+${HAND_OFF_URL} draft
+${HAND_OFF_URL} Development
+${HAND_OFF_COMMENT_URL}" ]
+    grep -qxF "pr merge 42 --repo ${REPO} --disable-auto" "${GH_LOG}"
+    grep -qxF "pr ready 42 --repo ${REPO} --undo" "${GH_LOG}"
+    grep -qxF "${TAKE_BACK_BOARD_EDIT}" "${GH_LOG}"
+    [ "$(gh_line_of "pr merge 42")" -lt "$(gh_line_of "pr ready 42")" ]
+    [ "$(gh_line_of "pr ready 42")" -lt "$(gh_line_of "project item-edit")" ]
+    [ "$(gh_line_of "project item-edit")" -lt "$(gh_line_of "pr comment 42")" ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "Taking this back to add the review fixes." ]
+    [ "$(gh_call_count "--admin")" -eq 0 ]
+    [ "$(gh_call_count "--auto ")" -eq 0 ]
+}
+
+@test "pr take-back skips the steps already done on a draft with auto-merge off, but still moves the board and comments" {
+    prepare_take_back
+    write_take_back_pr open true false
+    run_take_back
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${HAND_OFF_URL} auto-merge off
+${HAND_OFF_URL} draft
+${HAND_OFF_URL} Development
+${HAND_OFF_COMMENT_URL}" ]
+    [ "$(gh_call_count "pr merge")" -eq 0 ]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    grep -qxF "${TAKE_BACK_BOARD_EDIT}" "${GH_LOG}"
+    [ "$(gh_call_count "pr comment 42")" -eq 1 ]
+}
+
+@test "pr take-back stops before converting to a draft when turning auto-merge off fails" {
+    prepare_take_back
+    printf 'GraphQL: something went wrong\n' > "${GH_FIXTURES}/pr-merge.fail"
+    run_take_back
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: could not turn auto-merge off on ${REPO}#42, so it was not converted to a draft"* ]]
+    [[ "${stderr}" != *"steps done"* ]]
+    [ "$(gh_call_count "pr ready")" -eq 0 ]
+    [ "$(gh_call_count "project item-edit")" -eq 0 ]
+    [ "$(gh_call_count "pr comment")" -eq 0 ]
+}
+
+@test "pr take-back names the steps done when a later step fails" {
+    prepare_take_back
+    touch "${GH_FIXTURES}/comment.fail"
+    run_take_back
+    [ "${status}" -eq 1 ]
+    [[ "${stderr}" == *"cfwf: could not post the comment on ${REPO}#42"* ]]
+    [[ "${stderr}" == *"cfwf: take-back steps done before the failure: auto-merge off, draft, board Development" ]]
+}
+
+@test "pr take-back refuses (exit 8, nothing written) a pull request that is not open" {
+    prepare_take_back
+    write_take_back_pr closed false true
+    run_take_back
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: take-back refused: the pull request is not open" ]
+    assert_nothing_taken_back
+}
+
+@test "pr take-back refuses (exit 8) a body that leaks or carries a plan-approval keyword, before any gh call" {
+    prepare_take_back
+    printf 'see /home/someone/secret.txt\n' > "${TEST_TMP}/take-back.md"
+    : > "${GH_LOG}"
+    run_take_back
+    [ "${status}" -eq 8 ]
+    [[ "${stderr}" == "cfwf: body refused: "* ]]
+    assert_nothing_taken_back
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+
+    printf 'Looks good, approved.\n' > "${TEST_TMP}/take-back.md"
+    : > "${GH_LOG}"
+    run_take_back
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: body refused: approval keyword (line 1)" ]
+    assert_nothing_taken_back
+    [ "$(gh_call_count "pulls/42")" -eq 0 ]
+}
+
+@test "pr take-back reads the body from stdin with --body-file -" {
+    prepare_take_back
+    run --separate-stderr "${SCRIPT}" pr take-back --repo "${REPO}" --pr 42 --body-file - <<< "Back to development."
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${GH_FIXTURES}/comment-body.txt")" = "Back to development." ]
+}
+
+@test "pr take-back exits 9 for a pull request that does not exist, writing nothing" {
+    prepare_take_back
+    jq -n --arg repo "${REPO}" '{id: 1, full_name: $repo, default_branch: "main"}' | write_api "repos/${REPO}"
+    rm "$(api_fixture "repos/${REPO}/pulls/42").json"
+    run_take_back
+    [ "${status}" -eq 9 ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#42 was not found" ]
+    assert_nothing_taken_back
+}
+
+@test "pr take-back rejects usage errors (exit 2) without calling gh" {
+    local args
+    printf 'text\n' > "${TEST_TMP}/take-back.md"
+    for args in "--repo ${REPO} --pr 42" "--repo ${REPO} --body-file ${TEST_TMP}/take-back.md" \
+        "--pr 42 --body-file ${TEST_TMP}/take-back.md" "--repo ${REPO} --pr 0 --body-file ${TEST_TMP}/take-back.md" \
+        "--repo ${REPO} --pr 42 --body-file ${TEST_TMP}/take-back.md --admin" \
+        "--repo ${REPO} --pr 42 --body-file ${TEST_TMP}/take-back.md --body text" \
+        "--repo ${REPO} --pr 42 --pr 43 --body-file ${TEST_TMP}/take-back.md"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" pr take-back ${args}
+        [ "${status}" -eq 2 ]
+        [ ! -s "${GH_LOG}" ]
+    done
+}
+
+@test "pr take-back help, from help pr take-back, pr take-back --help and -h, describes the order; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "help pr take-back" "pr take-back --help" "pr take-back -h"; do
+        # shellcheck disable=SC2086  # each invocation is split into its words on purpose
+        run "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr take-back --repo <owner/repo> --pr <n> --body-file <file|->"* ]]
+        [[ "${output}" == *"turns auto-merge off, converts it to"* ]]
+        [[ "${output}" == *"8 refused, nothing"* ]]
+    done
+    run "${SCRIPT}" help pr
+    [[ "${output}" == *"Run 'cfwf pr take-back --help' for pr take-back"* ]]
+    run "${SCRIPT}" help
+    [[ "${output}" == *"  pr take-back             Take a PR back from human review"* ]]
     [ ! -s "${GH_LOG}" ]
 }
