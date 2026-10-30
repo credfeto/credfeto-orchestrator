@@ -79,7 +79,7 @@ It requires every `git` call to use `git -C <dir>` (except `clone` and `config`,
 
 ### block-git-worktree
 
-It blocks `git worktree add` and, through a second `EnterWorktree` matcher, the native `EnterWorktree` tool (unless it only switches into an existing worktree). An unrecognised `tool_name` is blocked. The other `git worktree` subcommands pass.
+It blocks `git worktree add` and `git worktree move` (also when the word is quoted, as in `"add"` or `'move'`) and, through a second `EnterWorktree` matcher, the native `EnterWorktree` tool (unless it only switches into an existing worktree). An unrecognised `tool_name` is blocked. The other `git worktree` subcommands pass.
 
 ### block-dotnet-tool-install
 

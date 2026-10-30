@@ -82,8 +82,63 @@ run_hook_enter_worktree() {
     [ "${status}" -eq 0 ]
 }
 
-@test "git worktree move is allowed" {
+@test "git worktree move is blocked" {
     run_hook "git worktree move ../foo ../bar"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree move is prohibited'* ]]
+}
+
+@test "git worktree move with a double-quoted subcommand is blocked" {
+    run_hook 'git -C . worktree "move" a b'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree move is prohibited'* ]]
+}
+
+@test "git worktree move with a single-quoted subcommand is blocked" {
+    run_hook "git worktree 'move' a b"
+    [ "${status}" -eq 2 ]
+}
+
+@test "git -C . worktree add with a double-quoted subcommand is blocked" {
+    run_hook 'git -C . worktree "add" x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "git worktree add with a single-quoted subcommand is blocked" {
+    run_hook "git worktree 'add' x"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'git worktree add is prohibited'* ]]
+}
+
+@test "git worktree add with no further arguments is blocked" {
+    run_hook "git worktree add"
+    [ "${status}" -eq 2 ]
+}
+
+@test "a double-quoted worktree word ahead of add is blocked" {
+    run_hook 'git -C . "worktree" add x'
+    [ "${status}" -eq 2 ]
+}
+
+@test "a double-quoted git command name running worktree add is blocked" {
+    run_hook '"git" worktree add x'
+    [ "${status}" -eq 2 ]
+}
+
+@test "git worktree list with a quoted subcommand is allowed" {
+    run_hook 'git worktree "list"'
+    [ "${status}" -eq 0 ]
+}
+
+@test "a double-quoted subcommand containing an expansion stays opaque" {
+    # shellcheck disable=SC2016  # literal $x — must reach the hook unexpanded
+    run_hook 'git worktree "a$x" ../foo'
+    [ "${status}" -eq 0 ]
+}
+
+@test "an ANSI-C quoted subcommand stays opaque (reject-obfuscated-commands blocks it upstream)" {
+    run_hook "git worktree \$'add' ../foo"
     [ "${status}" -eq 0 ]
 }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Blocks `git worktree add` outright — the subcommand that creates a new
-# linked worktree. Other worktree subcommands (list/remove/prune/lock/
-# unlock/move/repair/...) are inspection or cleanup of worktrees that
-# already exist and are left alone.
+# linked worktree — and `git worktree move`, which relocates one and so
+# keeps a linked-worktree layout in use rather than cleaning it up. Other
+# worktree subcommands (list/remove/prune/lock/unlock/repair/...) are
+# inspection or cleanup of worktrees that already exist and are left alone.
 #
 # Also registered (in claude-managed-settings.json) against Claude Code's native
 # EnterWorktree tool, a first-class tool that performs the equivalent of
@@ -34,7 +35,8 @@
 # Obfuscated command names (quote-splices, substitutions, ${IFS} games) are
 # NOT this hook's job — reject-obfuscated-commands rejects those
 # categorically before this hook ever runs. Anything here that is not a
-# plain literal word is deliberately treated as opaque. (This does not apply
+# literal word (plain, single-quoted, or double-quoted with no expansion
+# inside) is deliberately treated as opaque. (This does not apply
 # to the EnterWorktree branch above, whose input is already structured JSON,
 # not a shell command line.)
 #
@@ -53,11 +55,11 @@
 # could lose the `$dir` word entirely, shifting `worktree add` left). Both
 # are closed at once here: each call becomes one compact JSON array (a word
 # that isn't a single plain `Lit` becomes JSON null), and each call's words
-# are then individually base64-encoded, one per line — no word's content,
+# # are then individually base64-encoded, one per line — no word's content,
 # whatever bytes it contains, can ever be mistaken for a delimiter. Literal
-# recognition here stays narrower than enforce-ssh-host-and-key's (`Lit`
-# only, not `SglQuoted`/single-part `DblQuoted`) — minimally scoped to
-# fixing the transport bug itself, not widening detection.
+# recognition matches enforce-ssh-host-and-key's: a quoted literal such as
+# `"add"` or `'add'` runs exactly as the bare word does, so treating it as
+# opaque would let `git worktree "add" ../foo` past this hook.
 #
 # jq is required, and every jq call is guarded: a missing jq, or any jq
 # invocation failing outright, blocks rather than silently disabling this
@@ -152,12 +154,26 @@ command -v shfmt > /dev/null 2>&1 || block 'shfmt is not available to parse the 
 ast=$(printf '%s' "$raw_cmd" | shfmt --tojson 2> /dev/null) || block 'command could not be parsed as shell - failing closed'
 
 # One compact JSON array per CallExpr, one per line: a word that is a single
-# plain `Lit` literal is the JSON string value; anything else (quoted text,
-# substitutions, expansions) is JSON null. See the header for why this
-# replaced the earlier tab/newline text-join transport.
+# plain `Lit`, a single-quoted literal, or a double-quoted string made only
+# of literal text is the JSON string value; anything else (substitutions,
+# expansions, ANSI-C/locale quoting, words spliced from several parts) is
+# JSON null. See the header for why this replaced the earlier tab/newline
+# text-join transport.
 calls=$(printf '%s' "$ast" | jq -c '
+  def literal_value:
+    if (.Parts | length) != 1 then null
+    else
+      .Parts[0] as $p |
+      if ($p.Dollar // false) then null
+      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "SglQuoted" then $p.Value
+      elif $p.Type == "DblQuoted" and all(($p.Parts // [])[]; .Type == "Lit")
+        then ([($p.Parts // [])[].Value] | join(""))
+      else null
+      end
+    end;
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
-  [ .Args[] | if (.Parts | length) == 1 and .Parts[0].Type == "Lit" then .Parts[0].Value else null end ]
+  [ .Args[] | literal_value ]
 ') || block 'command structure could not be analyzed - failing closed'
 
 while IFS= read -r call_line; do
@@ -196,8 +212,11 @@ while IFS= read -r call_line; do
       while [ "${words[$j]:-}" = "-c" ] || [ "${words[$j]:-}" = "-C" ]; do
         j=$((j + 2))
       done
-      if [ "${words[$j]:-}" = "worktree" ] && [ "${words[$((j + 1))]:-}" = "add" ]; then
-        block 'git worktree add is prohibited in this repo - use a normal branch checkout instead'
+      if [ "${words[$j]:-}" = "worktree" ]; then
+        case "${words[$((j + 1))]:-}" in
+          add) block 'git worktree add is prohibited in this repo - use a normal branch checkout instead' ;;
+          move) block 'git worktree move is prohibited in this repo - it relocates a linked worktree, which this project does not use' ;;
+        esac
       fi
     fi
   done
