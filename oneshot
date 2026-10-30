@@ -60,6 +60,9 @@ source "${ONESHOT_DIR}/lib/project-status" \
 # shellcheck source=lib/workflow-board disable=SC1091
 source "${ONESHOT_DIR}/lib/workflow-board" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/workflow-board\n' "${ONESHOT_DIR}" >&2; exit 1; }
+# shellcheck source=lib/secret-patterns disable=SC1091
+source "${ONESHOT_DIR}/lib/secret-patterns" \
+    || { printf 'oneshot: FATAL: failed to source %s/lib/secret-patterns\n' "${ONESHOT_DIR}" >&2; exit 1; }
 # shellcheck source=lib/discord disable=SC1091
 source "${ONESHOT_DIR}/lib/discord" \
     || { printf 'oneshot: FATAL: failed to source %s/lib/discord\n' "${ONESHOT_DIR}" >&2; exit 1; }
@@ -144,6 +147,8 @@ source "${ONESHOT_DIR}/lib/podman" \
 # notify_discord_pr_needs_approval, notify_discord_claude_error, notify_discord_permission_denials,
 # notify_discord_session_stalled, notify_discord_daily_digest, notify_discord_rate_limited, and
 # notify_discord_host_health are declared in lib/discord.
+
+# SECRET_REDACTION_SED_EXPRESSIONS and redact_secrets are declared in lib/secret-patterns.
 
 # rearm_closed_issue_markers, tag_pr_closed_issue and link_pivot_pr_transcripts are declared in
 # lib/state.

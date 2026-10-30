@@ -1,12 +1,12 @@
 # The lib/ function libraries
 
-Twelve of the sourced-only files in `lib/` hold all the logic that `oneshot` runs (it sources all twelve); `loop` sources only `lib/core`, `setup-owner` and `teardown-owner` source `lib/core` and the thirteenth file, `lib/systemd-units`, and `create-project` sources `lib/core` and `lib/project-status`.
+Thirteen of the sourced-only files in `lib/` hold all the logic that `oneshot` runs (it sources all thirteen); `loop` sources only `lib/core`, `setup-owner` and `teardown-owner` source `lib/core` and the fourteenth file, `lib/systemd-units`, and `create-project` sources `lib/core` and `lib/project-status`.
 
 Back to the [development guide](README.md).
 
 ## How the libraries are loaded
 
-`oneshot` resolves its own directory from `${BASH_SOURCE[0]}` (never `$0`, which is the bats runner when a test sources it) and sources the libraries in this fixed order: `globals`, `core`, `git`, `github`, `github-status`, `fingerprints`, `state`, `prompts`, `project-status`, `workflow-board`, `discord`, `podman`. Each `source` line carries a `# shellcheck source=lib/x disable=SC1091` directive and a dependency-free failure fallback that prints `FATAL: failed to source` and exits 1. The fallback cannot call `die`, because `die` lives in `lib/core` and may not have loaded.
+`oneshot` resolves its own directory from `${BASH_SOURCE[0]}` (never `$0`, which is the bats runner when a test sources it) and sources the libraries in this fixed order: `globals`, `core`, `git`, `github`, `github-status`, `fingerprints`, `state`, `prompts`, `project-status`, `workflow-board`, `secret-patterns`, `discord`, `podman`. Each `source` line carries a `# shellcheck source=lib/x disable=SC1091` directive and a dependency-free failure fallback that prints `FATAL: failed to source` and exits 1. The fallback cannot call `die`, because `die` lives in `lib/core` and may not have loaded.
 
 Before sourcing `lib/globals`, the top-level script (`oneshot`) sets `BASEDIR` to that directory. A `lib/` file never works out where it is itself (no `BASH_SOURCE` in a library); one that needs a path in the tree builds it from `BASEDIR`, as `lib/globals` does for `CFWF_SCRIPT`, and `lib/globals` stops with a message if `BASEDIR` is not set.
 
@@ -71,7 +71,11 @@ The Status option map (`_WF_OPTION_IDS`) is copied between the live globals, the
 
 ### discord
 
-Webhook notifications (`notify_discord_work_item`, `notify_discord_blocked_item`, `notify_discord_no_work` and the rest), the URL builder `build_item_url`, and per-owner dedup files (`_discord_dedup_allowed`). `notify_discord_session_stalled` dedups per item under its own `session_stalled` key, apart from the per-repository permission-denials key; `notify_discord_daily_digest` returns 1 when the post fails, unlike the other notifiers, so its caller can hold the once-a-day marker back. Both use the `permissions` webhook category. Depends on: `core`, `github-status`, `state`, `workflow-board`.
+Webhook notifications (`notify_discord_work_item`, `notify_discord_blocked_item`, `notify_discord_no_work` and the rest), the URL builder `build_item_url`, and per-owner dedup files (`_discord_dedup_allowed`). `notify_discord_session_stalled` dedups per item under its own `session_stalled` key, apart from the per-repository permission-denials key; `notify_discord_daily_digest` returns 1 when the post fails, unlike the other notifiers, so its caller can hold the once-a-day marker back. Both use the `permissions` webhook category. `notify_discord_session_stalled` passes the agent's final message through `redact_secrets` before its own masking, so a token-form secret is replaced by a named marker and the text around it stays readable; a redaction failure warns and sends nothing. Depends on: `core`, `github-status`, `secret-patterns`, `state`, `workflow-board`.
+
+### secret-patterns
+
+The single list of token-form secrets redacted from text that leaves the host: `SECRET_REDACTION_SED_EXPRESSIONS`, one `sed -E` expression per form (GitHub tokens and fine-grained PATs, Anthropic and OpenAI project keys, Slack tokens, Discord webhook URLs on `discord.com` and `discordapp.com`, AWS access key ids, and `Bearer`/`Token`/`Authorization` followed by 12 or more token characters), and `redact_secrets`, which filters stdin to stdout through all of them. Each form becomes a marker such as `[REDACTED-GH-TOKEN]`; markers never contain `/`, because `lib/discord` masks any slash-bearing word as `[path]`. `notify-unit-failure` and `cfwf` are installed standalone and cannot source it, so they keep their own copies: `notify-unit-failure` carries the expressions verbatim and `cfwf body check` has its own detection rules. `test/secret-patterns.bats` fails when `notify-unit-failure`'s copy differs from this list, when `cfwf body check` accepts a sample of any listed form, or when a listed form has no sample, so add the form and its sample together. Depends on: nothing.
 
 ### podman
 
@@ -105,7 +109,7 @@ Things that have caught us out in the unit text:
 - Unit-test every function by sourcing `oneshot` in a bats test: `load test_helper`, then `setup_isolated_env` and `source_oneshot` in `setup()`, and `cleanup_stubs` in `teardown()`. `source_oneshot` sources `oneshot` (the guard skips `main`), then sets the repo context to `credfeto/credfeto-orchestrator` with state directories inside the test's temporary directory. Stub `gh`, `git`, `curl` and `sleep` with `make_stub`, or redefine the function after sourcing. Most of these tests are in `test/oneshot.bats`; run a subset with `bats -f '<pattern>' test/oneshot.bats`.
 - Mutation-check each new test: break the line the test is about, watch it fail, restore it. See the [development guide](README.md).
 - If you add, remove or change what `fingerprint_issue_json` or `fingerprint_pr_json` hash, bump `FINGERPRINT_SCHEMA_VERSION` (currently 2) by exactly 1 in the same change, and update the field list in [fingerprinting.instructions.md](../../ai/local/fingerprinting.instructions.md). The two functions share one counter. No test checks that you did; reviewers must.
-- `cfwf` is copied alone into a container image and cannot source `lib/`. Anything it shares with the libraries is written twice and needs a parity test. The list of the ten workflow states is the current case: `WORKFLOW_STATES` in `cfwf`, `PROJECT_STATUS_OPTIONS` in `lib/project-status` and `_WF_STATUS_ORDER` in `lib/globals`, held together by `test/status-mapping-parity.bats`. A similar test, `test/entrypoint-cache-path-parity.bats`, pins the cache path the `cache-gh-lookups` hook shares with `entrypoint.sh`.
+- `cfwf` is copied alone into a container image and cannot source `lib/`. Anything it shares with the libraries is written twice and needs a parity test. The list of the ten workflow states is the current case: `WORKFLOW_STATES` in `cfwf`, `PROJECT_STATUS_OPTIONS` in `lib/project-status` and `_WF_STATUS_ORDER` in `lib/globals`, held together by `test/status-mapping-parity.bats`. A similar test, `test/entrypoint-cache-path-parity.bats`, pins the cache path the `cache-gh-lookups` hook shares with `entrypoint.sh`, and `test/secret-patterns.bats` checks that `cfwf body check` refuses every secret form `lib/secret-patterns` redacts.
 
 ## GitHub API behaviour
 
