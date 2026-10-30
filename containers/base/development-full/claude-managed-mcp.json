@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cfwf": {
+      "type": "http",
+      "url": "https://workflow-mcp.markridgwell.com/mcp",
+      "headersHelper": "/etc/claude-code/mcp/cfwf-mcp-headers"
+    }
+  }
+}
