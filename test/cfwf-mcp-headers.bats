@@ -1,5 +1,8 @@
 #!/usr/bin/env bats
 # shellcheck disable=SC2030,SC2031  # bats test bodies run in subshells; variable modifications are intentionally scoped
+# shellcheck disable=SC2154  # stderr is set by run --separate-stderr
+
+bats_require_minimum_version 1.5.0
 
 load test_helper
 
@@ -7,7 +10,6 @@ HELPER="${REPO_ROOT}/containers/base/development-full/claude-mcp/cfwf-mcp-header
 
 setup() {
     setup_isolated_env
-    STDERR_FILE="${TEST_TMP}/stderr"
     # The helper runs with PATH set to the stub directory alone, so no real gh on this host can
     # answer; jq, plus env and bash for the stubs' shebang, are linked in beside the stubs.
     local tool
@@ -21,9 +23,9 @@ teardown() {
 }
 
 # Runs the helper with only the given NAME=value variables (env -i drops every token the host
-# exported), stdout in output and stderr in STDERR_FILE.
+# exported), stdout in output and stderr in stderr.
 run_helper() {
-    run bash -c '"$@" 2>"$0"' "${STDERR_FILE}" env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "$@" "${HELPER}"
+    run --separate-stderr env -i "PATH=${STUB_BIN}" "HOME=${HOME}" "$@" "${HELPER}"
 }
 
 # A gh stub that logs its arguments and prints the given token for `gh auth token`.
@@ -81,14 +83,14 @@ stub_gh_token() {
     run_helper
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
-    grep -qF 'no GitHub token' "${STDERR_FILE}"
+    [[ "${stderr}" == *'no GitHub token'* ]]
 }
 
 @test "no token and no gh installed exits non-zero with nothing on stdout" {
     run_helper GH_HOST=github.com
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
-    grep -qF 'no GitHub token' "${STDERR_FILE}"
+    [[ "${stderr}" == *'no GitHub token'* ]]
 }
 
 @test "gh printing nothing counts as no token" {
@@ -102,11 +104,11 @@ stub_gh_token() {
     make_stub gh "printf '%s\n' 'gho_leaked_by_gh' >&2; exit 1"
     run_helper
     [ "${status}" -eq 1 ]
-    [ "$(grep -c 'gho_leaked_by_gh' "${STDERR_FILE}")" -eq 0 ]
+    [[ "${stderr}" != *'gho_leaked_by_gh'* ]]
 
     run_helper GH_TOKEN=ghp_direct
     [ "${status}" -eq 0 ]
-    [ ! -s "${STDERR_FILE}" ]
+    [ -z "${stderr}" ]
 }
 
 @test "a token holding characters a bearer token cannot contain is refused and not echoed" {
@@ -115,7 +117,7 @@ stub_gh_token() {
         run_helper "GH_TOKEN=${bad}"
         [ "${status}" -eq 1 ] || { echo "accepted ${bad}" >&2; return 1; }
         [ -z "${output}" ] || { echo "printed output for ${bad}: ${output}" >&2; return 1; }
-        [ "$(grep -cF 'ghp_a' "${STDERR_FILE}")" -eq 0 ] || { echo "echoed ${bad} to stderr" >&2; return 1; }
+        [[ "${stderr}" != *'ghp_a'* ]] ||{ echo "echoed ${bad} to stderr" >&2; return 1; }
     done
 }
 
@@ -130,6 +132,6 @@ stub_gh_token() {
     run_helper GH_TOKEN=ghp_direct_secret
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
-    grep -qF 'jq could not build the Authorization header' "${STDERR_FILE}"
-    [ "$(grep -c 'ghp_direct_secret' "${STDERR_FILE}")" -eq 0 ]
+    [[ "${stderr}" == *'jq could not build the Authorization header'* ]]
+    [[ "${stderr}" != *'ghp_direct_secret'* ]]
 }
