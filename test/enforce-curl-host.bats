@@ -22,6 +22,12 @@ teardown() {
     [[ "${output}" == *"curl to 'api.github.com' is not permitted"* ]]
 }
 
+@test "a backslash-escaped curl command name is still recognised as curl" {
+    run_hook 'cu\rl -fsSL https://api.github.com/repos/foo/bar'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *"curl to 'api.github.com' is not permitted"* ]]
+}
+
 @test "curl to github.com is blocked" {
     run_hook "curl -fsSL https://github.com/foo/bar"
     [ "${status}" -eq 2 ]

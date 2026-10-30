@@ -172,6 +172,35 @@ run_hook() {
     [ "${status}" -eq 0 ]
 }
 
+@test "a backslash-escaped letter inside the install word is blocked" {
+    run_hook 'dotnet tool inst\all x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet tool install is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside the dotnet command name is blocked" {
+    run_hook 'd\otnet tool install x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet tool install is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside the tool word is blocked" {
+    run_hook 'dotnet t\ool install x'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet tool install is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside the tool-manifest template is blocked" {
+    run_hook 'dotnet new tool-mani\fest'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'dotnet new tool-manifest is prohibited'* ]]
+}
+
+@test "a backslash-escaped letter inside an allowed tool subcommand is allowed" {
+    run_hook 'dotnet tool rest\ore'
+    [ "${status}" -eq 0 ]
+}
+
 @test "a command that does not parse as shell is blocked (fail closed)" {
     run_hook "if true; then dotnet tool install"
     [ "${status}" -eq 2 ]

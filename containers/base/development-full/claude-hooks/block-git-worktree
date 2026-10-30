@@ -59,7 +59,10 @@
 # whatever bytes it contains, can ever be mistaken for a delimiter. Literal
 # recognition matches enforce-ssh-host-and-key's: a quoted literal such as
 # `"add"` or `'add'` runs exactly as the bare word does, so treating it as
-# opaque would let `git worktree "add" ../foo` past this hook.
+# opaque would let `git worktree "add" ../foo` past this hook. For the same
+# reason a plain `Lit` word is decoded the way bash decodes an unquoted word
+# (each backslash dropped, the next character kept): shfmt keeps the raw
+# backslash in Lit.Value, so `git work\tree add` would otherwise never match.
 #
 # jq is required, and every jq call is guarded: a missing jq, or any jq
 # invocation failing outright, blocks rather than silently disabling this
@@ -165,7 +168,7 @@ calls=$(printf '%s' "$ast" | jq -c '
     else
       .Parts[0] as $p |
       if ($p.Dollar // false) then null
-      elif $p.Type == "Lit" then $p.Value
+      elif $p.Type == "Lit" then ($p.Value | if . == null then null else gsub("\\\\(?<c>.)"; "\(.c)") end)
       elif $p.Type == "SglQuoted" then $p.Value
       elif $p.Type == "DblQuoted" and all(($p.Parts // [])[]; .Type == "Lit")
         then ([($p.Parts // [])[].Value] | join(""))

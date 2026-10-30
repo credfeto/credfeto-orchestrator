@@ -22,7 +22,7 @@ The hook sees only the command string the agent typed. It does not see what a sc
 - A multi-step `gh` pattern inside a script (or inside `cfwf`, which is one allowlisted word covered by `Bash(cfwf *)`) is invisible to every hook.
 - The same steps typed one at a time are each parsed and checked, so each must satisfy the allowlist, the git rules and the permission patterns on its own. This is why `cfwf` exists: one flat command per recurring multi-step pattern.
 
-The hooks parse the command with `shfmt --tojson` and walk the syntax tree (every call expression at any depth, including inside `$(...)`, loops, pipelines and subshells), so a heredoc body that only mentions `git push` is not treated as a command. `enforce-git-identity` is the exception: it uses a text regex (see below). The `Bash` hooks are listed in `claude-managed-settings.json` in the order of the sections below; the hooks' own comments assume that an earlier one has already run, and this repo does not test how Claude Code schedules them.
+The hooks parse the command with `shfmt --tojson` and walk the syntax tree (every call expression at any depth, including inside `$(...)`, loops, pipelines and subshells), so a heredoc body that only mentions `git push` is not treated as a command. `enforce-git-identity` is the exception: it uses a text regex (see below). `shfmt` keeps an unquoted backslash in the word text, but bash drops it, so `git work\tree add` runs `git worktree add`. The hooks that match command or subcommand names (`reject-obfuscated-commands`' interpreter-flag check, `block-git-worktree`, `block-dotnet-tool-install`, `enforce-ssh-host-and-key`, `enforce-curl-host`, `enforce-background-for-long-running-commands` and `enforce-git-dash-c`) therefore remove the backslash from each unquoted escape before comparing. A backslash inside double quotes is left alone, because bash keeps it before an ordinary letter. The `Bash` hooks are listed in `claude-managed-settings.json` in the order of the sections below; the hooks' own comments assume that an earlier one has already run, and this repo does not test how Claude Code schedules them.
 
 ## How a denial surfaces
 
@@ -34,7 +34,7 @@ Every hook in the `Bash` chain except `enforce-git-identity` and `cache-gh-looku
 
 ## The hooks
 
-In chain order. Behaviour below was checked against the scripts (and their tests, except `enforce-git-identity`, which has none).
+In chain order. Behaviour below was checked against the scripts and their tests.
 
 ### reject-obfuscated-commands
 
@@ -73,7 +73,7 @@ Paths are resolved with `realpath -m`, relative ones against the hook's working 
 
 ### enforce-git-identity
 
-It blocks `git commit`, `fetch`, `pull`, `rebase`, `merge`, `cherry-pick`, `revert` and `am` unless the global git identity is set and is not the banned one, `commit.gpgsign` is true, and a GPG secret key matches `user.email` and `user.signingkey`. It matches with a regex on the command text after stripping heredocs, and `git` must start a line or follow `;`, `&&` or `||`. Because the gate only matches `git` at the start of a line or after `;`, `&&` or `||`, `echo hi | git -C . commit` and `x=$(git -C . commit -m y)` are not gated by this hook; nothing tests this.
+It blocks `git commit`, `fetch`, `pull`, `rebase`, `merge`, `cherry-pick`, `revert` and `am` unless the global git identity is set and is not the banned one, `commit.gpgsign` is true, and a GPG secret key matches `user.email` and `user.signingkey`. It matches with a regex on the command text after stripping heredocs and removing every backslash (so `git com\mit` is gated; this can only gate more commands, never fewer), and `git` must start a line or follow `;`, `&&` or `||`. Because the gate only matches `git` at the start of a line or after `;`, `&&` or `||`, `echo hi | git -C . commit` and `x=$(git -C . commit -m y)` are not gated by this hook; nothing tests this.
 
 ### enforce-git-dash-c
 
