@@ -31,25 +31,26 @@ It sources nothing from `lib/` on purpose, because everything there assumes the 
 3. Extract `WEBHOOK` with `grep | tail | cut | sed`; if empty, message and exit 0.
 4. Require an `https://` prefix, so curl cannot read the value as an option.
 5. Capture `CONTEXT` from `journalctl` (`|| true`); fall back to `(no journal output available)`.
-6. Redact with one `sed -E` pass over these patterns: `gh[pousr]_`, `github_pat_`, `sk-ant-`, `xox[abprs]-`, the path of a Discord webhook URL, and `Bearer`/`Token`/`Authorization` followed by 12 or more token characters.
+6. Redact with one `sed -E` pass over these patterns: `gh[pousr]_`, `github_pat_`, `sk-ant-`, `sk-proj-`, `xox[abprs]-`, a Discord webhook URL on `discord.com` or `discordapp.com`, an AWS access key id (`AKIA`/`ASIA`), and `Bearer`/`Token`/`Authorization` followed by 12 or more token characters. The expressions are a verbatim copy of `SECRET_REDACTION_SED_EXPRESSIONS` in `lib/secret-patterns`, kept inline because this script sources nothing; `test/secret-patterns.bats` fails when the two differ.
 7. Truncate after redaction to `MAX_CONTEXT_CHARS` (900): keep the last 900 characters with a `...(truncated)...` prefix.
 8. Build the payload with `jq -n --arg ...`. If `jq` is absent, print `jq unavailable` and hand-build a context-free JSON payload, restricting the unit and host names with `tr -cd`.
 9. `curl` POST; on failure print `failed to post Discord alert` and continue. `exit 0`.
 
 ## Tests
 
-`test/notify-unit-failure.bats` (9 tests). Setup: `setup_isolated_env` from `test/test_helper.bash`, `XDG_CONFIG_HOME` pointed at `${TEST_TMP}/config`, a hand-written `curl` stub, `make_stub journalctl`, and `cleanup_stubs` in teardown. The script is executed as a subprocess (`run "${SCRIPT}" my-unit.service`), not sourced.
+`test/notify-unit-failure.bats` (15 tests). Setup: `setup_isolated_env` from `test/test_helper.bash`, `XDG_CONFIG_HOME` pointed at `${TEST_TMP}/config`, a hand-written `curl` stub, `make_stub journalctl`, and `cleanup_stubs` in teardown. The script is executed as a subprocess (`run "${SCRIPT}" my-unit.service`), not sourced.
 
 - The `curl` stub is written directly into `${STUB_BIN}` and appends every argument, one per line, to `${TEST_TMP}/curl.log`. Assertions grep that log, so they see the JSON payload the script would have sent.
 - `journalctl` is stubbed per test with the text to be redacted, or a 400-line loop to trigger truncation.
 - The `jq unavailable` test replaces `PATH` with a directory of symlinks to only the tools the script needs (`grep sed cut tail tr bash env`) plus the two stubs, so `command -v jq` finds nothing. Emptying `PATH` would not prove the same thing. `bash` and `env` are needed because the stubs use `#!/usr/bin/env bash`.
-- Covered: successful post, missing `.env`, missing key, non-https value, no argument (status 1), redaction of a `ghp_` token and an `sk-ant-` key, truncation, and the no-`jq` fallback. Not covered by any test: the `github_pat_`, `xox`, Discord URL and bare `Bearer`/`Token` patterns, a `curl` failure, and `jq` present but failing.
+- Covered: successful post, missing `.env`, missing key, non-https value, no argument (status 1), redaction of a `ghp_` token, an `sk-ant-` key, an `sk-proj-` key, a `discordapp.com` webhook URL, an AWS access key id, a `Bearer` token, a Slack token and a `github_pat_` token (each asserting the secret is gone, its marker is present and the text either side survives), truncation, and the no-`jq` fallback. `test/secret-patterns.bats` checks that the inline expressions match `lib/secret-patterns`. Not covered by any test: a `curl` failure, and `jq` present but failing.
 - Run only this file: `bats test/notify-unit-failure.bats`.
 
 ## Changing it safely
 
 - [ ] `shellcheck notify-unit-failure test/notify-unit-failure.bats` is clean. The lists in `ai/local/*.instructions.md` do not include this script, so run it explicitly.
 - [ ] `bats test/notify-unit-failure.bats` passes.
+- [ ] To change a redaction pattern, change `lib/secret-patterns` and the inline copy here together, add a sample for any new form, and run `bats test/secret-patterns.bats`.
 - [ ] Mutation-check any new test: for example remove one `sed -e` redaction line and confirm the matching test fails.
 - [ ] Update the "Unit-failure alerts" section of `README.md` if behaviour changes (`docs/discord-notifications.md` does not currently mention this script; consider whether it should). Also check the unit `lib/systemd-units` generates for it (`create_failure_unit`) and its `test/systemd-units.bats` tests.
 - [ ] Add a changelog entry with `dotnet changelog -f CHANGELOG.md -a <Type> -m "<message>"`. Never edit `CHANGELOG.md` by hand.
