@@ -56,6 +56,7 @@ Library ownership:
 | `lib/workflow-board` | Board discovery, creation and conversion, project cache, status reads and writes, ordinal sync. |
 | `lib/prompts` | Prompt and CLAUDE.md builders (agent-facing heredocs). |
 | `lib/podman` | Container launch, mounts, secrets, GPG and SSH, result handling. |
+| `lib/secret-patterns` | The shared token-form secret patterns and `redact_secrets`, used before any agent text is posted. |
 | `lib/discord` | Webhook notifications with hourly dedup state. |
 
 Where to make a common change:
@@ -96,7 +97,7 @@ State files, all named `<Type>_<id>.<suffix>` under `SESSION_BASE_DIR` (`ORCHEST
 - Faking: `gh` is the most stubbed command (`make_stub gh`, a `case "$*"` on the arguments, in the `fetch_single_item_workflow_status` tests for instance); `podman` and `curl` use PATH stubs; `main()` integration tests call `setup_main_mocks` (defined near the "main() skip_repos integration tests" heading, used by about 200 tests) and then override functions such as `fetch_pr_json` and `invoke_claude` with plain function definitions. Some tests use real `git`. Time is faked with `make_stub date "echo 1700000000"`; there is no `sleep` stub here, tests set the `*_RETRY_DELAY_SECS` variables to 0 instead.
 - Source guard: `oneshot` ends with `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi` and finds its libraries from `BASH_SOURCE`, so a test can `source` it. See [shell-testing.instructions.md](../../../ai/local/shell-testing.instructions.md).
 - Subset: `bats -f '<pattern>' test/oneshot.bats`. Bats still parses the whole file: five tests matched by `fetch_single_item_workflow_status` took about 13 seconds when measured for this guide, so batch your patterns.
-- The full suite takes minutes (not timed for this guide; `docs/development/README.md` says the same): more than a thousand tests, each sourcing `oneshot` and twelve libraries in `setup()`, plus tests that run real git. CI runs it as `shell-tests`.
+- The full suite takes minutes (not timed for this guide; `docs/development/README.md` says the same): more than a thousand tests, each sourcing `oneshot` and thirteen libraries in `setup()`, plus tests that run real git. CI runs it as `shell-tests`.
 
 ## Changing it safely
 
