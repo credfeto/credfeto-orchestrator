@@ -81,13 +81,18 @@ CONTEXT=$(journalctl -u "${UNIT_NAME}" -n 15 --no-pager 2> /dev/null || true)
 # message, and the container's stderr is echoed wholesale. No known secret is written
 # deterministically, so this is narrowing a channel rather than closing a proven leak - but the
 # cost of the scrub is one sed and the cost of being wrong is a token in a chat log.
+# These expressions are a verbatim copy of SECRET_REDACTION_SED_EXPRESSIONS in lib/secret-patterns,
+# kept inline because this script must run with nothing else from the repository installed.
+# test/secret-patterns.bats fails when the two lists differ, so change both together.
 CONTEXT=$(printf '%s' "${CONTEXT}" | sed -E \
-    -e 's/gh[pousr]_[A-Za-z0-9]{16,}/[REDACTED-GH-TOKEN]/g' \
-    -e 's/github_pat_[A-Za-z0-9_]{20,}/[REDACTED-GH-PAT]/g' \
-    -e 's/sk-ant-[A-Za-z0-9_-]{16,}/[REDACTED-ANTHROPIC-KEY]/g' \
-    -e 's/xox[abprs]-[A-Za-z0-9-]{10,}/[REDACTED-SLACK-TOKEN]/g' \
-    -e 's/(https:\/\/discord\.com\/api\/webhooks)\/[^[:space:]]+/\1\/[REDACTED]/g' \
-    -e 's/([Bb]earer|[Tt]oken|[Aa]uthorization)([=:[:space:]]+)[A-Za-z0-9._~+\/-]{12,}/\1\2[REDACTED]/g')
+    -e 's#gh[pousr]_[A-Za-z0-9]{16,}#[REDACTED-GH-TOKEN]#g' \
+    -e 's#github_pat_[A-Za-z0-9_]{20,}#[REDACTED-GH-PAT]#g' \
+    -e 's#sk-ant-[A-Za-z0-9_-]{16,}#[REDACTED-ANTHROPIC-KEY]#g' \
+    -e 's#sk-proj-[A-Za-z0-9_-]{16,}#[REDACTED-OPENAI-KEY]#g' \
+    -e 's#xox[abprs]-[A-Za-z0-9-]{10,}#[REDACTED-SLACK-TOKEN]#g' \
+    -e 's#(https?://)?([a-z]+\.)?[Dd]iscord(app)?\.com/api/webhooks/[^[:space:]]+#[REDACTED-DISCORD-WEBHOOK]#g' \
+    -e 's#A[KS]IA[0-9A-Z]{16}#[REDACTED-AWS-KEY-ID]#g' \
+    -e 's#([Bb]earer|BEARER|[Tt]oken|TOKEN|[Aa]uthorization|AUTHORIZATION)([=:[:space:]]+)[A-Za-z0-9._~+/-]{12,}#\1\2[REDACTED]#g')
 
 # Truncate AFTER redacting, so a secret cannot survive by sitting past the cut.
 if [ "${#CONTEXT}" -gt "${MAX_CONTEXT_CHARS}" ]; then
