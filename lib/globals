@@ -197,6 +197,14 @@ TOOL_DENIED_NEGATED_WORKAROUND_PATTERNS=(
 # round cap or the Blocked label). Any doubt leaves the session charged as before. Each array is
 # joined with "|" and matched case-insensitively against the whole message; ASCII only, like the
 # patterns above.
+# The result line PHASE E and PHASE F ask a review session to end its final message with (#1749).
+# A line that is exactly one of these (surrounding whitespace and case ignored) decides the
+# verdict outright; the patterns below are only a fallback for a message that carries neither.
+# FINDINGS beats CLEAN, so a message with both is never clean.
+# shellcheck disable=SC2034  # read by lib/prompts and lib/podman after sourcing
+REVIEW_RESULT_CLEAN_MARKER="REVIEW RESULT: CLEAN"
+# shellcheck disable=SC2034  # read by lib/prompts and lib/podman after sourcing
+REVIEW_RESULT_FINDINGS_MARKER="REVIEW RESULT: FINDINGS"
 # shellcheck disable=SC2034  # read by lib/podman after sourcing
 CLEAN_REVIEW_PATTERNS=(
     'review: no (high-confidence )?(findings|vulnerabilities|issues)'
