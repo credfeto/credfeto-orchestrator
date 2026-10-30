@@ -155,6 +155,20 @@ paths at runtime (see `containers/agent/Dockerfile` for the full mount contract)
 the persistent state subdirectories (`sessions/`, `session-env/`, `plans/`, `cache/`, `backups/`) and the
 per-work-item transcript directory (`projects/`) are mounted per invocation.
 
+`claude-managed-mcp.json` is copied to `/etc/claude-code/managed-mcp.json` (root:root 0444) and
+`claude-mcp/cfwf-mcp-headers` to `/etc/claude-code/mcp/cfwf-mcp-headers` (root:root 0755). The file defines
+the only MCP server Claude Code loads in the container, `cfwf`, an HTTP server at
+`https://workflow-mcp.markridgwell.com/mcp`. While the file exists it has exclusive control, so no user,
+project, plugin or `--mcp-config` server can be added. `mcp__cfwf__*` in `permissions.allow` lets every
+agent use all of its tools. The file is world-readable, so it holds no token. Its `headersHelper`, the
+root-owned `cfwf-mcp-headers`, runs at connect time and prints `{"Authorization":"Bearer <token>"}`. The
+token comes from `GH_ENTERPRISE_TOKEN`, then `GH_TOKEN` (the GitHub token that already reaches the
+container as a Podman secret), then `gh auth token`. With no token it exits non-zero and prints nothing,
+and the token is never written to stderr, a file or the image. `enforce-curl-host` is unchanged, so an
+agent cannot send that token to the server with `curl`; only the MCP client talks to it. No prompt routes
+work to the server yet. See
+[docs/development/claude-hooks.md](../../../docs/development/claude-hooks.md#the-cfwf-mcp-server).
+
 The repo-root `install-claude-hooks` script installs this same layout onto the current host, so the
 hooks can be exercised directly outside the container: the managed settings and every hook/data file are
 copied root-owned into `/etc/claude-code` with `sudo install` (a copy, so re-run the script after a hook
@@ -162,7 +176,12 @@ changes; `CLAUDE_MANAGED_DIR` overrides the directory for tests only), the prefe
 `claude-user-settings.json` are copied to `~/.claude/settings.json` (keeping the previous file as
 `settings.json.bak`), and any `~/.claude/hooks` symlinks left pointing into this checkout are removed. An
 optional first argument names a file of host directory roots, installed as the root-owned
-`/etc/claude-code/hooks/allowed-dirs.local`. It also installs the `cfwf`
+`/etc/claude-code/hooks/allowed-dirs.local`. It installs `cfwf-mcp-headers` and a `managed-mcp.json` that
+merges `cfwf` with the host's own MCP servers from `~/.claude.json` (user scope and every project scope).
+A server at `cfwf`'s URL is left out as a duplicate, with a suggestion to remove it. A server with a
+literal `headers` or `env` value is refused with a warning naming it, because the file is world-readable.
+A name used for two different servers is fatal. The merge is a snapshot, so re-run the script after
+adding a server. It also installs the `cfwf`
 helper into `/usr/local/bin` (`CFWF_BIN_DIR` overrides the directory) so anyone on the host can run it
 (a copy, not a symlink, so re-run the script after `cfwf` changes),
 falling back to `sudo install` if the plain install fails (typically because that directory is not writable), and it aborts before changing
@@ -231,6 +250,9 @@ Paths locked down by this image. NuGet.Config and the .NET tool paths are locked
 | `/home/developer/.claude/policy-limits.json` | root:root | 0444 | Baked-in Claude Code policy limits (from `claude-policy-limits.json`); read-only for all users |
 | `/etc/claude-code/` | root:root | 0755 | Claude Code managed settings directory; agent can read but not modify |
 | `/etc/claude-code/managed-settings.json` | root:root | 0444 | Baked-in Claude Code managed settings: permissions, hooks, sandbox (from `claude-managed-settings.json`); read-only for all users |
+| `/etc/claude-code/managed-mcp.json` | root:root | 0444 | Baked-in MCP server list, the `cfwf` server alone, with no token (from `claude-managed-mcp.json`); read-only for all users |
+| `/etc/claude-code/mcp/` | root:root | 0755 | MCP headers helper directory; agent can read/execute but not modify |
+| `/etc/claude-code/mcp/cfwf-mcp-headers` | root:root | 0755 | `headersHelper` printing the `cfwf` server's `Authorization` header from the GitHub token in the environment (from `claude-mcp/cfwf-mcp-headers`); read/execute only |
 | `/etc/claude-code/hooks/` | root:root | 0755 | Baked-in Claude Code hooks directory; agent can read/execute but not modify |
 | `/etc/claude-code/hooks/reject-obfuscated-commands` | root:root | 0755 | Baked-in hook script (from `claude-hooks/reject-obfuscated-commands`); read/execute only |
 | `/etc/claude-code/hooks/enforce-allowed-dirs` | root:root | 0755 | Baked-in hook script (from `claude-hooks/enforce-allowed-dirs`); read/execute only |
@@ -304,9 +326,13 @@ Executed as root. Fails the build immediately if anything is missing or broken.
 - `/opt/git-global-hooks/pre-commit` must be executable.
 
 **Claude Code settings/policy-limits/hooks wiring**: `/home/developer/.claude/settings.json`,
-`/home/developer/.claude/policy-limits.json` and `/etc/claude-code/managed-settings.json` must be root:root
-0444, and `/etc/claude-code` and `/etc/claude-code/hooks` root:root 0755; `managed-settings.json` must set
-the `allowManaged*Only` locks and disable bypass-permissions mode, `~/.claude/settings.json` must hold no
+`/home/developer/.claude/policy-limits.json`, `/etc/claude-code/managed-settings.json` and
+`/etc/claude-code/managed-mcp.json` must be root:root 0444, and `/etc/claude-code`, `/etc/claude-code/hooks`
+and `/etc/claude-code/mcp` root:root 0755; `managed-settings.json` must set
+the `allowManaged*Only` locks, disable bypass-permissions mode and allow `mcp__cfwf__*`;
+`managed-mcp.json` must hold exactly the `cfwf` server, `type` `http`, at
+`https://workflow-mcp.markridgwell.com/mcp`, with `headersHelper` `/etc/claude-code/mcp/cfwf-mcp-headers`,
+no `headers` or `env` and no `Authorization` text, and that helper must be root:root 0755; `~/.claude/settings.json` must hold no
 permissions, hooks, sandbox or MCP configuration, and every `PreToolUse` hook command must be
 under `/etc/claude-code/hooks/`; `/etc/claude-code/hooks/reject-obfuscated-commands`,
 `.../enforce-allowed-dirs`, `.../block-config-skills`, `.../enforce-git-identity`, `.../enforce-git-dash-c`,
