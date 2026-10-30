@@ -1021,6 +1021,14 @@ stub_shfmt_rewriting() {
     [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]]
 }
 
+@test "a \${...} word whose offset is missing fails closed rather than being read up to the closing brace" {
+    stub_shfmt_rewriting 'walk(if type == "object" and .Type == "ParamExp" and .Exp.Word != null then del(.Exp.Word.Pos) else . end)'
+    # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
+    run_hook 'echo "${PATH=x}"'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]]
+}
+
 @test "a \${...} assignment with an empty word is read up to the closing brace" {
     # shellcheck disable=SC2016  # literal ${...} — must reach the hook unexpanded
     run_hook 'echo ${PATH:=}'
