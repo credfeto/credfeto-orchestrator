@@ -55,7 +55,7 @@
 # could lose the `$dir` word entirely, shifting `worktree add` left). Both
 # are closed at once here: each call becomes one compact JSON array (a word
 # that isn't a single plain `Lit` becomes JSON null), and each call's words
-# # are then individually base64-encoded, one per line — no word's content,
+# are then individually base64-encoded, one per line — no word's content,
 # whatever bytes it contains, can ever be mistaken for a delimiter. Literal
 # recognition matches enforce-ssh-host-and-key's: a quoted literal such as
 # `"add"` or `'add'` runs exactly as the bare word does, so treating it as
