@@ -335,6 +335,7 @@ Commands:
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
   pr list                  List a repository's open pull requests, one line each
   pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)
+  pr edit                  Change the agent's own PR's title or body, or assign the agent (exit 8 when refused, 9 when not found)
   comment add              Post a comment on a PR or an issue and print its URL
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
@@ -908,6 +909,7 @@ Run 'cfwf pr view --help' for pr view, which prints a pull request's state and m
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts.
 Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board.
+Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent.
 Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch
 requires without judging them.
 USAGE
@@ -963,6 +965,45 @@ board write is never read back.
 Exit codes: 0 created, or it already existed; 1 a runtime failure, such as a gh or network error,
 no Workflow board, or a head branch that is not found, prefixed "cfwf:"; 2 a usage error; ${BODY_REFUSED_EXIT} the
 body or the title was refused by the leak check.
+USAGE
+}
+
+usage_pr_edit() {
+    cat << USAGE
+Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]
+
+Changes a pull request's title, its body or both, and can assign the agent to it, in one gh pr edit
+call, then prints the pull request URL and nothing else.
+
+--repo         Always required; never taken from the current directory.
+--pr           Always required: the pull request's number, above 0.
+--title        A Conventional Commits title, <type>[(<scope>)][!]: <description>, with a lower-case
+               type, such as "feat(cfwf): add a command". At most ${TITLE_LIMIT} characters, with no
+               control character. It is checked for leaks as the body is.
+--body-file    The new body, a regular file, or - to read it from stdin. It replaces the whole
+               body: there is no append. An empty body is an error. It is read once, into a private
+               copy that is both checked and posted. There is no --body.
+--assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
+               option: --add-assignee and --remove-assignee are not options.
+At least one of --title, --body-file and --assign-self; each at most once. --add-label,
+--remove-label, --base, --milestone, --reviewer, --json and --jq are not options either: labels
+have commands of their own.
+
+Everything is checked before anything is written. The title and the body are checked for leaks
+first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
+"cfwf: title refused: <rule>" on stderr, never naming the text that matched. Then the agent's login
+is read (gh api user), and so is the pull request, once, to check who owns it:
+  the agent's own        a pull request the agent opened can be edited
+  a bot's                one opened by a GitHub App, or by the account that opens the agent's pull
+                         requests (PR_CREATOR_LOGIN, default prpixie), can be edited only when every
+                         one of its commits is authored by the agent
+  anyone else's          is refused
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: edit refused: <rule>" on stderr, and nothing is written. A
+pull request with more commits than GitHub lists (250) cannot be checked, and is a runtime failure.
+
+Exit codes: 0 edited; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a
+usage error; ${BODY_REFUSED_EXIT} the title or the body was refused by the leak check, or the edit by the ownership
+rule; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
 
@@ -1495,6 +1536,7 @@ usage_for() {
         "pr diff") usage_pr_diff ;;
         "pr list") usage_pr_list ;;
         "pr create") usage_pr_create ;;
+        "pr edit") usage_pr_edit ;;
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
@@ -2904,6 +2946,14 @@ read_rate_limit() {
         "${BASH_REMATCH[@]:1:6}"
 }
 
+# Sets AGENT_LOGIN to the authenticated login, asked of GitHub (gh api user), refusing an answer
+# that is not a login.
+read_agent_login() {
+    gh_capture api user --jq '.login // ""' || auth_read_failed "could not read the authenticated user"
+    matches_pattern "${GH_OUTPUT}" "${LOGIN_PATTERN}" || die "gh returned an unexpected result for the authenticated user"
+    AGENT_LOGIN="${GH_OUTPUT}"
+}
+
 # Prints the authenticated login, the host gh is pointed at and the version of gh, and with
 # --rate-limit the rate limits. The login is asked of GitHub each time, never taken from a cache:
 # the read is what proves the credential works. gh is run only as gh --version, gh api user and gh
@@ -2919,9 +2969,8 @@ auth_status() {
     gh_capture --version || die "could not read the version of gh: $(gh_failure_text)"
     matches_pattern "${GH_OUTPUT%%$'\n'*}" "${GH_VERSION_PATTERN}" || die "gh returned an unexpected version"
     version="${BASH_REMATCH[1]}"
-    gh_capture api user --jq '.login // ""' || auth_read_failed "could not read the authenticated user"
-    login="${GH_OUTPUT}"
-    matches_pattern "${login}" "${LOGIN_PATTERN}" || die "gh returned an unexpected result for the authenticated user"
+    read_agent_login
+    login="${AGENT_LOGIN}"
     [ -z "${RATE_LIMIT_ASKED}" ] || read_rate_limit
 
     printf 'login\t%s\nhost\t%s\ngh\t%s\n' "${login}" "${host}" "${version}"
@@ -4313,9 +4362,122 @@ pr_reply() {
     post_reply
 }
 
+# pr edit: whether --assign-self was given, the agent's login, and the pull request as read for the
+# ownership check (its author, the author's type, its URL and its number of commits).
+ASSIGN_SELF=""
+AGENT_LOGIN=""
+EDIT_AUTHOR=""
+EDIT_AUTHOR_TYPE=""
+EDIT_URL=""
+EDIT_COMMITS=""
+# The most commits GitHub lists for a pull request ("a maximum of 250 commits", in the REST reference
+# for "List commits on a pull request"), so the authors of one with more cannot all be checked.
+readonly PR_COMMITS_LIMIT=250
+
+assign_pr_edit_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --pr)
+            assign_once PR "${flag}"
+            assign_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${PR}"
+            ;;
+        --assign-self)
+            assign_once ASSIGN_SELF "${flag}"
+            ASSIGN_SELF=1
+            ;;
+        *) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Prints, lower-cased, the login of the account that opens the pull requests for the agent's work:
+# PR_CREATOR_LOGIN, as the orchestrator names it, or prpixie (the orchestrator's own default) when
+# it is unset or is not a login.
+pr_creator_login() {
+    local LC_ALL=C login="${PR_CREATOR_LOGIN:-prpixie}"
+    matches_pattern "${login}" "${LOGIN_PATTERN}" || login=prpixie
+    printf '%s\n' "${login,,}"
+}
+
+# Reads PR of REPO for pr edit in one REST read, setting EDIT_AUTHOR, EDIT_AUTHOR_TYPE, EDIT_URL and
+# EDIT_COMMITS. A 404 is a pull request that is not there (the number of an issue included) once the
+# repository has been read and found; any other failure dies. The answer is refused unless the
+# author is a login, the number of commits is a number and the URL is this pull request's.
+read_pull_request_for_edit() {
+    local end
+    api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
+        "${FIELDS_ROW_DEF} [.user.login, .user.type, .html_url, .commits, \"end\"] | fields_row" \
+        || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
+    IFS="${ROW_SEPARATOR}" read -r EDIT_AUTHOR EDIT_AUTHOR_TYPE EDIT_URL EDIT_COMMITS end <<< "${GH_OUTPUT}"
+    if [ "${end}" != end ] || ! matches_pattern "${EDIT_AUTHOR}" "${LOGIN_PATTERN}" \
+        || ! matches_pattern "${EDIT_COMMITS}" '^[0-9]+$' \
+        || ! matches_pattern "${EDIT_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$"; then
+        die "gh returned an unexpected result for ${REPO}#${PR}"
+    fi
+}
+
+# Refuses (exit POLICY_REFUSED_EXIT) the edit unless every commit of PR is authored by the agent
+# (AGENT_LOGIN, compared without regard to case, as GitHub compares logins). A commit whose author
+# has no login (an email GitHub does not know) is not the agent's. Every page is read, and the
+# commits listed must be as many as the pull request has: GitHub lists at most PR_COMMITS_LIMIT, so
+# one with more is a runtime failure, never judged on part of its commits.
+require_all_commits_by_agent() {
+    local LC_ALL=C login listed=0 own=0
+    local -a logins=()
+    [ "${EDIT_COMMITS}" -le "${PR_COMMITS_LIMIT}" ] \
+        || die "${REPO}#${PR} has more than ${PR_COMMITS_LIMIT} commits, so their authors cannot all be checked"
+    api_read "could not read the commits of ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}/commits?per_page=${API_PAGE_SIZE}" \
+        '.[] | (.author.login // "-")' --paginate || die "could not read the commits of ${REPO}#${PR}"
+    [ -z "${GH_OUTPUT}" ] || mapfile -t logins <<< "${GH_OUTPUT}"
+    for login in "${logins[@]}"; do
+        listed=$((listed + 1))
+        [ "${login,,}" != "${AGENT_LOGIN,,}" ] || own=$((own + 1))
+    done
+    [ "${listed}" -eq "${EDIT_COMMITS}" ] \
+        || die "gh listed ${listed} commits for ${REPO}#${PR}, which has ${EDIT_COMMITS}"
+    [ "${own}" -gt 0 ] || refuse_policy edit "the pull request has no commit by the agent"
+    [ "${own}" -eq "${listed}" ] || refuse_policy edit "the pull request has commits by another author"
+}
+
+# Refuses (exit POLICY_REFUSED_EXIT) an edit of a pull request the agent does not own: one opened by
+# the agent is its own; one opened by a bot (a GitHub App, or the account that opens the agent's
+# pull requests) is its own only when all of its commits are the agent's; any other is someone
+# else's.
+check_edit_ownership() {
+    local LC_ALL=C
+    [ "${EDIT_AUTHOR,,}" != "${AGENT_LOGIN,,}" ] || return 0
+    if [ "${EDIT_AUTHOR_TYPE}" != Bot ] && [ "${EDIT_AUTHOR,,}" != "$(pr_creator_login)" ]; then
+        refuse_policy edit "the pull request was opened by someone other than the agent"
+    fi
+    require_all_commits_by_agent
+}
+
+pr_edit() {
+    parse_command_options assign_pr_edit_option "--repo --pr --title --body-file" "--assign-self" "$@"
+    require REPO --repo
+    require PR --pr
+    [ -n "${TITLE}${BODY_FILE}${ASSIGN_SELF}" ] \
+        || usage_error "nothing to change: give --title, --body-file or --assign-self"
+    [ -z "${TITLE}" ] || validate_pull_request_title "${TITLE}" "${REPO}"
+    require_gh
+    [ -z "${BODY_FILE}" ] || resolve_body
+    [ -z "${TITLE}" ] || check_value_for_leaks "${TITLE}" "${REPO}" title
+
+    read_agent_login
+    read_pull_request_for_edit
+    check_edit_ownership
+
+    local args=(pr edit "${PR}" --repo "${REPO}")
+    [ -z "${TITLE}" ] || args+=(--title "${TITLE}")
+    [ -z "${BODY_FILE}" ] || args+=(--body-file "${BODY_FILE}")
+    [ -z "${ASSIGN_SELF}" ] || args+=(--add-assignee "${AGENT_LOGIN}")
+    gh_capture "${args[@]}" || die "could not edit ${REPO}#${PR}: $(gh_failure_text)"
+    printf '%s\n' "${EDIT_URL}"
+}
+
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
-        ready-at pr_ready_at diff pr_diff -- "$@"
+        ready-at pr_ready_at diff pr_diff edit pr_edit -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
