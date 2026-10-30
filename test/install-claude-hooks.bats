@@ -120,7 +120,7 @@ teardown() {
     allow_sudo
     main
 
-    grep -qxF "install -o root -g root -d -m 0755 ${CLAUDE_MANAGED_DIR} ${CLAUDE_MANAGED_DIR}/hooks" "${SUDO_LOG}"
+    grep -qxF "install -o root -g root -d -m 0755 ${CLAUDE_MANAGED_DIR} ${CLAUDE_MANAGED_DIR}/hooks ${CLAUDE_MANAGED_DIR}/mcp" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0755 ${SOURCE_HOOKS_DIR}/enforce-git-dash-c ${CLAUDE_MANAGED_DIR}/hooks/enforce-git-dash-c" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0444 ${SOURCE_HOOKS_DIR}/command-allowlist ${CLAUDE_MANAGED_DIR}/hooks/command-allowlist" "${SUDO_LOG}"
     grep -qxF "install -o root -g root -m 0444 ${SOURCE_MANAGED_SETTINGS} ${CLAUDE_MANAGED_DIR}/managed-settings.json" "${SUDO_LOG}"
@@ -165,6 +165,245 @@ teardown() {
     [ ! -e "${HOME}/.claude/settings.json.bak" ]
     [ -L "${HOME}/.claude/hooks/enforce-git-dash-c" ]
     [[ "${output}" == *"Left ${HOME}/.claude/settings.json and ${HOME}/.claude/hooks as they were"* ]]
+}
+
+# --- managed MCP servers: cfwf merged with the host's ~/.claude.json -----------
+
+CFWF_URL='https://workflow-mcp.markridgwell.com/mcp'
+
+# Writes the given JSON as the host's ~/.claude.json.
+write_host_claude_json() {
+    printf '%s\n' "$1" > "${HOME}/.claude.json"
+}
+
+installed_mcp_names() {
+    jq -r '.mcpServers | keys | join(" ")' "${CLAUDE_MANAGED_DIR}/managed-mcp.json"
+}
+
+@test "the headers helper and managed-mcp.json are installed via sudo, 0755 and 0444" {
+    allow_sudo
+    main
+
+    diff "${SOURCE_MCP_HEADERS}" "${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers")" = "755" ]
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "444" ]
+    [ "$(stat -c '%a' "${CLAUDE_MANAGED_DIR}/mcp")" = "755" ]
+    grep -qxF "install -o root -g root -m 0755 ${SOURCE_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers" "${SUDO_LOG}"
+    grep -qxF "install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json" "${SUDO_LOG}"
+}
+
+@test "with no ~/.claude.json, managed-mcp.json holds the shipped cfwf server alone" {
+    allow_sudo
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf" ]
+    [ "$(jq -S . "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -S . "${SOURCE_MANAGED_MCP}")" ]
+    [[ "${output}" == *"re-run this script after adding an MCP server there"* ]]
+}
+
+@test "an empty ~/.claude.json, or one with no MCP servers, installs cfwf alone" {
+    allow_sudo
+    : > "${HOME}/.claude.json"
+    main
+    [ "$(installed_mcp_names)" = "cfwf" ]
+
+    write_host_claude_json '{"projects": {"/x": {"allowedTools": []}}, "theme": "dark"}'
+    main
+    [ "$(installed_mcp_names)" = "cfwf" ]
+}
+
+@test "user-scope and every project's MCP servers are merged in beside cfwf" {
+    allow_sudo
+    write_host_claude_json '{
+        "mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}},
+        "projects": {
+            "/a": {"mcpServers": {"tool-a": {"type": "stdio", "command": "/usr/bin/tool-a", "args": ["--serve"]}}},
+            "/b": {"mcpServers": {"tool-b": {"type": "http", "url": "https://b.example.com/mcp"}}}
+        }
+    }'
+    main
+
+    [ "$(installed_mcp_names)" = "cfwf rider tool-a tool-b" ]
+    [ "$(jq -r '.mcpServers["tool-a"].args[0]' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "--serve" ]
+    [ "$(jq -c '.mcpServers.cfwf' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = "$(jq -c '.mcpServers.cfwf' "${SOURCE_MANAGED_MCP}")" ]
+}
+
+@test "a host server at cfwf's URL is left out as a duplicate, and its removal is suggested" {
+    allow_sudo
+    write_host_claude_json "{\"projects\": {\"${HOME}\": {\"mcpServers\": {\"secure-api\": {\"type\": \"http\", \"url\": \"${CFWF_URL}/\", \"headers\": {\"Authorization\": \"Bearer ghp_hostsecret\"}}}}}}"
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf" ]
+    [[ "${output}" == *"Left out secure-api from ${HOME}/.claude.json: same URL as cfwf"* ]]
+    [[ "${output}" == *"Remove them from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c 'ghp_hostsecret' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+    [[ "${output}" != *'ghp_hostsecret'* ]]
+}
+
+@test "a host server with a literal header or env value is refused by name and never copied" {
+    allow_sudo
+    write_host_claude_json '{
+        "mcpServers": {
+            "leaky-header": {"type": "http", "url": "https://l.example.com/mcp", "headers": {"X-Api-Key": "sk-literal-header"}},
+            "leaky-bearer": {"type": "http", "url": "https://m.example.com/mcp", "headers": {"Authorization": "Bearer sk-literal-bearer"}}
+        },
+        "projects": {"/p": {"mcpServers": {"leaky-env": {"type": "stdio", "command": "x", "env": {"API_KEY": "sk-literal-env"}}}}}
+    }'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf" ]
+    [[ "${output}" == *"WARNING: did not copy leaky-bearer, leaky-env, leaky-header from ${HOME}/.claude.json"* ]]
+    [ "$(grep -c 'sk-literal' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" -eq 0 ]
+    [ "$(grep -c 'sk-literal' "${HOME}/.claude/managed-mcp.merged.json")" -eq 0 ]
+    [[ "${output}" != *'sk-literal'* ]]
+}
+
+@test "a host server whose headers and env only reference variables is copied" {
+    allow_sudo
+    # shellcheck disable=SC2016  # literal ${VAR} references, for Claude Code to expand
+    write_host_claude_json '{"mcpServers": {"by-ref": {"type": "http", "url": "https://r.example.com/mcp", "headers": {"Authorization": "Bearer ${R_TOKEN}", "X-Key": "${R_KEY}"}, "env": {"A": "${A}"}}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "by-ref cfwf" ]
+    # shellcheck disable=SC2016
+    [ "$(jq -r '.mcpServers["by-ref"].headers.Authorization' "${CLAUDE_MANAGED_DIR}/managed-mcp.json")" = 'Bearer ${R_TOKEN}' ]
+    [[ "${output}" != *'did not copy'* ]]
+}
+
+@test "a ~/.claude.json bigger than the kernel's per-argument limit is still merged" {
+    allow_sudo
+    local padding
+    padding=$(head -c 200000 /dev/zero | tr '\0' 'x')
+    write_host_claude_json "{\"padding\": \"${padding}\", \"mcpServers\": {\"rider\": {\"type\": \"sse\", \"url\": \"http://localhost:64342/sse\"}}}"
+    [ "$(stat -c '%s' "${HOME}/.claude.json")" -gt 131072 ]
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf rider" ]
+}
+
+@test "the same server repeated in several scopes is installed once" {
+    allow_sudo
+    write_host_claude_json '{
+        "mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}},
+        "projects": {"/a": {"mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}}}}
+    }'
+    run main
+    [ "${status}" -eq 0 ]
+    [ "$(installed_mcp_names)" = "cfwf rider" ]
+}
+
+@test "one name for two different host servers is fatal before anything is installed" {
+    allow_sudo
+    write_host_claude_json '{
+        "mcpServers": {"tool": {"type": "http", "url": "https://one.example.com/mcp"}},
+        "projects": {"/a": {"mcpServers": {"tool": {"type": "http", "url": "https://two.example.com/mcp"}}}}
+    }'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": tool."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+    [ ! -e "${HOME}/.claude" ]
+}
+
+@test "a host server named cfwf at another URL collides with the shipped one and is fatal" {
+    allow_sudo
+    write_host_claude_json '{"mcpServers": {"cfwf": {"type": "http", "url": "https://elsewhere.example.com/mcp"}}}'
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"used for two different servers"*": cfwf."* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "an invalid ~/.claude.json is fatal before anything is installed" {
+    allow_sudo
+    printf '{ not json' > "${HOME}/.claude.json"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"${HOME}/.claude.json is not valid JSON"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+    [ ! -e "${HOME}/.claude" ]
+    [ ! -e "${CFWF_BIN_DIR}/cfwf" ]
+}
+
+@test "dies before installing anything when the shipped managed MCP servers are not valid JSON" {
+    allow_sudo
+    printf '{ not json' > "${TEST_TMP}/broken.json"
+    SOURCE_MANAGED_MCP="${TEST_TMP}/broken.json"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Managed MCP servers are not valid JSON"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "dies when the shipped managed MCP servers or the headers helper are missing" {
+    SOURCE_MANAGED_MCP="${TEST_TMP}/does-not-exist.json"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source managed MCP servers not found"* ]]
+
+    SOURCE_MANAGED_MCP="${SOURCE_DIR}/claude-managed-mcp.json"
+    SOURCE_MCP_HEADERS="${TEST_TMP}/does-not-exist"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Source MCP headers helper not found"* ]]
+}
+
+@test "when sudo is declined, the printed managed-mcp.json install command names a merged file that still exists" {
+    write_host_claude_json '{"mcpServers": {"rider": {"type": "sse", "url": "http://localhost:64342/sse"}}}'
+    run main
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"sudo install -o root -g root -m 0444 ${HOME}/.claude/managed-mcp.merged.json ${CLAUDE_MANAGED_DIR}/managed-mcp.json"* ]]
+    [[ "${output}" == *"sudo install -o root -g root -m 0755 ${SOURCE_MCP_HEADERS} ${CLAUDE_MANAGED_DIR}/mcp/cfwf-mcp-headers"* ]]
+    [ "$(jq -r '.mcpServers | keys | join(" ")' "${HOME}/.claude/managed-mcp.merged.json")" = "cfwf rider" ]
+}
+
+@test "a merged MCP file that cannot be written is fatal before anything is installed" {
+    allow_sudo
+    mkdir -p "${HOME}/.claude/managed-mcp.merged.json"
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Failed to write ${HOME}/.claude/managed-mcp.merged.json"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+@test "a merged MCP file that is not valid JSON is fatal before anything is installed" {
+    allow_sudo
+    # Fails only the validation of the merged file; every other jq call is the real one.
+    jq() {
+        if [ "$1" = "empty" ] && [ "$2" = "${HOME}/.claude/managed-mcp.merged.json" ]; then
+            return 1
+        fi
+        builtin command jq "$@"
+    }
+    run main
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"Merged MCP servers are not valid JSON: ${HOME}/.claude/managed-mcp.merged.json"* ]]
+    [ ! -e "${CLAUDE_MANAGED_DIR}" ]
+}
+
+# --- the shipped managed MCP servers ------------------------------------------------
+
+@test "the shipped managed-mcp.json holds only cfwf, over https, with its header from the root-owned helper" {
+    run jq -c '.' "${SOURCE_MANAGED_MCP}"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "{\"mcpServers\":{\"cfwf\":{\"type\":\"http\",\"url\":\"${CFWF_URL}\",\"headersHelper\":\"/etc/claude-code/mcp/cfwf-mcp-headers\"}}}" ]
+}
+
+@test "the shipped managed-mcp.json carries no literal Authorization header and no \${VAR} expansion" {
+    [ "$(grep -ci 'authorization' "${SOURCE_MANAGED_MCP}")" -eq 0 ]
+    # shellcheck disable=SC2016  # the literal ${ that starts a Claude Code expansion
+    [ "$(grep -cF '${' "${SOURCE_MANAGED_MCP}")" -eq 0 ]
+}
+
+@test "the managed settings allow every cfwf MCP tool" {
+    jq -r '.permissions.allow[]' "${SOURCE_MANAGED_SETTINGS}" | grep -qxF 'mcp__cfwf__*'
+}
+
+@test "the Dockerfile copies managed-mcp.json and the headers helper into /etc/claude-code" {
+    local dockerfile="${SOURCE_DIR}/Dockerfile"
+    grep -qxF 'COPY --chown=root:root --chmod=0444 claude-managed-mcp.json /etc/claude-code/managed-mcp.json' "${dockerfile}"
+    grep -qxF 'COPY --chown=root:root --chmod=0755 claude-mcp/cfwf-mcp-headers /etc/claude-code/mcp/cfwf-mcp-headers' "${dockerfile}"
+    [ -x "${SOURCE_MCP_HEADERS}" ]
 }
 
 # --- legacy ~/.claude/hooks symlinks -------------------------------------------
@@ -538,7 +777,7 @@ teardown() {
     allow_sudo
     run main
     [ "${status}" -eq 0 ]
-    run grep -c 'cfwf' "${SUDO_LOG}"
+    run grep -cF "${CFWF_BIN_DIR}/cfwf" "${SUDO_LOG}"
     [ "${output}" = "0" ]
 }
 
