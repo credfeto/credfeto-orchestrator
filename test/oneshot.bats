@@ -4954,7 +4954,7 @@ STUBEOF
     [ "${status}" -eq 0 ]
     local excerpt
     excerpt=$(jq -r '.embeds[0].fields[] | select(.name == "Final message") | .value' "${payload_file}")
-    [[ "${excerpt}" == "Bash is now denied. Token [token], [token], sha [token] and key [token]; file [path] and [path]"* ]]
+    [[ "${excerpt}" == "Bash is now denied. Token [REDACTED], [token], sha [token] and key [token]; file [path] and [path]"* ]]
     [[ "${excerpt}" != *ghp_* ]]
     [[ "${excerpt}" != *github_pat_* ]]
     [[ "${excerpt}" != *0123456789abcdef* ]]
@@ -4976,6 +4976,47 @@ STUBEOF
     excerpt=$(jq -r '.embeds[0].fields[] | select(.name == "Final message") | .value' "${payload_file}")
     [[ "${excerpt}" == *"[path]" ]]
     [[ "${excerpt}" != *someone* ]]
+}
+
+# Each lib/secret-patterns form must be named by its own marker rather than collapsed into a
+# generic "[path]" or "[token]", and the words either side of it must survive.
+assert_session_stalled_form_redacted() {
+    local secret="$1"
+    local marker="$2"
+    DISCORD_WEBHOOK_URL="https://discord.example.com/hook"
+    set_repo_context "org/repo"
+    local payload_file="${TEST_TMP}/payload.json"
+    stub_curl_capturing_payload "${payload_file}"
+
+    run notify_discord_session_stalled "Issue" "42" "1" "git" "before ${secret} after"
+    [ "${status}" -eq 0 ]
+    local excerpt
+    excerpt=$(jq -r '.embeds[0].fields[] | select(.name == "Final message") | .value' "${payload_file}")
+    [ "${excerpt}" = "before ${marker} after" ]
+}
+
+@test "notify_discord_session_stalled names a discord.com webhook in the final message" {
+    assert_session_stalled_form_redacted 'https://discord.com/api/webhooks/123456/abcDEF_-x' '[REDACTED-DISCORD-WEBHOOK]'
+}
+
+@test "notify_discord_session_stalled names a discordapp.com webhook in the final message" {
+    assert_session_stalled_form_redacted 'https://discordapp.com/api/webhooks/123456/abcDEF_-x' '[REDACTED-DISCORD-WEBHOOK]'
+}
+
+@test "notify_discord_session_stalled names an OpenAI project key in the final message" {
+    assert_session_stalled_form_redacted 'sk-proj-ABCDEFGHIJKLMNOPQRST' '[REDACTED-OPENAI-KEY]'
+}
+
+@test "notify_discord_session_stalled names a Bearer token in the final message" {
+    assert_session_stalled_form_redacted 'Bearer abcdefghij0123456789klmn' 'Bearer [REDACTED]'
+}
+
+@test "notify_discord_session_stalled names an AWS access key ID in the final message" {
+    assert_session_stalled_form_redacted 'AKIAIOSFODNN7EXAMPLE' '[REDACTED-AWS-KEY-ID]' # gitleaks:allow
+}
+
+@test "notify_discord_session_stalled names a GitHub token in the final message" {
+    assert_session_stalled_form_redacted 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' '[REDACTED-GH-TOKEN]'
 }
 
 @test "notify_discord_session_stalled deduplicates per item, apart from the per-repo permission-denials alert" {
