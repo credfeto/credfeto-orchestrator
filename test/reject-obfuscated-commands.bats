@@ -985,6 +985,13 @@ git status'
         '((i=1))' \
         '((i++))' \
         '((PATH==1))' \
+        '((PATH != 1))' \
+        '((PATH <= 1))' \
+        '((PATH >= 1))' \
+        '((PATH << 1))' \
+        '((-PATH))' \
+        '((!PATH))' \
+        'echo "${PATH#x}" "${PATH%=}" "${PATH-=}"' \
         'echo $((PATH+1))' \
         'let i=1'; do
         run_hook "${cmd}"
