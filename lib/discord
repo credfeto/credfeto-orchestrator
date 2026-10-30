@@ -848,8 +848,9 @@ notify_discord_permission_denials() {
 # in lib/state): it quit believing a tool was denied, or hit denials and made no progress.
 # Arguments: item_type (Issue|PullRequest|empty), item_id (numeric|empty), denial_count,
 #            command_names (comma-separated names only, never full command lines),
-#            final_message (the session's final result text; tokens and anything path-like are
-#            masked, then only its first 240 characters are sent)
+#            final_message (the session's final result text; every lib/secret-patterns form is
+#            redacted, then tokens and anything path-like are masked, then only its first 240
+#            characters are sent)
 # Deduplicated per item, at most one per hour, under its own key: notify_discord_permission_
 # denials' per-repo hourly key would otherwise let an ordinary denial alert elsewhere in the repo
 # swallow this one. Routed like the permission-denials alert, via DISCORD_WEBHOOK_URL_PERMISSIONS
@@ -866,8 +867,12 @@ notify_discord_session_stalled() {
     now=$(date +%s)
     _discord_dedup_allowed "${state_file}" "${now}" || return 0
 
-    local url payload
+    local url payload redacted_message
     url="$(build_item_url "${item_type}" "${item_id}")"
+    # Named secret forms first, so a webhook URL or a Bearer value is reported by kind rather
+    # than collapsed into a generic "[path]" by the masking below.
+    redacted_message=$(printf '%s' "${final_message}" | redact_secrets) \
+        || { warn "Discord: failed to redact session-stalled message"; return 0; }
 
     payload=$(jq --null-input \
         --argjson color 15105570 \
@@ -876,7 +881,7 @@ notify_discord_session_stalled() {
         --arg url "${url}" \
         --arg count "${denial_count}" \
         --arg commands "${command_names}" \
-        --arg message "${final_message}" \
+        --arg message "${redacted_message}" \
         '
         # GitHub tokens and long hex runs first, then any whitespace-delimited run with a "/" in
         # it (paths and URLs, and a base64 value that happens to hold one), then any other long
