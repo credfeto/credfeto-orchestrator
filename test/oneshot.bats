@@ -19777,6 +19777,68 @@ stub_pr_merged() {
     [ "${status}" -eq 1 ]
 }
 
+@test "review_result_marker reads a CLEAN or FINDINGS result line, ignoring surrounding whitespace and case" {
+    run review_result_marker $'Security review: nothing to fix.\nREVIEW RESULT: CLEAN'
+    [ "${output}" = "CLEAN" ]
+    run review_result_marker $'Found two issues and fixed them.\n  review result: findings \r'
+    [ "${output}" = "FINDINGS" ]
+    run review_result_marker $'All good.\n\tReview Result: Clean\t'
+    [ "${output}" = "CLEAN" ]
+}
+
+@test "review_result_marker prints nothing without a marker line, or when the marker is inside a sentence" {
+    run review_result_marker "Code review found nothing to change in this diff."
+    [ -z "${output}" ]
+    run review_result_marker 'I will end with REVIEW RESULT: CLEAN once the fixes land.'
+    [ -z "${output}" ]
+    run review_result_marker $'Result:\n`REVIEW RESULT: CLEAN`'
+    [ -z "${output}" ]
+    run review_result_marker ""
+    [ -z "${output}" ]
+}
+
+@test "review_result_marker prefers FINDINGS when a message has both lines" {
+    run review_result_marker $'REVIEW RESULT: CLEAN\nOn reflection one finding remains.\nREVIEW RESULT: FINDINGS'
+    [ "${output}" = "FINDINGS" ]
+    run review_result_marker $'REVIEW RESULT: FINDINGS\nREVIEW RESULT: CLEAN'
+    [ "${output}" = "FINDINGS" ]
+}
+
+@test "claude_result_indicates_clean_review accepts a clean security review worded outside the patterns when it ends with the CLEAN line (#1749)" {
+    claude_result_indicates_clean_review $'The change adds a shared pattern list and a redaction step. I found no new attack surface.\nREVIEW RESULT: CLEAN'
+    claude_result_indicates_clean_review $'The sed expressions are fixed literals and the input only goes to stdin, so there is no injection path.\n\nREVIEW RESULT: CLEAN'
+    claude_result_indicates_clean_review $'If redaction fails, the function returns without sending, so it fails closed. Nothing is redacted less than before.\nREVIEW RESULT: CLEAN\n'
+    claude_result_indicates_clean_review $'Code review found no correctness problems worth changing.\nREVIEW RESULT: CLEAN'
+}
+
+@test "claude_result_indicates_clean_review rejects a FINDINGS line even when the text matches a clean pattern" {
+    run claude_result_indicates_clean_review $'Security review: no findings in the new library.\nREVIEW RESULT: FINDINGS'
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review $'No findings were reported by the code review.\nREVIEW RESULT: CLEAN\nREVIEW RESULT: FINDINGS'
+    [ "${status}" -eq 1 ]
+}
+
+@test "claude_result_indicates_clean_review trusts a CLEAN line over wording the findings patterns would reject" {
+    claude_result_indicates_clean_review $'Nothing to fix; the earlier round already pushed its changes.\nREVIEW RESULT: CLEAN'
+}
+
+@test "claude_result_indicates_clean_review falls back to the patterns when there is no result line" {
+    claude_result_indicates_clean_review "# Security review: no findings  This PR only tightens the hook."
+    run claude_result_indicates_clean_review "I found no new attack surface, and there is no injection path."
+    [ "${status}" -eq 1 ]
+    run claude_result_indicates_clean_review "The change is fine. I would say REVIEW RESULT: CLEAN here."
+    [ "${status}" -eq 1 ]
+}
+
+@test "the PHASE E and PHASE F prompts ask for the review result line" {
+    [ "${REVIEW_RESULT_CLEAN_MARKER}" = "REVIEW RESULT: CLEAN" ]
+    [ "${REVIEW_RESULT_FINDINGS_MARKER}" = "REVIEW RESULT: FINDINGS" ]
+    local prompts_src
+    prompts_src="${BATS_TEST_DIRNAME}/../lib/prompts"
+    [ "$(grep -c 'REVIEW_RESULT_CLEAN_MARKER}" when the' "${prompts_src}")" -eq 2 ]
+    [ "$(grep -c 'REVIEW_RESULT_FINDINGS_MARKER}" otherwise' "${prompts_src}")" -eq 2 ]
+}
+
 @test "pr_clean_review_board_advance names the next review status for a clean report on an unchanged board" {
     _WF_PROJECT_ID="PVT_test"
     run pr_clean_review_board_advance "AI Security Review" "AI Security Review" "Security review: no findings."
