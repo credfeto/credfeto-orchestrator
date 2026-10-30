@@ -56,6 +56,11 @@ FLAGS="((-C|-c)[[:space:]]+${VALTOKEN}[[:space:]]+)*"
 input=$(cat)
 raw_cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // .command // ""')
 cmd=$(strip_heredocs "$raw_cmd")
+# bash drops the backslash from an unquoted escape, so `git com\mit` still runs
+# `commit`. Dropping every backslash before the gate match can only make the
+# gate match more often, which runs the identity check more often; it never
+# lets a real commit skip the check.
+cmd="${cmd//\\/}"
 
 # Only run these checks for commands that actually invoke one of $SUBCMDS.
 # Matched against trailing whitespace/end (not \b) so `commit-graph` etc.
