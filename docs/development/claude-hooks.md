@@ -111,7 +111,7 @@ It rewrites exactly `gh api user --jq '.login'` (one bare call, no pipe, redirec
 
 ## The allowlist, the settings and the parity tests
 
-`command-allowlist` decides which command names `reject-obfuscated-commands` accepts; `permissions.allow` in `claude-managed-settings.json` is a separate layer that Claude Code applies on top, so a name needs an entry in both. `command-blocklist` wins over the allowlist (`xargs` is in both and is unusable). `test/command-allowlist-parity.bats` fails when:
+`command-allowlist` decides which command names `reject-obfuscated-commands` accepts; `permissions.allow` in `claude-managed-settings.json` is a separate layer that Claude Code applies on top, so a name needs an entry in both. `command-blocklist` wins over the allowlist. `test/command-allowlist-parity.bats` fails when:
 
 - a `command-allowlist` name has no `Bash(<name> ...)` entry in `permissions.allow`, or the reverse. Names on the blocklist and names with a whole-command deny (such as `sqlcmd`) are excluded, and `set` is the one narrow exception (`NARROW_ALLOW_ONLY_NAMES`, with `Bash(set -e)`).
 - a bare non-Bash tool such as `Monitor`, `Edit` or `WebFetch` is missing from `permissions.allow`.

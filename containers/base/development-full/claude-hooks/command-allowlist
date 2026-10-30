@@ -175,7 +175,6 @@ tee                                   writer
 stat                                  read-only
 file                                  writer
 ps                                    read-only
-xargs                                 writer
 mktemp                                writer
 df                                    read-only
 du                                    read-only

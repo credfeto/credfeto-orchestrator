@@ -77,7 +77,7 @@ NARROW_ALLOW_ONLY_NAMES=(set)
 
     # A name genuinely needs a permissions.allow entry only if command-allowlist
     # permits it AND command-blocklist doesn't shadow it into a no-op (blocklist
-    # wins - e.g. xargs) AND it isn't wholly denied on purpose (e.g. sqlcmd).
+    # wins) AND it isn't wholly denied on purpose (e.g. sqlcmd).
     expected=$(comm -23 <(printf '%s\n' "${allow_names}") <(printf '%s\n' "${blocklist_names}"))
     expected=$(comm -23 <(printf '%s\n' "${expected}") <(printf '%s\n' "${deny_names}"))
 
