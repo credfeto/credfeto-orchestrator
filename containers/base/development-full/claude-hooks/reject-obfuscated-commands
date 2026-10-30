@@ -331,9 +331,11 @@ assign_targets=$(printf '%s' "$ast" | jq -r --arg op_src "$op_src" "${JQ_RESOLVE
         end
     # The operator sits between the name (and any [index]) and the word, or
     # the closing brace when the word is empty: := and = assign, :-, -, :?,
-    # ?, :+, +, #, %, ^, , and @ do not.
+    # ?, :+, +, #, %, ^, , and @ do not. The end is chosen by whether the
+    # word exists, not by whether its offset parsed, so a word without a
+    # readable offset fails closed instead of being read up to the brace.
     elif .Type == "ParamExp" and .Exp != null then
-      src_between(.Param.ValueEnd.Offset?; (.Exp.Word.Pos.Offset? // .Rbrace.Offset?)) as $op
+      src_between(.Param.ValueEnd.Offset?; (if .Exp.Word != null then .Exp.Word.Pos.Offset? else .Rbrace.Offset? end)) as $op
       | if ($op // "") == "" then "\u0001"
         elif $op | test(":?=$") then (if .Excl then "\u0001" else .Param.Value end)
         else empty
