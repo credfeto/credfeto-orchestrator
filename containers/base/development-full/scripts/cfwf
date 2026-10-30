@@ -292,7 +292,10 @@ cleanup() {
     if [ "${exit_status}" -ne 0 ] && [ -n "${CREATED_URL}" ]; then
         printf 'cfwf: %s: %s\n' "${CREATED_NOTE}" "${CREATED_URL}" >&2
     fi
-    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}"
+    if [ "${exit_status}" -ne 0 ] && [ -n "${HAND_OFF_DONE:-}" ]; then
+        printf 'cfwf: hand-off steps done before the failure: %s\n' "${HAND_OFF_DONE}" >&2
+    fi
+    rm -f "${GH_ERR_FILE}" "${BODY_PATH_TMP}" "${SCAN_TMP}" "${VALUE_TMP}" "${HAND_OFF_RECORD_TMP:-}"
 }
 
 # Creates a temporary file on first use and stores its path in the global variable named by $1
@@ -330,6 +333,7 @@ Commands:
   pr checks-wait           Wait for a PR's required checks to finish, up to a time limit (exit 0, 3, 4, 5 or 6)
   pr comments              Print a PR's comments, reviews and review threads (exit 9 when not found)
   pr reply                 Reply to an inline review comment of a PR (exit 8 when the body is refused)
+  pr hand-off              Hand a PR to human review: board, ready, review record, then auto-merge (exit 7 deferred, 8 refused)
   pr view                  Print a PR's state and metadata, one key and value a line (exit 9 when not found)
   pr ready-at              Print when a PR was last marked ready for review, or when it was created (exit 9 when not found)
   pr diff                  Print a PR's diff, its changed files or a per-file line count (exit 9 when not found)
@@ -905,6 +909,8 @@ review threads.
 Run 'cfwf pr reply --help' for pr reply, which replies to an inline review comment.
 Run 'cfwf pr ready-at --help' for pr ready-at, which prints when a pull request was last marked
 ready for review.
+Run 'cfwf pr hand-off --help' for pr hand-off, which hands a pull request off to human review in one
+step, enabling auto-merge once its checks have passed since it was marked ready.
 Run 'cfwf pr view --help' for pr view, which prints a pull request's state and metadata.
 Run 'cfwf pr list --help' for pr list, which lists a repository's open pull requests.
 Run 'cfwf pr diff --help' for pr diff, which prints a pull request's diff, changed files or line counts.
@@ -1059,6 +1065,55 @@ check, so on a pull request of more than 100 commits it can miss an author.
 
 Exit codes: 0 printed; ${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included); 1 a
 runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a usage error.
+USAGE
+}
+
+usage_pr_hand_off() {
+    cat << USAGE
+Usage: cfwf pr hand-off --repo <owner/repo> --pr <n> --body-file <file|->
+
+Hands a pull request off to human review at the end of the AI review loop (Phase E), in one
+command and always in this order: moves it to Human Review on the Workflow board, marks it ready
+for review, posts the review record, then enables auto-merge.
+
+--repo       Always required; never taken from the current directory.
+--pr         Always required: the pull request's number, above 0.
+--body-file  Always required: extra text for the review record, a regular file, or - to read it
+             from stdin. cfwf writes the record's first line itself,
+             "${HAND_OFF_RECORD_PREFIX} <head SHA>", from the head it read at the start, so the
+             SHA can never be mistyped or stale. There is no --body.
+--json, --jq, --admin, --squash, --rebase and a merge method are not options: auto-merge always
+uses a merge commit, never --admin, and never merges at once.
+
+Everything is checked before anything is written, and a refusal writes nothing:
+  the body          is checked for leaks (see 'cfwf help body') and for the plan-approval
+                    keywords, as for comment add
+  the pull request  must be open and carry neither Blocked nor On Hold
+  the checks        the required checks on its head must all pass, judged as pr checks --pr
+                    judges them; failed, pending or no checks at all is refused
+A refusal exits ${POLICY_REFUSED_EXIT} with "cfwf: hand-off refused: <rule>" (or "cfwf: body refused: <rule>") on
+stderr.
+
+Auto-merge is enabled only when the head is still the one reviewed and every judged check has a
+result completed at or after the pull request was last marked ready (see 'cfwf pr ready-at'): a
+check skipped while it was a draft counts as passed before it has ever run. When the checks that
+start once it is ready have not finished, or one of them failed, auto-merge is left off and the
+command exits ${AUTO_MERGE_DEFERRED_EXIT} (deferred): run it again once they have finished. A head that changed after it
+was read stops the command before auto-merge. A repository that does not allow auto-merge leaves
+the pull request ready for a human, and says so.
+
+Output, one line a step:
+  <url> Human Review
+  <url> ready
+  <review record comment URL>
+  <url> auto-merge on
+or, in place of the last line, "<url> auto-merge deferred: <reason>" or "<url> auto-merge
+unavailable: <reason>".
+
+Exit codes: 0 handed off (auto-merge on, or unavailable on the repository); 1 a runtime failure,
+such as a gh or network error, prefixed "cfwf:", naming the steps already done when it fails part
+way; 2 a usage error; ${AUTO_MERGE_DEFERRED_EXIT} ready and recorded, auto-merge deferred; ${POLICY_REFUSED_EXIT} refused, nothing written;
+${PR_NOT_FOUND_EXIT} the pull request does not exist (the number of an issue included).
 USAGE
 }
 
@@ -1537,6 +1592,7 @@ usage_for() {
         "pr list") usage_pr_list ;;
         "pr create") usage_pr_create ;;
         "pr edit") usage_pr_edit ;;
+        "pr hand-off") usage_pr_hand_off ;;
         "pr comments") usage_pr_comments ;;
         "pr reply") usage_pr_reply ;;
         comment | "comment add") usage_comment ;;
@@ -4475,9 +4531,228 @@ pr_edit() {
     printf '%s\n' "${EDIT_URL}"
 }
 
+# pr hand-off: the pull request as read before any write (its URL, state, whether it is a draft, its
+# head and whether it carries Blocked or On Hold), the head the review record names, the steps done
+# so far (named by the EXIT trap when a run fails part way) and the time the pull request was last
+# marked ready.
+HAND_OFF_URL=""
+HAND_OFF_STATE=""
+HAND_OFF_DRAFT=""
+HAND_OFF_SHA=""
+HAND_OFF_BLOCKED=""
+HAND_OFF_ON_HOLD=""
+HAND_OFF_AUTO_MERGE_ALLOWED=""
+HAND_OFF_DONE=""
+HAND_OFF_RECORD_TMP=""
+READY_AT=""
+READY_SOURCE=""
+# What a hand-off posts first in its review record, followed by the head it reviewed.
+readonly HAND_OFF_RECORD_PREFIX="### AI Review Loop: reviewed"
+# The exit code of a hand-off that marked the pull request ready and recorded it, but left
+# auto-merge off because the required checks have no result from after it was marked ready yet.
+readonly AUTO_MERGE_DEFERRED_EXIT=7
+
+assign_pr_hand_off_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --pr)
+            assign_once PR "${flag}"
+            assign_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${PR}"
+            ;;
+        *) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Sets READY_AT and READY_SOURCE to when TARGET_NUMBER was last marked ready for review, read from
+# its timeline, or when it was created when its timeline has no ready_for_review event (source
+# created). TARGET_* must be set (require_target).
+read_last_ready_at() {
+    local end
+    read_timeline_target
+    read_timeline 'select(.event == "ready_for_review") | [.created_at, "end"] | fields_row'
+    if [ -z "${GH_OUTPUT}" ]; then
+        READY_AT="${TARGET_CREATED_AT}"
+        READY_SOURCE=created
+    else
+        IFS="${ROW_SEPARATOR}" read -r READY_AT end <<< "${GH_OUTPUT##*$'\n'}"
+        is_timed_row "${READY_AT}" "${end}" || unexpected_timeline_result
+        READY_SOURCE=ready-for-review
+    fi
+}
+
+# Reads PR of REPO for pr hand-off in one REST read, setting HAND_OFF_URL, HAND_OFF_STATE,
+# HAND_OFF_DRAFT, HAND_OFF_SHA, HAND_OFF_BLOCKED and HAND_OFF_ON_HOLD. A 404 is a pull request that
+# is not there (the number of an issue included) once the repository has been read and found; any
+# other failure dies, and so does an answer that is not this pull request's.
+read_pull_request_for_hand_off() {
+    local end
+    api_read "could not read ${REPO}#${PR}" "repos/${REPO}/pulls/${PR}" \
+        "${FIELDS_ROW_DEF} ${HOLD_LABELS_DEF} [.html_url, .state, .draft, .head.sha, is_blocked, is_on_hold, \"end\"] | fields_row" \
+        || not_found_in_repository "${PR_NOT_FOUND_EXIT}" "the pull request ${REPO}#${PR} was not found"
+    IFS="${ROW_SEPARATOR}" read -r HAND_OFF_URL HAND_OFF_STATE HAND_OFF_DRAFT HAND_OFF_SHA HAND_OFF_BLOCKED HAND_OFF_ON_HOLD end <<< "${GH_OUTPUT}"
+    if [ "${end}" != end ] || ! matches_pattern "${HAND_OFF_URL}" "${REPOSITORY_URL_PATTERN}/pull/${PR}\$" \
+        || [[ ! "${HAND_OFF_STATE}" =~ ^(open|closed)$ ]] || [[ ! "${HAND_OFF_DRAFT}" =~ ^(true|false)$ ]] \
+        || [[ ! "${HAND_OFF_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+        || [[ ! "${HAND_OFF_BLOCKED}" =~ ^(true|false)$ ]] || [[ ! "${HAND_OFF_ON_HOLD}" =~ ^(true|false)$ ]]; then
+        die "gh returned an unexpected result for ${REPO}#${PR}"
+    fi
+}
+
+# Reads whether REPO allows auto-merge, setting HAND_OFF_AUTO_MERGE_ALLOWED to true or false.
+read_auto_merge_allowed() {
+    api_read_repository '.allow_auto_merge // false'
+    [[ "${GH_OUTPUT}" =~ ^(true|false)$ ]] || die "gh returned an unexpected result for ${REPO}"
+    HAND_OFF_AUTO_MERGE_ALLOWED="${GH_OUTPUT}"
+}
+
+# Refuses (exit POLICY_REFUSED_EXIT) a hand-off of a pull request that is not open or carries
+# Blocked or On Hold.
+check_hand_off_target() {
+    [ "${HAND_OFF_STATE}" = open ] || refuse_policy hand-off "the pull request is not open"
+    [ "${HAND_OFF_BLOCKED}" = false ] || refuse_policy hand-off "the pull request is Blocked"
+    [ "${HAND_OFF_ON_HOLD}" = false ] || refuse_policy hand-off "the pull request is On Hold"
+}
+
+# Prints the head commit summary pr checks ends its output with, from the output $1.
+checks_summary_head() {
+    local head="${1##*head=}"
+    [[ "${head}" =~ ^[0-9a-f]{40}$ ]] || die "gh returned an unexpected head commit for ${REPO}#${PR}"
+    printf '%s\n' "${head}"
+}
+
+# Refuses (exit POLICY_REFUSED_EXIT) a hand-off unless the required checks on the head read at the
+# start (HAND_OFF_SHA) all pass, judged as pr checks --pr judges them. A failed read dies.
+require_green_checks_before_hand_off() {
+    checks_wait_read
+    case "${CHECKS_WAIT_STATUS}" in
+        0) ;;
+        "${CHECKS_FAILED_EXIT}") refuse_policy hand-off "a required check failed" ;;
+        "${CHECKS_PENDING_EXIT}") refuse_policy hand-off "a required check is still pending" ;;
+        "${NO_CHECKS_EXIT}") refuse_policy hand-off "the head has no checks yet" ;;
+        *) exit 1 ;;
+    esac
+    [ "$(checks_summary_head "${CHECKS_WAIT_OUTPUT}")" = "${HAND_OFF_SHA}" ] \
+        || die "the head of ${REPO}#${PR} changed while it was read; nothing was written"
+}
+
+# Writes the review record to HAND_OFF_RECORD_TMP: the record line naming HAND_OFF_SHA, then the
+# body the caller gave, and runs the leak check on the whole of it, so the comment posted is the
+# text checked.
+write_hand_off_record() {
+    ensure_temp_file HAND_OFF_RECORD_TMP
+    {
+        printf '%s %s\n\n' "${HAND_OFF_RECORD_PREFIX}" "${HAND_OFF_SHA}"
+        cat -- "${BODY_FILE}"
+    } > "${HAND_OFF_RECORD_TMP}" || die "could not write the review record"
+    check_body_for_leaks "${HAND_OFF_RECORD_TMP}" "${REPO}"
+}
+
+# Notes the step $1 as done, for the EXIT trap to name if a later step fails.
+hand_off_done() {
+    HAND_OFF_DONE+="${HAND_OFF_DONE:+, }$1"
+}
+
+# Marks PR ready for review (#1590). Only pr hand-off calls it, after it has moved the board to
+# Human Review and found the pull request open and not Blocked or On Hold, so those rules hold here.
+# A pull request that is already ready is left as it is.
+mark_pull_request_ready() {
+    if [ "${HAND_OFF_DRAFT}" = true ]; then
+        gh_capture pr ready "${PR}" --repo "${REPO}" || die "could not mark ${REPO}#${PR} ready: $(gh_failure_text)"
+    fi
+    printf '%s ready\n' "${HAND_OFF_URL}"
+    hand_off_done ready
+}
+
+# Posts the review record on PR and prints the comment URL.
+post_hand_off_record() {
+    local url
+    gh_capture pr comment "${PR}" --repo "${REPO}" --body-file "${HAND_OFF_RECORD_TMP}" \
+        || die "could not post the review record on ${REPO}#${PR}: $(gh_failure_text)"
+    url="${GH_OUTPUT##*$'\n'}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/(pull|issues)/${PR}#issuecomment-[0-9]+$ ]] \
+        || die "gh returned an unexpected result for the review record, which may have been posted on ${REPO}#${PR}"
+    printf '%s\n' "${url}"
+    hand_off_done "review record"
+}
+
+# Exits AUTO_MERGE_DEFERRED_EXIT, with auto-merge left off, for the reason $1.
+defer_auto_merge() {
+    printf '%s auto-merge deferred: %s\n' "${HAND_OFF_URL}" "$1"
+    printf 'cfwf: auto-merge was not enabled on %s#%s: %s; run pr hand-off again once the checks have finished\n' "${REPO}" "${PR}" "$1" >&2
+    HAND_OFF_DONE=""
+    exit "${AUTO_MERGE_DEFERRED_EXIT}"
+}
+
+# Enables merge-commit auto-merge on PR (#1591), only when the head is still the one reviewed
+# (HAND_OFF_SHA) and every judged check has passed with a result completed at or after the pull
+# request was last marked ready, since a check skipped while it was a draft counts as passed
+# before it has run. Otherwise it defers (AUTO_MERGE_DEFERRED_EXIT). It never merges at once and
+# never uses --admin, and the head is pinned on the merge request itself as well.
+enable_pull_request_auto_merge() {
+    local line name verdict completed_at
+    read_last_ready_at
+    checks_wait_read
+    case "${CHECKS_WAIT_STATUS}" in
+        0) ;;
+        "${CHECKS_FAILED_EXIT}") defer_auto_merge "a required check failed after the pull request was marked ready" ;;
+        "${CHECKS_PENDING_EXIT}" | "${NO_CHECKS_EXIT}") defer_auto_merge "the required checks have not finished since the pull request was marked ready" ;;
+        *) exit 1 ;;
+    esac
+    [ "$(checks_summary_head "${CHECKS_WAIT_OUTPUT}")" = "${HAND_OFF_SHA}" ] \
+        || die "the head of ${REPO}#${PR} changed after it was reviewed, so auto-merge was not enabled"
+    while IFS=$'\t' read -r name verdict completed_at _; do
+        [ -n "${verdict}" ] || continue
+        # A result that finished before the pull request was last marked ready (ISO 8601 times in
+        # UTC compare as text) predates the checks that run once it is ready.
+        if [ -z "${completed_at}" ] || [[ "${completed_at}" < "${READY_AT}" ]]; then
+            defer_auto_merge "the required checks have not finished since the pull request was marked ready"
+        fi
+    done <<< "$(grep -F $'\t' <<< "${CHECKS_WAIT_OUTPUT}" || true)"
+    gh_capture pr merge "${PR}" --repo "${REPO}" --auto --merge --match-head-commit "${HAND_OFF_SHA}" \
+        || die "could not enable auto-merge on ${REPO}#${PR}: $(gh_failure_text)"
+    printf '%s auto-merge on\n' "${HAND_OFF_URL}"
+}
+
+pr_hand_off() {
+    parse_command_options assign_pr_hand_off_option "--repo --pr --body-file" "" "$@"
+    require REPO --repo
+    require PR --pr
+    require BODY_FILE --body-file
+    require_target
+    require_gh
+    resolve_body
+    check_comment_for_approval_keywords "${BODY_FILE}"
+    # Made before the checks are read, so each read in its subshell reuses it and the EXIT trap
+    # removes it.
+    ensure_temp_file GH_ERR_FILE
+
+    read_pull_request_for_hand_off
+    check_hand_off_target
+    require_green_checks_before_hand_off
+    write_hand_off_record
+    read_auto_merge_allowed
+    resolve_project
+    STATUS="Human Review"
+    resolve_status
+
+    put_item_on_board "${HAND_OFF_URL}"
+    printf '%s Human Review\n' "${HAND_OFF_URL}"
+    hand_off_done "board Human Review"
+    mark_pull_request_ready
+    post_hand_off_record
+    if [ "${HAND_OFF_AUTO_MERGE_ALLOWED}" != true ]; then
+        printf '%s auto-merge unavailable: the repository does not allow auto-merge, so the pull request is left ready for a human\n' "${HAND_OFF_URL}"
+        HAND_OFF_DONE=""
+        return 0
+    fi
+    enable_pull_request_auto_merge
+    HAND_OFF_DONE=""
+}
+
 cmd_pr() {
     dispatch_subcommand pr checks pr_checks checks-wait pr_checks_wait view pr_view list pr_list comments pr_comments reply pr_reply create pr_create \
-        ready-at pr_ready_at diff pr_diff edit pr_edit -- "$@"
+        ready-at pr_ready_at diff pr_diff edit pr_edit hand-off pr_hand_off -- "$@"
 }
 
 # Refuses (exit 8) the body in the file $1 when one of the two plan-approval keywords is a whole
@@ -4782,22 +5057,13 @@ issue_label_history() {
 # its timeline, which is oldest first, or when it was created when it has none. A conversion back to
 # draft is not looked at.
 pr_ready_at() {
-    local at end origin=ready-for-review
     parse_command_options assign_view_option "--repo --pr" "" "$@"
     require REPO --repo
     require PR --pr
     require_target
     require_gh
-    read_timeline_target
-    read_timeline 'select(.event == "ready_for_review") | [.created_at, "end"] | fields_row'
-    if [ -z "${GH_OUTPUT}" ]; then
-        at="${TARGET_CREATED_AT}"
-        origin=created
-    else
-        IFS="${ROW_SEPARATOR}" read -r at end <<< "${GH_OUTPUT##*$'\n'}"
-        is_timed_row "${at}" "${end}" || unexpected_timeline_result
-    fi
-    printf 'ready-at\t%s\nsource\t%s\n' "${at}" "${origin}"
+    read_last_ready_at
+    printf 'ready-at\t%s\nsource\t%s\n' "${READY_AT}" "${READY_SOURCE}"
 }
 
 RUN_ID=""
