@@ -49,6 +49,7 @@ setup() {
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
         '  "run rerun") [ -f "${GH_FIXTURES}/run-rerun.fail" ] && { cat "${GH_FIXTURES}/run-rerun.fail" >&2; exit 1; }; echo "stub: requested a rerun"; exit 0 ;;' \
+        '  "pr edit") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/edit-body.txt"; prev="${arg}"; done; [ -f "${GH_FIXTURES}/pr-edit.fail" ] && { cat "${GH_FIXTURES}/pr-edit.fail" >&2; exit 1; }; echo "https://github.com/credfeto/credfeto-orchestrator/pull/0" ;;' \
         '  *) echo "gh stub: unexpected call: $*" >&2; exit 99 ;;' \
         'esac'
 
@@ -4312,12 +4313,12 @@ assert_set_to_development() {
         # shellcheck disable=SC2086  # each invocation is split into its words on purpose
         run "${SCRIPT}" ${invocation}
         [ "${status}" -eq 0 ]
-        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
+        [[ "${output}" == "Usage: cfwf pr checks"*$'\n'"Run 'cfwf pr create --help' for pr create, which creates a draft pull request on the Workflow board."$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'"Run 'cfwf branch required-checks --help' for branch required-checks, which lists the checks a branch"$'\n'"requires without judging them." ]]
     done
 
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *$'\n'"  pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)"$'\n'"  comment add "* ]]
+    [[ "${output}" == *$'\n'"  pr create                Create a draft PR and put it on the Workflow board as Development (prints the existing one's URL if the branch has one)"$'\n'"  pr edit "*$'\n'"  comment add "* ]]
     [ ! -f "${GH_LOG}" ]
 }
 
@@ -8909,7 +8910,7 @@ read_once_asking_for() {
     run --separate-stderr "${SCRIPT}" pr
     [ "${status}" -eq 2 ]
     [ -z "${output}" ]
-    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff)"* ]]
+    [[ "${stderr}" == "cfwf: pr needs a subcommand (checks, checks-wait, view, list, comments, reply, create, ready-at, diff, edit)"* ]]
     [[ "${stderr}" == *"Usage: cfwf pr checks"*"Run 'cfwf pr view --help' for pr view"* ]]
 
     run --separate-stderr "${SCRIPT}" pr frobnicate
@@ -11466,4 +11467,336 @@ run_checks_wait() {
     [[ "${output}" == *"summary passed=1 failed=0 pending=0 head=${OLD_SHA}" ]]
     # Pass on the first head, pass on the new head (not a confirmation), then the confirming read.
     [ "$(sleep_count)" -eq 2 ]
+}
+
+# --- pr edit -------------------------------------------------------------------
+
+EDIT_PR=1600
+AGENT=dnyw4l3n13
+EDIT_PR_URL="https://github.com/${REPO}/pull/${EDIT_PR}"
+EDIT_TITLE="feat(cfwf): add pr edit"
+
+# Writes the fixtures of a pr edit run: the agent's login, the pull request opened by $1 (the agent
+# by default) of the account type $2 (User by default) with $3 commits (1 by default), and its
+# commits, one for each further argument, each the login of that commit's author ("" for none).
+# With no commit author given, every commit is the agent's.
+prepare_pr_edit() {
+    local author="${1:-${AGENT}}" type="${2:-User}" count="${3:-1}"
+    shift 3 2> /dev/null || shift "$#"
+    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
+    jq -n --arg author "${author}" --arg type "${type}" --arg url "${EDIT_PR_URL}" --argjson count "${count}" \
+        '{number: 1600, user: {login: $author, type: $type}, html_url: $url, commits: $count}' \
+        | write_api "repos/${REPO}/pulls/${EDIT_PR}"
+    local -a authors=("$@")
+    if [ "${#authors[@]}" -eq 0 ]; then
+        local index
+        for ((index = 0; index < count; index++)); do
+            authors+=("${AGENT}")
+        done
+    fi
+    printf '%s\n' "${authors[@]}" \
+        | jq -R -s 'split("\n")[:-1] | map(if . == "" then {sha: "abc", author: null} else {sha: "abc", author: {login: .}} end)' \
+        | write_api "repos/${REPO}/pulls/${EDIT_PR}/commits"
+    printf 'The body of the pull request.\n\nCloses #1589\n' > "${TEST_TMP}/edit-body.md"
+}
+
+run_pr_edit() {
+    run --separate-stderr "${SCRIPT}" pr edit --repo "${REPO}" --pr "${EDIT_PR}" "$@"
+}
+
+edits_made() {
+    gh_call_count "pr edit ${EDIT_PR} "
+}
+
+commit_reads() {
+    gh_call_count "api repos/${REPO}/pulls/${EDIT_PR}/commits"
+}
+
+@test "pr edit changes the title and the body of the agent's own pull request, assigns the agent and prints only the URL" {
+    prepare_pr_edit
+    run_pr_edit --title "${EDIT_TITLE}" --body-file "${TEST_TMP}/edit-body.md" --assign-self <<< "stray stdin"
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ -z "${stderr}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE} --body-file BODY --add-assignee ${AGENT}"
+    cmp "${TEST_TMP}/edit-body.md" "${GH_FIXTURES}/edit-body.txt"
+    [ "$(gh_call_count "--body-file ${TEST_TMP}/edit-body.md")" -eq 0 ]
+    # The agent's own pull request needs no look at its commits.
+    [ "$(commit_reads)" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "pr edit hands gh only the parts given: a title alone, a body alone, or only --assign-self" {
+    prepare_pr_edit
+    run_pr_edit --title "${EDIT_TITLE}"
+    [ "${status}" -eq 0 ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --title ${EDIT_TITLE}"
+
+    rm -f "${GH_LOG}"
+    run_pr_edit --body-file "${TEST_TMP}/edit-body.md"
+    [ "${status}" -eq 0 ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --body-file BODY"
+
+    rm -f "${GH_LOG}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    issue_create_called_with "pr edit ${EDIT_PR} --repo ${REPO} --add-assignee ${AGENT}"
+    [ "$(gh_call_count "api user")" -eq 1 ]
+}
+
+@test "pr edit reads the body from stdin for --body-file -, and refuses an empty or blank body without calling gh" {
+    prepare_pr_edit
+    run_pr_edit --body-file - <<< "A body from stdin"
+    [ "${status}" -eq 0 ]
+    [ "$(cat "${GH_FIXTURES}/edit-body.txt")" = "A body from stdin" ]
+
+    rm -f "${GH_LOG}"
+    run_pr_edit --body-file - < /dev/null
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    printf '  \n\t\n' > "${TEST_TMP}/blank.md"
+    run_pr_edit --body-file "${TEST_TMP}/blank.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the body is empty" ]
+    run_pr_edit --body-file "${TEST_TMP}/missing.md"
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: cannot read the --body-file" ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr edit edits a bot's pull request whose commits are all the agent's: the PR create bot's or a GitHub App's, whatever the case of the logins" {
+    prepare_pr_edit prpixie User 2
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ "${output}" = "${EDIT_PR_URL}" ]
+    [ "$(commit_reads)" -eq 1 ]
+    [ "$(edits_made)" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    prepare_pr_edit "github-actions[bot]" Bot 2 DNYW4L3N13 "${AGENT}"
+    run_pr_edit --title "${EDIT_TITLE}"
+    [ "${status}" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
+
+    rm -f "${GH_LOG}"
+    prepare_pr_edit PRPixie User 1
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr edit refuses (exit 8) a bot's pull request with a commit by another author, or one whose author GitHub does not know, writing nothing" {
+    prepare_pr_edit prpixie User 2 "${AGENT}" credfeto
+    run_pr_edit --title "${EDIT_TITLE}" --assign-self
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request has commits by another author" ]
+    [ "$(edits_made)" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    prepare_pr_edit prpixie User 2 "${AGENT}" ""
+    run_pr_edit --assign-self
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request has commits by another author" ]
+    [ "$(edits_made)" -eq 0 ]
+
+    rm -f "${GH_LOG}"
+    prepare_pr_edit prpixie User 1 credfeto
+    run_pr_edit --assign-self
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request has no commit by the agent" ]
+    [ "$(edits_made)" -eq 0 ]
+}
+
+@test "pr edit refuses (exit 8) a pull request a human other than the agent opened, without reading its commits, even when they are all the agent's" {
+    prepare_pr_edit credfeto User 1
+    run_pr_edit --body-file "${TEST_TMP}/edit-body.md" --assign-self
+    [ "${status}" -eq 8 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
+    [ "$(commit_reads)" -eq 0 ]
+    [ "$(edits_made)" -eq 0 ]
+}
+
+@test "pr edit takes the PR create bot's login from PR_CREATOR_LOGIN, and falls back to prpixie when it is not a login" {
+    prepare_pr_edit other-pr-bot User 1
+    PR_CREATOR_LOGIN=other-pr-bot run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+
+    prepare_pr_edit prpixie User 1
+    PR_CREATOR_LOGIN=other-pr-bot run_pr_edit --assign-self
+    [ "${status}" -eq 8 ]
+    [ "${stderr}" = "cfwf: edit refused: the pull request was opened by someone other than the agent" ]
+
+    PR_CREATOR_LOGIN='bad login;' run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+}
+
+@test "pr edit reads every page of a bot's pull request's commits, and fails (exit 1) when they are more than GitHub lists or not as many as the pull request has" {
+    prepare_pr_edit prpixie User 3
+    jq -n --arg a "${AGENT}" '[[{author: {login: $a}}, {author: {login: $a}}], [{author: {login: $a}}]]' \
+        > "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}/commits").pages"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 0 ]
+    [ "$(gh_call_count "api repos/${REPO}/pulls/${EDIT_PR}/commits?per_page=100 --paginate")" -eq 1 ]
+
+    rm -f "${GH_LOG}" "$(api_fixture "repos/${REPO}/pulls/${EDIT_PR}/commits").pages"
+    prepare_pr_edit prpixie User 251
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: ${REPO}#${EDIT_PR} has more than 250 commits, so their authors cannot all be checked" ]
+    [ "$(commit_reads)" -eq 0 ]
+
+    prepare_pr_edit prpixie User 3 "${AGENT}" "${AGENT}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh listed 2 commits for ${REPO}#${EDIT_PR}, which has 3" ]
+    [ "$(edits_made)" -eq 0 ]
+}
+
+@test "pr edit exits 9 for a pull request that is not there, and 1 when the repository is not there or a read fails" {
+    jq -n --arg login "${AGENT}" '{login: $login}' > "${GH_FIXTURES}/api-user.json"
+    jq -n '{id: 1}' | write_api "repos/${REPO}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the pull request ${REPO}#${EDIT_PR} was not found" ]
+    [ "$(edits_made)" -eq 0 ]
+
+    rm -f "$(api_fixture "repos/${REPO}").json"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
+
+    prepare_pr_edit
+    fail_api "repos/${REPO}/pulls/${EDIT_PR}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read ${REPO}#${EDIT_PR}: gh: Bad Gateway (HTTP 502)" ]
+
+    prepare_pr_edit
+    printf '%s\n' "HTTP 502" > "${GH_FIXTURES}/api-user.fail"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: could not read the authenticated user: HTTP 502" ]
+    [ "$(edits_made)" -eq 0 ]
+}
+
+@test "pr edit refuses an answer that is not this pull request, and quotes gh when the edit fails" {
+    prepare_pr_edit
+    jq -n --arg author "${AGENT}" '{user: {login: $author, type: "User"}, html_url: "https://github.com/credfeto/credfeto-orchestrator/pull/1601", commits: 1}' \
+        | write_api "repos/${REPO}/pulls/${EDIT_PR}"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ "${stderr}" = "cfwf: gh returned an unexpected result for ${REPO}#${EDIT_PR}" ]
+    [ "$(edits_made)" -eq 0 ]
+
+    prepare_pr_edit
+    printf '%s\n' "GraphQL: Resource not accessible by integration" > "${GH_FIXTURES}/pr-edit.fail"
+    run_pr_edit --assign-self
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not edit ${REPO}#${EDIT_PR}: GraphQL: Resource not accessible by integration" ]
+}
+
+@test "pr edit takes a Conventional Commits title and refuses another shape, a blank one, a control character or more than 256 characters (exit 2) without echoing it or calling gh" {
+    prepare_pr_edit
+    local title
+    for title in "Add pr edit LEAKMARKER" "Feat: add LEAKMARKER" "feat:LEAKMARKER" "fix(): add LEAKMARKER"; do
+        run_pr_edit --title "${title}"
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: invalid value for --title: it must be a Conventional Commits title"* ]]
+        [[ "${stderr}" != *LEAKMARKER* ]]
+    done
+    run_pr_edit --title $'feat: a \x1b[1mLEAKMARKER'
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --title: it must not contain a control character"* ]]
+    run_pr_edit --title "   "
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --title: it must not be blank or longer than 256 characters"* ]]
+    run_pr_edit --title "feat: $(run_of x 251)"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --title: it must not be blank or longer than 256 characters"* ]]
+    [ ! -f "${GH_LOG}" ]
+
+    run_pr_edit --title "feat: $(run_of x 250)"
+    [ "${status}" -eq 0 ]
+    [ "$(edits_made)" -eq 1 ]
+}
+
+@test "pr edit refuses a title or a body with a token or a host path (exit 8) before any gh call" {
+    prepare_pr_edit
+    local leak
+    for leak in "token|use gh""p_LEAKMARKER0123456789 here" "host path|see /home/LEAKMARKER/work"; do
+        write_leak_body "${leak#*|}"
+        run_pr_edit --body-file "${TEST_TMP}/leak.md" --assign-self
+        assert_refused "${status}" "${output}" "${stderr}" "${leak%%|*}" "LEAKMARKER"
+        run_pr_edit --title "feat: ${leak#*|}"
+        [ "${status}" -eq 8 ]
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: title refused: ${leak%%|*}" ]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr edit usage errors exit 2 with the pr edit usage before any gh call, never echoing a value" {
+    prepare_pr_edit
+    run --separate-stderr "${SCRIPT}" pr edit --pr "${EDIT_PR}" --assign-self
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: missing required option --repo"*"Usage: cfwf pr edit "* ]]
+    run --separate-stderr "${SCRIPT}" pr edit --repo "${REPO}" --assign-self
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: missing required option --pr"* ]]
+    run_pr_edit
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: nothing to change: give --title, --body-file or --assign-self"* ]]
+    run_pr_edit --title "${EDIT_TITLE}" --title "${EDIT_TITLE}"
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --title can only be given once"* ]]
+    run_pr_edit --body-file a --body-file b
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --body-file can only be given once"* ]]
+    run_pr_edit --assign-self --assign-self
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: --assign-self can only be given once"* ]]
+    run --separate-stderr "${SCRIPT}" pr edit --repo "${REPO}" --pr 0 --assign-self
+    [ "${status}" -eq 2 ]
+    [[ "${stderr}" == "cfwf: invalid value for --pr: it must be a number above 0"* ]]
+    run --separate-stderr "${SCRIPT}" pr edit --repo "${REPO}" --pr 12a --assign-self
+    [ "${status}" -eq 2 ]
+    local option
+    for option in --add-assignee --remove-assignee --add-label --body --base --json --jq; do
+        run_pr_edit --assign-self "${option}" LEAKMARKER
+        [ "${status}" -eq 2 ]
+        [[ "${stderr}" == "cfwf: unknown option (argument 8; its value is not shown)"*"Usage: cfwf pr edit "* ]]
+        [[ "${stderr}" != *LEAKMARKER* ]]
+    done
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr edit help, from help pr edit, pr edit --help and pr edit -h, gives the usage, the ownership rule and the exit codes; help pr and the general help point to it; none calls gh" {
+    local invocation
+    for invocation in "help pr edit" "pr edit --help" "pr edit -h"; do
+        # shellcheck disable=SC2086  # the invocation is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" ${invocation}
+        [ "${status}" -eq 0 ]
+        [[ "${output}" == "Usage: cfwf pr edit --repo <owner/repo> --pr <n> [--title <title>] [--body-file <file|->] [--assign-self]"* ]]
+        [[ "${output}" == *"PR_CREATOR_LOGIN, default prpixie"* ]]
+        [[ "${output}" == *'"cfwf: edit refused: <rule>"'* ]]
+        [[ "${output}" == *"Exit codes: 0 edited; 1 a runtime failure"*"; 9 the pull request does not exist"* ]]
+    done
+    run --separate-stderr "${SCRIPT}" help pr
+    [[ "${output}" == *$'\n'"Run 'cfwf pr edit --help' for pr edit, which changes a pull request's title or body, or assigns the agent."$'\n'* ]]
+    run --separate-stderr "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  pr edit                  Change the agent's own PR's title or body, or assign the agent (exit 8 when refused, 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "pr edit fails (exit 1) when gh is not installed, after the options are checked" {
+    prepare_pr_edit
+    mkdir -p "${TEST_TMP}/empty-path"
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" pr edit --repo "${REPO}" --pr "${EDIT_PR}" --assign-self
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
 }
