@@ -330,6 +330,7 @@ Commands:
   issue list               List a repository's open issues, highest priority first, one line each
   issue search             Search one repository's issues by words in their title or body, one line each
   issue label-history      Print when each label was added to or removed from an issue or PR, and by whom (exit 9 when not found)
+  issue edit               Change an issue's title or body, or assign the agent (exit 8 when refused, 9 when not found)
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
@@ -437,6 +438,41 @@ The body is checked for leaks before anything is read from the board or created 
 A refused body exits 8 with "cfwf: body refused: <rule>" on stderr, a refused title or label
 with "cfwf: title refused: <rule>" or "cfwf: label refused: <rule>" (never naming which text
 matched), and nothing is created.
+USAGE
+}
+
+usage_issue_edit() {
+    cat << USAGE
+Usage: cfwf issue edit --repo <owner/repo> --issue <n> [--title <title>] [--body-file <file|->] [--assign-self]
+
+Changes an issue's title, its body or both, and can assign the agent to it, in one gh issue edit
+call, then prints the issue URL and nothing else.
+
+--repo         Always required; never taken from the current directory.
+--issue        Always required: the issue's number, above 0.
+--title        The new title: not blank, at most ${TITLE_LIMIT} characters, with no control character.
+               It need not be a Conventional Commits title, but in a repository owned by credfeto
+               or funfair-tech it must have the shape issue create requires (see
+               'cfwf help issue create'). It is checked for leaks as the body is.
+--body-file    The new body, a regular file, or - to read it from stdin. It replaces the whole
+               body: there is no append. An empty body is an error. It is read once, into a private
+               copy that is both checked and posted. There is no --body.
+--assign-self  Add the authenticated account (the agent) as an assignee. It is the only assignee
+               option: --add-assignee and --remove-assignee are not options.
+At least one of --title, --body-file and --assign-self; each at most once. --add-label,
+--remove-label, --milestone, --json and --jq are not options either: labels have commands of
+their own.
+
+Everything is checked before anything is written. The title and the body are checked for leaks
+first (see 'cfwf help body'): a refused one exits ${BODY_REFUSED_EXIT} with "cfwf: body refused: <rule>" or
+"cfwf: title refused: <rule>" on stderr, never naming the text that matched. Then, with
+--assign-self, the agent's login is read (gh api user), and the issue is read once, so a number
+that is a pull request's is never edited. Editing the body does not revise an implementation plan,
+which is a comment of its own.
+
+Exit codes: 0 edited; 1 a runtime failure, such as a gh or network error, prefixed "cfwf:"; 2 a
+usage error; ${BODY_REFUSED_EXIT} the title or the body was refused by the leak check; ${ISSUE_NOT_FOUND_EXIT} the issue does
+not exist, or the number is a pull request's.
 USAGE
 }
 
@@ -625,6 +661,8 @@ USAGE
 
 usage_issue() {
     usage_issue_create
+    printf '\n'
+    usage_issue_edit
     printf '\n'
     usage_issue_view
     printf '\n'
@@ -1633,6 +1671,7 @@ usage_for() {
         closing-issue-labels) usage_closing_issue_labels ;;
         issue) usage_issue ;;
         "issue create") usage_issue_create ;;
+        "issue edit") usage_issue_edit ;;
         "issue view") usage_issue_view ;;
         "issue plan-status") usage_issue_plan_status ;;
         "issue list") usage_issue_list ;;
@@ -2948,7 +2987,7 @@ issue_search() {
 }
 
 cmd_issue() {
-    dispatch_subcommand issue create issue_create view issue_view plan-status issue_plan_status \
+    dispatch_subcommand issue create issue_create edit issue_edit view issue_view plan-status issue_plan_status \
         list issue_list search issue_search \
         label-history issue_label_history -- "$@"
 }
@@ -4506,12 +4545,15 @@ assign_pr_edit_option() {
             assign_option "${flag}" "${value}"
             require_number_above_zero "${flag}" "${PR}"
             ;;
-        --assign-self)
-            assign_once ASSIGN_SELF "${flag}"
-            ASSIGN_SELF=1
-            ;;
+        --assign-self) assign_self_option "${flag}" ;;
         *) assign_issue_option "${flag}" "${value}" ;;
     esac
+}
+
+# Takes --assign-self ($1), the flag pr edit and issue edit share, refusing it a second time.
+assign_self_option() {
+    assign_once ASSIGN_SELF "$1"
+    ASSIGN_SELF=1
 }
 
 # Prints, lower-cased, the login of the account that opens the pull requests for the agent's work:
@@ -4597,6 +4639,50 @@ pr_edit() {
     [ -z "${ASSIGN_SELF}" ] || args+=(--add-assignee "${AGENT_LOGIN}")
     gh_capture "${args[@]}" || die "could not edit ${REPO}#${PR}: $(gh_failure_text)"
     printf '%s\n' "${EDIT_URL}"
+}
+
+assign_issue_edit_option() {
+    local flag="$1" value="${2:-}"
+    case "${flag}" in
+        --issue)
+            assign_once ISSUE "${flag}"
+            assign_option "${flag}" "${value}"
+            require_number_above_zero "${flag}" "${ISSUE}"
+            ;;
+        --assign-self) assign_self_option "${flag}" ;;
+        *) assign_issue_option "${flag}" "${value}" ;;
+    esac
+}
+
+# Changes ISSUE of REPO: its title, its body or both, and adds the agent as an assignee with
+# --assign-self, in one gh issue edit call, then prints the issue's URL. The title is checked as
+# issue create checks it (its shape where TITLE_CHECK_OWNERS applies, then the leak check) and the
+# body goes through resolve_body, all before gh is called. The issue is read once first
+# (read_issue), so a missing number, or one that is a pull request's, exits ISSUE_NOT_FOUND_EXIT
+# with nothing written.
+issue_edit() {
+    local url
+    parse_command_options assign_issue_edit_option "--repo --issue --title --body-file" "--assign-self" "$@"
+    require REPO --repo
+    require ISSUE --issue
+    [ -n "${TITLE}${BODY_FILE}${ASSIGN_SELF}" ] \
+        || usage_error "nothing to change: give --title, --body-file or --assign-self"
+    [ -z "${TITLE}" ] || check_title_shape "${TITLE}" "${REPO}"
+    require_gh
+    [ -z "${BODY_FILE}" ] || resolve_body
+    [ -z "${TITLE}" ] || check_value_for_leaks "${TITLE}" "${REPO}" title
+
+    [ -z "${ASSIGN_SELF}" ] || read_agent_login
+    read_issue number '.url'
+    url="${GH_OUTPUT}"
+    [[ "${url}" =~ ${REPOSITORY_URL_PATTERN}/issues/${ISSUE}$ ]] || unexpected_issue_result
+
+    local args=(issue edit "${ISSUE}" --repo "${REPO}")
+    [ -z "${TITLE}" ] || args+=(--title "${TITLE}")
+    [ -z "${BODY_FILE}" ] || args+=(--body-file "${BODY_FILE}")
+    [ -z "${ASSIGN_SELF}" ] || args+=(--add-assignee "${AGENT_LOGIN}")
+    gh_capture "${args[@]}" || die "could not edit ${REPO}#${ISSUE}: $(gh_failure_text)"
+    printf '%s\n' "${url}"
 }
 
 # pr hand-off: the pull request as read before any write (its URL, state, whether it is a draft, its
