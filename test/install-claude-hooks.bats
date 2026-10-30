@@ -287,12 +287,24 @@ teardown() {
     [ "${output}" = "true true true disable dontAsk" ]
 }
 
-@test "every managed hook command is an absolute /etc/claude-code/hooks path, apart from block-no-verify" {
-    local cmd
+@test "every managed hook command is an absolute /etc/claude-code/hooks path" {
+    local cmd count=0
     while IFS= read -r cmd; do
-        [ "${cmd}" = "block-no-verify" ] && continue
+        count=$((count + 1))
         [[ "${cmd}" == /etc/claude-code/hooks/* ]] || { echo "not an /etc/claude-code/hooks path: ${cmd}" >&2; return 1; }
-    done < <(jq -r '.hooks.PreToolUse[].hooks[].command' "${SOURCE_MANAGED_SETTINGS}")
+    done < <(jq -r '.hooks[][].hooks[].command' "${SOURCE_MANAGED_SETTINGS}")
+    [ "${count}" -gt 0 ]
+}
+
+@test "no managed hook command is a bare command looked up on PATH" {
+    run jq -r '[.hooks[][].hooks[].command | select(startswith("/") | not)] | join(" ")' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 0 ]
+    [ -z "${output}" ]
+}
+
+@test "the managed settings do not wire in the npm block-no-verify tool" {
+    run grep -q 'block-no-verify' "${SOURCE_MANAGED_SETTINGS}"
+    [ "${status}" -eq 1 ]
 }
 
 @test "every hook the managed settings run exists in claude-hooks and is copied into /etc/claude-code/hooks by the Dockerfile" {
@@ -312,14 +324,14 @@ teardown() {
     [ "${status}" -eq 1 ]
 }
 
-@test "the Bash chain runs enforce-allowed-dirs straight after reject-obfuscated-commands (#1385)" {
+@test "the Bash chain runs enforce-allowed-dirs straight after reject-obfuscated-commands" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0:2][] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
     [ "${output}" = "/etc/claude-code/hooks/reject-obfuscated-commands
 /etc/claude-code/hooks/enforce-allowed-dirs" ]
 }
 
-@test "the Bash chain includes block-git-worktree, block-dotnet-tool-install and cache-gh-lookups (#1380)" {
+@test "the Bash chain includes block-git-worktree, block-dotnet-tool-install and cache-gh-lookups" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *'/etc/claude-code/hooks/block-git-worktree'* ]]
@@ -327,7 +339,7 @@ teardown() {
     [[ "${output}" == *'/etc/claude-code/hooks/cache-gh-lookups'* ]]
 }
 
-@test "block-git-worktree is registered against the native EnterWorktree tool (#1322)" {
+@test "block-git-worktree is registered against the native EnterWorktree tool" {
     run jq -r '.hooks.PreToolUse[] | select(.matcher == "EnterWorktree") | .hooks[] | .command' "${SOURCE_MANAGED_SETTINGS}"
     [ "${status}" -eq 0 ]
     [ "${output}" = '/etc/claude-code/hooks/block-git-worktree' ]
@@ -368,7 +380,7 @@ teardown() {
     done
 }
 
-@test "the user's git, gh and curl configuration and gh's extension directory are denied to Edit (#1554 Q55, Q57)" {
+@test "the user's git, gh and curl configuration and gh's extension directory are denied to Edit" {
     local denies entry
     denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
     for entry in 'Edit(~/.curlrc)' 'Edit(~/.config/curlrc)' 'Edit(~/.gitconfig)' 'Edit(~/.config/git/**)' 'Edit(~/.config/gh/**)' 'Edit(~/.local/share/gh/**)'; do
@@ -376,7 +388,7 @@ teardown() {
     done
 }
 
-@test "any repository's git config and hooks are denied to Edit, by relative path and at any depth (#1554 Q56)" {
+@test "any repository's git config and hooks are denied to Edit, by relative path and at any depth" {
     local denies prefix path entry
     denies=$(jq -r '.permissions.deny[]' "${SOURCE_MANAGED_SETTINGS}")
     for prefix in '' '*/'; do
@@ -389,7 +401,7 @@ teardown() {
     done
 }
 
-@test "every code-execution/destructive flag is denied in both the first and a later argument position (#1385)" {
+@test "every code-execution/destructive flag is denied in both the first and a later argument position" {
     # `*` matches one-or-more characters, so `Bash(rm * --no-preserve-root*)` alone does not
     # match `rm --no-preserve-root -rf /` - each flag needs the pair. Pinned here so a new deny
     # cannot be added in only one position.

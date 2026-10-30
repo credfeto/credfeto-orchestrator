@@ -422,7 +422,7 @@ RUN set -e; \
         || { echo "FATAL sanity: managed-settings.json does not lock out user/project permissions, hooks and MCP servers and disable bypass mode" >&2; exit 1; }; \
     jq -e 'has("permissions") or has("hooks") or has("sandbox") or has("enabledMcpjsonServers") or has("mcpServers") | not' /home/developer/.claude/settings.json >/dev/null \
         || { echo "FATAL sanity: ~/.claude/settings.json must hold preferences only - permissions, hooks, sandbox and MCP config belong in /etc/claude-code/managed-settings.json" >&2; exit 1; }; \
-    ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE 'block-no-verify|/etc/claude-code/hooks/[A-Za-z0-9-]+' \
+    ! jq -r '.hooks.PreToolUse[].hooks[].command' /etc/claude-code/managed-settings.json | grep -vxE '/etc/claude-code/hooks/[A-Za-z0-9-]+' \
         || { echo "FATAL sanity: managed-settings.json runs a hook from outside /etc/claude-code/hooks (listed above)" >&2; exit 1; }; \
     for h in reject-obfuscated-commands enforce-allowed-dirs block-config-skills enforce-git-identity enforce-git-dash-c \
              block-git-worktree block-dotnet-tool-install block-github-mcp-write-tools enforce-ssh-host-and-key enforce-curl-host \

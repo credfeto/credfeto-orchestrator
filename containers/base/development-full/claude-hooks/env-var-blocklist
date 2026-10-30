@@ -1,5 +1,7 @@
 # Environment variables that may not be assigned (standalone FOO=bar
-# statements or per-command FOO=bar prefixes) in agent Bash commands,
+# statements, per-command FOO=bar prefixes, printf -v, read, mapfile,
+# readarray, getopts, unset, let, arithmetic assignment, for/select loop
+# variables, or ${FOO:=x}/${FOO=x}) in agent Bash commands,
 # checked by the reject-obfuscated-commands hook. One glob pattern per
 # line; blank lines and #-comments are ignored.
 #

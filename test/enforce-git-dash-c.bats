@@ -54,6 +54,23 @@ make_writable_repo() {
     [[ "${output}" == *'must include a subcommand'* ]]
 }
 
+@test "git -C with an empty single-quoted directory is blocked" {
+    run_hook_in_dir "git -C '' status"
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-empty directory'* ]]
+}
+
+@test "git -C with an empty double-quoted directory is blocked" {
+    run_hook_in_dir 'git -C "" status'
+    [ "${status}" -eq 2 ]
+    [[ "${output}" == *'non-empty directory'* ]]
+}
+
+@test "git -C with a real directory is still allowed" {
+    run_hook_in_dir "git -C /repo status"
+    [ "${status}" -eq 0 ]
+}
+
 # Subcommand allowlist tests (#1387): git-subcommand-allowlist gates every
 # git call before the existing -C/config/clone/auto-correct handling below.
 

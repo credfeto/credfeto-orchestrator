@@ -20,6 +20,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - enforce-allowed-dirs hook: report offending byte offset and hex value when blocking non-ASCII commands, and add regression tests for plain-ASCII heredocs - #1677
 - Agent entrypoint now warns instead of failing when the pre-commit rules checkout SHA differs from the published SHA, comparing only the common prefix so abbreviated and full SHAs match (#1100)
 - Block POSIXLY_CORRECT and multi-match --target-directory globs in cp, mv and ln hook checks - #1698
+- Close gaps in Claude hooks found while reviewing #1620 (symlinked repo claude config, absolute vendored block-no-verify hook, empty git -C, dead xargs allowlist entry, git worktree quoting/move, env-var blocklist bypasses, instruction file issue references)
 ### Changed
 - Cleaned up ai/local instruction files (em dashes, load conditions, issue references)
 - The development-tools base image now installs shellcheck and devscripts from trixie-backports, and the build fails if shellcheck is older than 0.11, so lint results match developer machines and super-linter (#1547)
