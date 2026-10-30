@@ -30,8 +30,11 @@
 #   1. shfmt missing, or the command does not parse as shell: reject.
 #   2. Structure: function definitions and declare/export/local/readonly
 #      clauses are rejected outright; every environment-variable assignment
-#      (standalone or per-command prefix) must not target a variable on
-#      env-var-blocklist; every command name in the AST — at any nesting
+#      (standalone or per-command prefix), and every assignment made by
+#      printf -v, read, mapfile/readarray, getopts, unset, let, arithmetic,
+#      a for/select loop variable or ${NAME:=x}/${NAME=x}, must not target a
+#      variable on env-var-blocklist, and its target name must be a plain
+#      literal; every command name in the AST — at any nesting
 #      depth, including inside $(...)/backtick substitutions — must be a
 #      single plain literal word matching ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$,
 #      with one carved-out exception: the literal single-character name `[`
@@ -194,17 +197,125 @@ if [ "$(printf '%s' "$ast" | jq '[.. | objects | select(.Type? == "DeclClause")]
   block 'declare/export/local/readonly clauses are not permitted - not a simple, obvious command'
 fi
 
-# Every assigned variable name (standalone `FOO=bar` statements and
-# per-command `FOO=bar cmd` prefixes alike) is checked against the env-var
+# Concatenates a word's parts when they are all literal or quoted text, or
+# yields null when any part is an expansion whose value is only known at run
+# time. Shared by the assignment-target and the per-CallExpr jq programs.
+# shellcheck disable=SC2016  # jq program text - its $ names are jq variables, not shell expansions
+JQ_RESOLVE_PARTS='
+  def resolve_parts:
+    if length == 0 then ""
+    else
+      reduce .[] as $p (
+        "";
+        if . == null then null
+        elif $p.Type == "Lit" then . + $p.Value
+        elif $p.Type == "SglQuoted" then . + ($p.Value // "")
+        elif $p.Type == "DblQuoted" then
+          (($p.Parts // []) | resolve_parts) as $inner
+          | (if $inner == null then null else . + $inner end)
+        else null
+        end
+      )
+    end;
+'
+
+# Every variable name the command assigns is checked against the env-var
 # blocklist: assignments to parser/loader/git-identity variables (IFS, PATH,
 # LD_PRELOAD, GIT_*, ...) change what other commands mean or bypass the git
 # identity guardrails, so they are rejected even though the command itself
-# may be plain. The blocklist is loaded once, not re-read from disk per
-# assignment.
+# may be plain. Bash can assign a variable in many more ways than NAME=value,
+# so the targets are collected from every one of them:
+#   - standalone `FOO=bar` statements and per-command `FOO=bar cmd` prefixes;
+#   - the builtins that write a named variable: printf -v NAME, and every
+#     argument of read, mapfile/readarray, getopts and unset (an option value
+#     or prompt is checked too - over-matching only ever blocks more, while
+#     tracking each builtin's option grammar to skip them could miss a name);
+#   - let and arithmetic assignment, anywhere arithmetic is evaluated
+#     ((NAME=..)), $((NAME=..)), for ((..)), array subscripts:
+#     =, op= and ++/--;
+#   - for/select loop variables;
+#   - the ${NAME:=word} and ${NAME=word} expansions.
+# A target name built from a backslash escape or an ANSI-C $'...' string is
+# treated as opaque, because shfmt keeps that raw source text rather than the
+# name bash actually assigns. An opaque name, or an opaque printf first
+# argument that could be -v at run time, is emitted as the \x01 marker (layer
+# 0 guarantees no real \x01 byte can reach this point) and blocked, since the
+# variable it assigns cannot be known statically. The blocklist is loaded
+# once, not re-read from disk per assignment.
 mapfile -t env_var_patterns < <(grep -vE '^[[:space:]]*(#|$)' "$ENV_VAR_BLOCKLIST" 2> /dev/null)
+
+assign_targets=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
+  def has_escape:
+    any(.. | objects | select(.Type == "Lit" or (.Type == "SglQuoted" and .Dollar == true)); .Value | contains("\\"));
+  def word_value:
+    if has_escape then "\u0001"
+    else (.Parts | resolve_parts) as $r | if $r == null then "\u0001" else $r end
+    end;
+  # Whether an opaque word certainly does not start with "-" at run time, so
+  # printf cannot be reading it as an option.
+  def starts_with_operand:
+    (.Parts[0] // {}) as $p
+    | ($p.Value // "") as $v
+    | if $p.Type == "Lit" or $p.Type == "SglQuoted" then $v | test("^[^-\\\\]")
+      elif $p.Type == "DblQuoted" then (($p.Parts[0] // {}) | .Type == "Lit" and (.Value | test("^[^-]")))
+      else false
+      end;
+  def printf_targets:
+    if length == 0 then empty
+    else
+      (.[0] | word_value) as $w
+      | if $w == "--" then empty
+        elif $w == "-v" then ((.[1] // empty) | word_value), (.[2:] | printf_targets)
+        elif ($w | startswith("-v")) then $w[2:], (.[1:] | printf_targets)
+        elif $w == "\u0001" then (if .[0] | starts_with_operand then empty else "\u0001" end)
+        elif ($w | startswith("-")) then .[1:] | printf_targets
+        else empty
+        end
+    end;
+  def builtin_targets:
+    (.Args[0] | word_value) as $name
+    | .Args[1:] as $args
+    | if $name == "printf" then $args | printf_targets
+      elif ($name | IN("read", "mapfile", "readarray", "getopts", "unset")) then
+        $args[] | word_value
+        # A name glued to a short-option cluster (read -rPATH) is assigned
+        # too, so every suffix after the first option letter is checked.
+        | ., (select(test("^-[A-Za-z]{2,}")) | . as $o | range(2; length) | $o[.:])
+      else empty
+      end;
+  def arith_target:
+    if .Type == "Word" and (.Parts | length) == 1 and (has_escape | not) then
+      (.Parts[0] | if .Type == "Lit" then .Value elif .Type == "ParamExp" then .Param.Value else "\u0001" end)
+    else "\u0001"
+    end;
+  def strip_index:
+    if . == "\u0001" then . else sub("\\[.*$"; "") end;
+  .. | objects
+  | if .Type == "CallExpr" then
+      (.Assigns[]? | .Name.Value // empty),
+      (select((.Args // []) | length > 0) | builtin_targets | strip_index)
+    # A let argument shfmt could not parse as arithmetic (a quoted string)
+    # is still evaluated as arithmetic by bash, so every identifier in it is
+    # treated as a possible target.
+    elif .Type == "LetClause" then
+      .Exprs[] | select(.Type == "Word") | word_value
+      | if . == "\u0001" then . else scan("[A-Za-z_][A-Za-z0-9_]*") end
+    elif .Type == "WordIter" then .Name.Value
+    elif .Type == "BinaryArithm" and (.Op | IN(44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 74)) then .X | arith_target
+    elif .Type == "UnaryArithm" and (.Op | IN(36, 37)) then .X | arith_target
+    elif .Type == "ParamExp" and ((.Exp.Op // null) | IN(74, 75)) then
+      (if .Excl then "\u0001" else .Param.Value end)
+    else empty
+    end
+') || block 'command AST could not be analysed - failing closed'
+
+MARKER=$'\x01'
 
 while IFS= read -r var; do
   [ -z "$var" ] && continue
+  if [ "$var" = "$MARKER" ]; then
+    block 'assignment to a variable whose name is not a plain literal is not permitted - its target cannot be checked against the env-var blocklist'
+  fi
   for pattern in "${env_var_patterns[@]}"; do
     [ -z "$pattern" ] && continue
     # Case-insensitive: npm matches npm_config_* env keys with /i, so
@@ -219,7 +330,7 @@ while IFS= read -r var; do
         ;;
     esac
   done
-done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr") | .Assigns[]? | .Name.Value // empty')
+done <<< "$assign_targets"
 
 # Emit two lines per CallExpr anywhere in the AST (at any nesting depth:
 # $(...)/backtick substitutions, loop and if bodies, pipelines, subshells,
@@ -275,22 +386,7 @@ done < <(printf '%s' "$ast" | jq -r '.. | objects | select(.Type? == "CallExpr")
 # way as the ast=$(...) assignment above: if it errored, $calls would be
 # empty, the loop would process nothing and the hook would fall through to
 # exit 0.
-calls=$(printf '%s' "$ast" | jq -r '
-  def resolve_parts:
-    if length == 0 then ""
-    else
-      reduce .[] as $p (
-        "";
-        if . == null then null
-        elif $p.Type == "Lit" then . + $p.Value
-        elif $p.Type == "SglQuoted" then . + ($p.Value // "")
-        elif $p.Type == "DblQuoted" then
-          (($p.Parts // []) | resolve_parts) as $inner
-          | (if $inner == null then null else . + $inner end)
-        else null
-        end
-      )
-    end;
+calls=$(printf '%s' "$ast" | jq -r "${JQ_RESOLVE_PARTS}"'
   def unsafe_for_transport:
     . == null or . == "" or (explode | any(. == 9 or . == 10 or . == 13 or . == 31));
   .. | objects | select(.Type? == "CallExpr") | select((.Args // [] | length) > 0) |
@@ -304,7 +400,6 @@ calls=$(printf '%s' "$ast" | jq -r '
   ] | join("\u001f"))
 ') || block 'command AST could not be analysed - failing closed'
 
-MARKER=$'\x01'
 # `[` (the `test` builtin's bracket form) is a single-character command name
 # that the generic pattern below cannot match (it requires an alnum/_/./
 # leading character); it is carved out as its own literal alternative rather

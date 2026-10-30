@@ -901,6 +901,97 @@ git status'
     [ "${status}" -eq 2 ]
 }
 
+@test "a builtin, arithmetic, loop or parameter-expansion assignment to a blocklisted variable is blocked" {
+    local entry cmd name
+    # shellcheck disable=SC2016  # literal $((...)) and ${...} — must reach the hook unexpanded
+    for entry in \
+        'PATH|printf -v PATH /tmp/evil' \
+        'IFS|printf -vIFS ,' \
+        'PATH|printf -v FOO -v PATH /tmp/evil' \
+        'PATH|printf -v PATH[0] /tmp/evil' \
+        "PATH|printf -v 'PATH' /tmp/evil" \
+        'IFS|read IFS' \
+        'PATH|read -r PATH' \
+        'PATH|read -rPATH' \
+        'PATH|read -a PATH' \
+        'PATH|mapfile PATH' \
+        'PATH|readarray -t PATH' \
+        'PATH|getopts ab PATH' \
+        'PATH|unset PATH' \
+        "PATH|unset 'PATH[0]'" \
+        'PATH|let PATH=1' \
+        'IFS|let "x = IFS + 1"' \
+        'PATH|((PATH=1))' \
+        'PATH|((PATH+=1))' \
+        'PATH|((PATH<<=1))' \
+        'PATH|((PATH++))' \
+        'IFS|((--IFS))' \
+        'PATH|((x = PATH = 1))' \
+        'PATH|((PATH[0]=1))' \
+        'IFS|echo $((IFS=1))' \
+        'PATH|for ((PATH=0; PATH<1; PATH++)); do echo x; done' \
+        'PATH|for PATH in /tmp/evil; do echo x; done' \
+        'IFS|select IFS in a; do echo x; done' \
+        'PATH|echo ${PATH:=/tmp/evil}' \
+        'CDPATH|echo "${CDPATH=/tmp/evil}"' \
+        'path|for path in a; do echo x; done'; do
+        name="${entry%%|*}"
+        cmd="${entry#*|}"
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ] || { echo "did not block: ${cmd}" >&2; return 1; }
+        [[ "${output}" == *"assignment to ${name} is not permitted"* ]] || { echo "wrong message for: ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "an assignment whose target variable name cannot be resolved statically is blocked" {
+    local cmd
+    # shellcheck disable=SC2016  # literal $v and ${...} — must reach the hook unexpanded
+    for cmd in \
+        'printf -v "$v" x' \
+        'printf "$opt" PATH /tmp/evil' \
+        'echo ${!v:=x}' \
+        'let "$v"' \
+        'read P\ATH' \
+        "read \$'\\x50ATH'" \
+        'printf \-v PATH x'; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 2 ] || { echo "did not block: ${cmd}" >&2; return 1; }
+        [[ "${output}" == *'assignment to a variable whose name is not a plain literal is not permitted'* ]] || { echo "wrong message for: ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
+@test "a backslash-escaped assigning builtin name is blocked" {
+    run_hook 'pr\intf -v PATH x'
+    [ "${status}" -eq 2 ]
+}
+
+@test "builtin, arithmetic, loop and parameter-expansion forms that assign no blocklisted variable stay allowed" {
+    local cmd
+    # shellcheck disable=SC2016  # literal $x, ${...} and $((...)) — must reach the hook unexpanded
+    for cmd in \
+        "printf '%s' PATH" \
+        'printf -v FOO x' \
+        'printf -- -v PATH' \
+        'printf "Value: $x"' \
+        'printf "%s" "$x"' \
+        'printf "%s\n" "$x"' \
+        "printf '%s\\n' PATH" \
+        'printf "\n"' \
+        'for i in a b; do echo "$i"; done' \
+        'for ((i=0; i<2; i++)); do echo x; done' \
+        'echo "${FOO:=x}"' \
+        'echo "${PATH:-x}" "${PATH:?x}" "${PATH:+x}" "${PATH-x}"' \
+        'echo "${#PATH}"' \
+        '((i=1))' \
+        '((i++))' \
+        '((PATH==1))' \
+        'echo $((PATH+1))' \
+        'let i=1'; do
+        run_hook "${cmd}"
+        [ "${status}" -eq 0 ] || { echo "blocked: ${cmd}: ${output}" >&2; return 1; }
+    done
+}
+
 # ---- round-8 bypass classes (keyword prefix + obfuscation/eval) ---------------
 
 @test "a quote-spliced command inside an if/then body is blocked (round 8)" {
