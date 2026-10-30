@@ -50,6 +50,13 @@ On top of all of that, this final image:
    is missing, any removed tool is somehow still reachable, or the entrypoint itself is broken —
    catching a broken image at build time, not three hours into an unattended overnight run.
 
+Claude Code can reach exactly one MCP server, `cfwf` (the workflow MCP server at
+`https://workflow-mcp.markridgwell.com/mcp`), pinned by `development-full` in a root-owned
+`/etc/claude-code/managed-mcp.json`, so the agent cannot add a server or point this one anywhere
+else. The file holds no token. A root-owned helper hands Claude Code's MCP client the GitHub token
+the container already has, at connect time, so the token is never written to the image or to disk.
+Nothing routes work to the server yet.
+
 ## What the entrypoint checks before the agent ever starts
 
 Every single container start runs through a chain of pre-flight checks (`entrypoint.sh`) before
