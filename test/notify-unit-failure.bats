@@ -133,3 +133,42 @@ teardown() {
     # The alert must still go out — losing the journal context is acceptable, losing the alert is not.
     grep -q "my-unit.service" "${CURL_LOG}"
 }
+
+# Each shared secret form must be replaced by its own marker while the words either side of it
+# survive, so the alert stays readable. The webhook sample uses discordapp.com because the .env
+# webhook itself is on discord.com and is always present in the curl arguments.
+assert_journal_form_redacted() {
+    local secret="$1"
+    local marker="$2"
+    printf 'DISCORD_WEBHOOK=https://discord.com/api/webhooks/1/abc\n' > "${CONFIG_DIR}/.env"
+    make_stub journalctl "printf 'before ${secret} after\n'"
+
+    run "${SCRIPT}" my-unit.service
+    [ "${status}" -eq 0 ]
+    [ "$(grep -cF -- "${secret}" "${CURL_LOG}")" -eq 0 ]
+    grep -qF -- "before ${marker} after" "${CURL_LOG}"
+}
+
+@test "notify-unit-failure redacts an OpenAI project key and keeps the surrounding text" {
+    assert_journal_form_redacted 'sk-proj-ABCDEFGHIJKLMNOPQRST' '[REDACTED-OPENAI-KEY]'
+}
+
+@test "notify-unit-failure redacts a discordapp.com webhook and keeps the surrounding text" {
+    assert_journal_form_redacted 'https://discordapp.com/api/webhooks/987654/SecretTok_-x' '[REDACTED-DISCORD-WEBHOOK]'
+}
+
+@test "notify-unit-failure redacts an AWS access key ID and keeps the surrounding text" {
+    assert_journal_form_redacted 'AKIAIOSFODNN7EXAMPLE' '[REDACTED-AWS-KEY-ID]' # gitleaks:allow
+}
+
+@test "notify-unit-failure redacts a Bearer token and keeps the surrounding text" {
+    assert_journal_form_redacted 'Bearer abcdefghij0123456789klmn' 'Bearer [REDACTED]'
+}
+
+@test "notify-unit-failure redacts a Slack token and keeps the surrounding text" {
+    assert_journal_form_redacted 'xoxb-1234567890-abcdefghij' '[REDACTED-SLACK-TOKEN]'
+}
+
+@test "notify-unit-failure redacts a fine-grained GitHub PAT and keeps the surrounding text" {
+    assert_journal_form_redacted 'github_pat_ABCDEFGHIJ0123456789xyz' '[REDACTED-GH-PAT]'
+}
