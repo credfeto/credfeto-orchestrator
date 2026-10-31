@@ -28,6 +28,9 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
 - cfwf pr finalise-dependency marks a bot dependency-update PR ready and enables auto-merge, without the AI hand-off's title, description, board or review-record steps; dependency prompts use it instead of raw gh (#1771)
 - cfwf issue add-sub-issue, label create and pr auto-merge-at: link a child issue to its parent, create a standard label (never changing one a repository has), and read when auto-merge was last enabled on a pull request and its last change (#1763, #1769, #1768)
+- cfwf label add and label remove change an issue's or a pull request's standard labels one gh call a label: priority and non-standard labels are refused, On Hold is never removed, and Blocked is removed only when the agent added it last (#1593)
+- cfwf label list lists a repository's label names (#1595)
+- cfwf issue close closes an issue with a reason (completed or not-planned) and an optional checked comment, refusing an issue on hold or one an open pull request will close (#1597)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
@@ -54,6 +57,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - Agent prompts use cfwf instead of raw gh wherever cfwf covers the operation (#1761)
 - cfwf pr hand-off's --body-file is optional, so a hand-off is one call with the description on stdin and no review-record file (#1775)
 - cfwf issue plan-status --approval is now the single plan-approval check for repositories without a Workflow board, and the agent prompt runs it instead of its own gh issue view check. The rule is the stricter of the two it replaces: the approval must follow the latest plan (any revised one included), come from a human collaborator or the owner who is not a bot, the agent, the PR creator or the plan's author, and hold approved or lgtm as a whole word on a non-quoted line with no negation, condition or question. go ahead and looks good no longer count. The orchestrator's host-side check applies the same rule (#1772)
+- The agent prompts mark items Blocked with cfwf label add instead of raw gh issue edit and gh pr edit (#1593)
 ### Deprecated
 ### Removed
 ### Deployment Changes
