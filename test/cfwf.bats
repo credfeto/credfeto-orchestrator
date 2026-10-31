@@ -14114,7 +14114,7 @@ $(tab_row result linked)" ]
     run_sub_issue --issue 5 --sub-issue 7
     [ "${status}" -eq 0 ]
     [ "${output##*$'\n'}" = "$(tab_row result already-linked)" ]
-    ! grep -q -- '--method' "${GH_LOG}"
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
 }
 
 @test "issue add-sub-issue exits 8 when GitHub refuses the link with 422, and 1 saying it may be linked for any other failed write" {
@@ -14155,7 +14155,7 @@ $(tab_row result linked)" ]
     run_sub_issue --issue 9 --sub-issue 5
     [ "${status}" -eq 1 ]
     [ "${stderr}" = "cfwf: the repository ${REPO} was not found, or the caller cannot see it" ]
-    ! grep -q -- '--method' "${GH_LOG}"
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
 }
 
 @test "issue add-sub-issue exits 1 for an answer that is not the issue, its sub-issues or the parent it linked" {
@@ -14199,7 +14199,7 @@ $(tab_row result linked)" ]
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: ${REPO}#5 has more than 1000 sub-issues, so nothing is linked" ]
-    ! grep -q -- '--method' "${GH_LOG}"
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
 }
 
 @test "label create refuses a name that is not a standard label with exit 8, and a bad colour or description with exit 2, before any gh call" {
@@ -14264,7 +14264,7 @@ $(tab_row result exists)" ]
 $(tab_row color 00ff00)
 $(tab_row description "Something else")
 $(tab_row result exists-different)" ]
-    ! grep -q -- '--method' "${GH_LOG}"
+    [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
 }
 
 @test "label create reports a label that turned up between the read and the create as there, and exits 1 for any other failed create or a missing repository" {
@@ -14297,7 +14297,7 @@ $(tab_row result exists-different)" ]
     [ "${status}" -eq 8 ]
     [ -z "${output}" ]
     [[ "${stderr}" == "cfwf: description refused: "* ]]
-    [ ! -f "${GH_LOG}" ] || ! grep -q -- '--method' "${GH_LOG}"
+    [ ! -f "${GH_LOG}" ] || [ "$(grep -c -- '--method' "${GH_LOG}")" -eq 0 ]
 }
 
 @test "label create percent-encodes a name for the label path, and exits 1 for an answer that is not the label" {
