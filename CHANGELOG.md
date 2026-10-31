@@ -25,6 +25,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 - cfwf issue reopen, pr close and pr reopen to change an issue's or the agent's own pull request's state without merging, with an optional checked comment first (#1762)
 - cfwf issue comments to read an issue's or pull request's top-level comments with their bodies, filtered by --since and --author, capped and count-checked (#1764)
 - cfwf pr list --label to list only the open pull requests carrying every given label (#1767)
+- cfwf issue add-sub-issue, label create and pr auto-merge-at: link a child issue to its parent, create a standard label (never changing one a repository has), and read when auto-merge was last enabled on a pull request and its last change (#1763, #1769, #1768)
 ### Fixed
 - CI: workflow expressions in run and script bodies are passed through env, so the no-expressions-in-scripts check passes
 - CI: the remaining workflow expressions in run bodies (image summaries, dispatch-secret check, runner name) are passed through env
