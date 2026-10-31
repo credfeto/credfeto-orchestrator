@@ -354,6 +354,9 @@ Commands:
   issue reopen             Reopen a closed issue, with an optional comment first (exit 8 when refused, 9 when not found)
   issue close              Close an issue with a reason, with an optional comment first (exit 8 when refused, 9 when not found)
   issue comments           Print an issue's or PR's top-level comments with their bodies, oldest first (exit 9 when not found)
+  label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
+  label remove             Remove labels from an issue or PR: never On Hold, Blocked only when the agent added it (exit 8 refused, 9 not found)
+  label list               List a repository's label names, one a line
   body check               Check a body for leaks without posting it (exit 8 when refused)
   repo view                Print a repository's default branch, visibility, merge methods and description
   repo collaborators       List a repository's collaborators and their roles, sorted by login in the C locale
@@ -377,9 +380,6 @@ Commands:
   pr close                 Close the agent's own PR without merging it, with an optional comment first (exit 8 refused, 9 not found)
   pr reopen                Reopen the agent's own closed PR, with an optional comment first (exit 8 refused, 9 not found)
   comment add              Post a comment on a PR or an issue and print its URL
-  label add                Add standard labels to an issue or PR, one gh call a label (exit 8 when refused, 9 when not found)
-  label remove             Remove labels from an issue or PR: never On Hold, Blocked only when the agent added it (exit 8 refused, 9 not found)
-  label list               List a repository's label names, one a line
   release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)
   release list             List a repository's releases, newest first, one line each
   tag view                 Print the commit a repository's tag points to (exit 9 when not found)
