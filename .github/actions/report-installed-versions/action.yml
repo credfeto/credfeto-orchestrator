@@ -11,8 +11,10 @@ runs:
   steps:
     - name: "Read installed-versions report from image"
       shell: "bash"
+      env:
+        IMAGE_REF_INPUT: "${{ inputs.image-ref }}"
       run: |
-        IMAGE_REF="${{inputs.image-ref}}"
+        IMAGE_REF="${IMAGE_REF_INPUT}"
 
         # A pull_request run has the image already loaded locally (load: true,
         # push: false) — a push run has it in the registry only. Prefer the
