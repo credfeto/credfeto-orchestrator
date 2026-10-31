@@ -11413,7 +11413,7 @@ run_cfwf_run() {
     [ "${output}" = "${expected}" ]
     [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
     grep -qF -- "run list --repo ${REPO} --branch=main --all --limit 20 --json databaseId,workflowName,status,conclusion,headSha,headBranch,event,createdAt --jq" "${GH_LOG}"
-    ! grep -qE -- "--event|event=" <(sed 's/--json [^ ]*//' "${GH_LOG}")
+    [ "$(sed 's/--json [^ ]*//' "${GH_LOG}" | grep -cE -- "--event|event=")" -eq 0 ]
 }
 
 @test "run list --sha asks for the commit, passes --workflow and --limit with = and as given, and an empty list prints nothing" {
