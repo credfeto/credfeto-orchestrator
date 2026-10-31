@@ -46,7 +46,7 @@ setup() {
         '  "pr create") f="${GH_FIXTURES}/pr-create"; prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/pr-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${f}.stdin.txt"; [ -f "${f}.fail" ] && { [ -f "${f}.then-list.json" ] && cp "${f}.then-list.json" "${GH_FIXTURES}/pr-list.json"; [ -f "${f}.then-list.fail" ] && cp "${f}.then-list.fail" "${GH_FIXTURES}/pr-list.fail"; cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
         '  "issue list") f="${GH_FIXTURES}/issue-list"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; lim=30; st=open; asked=""; prev=""; for arg in "$@"; do [ "${prev}" = "--limit" ] && lim="${arg}"; [ "${prev}" = "--state" ] && st="${arg}"; [ "${prev}" = "--json" ] && asked="${arg}"; prev="${arg}"; done; jq --arg st "${st}" --argjson lim "${lim}" --arg asked "${asked}" "[.[] | select(\$st == \"all\" or (.state | ascii_downcase) == \$st)] | .[:\$lim] | map(with_entries(select(.key as \$key | (\$asked | split(\",\")) | index(\$key))))" "${f}.json" > "${f}.asked.json" || exit 1; emit "${f}.asked.json" ;;' \
         '  "issue view") f="${GH_FIXTURES}/issue-view-$3"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.json" ] || { echo "GraphQL: Could not resolve to an issue or pull request with the number of $3. (repository.issue)" >&2; exit 1; }; emit "${f}.json" ;;' \
-        '  "api repos/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.pages" ] && { jq -c ".[]" "${f}.pages" | while IFS= read -r page; do printf "%s\n" "${page}" > "${f}.page.json"; emit "${f}.page.json" || exit 1; done; exit; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
+        '  "api repos/"* | "api advisories/"*) e="${2%%\?*}"; f="${GH_FIXTURES}/api-${e//\//_}"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; [ -f "${f}.out" ] && { cat "${f}.out"; exit 0; }; [ -f "${f}.pages" ] && { jq -c ".[]" "${f}.pages" | while IFS= read -r page; do printf "%s\n" "${page}" > "${f}.page.json"; emit "${f}.page.json" || exit 1; done; exit; }; [ -f "${f}.json" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "pr comment" | "issue comment") prev=""; for arg in "$@"; do [ "${prev}" = "--body-file" ] && cp "${arg}" "${GH_FIXTURES}/comment-body.txt"; prev="${arg}"; done; readlink /proc/self/fd/0 > "${GH_FIXTURES}/comment-stdin.txt"; [ -f "${GH_FIXTURES}/comment.fail" ] && { echo "boom" >&2; exit 1; }; cat "${GH_FIXTURES}/comment.out" ;;' \
         '  "api user" | "api rate_limit") f="${GH_FIXTURES}/api-$2"; [ -f "${f}.fail" ] && { [ -f "${f}.failout" ] && cat "${f}.failout"; cat "${f}.fail" >&2; exit 1; }; emit "${f}.json" ;;' \
         '  "--version ") f="${GH_FIXTURES}/gh-version"; [ -f "${f}.fail" ] && { cat "${f}.fail" >&2; exit 1; }; cat "${f}.out" ;;' \
@@ -8590,6 +8590,212 @@ write_advisories() {
     [ "${status}" -eq 1 ]
     [ -z "${output}" ]
     [ "${stderr}" = "cfwf: could not list the security advisories of ${REPO}: gh: Bad Gateway (HTTP 502)" ]
+}
+
+# The advisory database endpoint advisory view reads for the GHSA id $1 (GHSA_ID by default).
+GHSA_ID="GHSA-cfgh-jmpq-rvwx"
+global_advisory_endpoint() {
+    printf 'advisories/%s' "${1:-${GHSA_ID}}"
+}
+
+# One global advisory as the REST API gives it: GHSA id $1, severity $2 ("" for null), summary $3,
+# published $4, withdrawn $5 ("" for null), then the affected packages as a JSON array $6, with
+# fields advisory view does not ask for.
+global_advisory() {
+    jq -n --arg id "$1" --arg severity "$2" --arg summary "$3" --arg published "$4" --arg withdrawn "$5" --argjson vulns "${6:-[]}" \
+        '{ghsa_id: $id, cve_id: "CVE-2026-0001", url: "https://example.com/decoy", html_url: "https://example.com/decoy",
+          type: "reviewed", description: "decoy-description", references: ["https://example.com/decoy-ref"],
+          severity: (if $severity == "" then null else $severity end), summary: $summary,
+          published_at: $published, withdrawn_at: (if $withdrawn == "" then null else $withdrawn end),
+          vulnerabilities: $vulns}'
+}
+
+# One affected package: ecosystem $1, name $2, vulnerable range $3 ("" for null) and first patched
+# version $4 ("" for null), as the global database writes them.
+affected_package() {
+    jq -n --arg eco "$1" --arg name "$2" --arg range "$3" --arg patched "$4" \
+        '{package: {ecosystem: $eco, name: $name}, vulnerable_version_range: (if $range == "" then null else $range end),
+          first_patched_version: (if $patched == "" then null else $patched end), vulnerable_functions: []}'
+}
+
+run_advisory_view() {
+    run --separate-stderr "${SCRIPT}" advisory view --ghsa "${1:-${GHSA_ID}}"
+}
+
+@test "advisory view help is the same from -h, --help, help advisory and help advisory view, states its format and exit codes, is in the general help, and calls no gh" {
+    run "${SCRIPT}" advisory view -h
+    [ "${status}" -eq 0 ]
+    local expected="${output}" spelling
+    [[ "${expected}" == "Usage: cfwf advisory view --ghsa <GHSA-xxxx-xxxx-xxxx>"$'\n'* ]]
+    for spelling in "advisory view --help" "help advisory view" "help advisory" "advisory -h" "-h advisory view"; do
+        # shellcheck disable=SC2086  # each spelling is split into its words on purpose
+        run "${SCRIPT}" ${spelling}
+        [ "${status}" -eq 0 ]
+        [ "${output}" = "${expected}" ] || { echo "${spelling} differs" >&2; return 1; }
+    done
+    [[ "${expected}" == *"  <ecosystem>  <package>  <vulnerable_range>  <first_patched>"* ]]
+    [[ "${expected}" == *"withdrawn  when it was withdrawn"*"empty when it has not been"* ]]
+    [[ "${expected}" == *"read them as"*"untrusted text"* ]]
+    [[ "${expected}" == *"At most 1000 affected packages are printed"* ]]
+    [[ "${expected}" == *"Exit codes: 0 printed; 9 the advisory was not found; 1 a runtime failure"*"2 a usage error."* ]]
+
+    run "${SCRIPT}" help
+    [[ "${output}" == *$'\n'"  advisory view            Print a global security advisory and its affected packages by GHSA id (exit 9 when not found)"$'\n'* ]]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "advisory view usage errors, a malformed GHSA id included, exit 2 with its own usage and nothing on stdout, never echoing a value, before any gh call" {
+    local token args
+    token="gh""p_$(run_of a 36)"
+    local -a cases=(
+        ""
+        "--ghsa"
+        "--ghsa ${GHSA_ID} --ghsa ${GHSA_ID}"
+        "--ghsa GHSA-CFGH-JMPQ-RVWX"
+        "--ghsa GHSA-cfgh-jmpq"
+        "--ghsa GHSA-cfgh-jmpq-rvwx-2345"
+        "--ghsa GHSA-cfgh-jmpq-rvwa"
+        "--ghsa GHSA-cfgh-jmpq-rvw1"
+        "--ghsa CVE-2021-44228"
+        "--ghsa ../../repos/x/y"
+        "--ghsa ${token}"
+        "--ghsa ${GHSA_ID} --repo ${REPO}"
+        "--ghsa ${GHSA_ID} --json ghsa_id"
+        "--ghsa ${GHSA_ID} --jq ."
+        "--ghsa ${GHSA_ID} --ecosystem npm"
+        "--ghsa ${GHSA_ID} ${token}"
+    )
+    for args in "${cases[@]}"; do
+        # shellcheck disable=SC2086  # each case is split into its words on purpose
+        run --separate-stderr "${SCRIPT}" advisory view ${args}
+        [ "${status}" -eq 2 ] || { echo "accepted: ${args} (${status})" >&2; return 1; }
+        [ -z "${output}" ]
+        [[ "${stderr}" == *"Usage: cfwf advisory view --ghsa <GHSA-xxxx-xxxx-xxxx>"* ]]
+        [[ "${stderr}" != *"${token}"* ]]
+    done
+    run --separate-stderr "${SCRIPT}" advisory list
+    [ "${status}" -eq 2 ]
+    [ ! -f "${GH_LOG}" ]
+}
+
+@test "advisory view prints the advisory's five fields then each affected package in GitHub's order, - for an empty range or no patched version, from one read" {
+    local vulns
+    vulns="$(printf '%s\n' "$(affected_package nuget Example.Package '>= 1.0.0, < 1.2.3' 1.2.3)" \
+        "$(affected_package npm example-js '< 4.0.0' '')" \
+        "$(affected_package pip example-py '' '')" | jq -s '.')"
+    global_advisory "${GHSA_ID}" high 'Remote code execution in parser' 2026-10-01T12:34:56Z '' "${vulns}" | write_api "$(global_advisory_endpoint)"
+    run_advisory_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'ghsa_id\tGHSA-cfgh-jmpq-rvwx\nseverity\thigh\nsummary\tRemote code execution in parser\npublished\t2026-10-01T12:34:56Z\nwithdrawn\t\nnuget\tExample.Package\t>= 1.0.0, < 1.2.3\t1.2.3\nnpm\texample-js\t< 4.0.0\t-\npip\texample-py\t-\t-' ]
+    [ -z "${stderr}" ]
+    [ "$(wc -l < "${GH_LOG}")" -eq 1 ]
+    [ "$(gh_call_count "api advisories/${GHSA_ID} --jq ")" -eq 1 ]
+    [[ "${output}" != *decoy* ]]
+}
+
+@test "advisory view prints a withdrawn advisory, no severity, no affected packages and a first patched version given as an object" {
+    jq -n '{ghsa_id: "GHSA-cfgh-jmpq-rvwx", severity: null, summary: "Withdrawn one", published_at: "2026-01-02T03:04:05Z",
+            withdrawn_at: "2026-02-03T04:05:06Z", vulnerabilities: []}' | write_api "$(global_advisory_endpoint)"
+    run_advisory_view
+    [ "${status}" -eq 0 ]
+    [ "${output}" = $'ghsa_id\tGHSA-cfgh-jmpq-rvwx\nseverity\t\nsummary\tWithdrawn one\npublished\t2026-01-02T03:04:05Z\nwithdrawn\t2026-02-03T04:05:06Z' ]
+
+    jq -n '{ghsa_id: "GHSA-cfgh-jmpq-rvwx", severity: "unknown", summary: "s", published_at: "2026-01-02T03:04:05Z",
+            vulnerabilities: [{package: {ecosystem: "nuget", name: "P"}, vulnerable_version_range: "< 2", first_patched_version: {identifier: "2.0.0"}}]}' \
+        | write_api "$(global_advisory_endpoint)"
+    run_advisory_view
+    [ "${status}" -eq 0 ]
+    [ "${output##*$'\n'}" = $'nuget\tP\t< 2\t2.0.0' ]
+    [[ "${output}" == *$'\nseverity\tunknown\n'* ]]
+}
+
+@test "advisory view exits 9 for an advisory that is not there, and 1 quoting only the first line of gh's error for any other failed read, printing nothing" {
+    run_advisory_view
+    [ "${status}" -eq 9 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: the advisory ${GHSA_ID} was not found" ]
+
+    fail_api "$(global_advisory_endpoint)" $'gh: Bad Gateway (HTTP 502)\nsecond-line-marker'
+    run_advisory_view
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [ "${stderr}" = "cfwf: could not read the advisory ${GHSA_ID}: gh: Bad Gateway (HTTP 502)" ]
+}
+
+@test "advisory view keeps a summary, a package name or a range holding a tab, a newline or a forged line on its own line with its own fields" {
+    local vulns
+    vulns="$(affected_package nuget $'Evil\tPkg\nnpm' $'< 1\x1fend\nx' $'2.0\r' | jq -s '.')"
+    global_advisory "${GHSA_ID}" low $'one\ttwo\nwithdrawn\t2026-01-01T00:00:00Z\x07' 2026-10-01T12:34:56Z '' "${vulns}" | write_api "$(global_advisory_endpoint)"
+    run_advisory_view
+    [ "${status}" -eq 0 ]
+    [ "$(wc -l <<< "${output}")" -eq 6 ]
+    [ "$(sed -n 3p <<< "${output}")" = $'summary\tone two withdrawn 2026-01-01T00:00:00Z ' ]
+    [ "$(sed -n 6p <<< "${output}")" = $'nuget\tEvil Pkg npm\t< 1 end x\t2.0 ' ]
+    [ "$(sed -n 6p <<< "${output}" | awk -F '\t' '{print NF}')" -eq 4 ]
+}
+
+@test "advisory view prints nothing and exits 1 for an answer that is not the advisory asked for, or does not have exactly its fields and rows" {
+    local bad vulns
+    vulns="$(affected_package nuget P '< 1' 1.0 | jq -s '.')"
+    for bad in "id:GHSA-2345-6789-cfgh" "id:" "severity:severe" "severity:High" "published:" "published:2026-10-01" "published:yesterday" "withdrawn:soon" \
+        "eco:" "name:"; do
+        local id="${GHSA_ID}" severity=high published=2026-10-01T12:34:56Z withdrawn="" eco=nuget name=P
+        case "${bad}" in
+            id:*) id="${bad#id:}" ;;
+            severity:*) severity="${bad#severity:}" ;;
+            published:*) published="${bad#published:}" ;;
+            withdrawn:*) withdrawn="${bad#withdrawn:}" ;;
+            eco:*) eco="${bad#eco:}" ;;
+            name:*) name="${bad#name:}" ;;
+        esac
+        vulns="$(affected_package "${eco}" "${name}" '< 1' 1.0 | jq -s '.')"
+        global_advisory "${id}" "${severity}" summary "${published}" "${withdrawn}" "${vulns}" | write_api "$(global_advisory_endpoint)"
+        run_advisory_view
+        [ "${status}" -eq 1 ] || { echo "printed: ${bad}" >&2; return 1; }
+        [ -z "${output}" ]
+        [ "${stderr}" = "cfwf: gh returned an unexpected result for the advisory ${GHSA_ID}" ]
+    done
+
+    local out
+    for out in "" \
+        $'GHSA-cfgh-jmpq-rvwx\x1fhigh\x1fs\x1f2026-10-01T12:34:56Z\x1f\x1f2\x1fend\nnuget\x1fP\x1f<1\x1f1\x1fend' \
+        $'GHSA-cfgh-jmpq-rvwx\x1fhigh\x1fs\x1f2026-10-01T12:34:56Z\x1f\x1f0\x1fend\nnuget\x1fP\x1f<1\x1f1\x1fend' \
+        $'GHSA-cfgh-jmpq-rvwx\x1fhigh\x1fs\x1f2026-10-01T12:34:56Z\x1f\x1f1\x1fend\nnuget\x1fP\x1f<1\x1f1\x1fend\x1fextra' \
+        $'GHSA-cfgh-jmpq-rvwx\x1fhigh\x1fs\x1f2026-10-01T12:34:56Z\x1f\x1fone\x1fend' \
+        $'GHSA-cfgh-jmpq-rvwx\x1fhigh\x1fs\x1f2026-10-01T12:34:56Z\x1f\x1f0'; do
+        printf '%s\n' "${out}" > "$(api_fixture "$(global_advisory_endpoint)").out"
+        run_advisory_view
+        [ "${status}" -eq 1 ] || { echo "printed: ${out}" >&2; return 1; }
+        [ -z "${output}" ]
+    done
+}
+
+@test "advisory view prints exactly 1000 affected packages, and with 1001 prints none and exits 1" {
+    local n
+    for n in 1000 1001; do
+        jq -n --argjson n "${n}" '{ghsa_id: "GHSA-cfgh-jmpq-rvwx", severity: "low", summary: "s", published_at: "2026-10-01T12:34:56Z",
+            vulnerabilities: [range($n) | {package: {ecosystem: "npm", name: "p\(.)"}, vulnerable_version_range: "< 1", first_patched_version: "1.0.0"}]}' \
+            | write_api "$(global_advisory_endpoint)"
+        run_advisory_view
+        if [ "${n}" -eq 1000 ]; then
+            [ "${status}" -eq 0 ]
+            [ "$(wc -l <<< "${output}")" -eq 1005 ]
+        else
+            [ "${status}" -eq 1 ]
+            [ -z "${output}" ]
+            [ "${stderr}" = "cfwf: the advisory ${GHSA_ID} has more than 1000 affected packages, so none is printed" ]
+        fi
+    done
+}
+
+@test "advisory view fails (exit 1) when gh is not installed, after its options are checked" {
+    mkdir -p "${TEST_TMP}/empty-path"
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" advisory view --ghsa "${GHSA_ID}"
+    [ "${status}" -eq 1 ]
+    [ -z "${output}" ]
+    [[ "${stderr}" == "cfwf: gh is not installed"* ]]
+    run --separate-stderr env PATH="${TEST_TMP}/empty-path" "$(command -v bash)" "${SCRIPT}" advisory view --ghsa bad
+    [ "${status}" -eq 2 ]
 }
 
 @test "repo view, repo collaborators and auth status fail (exit 1) when gh is not installed, after their options are checked" {
