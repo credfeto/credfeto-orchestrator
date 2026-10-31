@@ -292,7 +292,12 @@
 #   npm           `--prefix <dir>` / `--prefix=<dir>` must resolve under a
 #                 root; `--script-shell`, `--userconfig`, `--globalconfig`
 #                 (any form) are denied outright.
-#   find          every starting-point path (the non-option words before the
+#   node          the script (first positional argument) must resolve under a
+#                 root and under `.github/actions/` below the working
+#                 directory; every option before it except a leading
+#                 `--check` is denied, as is `node -` and a missing script.
+#                 Words after the script are script arguments, not checked.
+#   find         every starting-point path (the non-option words before the
 #                 first expression word) must resolve under a root - no
 #                 starting point means `.`, resolved the same way. `-H`/`-L`/
 #                 `-P` before the starting points are skipped; `-D` and `-O`
@@ -405,7 +410,7 @@ in_list() {
 WRAPPERS=(env nice command sudo doas exec nohup stdbuf builtin setsid timeout ionice taskset chroot nsenter flock watch time)
 CD_NAMES=(cd pushd popd)
 # Commands with a path check of their own, whatever their classification.
-CHECKED_NAMES=(cd pushd popd git npm find rm mv cp)
+CHECKED_NAMES=(cd pushd popd git npm node find rm mv cp)
 # Commands that can leave a new symlink behind (see resolve_word), plus the
 # git subcommands that materialise repo content - which the prompt-injection
 # threat model says may contain symlinks, and every gh call that is a writer
@@ -1259,6 +1264,40 @@ npm_canonical_option() {
     fi
   done
   printf '%s' "$name"
+}
+
+# node takes its first positional argument as the script and passes every
+# later word to the script, so only the words up to and including the script
+# are inspected. Every option before the script is denied apart from a
+# leading --check: the code-loading ones (-r/--require, --import, --loader,
+# --experimental-loader, --inspect*) are the reason, and denying the rest
+# also covers spellings this list would miss, such as node's `_` for `-`
+# (--experimental_loader) or --env-file reading NODE_OPTIONS. `node -` (a
+# program on stdin) is denied too, since it is not a script under
+# .github/actions.
+check_node() {
+  local j=$((i + 1)) tok actions_dir
+  while [ "$j" -lt "${#words[@]}" ]; do
+    tok="${words[$j]}"
+    { [ "$tok" = "$MARKER" ] || [ "${wflags[$j]}" = N ]; } && block 'node argument could not be verified (non-literal argument)'
+    case "$tok" in
+      --check)
+        [ "$j" -eq $((i + 1)) ] || block 'node --check is permitted only as the first argument'
+        ;;
+      -?*)
+        block "node option '${tok}' is not permitted - only a leading --check may come before the script (options such as -r/--require, --import, --loader and --inspect load code from outside it)"
+        ;;
+      *) break ;;
+    esac
+    j=$((j + 1))
+  done
+  [ "$j" -lt "${#words[@]}" ] || block 'node requires a script path under .github/actions/'
+  [ "${words[$j]}" = "-" ] && block 'node - (a program read from stdin) is not permitted - run a script under .github/actions/'
+  [[ "${wflags[$j]}" == *g* ]] && block "node script '${words[$j]}' contains a glob - name the script exactly"
+  require_under_root "${words[$j]}" "${wflags[$j]}" "node script"
+  actions_dir=$(realpath -m -- "${BASE_DIR}/.github/actions" 2>/dev/null) || block 'node script directory .github/actions could not be resolved'
+  [[ "$RESOLVED" == "${actions_dir}/"* ]] || block "node script '${words[$j]}' resolves to '${RESOLVED}', which is not under .github/actions/"
+  return 0
 }
 
 check_npm() {
@@ -2799,6 +2838,7 @@ process_call() {
     cd | pushd | popd) check_cd ;;
     git) check_git ;;
     npm) check_npm ;;
+    node) check_node ;;
     find) check_find ;;
     rm | mv | cp) check_rm_mv_cp ;;
   esac
