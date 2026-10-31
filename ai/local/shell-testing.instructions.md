@@ -29,6 +29,7 @@ in a fixed order, then defines `main()`. All of its actual logic lives in `lib/*
 | `lib/state` | Invocation/guard-file counters, rate limiting, blocked/closed-issue markers. |
 | `lib/prompts` | CLAUDE.md/prompt building (`build_issue_claude_md`/`build_pr_claude_md`): heredoc bodies the agent reads directly; treat any edit to their wording as a behaviour change, not a refactor. |
 | `lib/workflow-board` | GitHub Projects v2 "Workflow" board GraphQL management + its disk cache. |
+| `lib/secret-patterns` | The shared token-form secret patterns and `redact_secrets`. `notify-unit-failure` and `cfwf` keep standalone copies, held in step by `test/secret-patterns.bats`. |
 | `lib/discord` | Discord webhook notifications. |
 | `lib/podman` | Container/Podman invocation: the largest, most side-effectful file. `invoke_claude` (oneshot's `--print` phase runs) refuses a launch without both an item type and an item id, before creating any temporary file or Podman secret, then uses `ensure_agent_container_ready` and `prepare_claude_container_args`. |
 

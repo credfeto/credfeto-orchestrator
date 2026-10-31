@@ -10,6 +10,7 @@ Please ADD ALL Changes to the UNRELEASED SECTION and not a specific release
 
 ## [Unreleased]
 ### Security
+- Redact every token form cfwf refuses (sk-proj-, discordapp.com webhooks, Bearer, AWS key IDs, Slack, sk-ant) in notify-unit-failure and lib/discord using a shared pattern list - #1616
 ### Added
 - `cfwf run list`, `cfwf run view` and `cfwf run log`: list a branch's or a commit's GitHub Actions runs with no event filter, read one run and its latest attempt's jobs, and read the tail of its failed steps' logs (at most 2000 lines a step, 1000 bytes a line, 256 KiB in all) made printable, with token lines redacted and long hex and base64 runs masked, replacing raw `gh run` and `gh api` reads (#1586)
 - cfwf issue edit: change an issue's title or body, or assign the agent, with the body and title checked for leaks first (#1596)
