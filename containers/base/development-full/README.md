@@ -92,8 +92,8 @@ wrapper commands like sudo/env/nice/timeout) are rejected with a per-name messag
 rejected too — extending policy is a one-line data-file change, not hook logic. Known interpreters
 (python3, ...) are additionally refused inline-code flags (`-c`/`-e`/...). `enforce-allowed-dirs` runs
 second, on the already-normalised command: every directory- or path-taking argument of `cd`/`pushd`,
-`git -C`, `npm --prefix`, `find` (starting points) and `rm`/`mv`/`cp` (operands) must resolve (symlinks
-followed) under one of the roots listed in `claude-hooks/allowed-dirs` (baked root:root 0444 with the
+`git -C`, `npm --prefix`, `find` (starting points), `rm`/`mv`/`cp` (operands) and the `node` script
+(which must also sit under `.github/actions/`) must resolve (symlinks followed) under one of the roots listed in `claude-hooks/allowed-dirs` (baked root:root 0444 with the
 agent container's three mounts, `/workspace/repo`, `/workspace/rules`, `/workspace/tmp`), and the flags
 that turn a path argument into code execution (`git --exec-path`/`--git-dir`/`--work-tree`/`--namespace`/
 `--super-prefix`, every `git -c` key outside a short allowlist of inert display/behaviour keys,
