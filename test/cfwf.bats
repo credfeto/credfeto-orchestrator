@@ -9979,6 +9979,7 @@ run_tag_view() {
     run "${SCRIPT}" help
     [ "${status}" -eq 0 ]
     local listed=$'\n'"  comment add              Post a comment on a PR or an issue and print its URL"$'\n'
+    listed+="  label create             Create one of the standard labels in a repository (exit 8 for any other name)"$'\n'
     listed+="  release view             Print a repository's latest release, one key and value a line (exit 9 when it has none)"$'\n'
     listed+="  release list             List a repository's releases, newest first, one line each"$'\n'
     listed+="  tag view                 Print the commit a repository's tag points to (exit 9 when not found)"$'\n'
